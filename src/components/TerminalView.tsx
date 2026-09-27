@@ -23,7 +23,7 @@ import {
   ptySpawn,
   ptyWrite,
 } from "../api";
-import { CloseIcon, SearchIcon } from "./Icons";
+import { CloseIcon, FolderIcon, SearchIcon, TerminalIcon } from "./Icons";
 import { getSearchDecorations, getTerminalTheme, getThemeMode, onThemeChange } from "../theme";
 import type { Settings } from "../types";
 
@@ -510,6 +510,22 @@ function TerminalView({
 
   return (
     <div className="terminal-view">
+      <div className="session-header">
+        <div className={`session-app-icon${isClaude ? " claude" : ""}`} aria-hidden="true">
+          {isClaude ? "✳" : <TerminalIcon size={17} />}
+        </div>
+        <div className="session-copy">
+          <div className="session-title">{isClaude ? "Claude Code" : "Terminal"}</div>
+          <div className="session-path" title={cwd}>
+            <FolderIcon size={12} />
+            <span>{cwd}</span>
+          </div>
+        </div>
+        <div className={`session-state ${status}`}>
+          <span className="session-state-dot" aria-hidden="true" />
+          <span>{status === "spawning" ? "Conectando" : status === "running" ? "Activo" : status === "exited" ? "Finalizado" : "Error"}</span>
+        </div>
+      </div>
       <div className="term-canvas" ref={hostRef} />
 
       <div className="term-tools">

@@ -113,7 +113,7 @@ export const listenPtyExit = (
 // --- Valores por defecto ----------------------------------------------------
 
 export const DEFAULT_FONT_FAMILY =
-  '"JetBrains Mono Variable", ui-monospace, "Cascadia Mono", monospace';
+  '"JetBrains Mono Variable", "Hack Nerd Font Mono", "Noto Sans Symbols 2", "Noto Color Emoji", ui-monospace, "Cascadia Mono", monospace';
 
 export const DEFAULT_SETTINGS: Settings = {
   shell: "default",

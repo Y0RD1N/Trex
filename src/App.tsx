@@ -47,6 +47,7 @@ import Sidebar from "./components/Sidebar";
 import TerminalTabs from "./components/TerminalTabs";
 import TerminalView from "./components/TerminalView";
 import Toast from "./components/Toast";
+import ProjectHome from "./components/ProjectHome";
 import WelcomeScreen from "./components/WelcomeScreen";
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
@@ -773,24 +774,12 @@ function AppShell() {
             })}
 
             {activeProject && projectTabs.length === 0 && (
-              <div className="project-empty">
-                <div className="project-empty-title">{activeProject.name}</div>
-                <div className="project-empty-path mono">{activeProject.path}</div>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-big"
-                  onClick={() => openTab(activeProject.id, "claude")}
-                >
-                  ✳ Abrir Claude aquí
-                </button>
-                <button
-                  type="button"
-                  className="link-btn"
-                  onClick={() => openTab(activeProject.id, "shell")}
-                >
-                  abrir terminal sin Claude
-                </button>
-              </div>
+              <ProjectHome
+                project={activeProject}
+                onClaude={() => openTab(activeProject.id, "claude")}
+                onShell={() => openTab(activeProject.id, "shell")}
+                onReveal={() => revealProject(activeProject.id)}
+              />
             )}
 
             {!activeProject && (

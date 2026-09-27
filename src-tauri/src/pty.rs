@@ -434,6 +434,14 @@ impl PtyState {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "trex");
+        // Claude usa símbolos Unicode en su TUI. El proceso de la app puede
+        // arrancar con una locale heredada sin UTF-8, que hace que el shell y
+        // algunas librerías sustituyan esos glifos por cuadros. En Unix,
+        // fuerza una locale UTF-8 estable para cada PTY.
+        if !is_windows() {
+            cmd.env("LANG", "C.UTF-8");
+            cmd.env("LC_ALL", "C.UTF-8");
+        }
         if command.is_some() {
             cmd.env("FORCE_COLOR", "1");
         }

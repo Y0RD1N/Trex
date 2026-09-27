@@ -227,3 +227,11 @@ export function PowerIcon({ size = 16, strokeWidth = 1.5 }: IconProps) {
     </svg>
   );
 }
+
+export function TerminalIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m7 9 3 3-3 3m6 0h4" /></svg>;
+}
+
+export function ArrowRightIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M5 12h14m-5-5 5 5-5 5" /></svg>;
+}

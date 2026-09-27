@@ -161,6 +161,7 @@ export default function Sidebar({
           </div>
         </div>
 
+        <div className="sidebar-section-label"><span>Proyectos</span><span>{projects.length}</span></div>
         <div className="project-list">
           {projects.map((project) => (
             <ProjectItem

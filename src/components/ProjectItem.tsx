@@ -151,6 +151,7 @@ export default function ProjectItem({
             )}
           </div>
         )}
+        <div className="project-meta">{tabCount > 0 ? `${tabCount} ${tabCount === 1 ? "sesión abierta" : "sesiones abiertas"}` : "Listo para empezar"}</div>
       </div>
 
       <button

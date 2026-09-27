@@ -71,6 +71,7 @@ export default function TerminalTabs({
   return (
     <div className="tabs-bar" data-tauri-drag-region="deep">
       <div className="tabs-scroll" data-tauri-drag-region>
+        {tabs.length === 0 && <div className="workspace-breadcrumb"><FolderIcon size={14} /><span>{hasProject ? projectName : "Tu espacio"}</span><span className="breadcrumb-divider">/</span><span>Inicio</span></div>}
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
           const tooltipParts = [`${projectName} · ${tab.subtitle}`];
