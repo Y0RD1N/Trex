@@ -28,7 +28,8 @@ import {
 } from "../api";
 import { CloseIcon, SearchIcon } from "./Icons";
 import { getSearchDecorations, getTerminalTheme, getThemeMode, onThemeChange } from "../theme";
-import type { Settings } from "../types";
+import type { AgentActivity, Settings, TabKind } from "../types";
+import { ACTIVITY_FOOTER_ROWS, ACTIVITY_SAMPLE_MS, ACTIVITY_SETTLE_MS, activitySignal, screenActivity } from "../agentActivity";
 import { usePresence } from "../hooks/usePresence";
 
 type Status = "spawning" | "running" | "exited" | "error";
@@ -49,11 +50,14 @@ export type TerminalViewProps = {
   launchMode: string;
   env: Record<string, string> | null;
   launchLabel: string | null;
+  kind: TabKind;
   settings: Settings;
   /** El padre controla la visibilidad con display:none sin desmontar nada. */
   visible: boolean;
   onExit: (tabId: string, code: number | null) => void;
   onTitle: (tabId: string, title: string) => void;
+  onActivity: (tabId: string, activity: AgentActivity) => void;
+  onRunning: (tabId: string) => void;
 };
 
 function TerminalView({
@@ -65,10 +69,13 @@ function TerminalView({
   launchMode,
   env,
   launchLabel,
+  kind,
   settings,
   visible,
   onExit,
   onTitle,
+  onActivity,
+  onRunning,
 }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -103,6 +110,12 @@ function TerminalView({
   onExitRef.current = onExit;
   const onTitleRef = useRef(onTitle);
   onTitleRef.current = onTitle;
+  const onActivityRef = useRef(onActivity);
+  onActivityRef.current = onActivity;
+  const onRunningRef = useRef(onRunning);
+  onRunningRef.current = onRunning;
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
 
   const [status, setStatus] = useState<Status>("spawning");
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -138,6 +151,80 @@ function TerminalView({
       let parsedBytes = 0;
       let ackTimer: number | null = null;
       let released = false;
+      const term = termRef.current;
+      let sampleTimer: number | null = null;
+      let settleTimer: number | null = null;
+      let activity: AgentActivity = "idle";
+      let pendingActivity: AgentActivity | null = null;
+      let progress: AgentActivity | undefined;
+      let notification: AgentActivity | undefined;
+      const activityListeners: IDisposable[] = [];
+      const publishActivity = (next: AgentActivity): void => {
+        if (released || disposedRef.current || exitedIdRef.current === id || activity === next) return;
+        activity = next;
+        onActivityRef.current(sessionIdRef.current, next);
+      };
+      const cancelSettle = (): void => {
+        if (settleTimer !== null) window.clearTimeout(settleTimer);
+        settleTimer = null;
+        pendingActivity = null;
+      };
+      const resetActivity = (): void => {
+        if (sampleTimer !== null) window.clearTimeout(sampleTimer);
+        sampleTimer = null;
+        cancelSettle();
+        progress = notification = undefined;
+        activity = "idle";
+        if (!disposedRef.current) onActivityRef.current(sessionIdRef.current, "idle");
+      };
+      const sampleActivity = (): void => {
+        sampleTimer = null;
+        if (!term || released || disposedRef.current || exitedIdRef.current === id) return;
+        const buffer = term.buffer.active;
+        // Las TUIs cortas dejan filas vacías debajo; las largas usan toda la
+        // pantalla. baseY sigue el proceso aunque el usuario mire el historial.
+        let bottom = term.rows - 1;
+        while (bottom > 0 && !buffer.getLine(buffer.baseY + bottom)?.translateToString(true).trim()) bottom--;
+        const footer: string[] = [];
+        for (let row = Math.max(0, bottom - ACTIVITY_FOOTER_ROWS + 1); row <= bottom; row++) {
+          footer.push(buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? "");
+        }
+        const screen = screenActivity(kindRef.current, footer);
+        const next = screen === "waiting" ? screen : notification ?? progress ?? screen;
+        notification = undefined;
+        if (next === activity) { cancelSettle(); return; }
+        if (next === "working") {
+          cancelSettle();
+          publishActivity(next);
+        } else if (pendingActivity !== next) {
+          // Un borrado y repintado intermedio no debe detener el icono.
+          cancelSettle();
+          pendingActivity = next;
+          settleTimer = window.setTimeout(() => {
+            settleTimer = null;
+            pendingActivity = null;
+            publishActivity(next);
+          }, ACTIVITY_SETTLE_MS);
+        }
+      };
+      const scheduleActivity = (): void => {
+        if (released || disposedRef.current || sampleTimer !== null) return;
+        sampleTimer = window.setTimeout(sampleActivity, ACTIVITY_SAMPLE_MS);
+      };
+      if (term && kindRef.current !== "shell") {
+        activityListeners.push(term.onWriteParsed(scheduleActivity));
+        for (const osc of [9, 133, 777]) {
+          activityListeners.push(term.parser.registerOscHandler(osc, data => {
+            const next = activitySignal(osc, data);
+            if (next !== undefined) {
+              if (osc === 9 && data.startsWith("4;")) progress = next;
+              else { progress = undefined; notification = next; }
+              scheduleActivity();
+            }
+            return false; // Deja que los demás handlers de xterm reciban el OSC.
+          }));
+        }
+      }
       const flushAck = (): void => {
         if (ackTimer !== null) window.clearTimeout(ackTimer);
         ackTimer = null;
@@ -154,7 +241,9 @@ function TerminalView({
       };
       releaseOutputRef.current = () => {
         flushAck();
+        resetActivity();
         released = true;
+        for (const listener of activityListeners) listener.dispose();
       };
       const unData = await listenPtyData(id, (payload) => {
         if (released || disposedRef.current) return;
@@ -163,6 +252,7 @@ function TerminalView({
       });
       const unExit = await listenPtyExit(id, (payload) => {
         if (released || disposedRef.current) return;
+        resetActivity();
         exitedIdRef.current = id;
         spawnedRef.current = false;
         // Barrera de escritura: el aviso no tapa la última salida aún en cola.
@@ -176,7 +266,7 @@ function TerminalView({
           onExitRef.current(sessionIdRef.current, payload.code);
         });
       });
-      if (disposedRef.current) {
+      if (disposedRef.current || released || currentIdRef.current !== id) {
         // El componente se desmontó mientras se registraban los listeners.
         unData();
         unExit();
@@ -291,6 +381,7 @@ function TerminalView({
       }
       if (exitedIdRef.current === id) return;
       spawnedRef.current = true;
+      onRunningRef.current(sessionIdRef.current);
       // El PTY nace con este tamaño: que el debounce no repita el mismo aviso.
       lastPtySizeRef.current = { cols, rows };
       setStatus("running");
@@ -300,6 +391,7 @@ function TerminalView({
     } catch (error) {
       if (disposedRef.current) return;
       spawnedRef.current = false;
+      cleanSubscriptions();
       const message = formatError(error);
       setErrorMsg(message);
       setStatus("error");
@@ -307,7 +399,7 @@ function TerminalView({
       term.write(`\r\n\x1b[1;31m✖ No se pudo iniciar el proceso\x1b[0m\r\n`);
       term.write(`\x1b[31m${message}\x1b[0m\r\n`);
     }
-  }, [schedulePtyResize, subscribe]);
+  }, [cleanSubscriptions, schedulePtyResize, subscribe]);
 
   /** Reinicia el proceso con un id nuevo derivado del original. */
   const restart = useCallback(() => {

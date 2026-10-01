@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { TabState } from "../types";
 import { CloseIcon } from "./Icons";
 import AgentIcon from "./AgentIcon";
+import { activityLabel } from "../agentActivity";
 
 /** Los títulos de Claude se muestran mientras la sesión no tenga un nombre propio. */
 export function sessionLabel(tab: TabState): string {
@@ -21,6 +22,8 @@ export default function SessionItem({ tab, active, onSelect, onClose, onRename }
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const label = sessionLabel(tab);
+  const activity = tab.exited ? "idle" : tab.activity;
+  const stateLabel = tab.exited ? "Proceso finalizado" : activityLabel(activity);
 
   const commit = (): void => {
     const value = draft.trim();
@@ -48,12 +51,13 @@ export default function SessionItem({ tab, active, onSelect, onClose, onRename }
           type="button"
           className="session-select"
           aria-current={active ? "page" : undefined}
-          title={`${label}${tab.profileName ? ` · Perfil: ${tab.profileName} (${tab.command})` : ""}${tab.exited ? " · proceso finalizado" : ""}\nDoble clic para renombrar`}
+          aria-label={`${label} · ${stateLabel}`}
+          title={`${label} · ${stateLabel}${tab.profileName ? ` · Perfil: ${tab.profileName} (${tab.command})` : ""}\nDoble clic para renombrar`}
           onClick={onSelect}
           onDoubleClick={() => { setDraft(label); setEditing(true); }}
         >
           <span className="session-kind" aria-hidden="true">
-            <AgentIcon kind={tab.kind} size={14} />
+            <AgentIcon kind={tab.kind} size={14} activity={activity} />
           </span>
           <span className="session-label">{label}</span>
           {tab.exited && <span className="session-ended" aria-label="Proceso finalizado" />}

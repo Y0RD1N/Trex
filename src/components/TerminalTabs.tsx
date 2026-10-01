@@ -43,7 +43,7 @@ export default function TerminalTabs({
     <header className="tabs-bar" data-tauri-drag-region="deep">
       <div className="workspace-title" data-tauri-drag-region>
         <span className={current?.kind === "claude" ? "workspace-mark claude" : "workspace-mark"} aria-hidden="true">
-          {current ? <AgentIcon kind={current.kind} /> : <FolderIcon size={15} />}
+          {current ? <AgentIcon kind={current.kind} activity={current.exited ? "idle" : current.activity} /> : <FolderIcon size={15} />}
         </span>
         <span className="workspace-title-text" title={current ? sessionLabel(current) : projectName} data-tauri-drag-region>
           {current ? sessionLabel(current) : hasProject ? projectName : "Tu espacio"}

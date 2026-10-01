@@ -2420,6 +2420,24 @@ body.dragging-sidebar .sidebar {
   .tabs-bar { padding-left: 12px; }
   .term-canvas { inset: 10px 12px; }
 }
+.agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 1;
+  transform-origin: center;
+  transition: color var(--t);
+}
+.agent-icon[data-activity="working"] { color: var(--accent-strong); }
+.agent-icon[data-activity="waiting"] { color: var(--warn); }
+.agent-icon-claude[data-activity="working"] { animation: trex-agent-turn 3s linear infinite; }
+.agent-icon-codex[data-activity="working"] { animation: trex-agent-breathe 1.6s ease-in-out infinite; }
+@keyframes trex-agent-turn { to { transform: rotate(360deg); } }
+@keyframes trex-agent-breathe {
+  0%, 100% { transform: scale(.92); opacity: .65; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-property: none !important;
@@ -2430,6 +2448,7 @@ body.dragging-sidebar .sidebar {
   }
   .session-row { animation: none; }
   .spinner { animation: none; }
+  .agent-icon { animation: none !important; }
   .btn:active, .icon-btn:active, .dialog-btn:active, .context-item:active,
   .sq-btn:active, .project-menu-btn:active, .window-btn:active,
   .term-tool-btn:active, .copy-btn:active, .chip:active, .swatch:active { transform: none; }

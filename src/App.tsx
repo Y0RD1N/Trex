@@ -35,6 +35,7 @@ import { usePresence } from "./hooks/usePresence";
 import { applyTheme, getThemeMode, onThemeChange, type ThemeMode } from "./theme";
 import type {
   AppConfig,
+  AgentActivity,
   AppInfo,
   ClaudeInfo,
   LauncherProfile,
@@ -84,6 +85,7 @@ const buildTab = (
     exited: false,
     exitCode: null,
     oscTitle: null,
+    activity: "idle",
     createdAt: Date.now(),
   };
 };
@@ -598,8 +600,24 @@ function AppShell() {
 
   const handleTabExit = useCallback((tabId: string, code: number | null) => {
     setTabs((prev) =>
-      prev.map((tab) => (tab.id === tabId ? { ...tab, exited: true, exitCode: code } : tab)),
+      prev.map((tab) => (tab.id === tabId ? { ...tab, exited: true, exitCode: code, activity: "idle" } : tab)),
     );
+  }, []);
+
+  const handleTabRunning = useCallback((tabId: string) => {
+    setTabs(prev => {
+      const tab = prev.find(item => item.id === tabId);
+      if (!tab || (!tab.exited && tab.exitCode === null)) return prev;
+      return prev.map(item => item.id === tabId ? { ...item, exited: false, exitCode: null } : item);
+    });
+  }, []);
+
+  const handleTabActivity = useCallback((tabId: string, activity: AgentActivity) => {
+    setTabs(prev => {
+      const tab = prev.find(item => item.id === tabId);
+      if (!tab || tab.activity === activity) return prev;
+      return prev.map(item => item.id === tabId ? { ...item, activity } : item);
+    });
   }, []);
 
   const handleTabTitle = useCallback((tabId: string, title: string) => {
@@ -815,10 +833,13 @@ function AppShell() {
                     launchMode={tab.launchMode}
                     env={tab.env}
                     launchLabel={tab.profileName}
+                    kind={tab.kind}
                     settings={config.settings}
                     visible={isActive}
                     onExit={handleTabExit}
                     onTitle={handleTabTitle}
+                    onActivity={handleTabActivity}
+                    onRunning={handleTabRunning}
                   />
                 </div>
               );

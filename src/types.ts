@@ -9,6 +9,7 @@ export type LaunchMode = "arg" | "inject";
 /** Asistente de la sesión o shell limpio. */
 export type AgentProvider = "claude" | "codex";
 export type TabKind = AgentProvider | "shell";
+export type AgentActivity = "idle" | "working" | "waiting";
 
 export type LauncherProfile = {
   id: string;
@@ -173,6 +174,8 @@ export type TabState = SessionLaunch & {
   exitCode: number | null;
   /** Último título recibido por OSC (solo informativo). */
   oscTitle: string | null;
+  /** Actividad transitoria del asistente; nunca se guarda en la configuración. */
+  activity: AgentActivity;
   createdAt: number;
 };
 
