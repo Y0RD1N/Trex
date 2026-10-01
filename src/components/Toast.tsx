@@ -27,7 +27,8 @@ export default function Toast({ message, duration = 3200, onDismiss }: Props) {
   // Al terminar el fundido de salida, se retira del árbol.
   useEffect(() => {
     if (!leaving) return;
-    const timer = window.setTimeout(() => dismissRef.current(), 180);
+    const timer = window.setTimeout(() => dismissRef.current(),
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 180);
     return () => window.clearTimeout(timer);
   }, [leaving]);
 

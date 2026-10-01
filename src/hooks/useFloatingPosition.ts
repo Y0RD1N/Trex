@@ -1,0 +1,85 @@
+import { useLayoutEffect, useState, type RefObject } from "react";
+
+export type AnchorRect = Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">;
+export type FloatingAnchor = { element: HTMLElement } | { rect: AnchorRect } | { x: number; y: number };
+export type FloatingSide = "top" | "bottom";
+type Options = { side?: FloatingSide; align?: "start" | "center" | "end"; gap?: number; track?: boolean };
+type Position = { left: number; top: number; origin: string; side: FloatingSide };
+type Measurement = { anchor: FloatingAnchor; surface: HTMLElement; position: Position };
+
+/** Posiciona una capa en coordenadas de la ventana, midiendo su tamaño real. */
+export function useFloatingPosition(
+  anchor: FloatingAnchor | null,
+  surfaceRef: RefObject<HTMLElement | null>,
+  { side = "bottom", align = "end", gap = 6, track = false }: Options = {},
+): Position | null {
+  const [measurement, setMeasurement] = useState<Measurement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!anchor) { setMeasurement(null); return; }
+    if (!surfaceRef.current) return;
+    const surface = surfaceRef.current;
+    const update = (): void => {
+      const margin = 8;
+      const viewport = window.visualViewport;
+      const leftEdge = (viewport?.offsetLeft ?? 0) + margin;
+      const topEdge = (viewport?.offsetTop ?? 0) + margin;
+      const rightEdge = leftEdge + (viewport?.width ?? window.innerWidth) - margin * 2;
+      const bottomEdge = topEdge + (viewport?.height ?? window.innerHeight) - margin * 2;
+      surface.style.setProperty("--floating-max-width", `${Math.max(1, rightEdge - leftEdge)}px`);
+      surface.style.setProperty("--floating-max-height", `${Math.max(1, bottomEdge - topEdge)}px`);
+      const rect = "element" in anchor
+        ? anchor.element.getBoundingClientRect()
+        : "rect" in anchor ? anchor.rect
+        : { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y };
+      // offsetWidth/Height no incluyen la escala de la animación de entrada.
+      const width = surface.offsetWidth;
+      const height = surface.offsetHeight;
+      const roomAbove = rect.top - topEdge - gap;
+      const roomBelow = bottomEdge - rect.bottom - gap;
+      const resolvedSide = side === "bottom"
+        ? roomBelow < height && roomAbove > roomBelow ? "top" : "bottom"
+        : roomAbove < height && roomBelow > roomAbove ? "bottom" : "top";
+      const preferredLeft = align === "start" ? rect.left
+        : align === "end" ? rect.right - width : (rect.left + rect.right - width) / 2;
+      const preferredTop = resolvedSide === "top" ? rect.top - height - gap : rect.bottom + gap;
+      const left = Math.max(leftEdge, Math.min(preferredLeft, rightEdge - width));
+      const top = Math.max(topEdge, Math.min(preferredTop, bottomEdge - height));
+      const horizontalOrigin = Math.max(0, Math.min(width, (rect.left + rect.right) / 2 - left));
+      const next: Position = {
+        left, top, side: resolvedSide,
+        origin: `${horizontalOrigin}px ${resolvedSide === "top" ? "bottom" : "top"}`,
+      };
+      setMeasurement(previous => previous?.anchor === anchor && previous.surface === surface
+        && previous.position.left === next.left && previous.position.top === next.top
+        && previous.position.origin === next.origin && previous.position.side === next.side
+        ? previous : { anchor, surface, position: next });
+    };
+    update();
+    // Las confirmaciones siguen a su botón incluso durante una transición de layout.
+    let frame = 0;
+    if (track && "element" in anchor) {
+      const follow = (): void => { update(); frame = requestAnimationFrame(follow); };
+      frame = requestAnimationFrame(follow);
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(surface);
+    if ("element" in anchor) observer.observe(anchor.element);
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    window.visualViewport?.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("scroll", update);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+      window.visualViewport?.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("scroll", update);
+    };
+  }, [anchor, surfaceRef, side, align, gap, track]);
+
+  // Una reapertura no debe pintar ni enfocar con las coordenadas de otra capa.
+  return measurement?.anchor === anchor && measurement.surface === surfaceRef.current
+    ? measurement.position : null;
+}

@@ -21,8 +21,12 @@ import {
   type ReactNode,
 } from "react";
 import Dialog, { type DialogTone } from "./Dialog";
+import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 
 export type ConfirmOptions = {
+  /** Control que abrió el aviso; se captura su posición antes de cambiar la UI. */
+  trigger?: HTMLElement | null;
+  returnFocus?: HTMLElement | null;
   title: string;
   message?: string;
   detail?: string;
@@ -32,6 +36,8 @@ export type ConfirmOptions = {
 };
 
 export type AlertOptions = {
+  trigger?: HTMLElement | null;
+  returnFocus?: HTMLElement | null;
   title: string;
   message?: string;
   detail?: string;
@@ -55,6 +61,8 @@ export function useDialog(): DialogApi {
 }
 
 type Entry = {
+  anchor: FloatingAnchor | null;
+  returnFocus: HTMLElement | null;
   id: number;
   title: string;
   message?: string;
@@ -83,7 +91,18 @@ export default function DialogProvider({ children }: { children: ReactNode }) {
       options: ConfirmOptions & { kind: "confirm" | "alert" },
     ): Promise<boolean> =>
       new Promise<boolean>((resolve) => {
+        const trigger = options.trigger === undefined
+          ? document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>("button, [role=button]") : null
+          : options.trigger;
+        const rect = trigger?.getBoundingClientRect();
+        const usable = trigger?.isConnected && rect && rect.width > 0 && rect.height > 0 && !trigger.closest("[inert]");
+        // Un elemento del menú desaparecerá: conservamos la posición que tenía al pulsarlo.
+        const anchor: FloatingAnchor | null = usable
+          ? trigger.closest('[role="menu"]') ? { rect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } } : { element: trigger }
+          : null;
         const item: Entry = {
+          anchor,
+          returnFocus: options.returnFocus ?? trigger,
           id: (nextIdRef.current += 1),
           title: options.title,
           message: options.message,
@@ -120,7 +139,7 @@ export default function DialogProvider({ children }: { children: ReactNode }) {
       entryRef.current = next;
       setEntry(next);
       current.resolve(value);
-    }, EXIT_MS);
+    }, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : EXIT_MS);
   }, []);
 
   // Si la app se desmonta con diálogos pendientes, se resuelven para no colgar
@@ -151,6 +170,8 @@ export default function DialogProvider({ children }: { children: ReactNode }) {
       {entry && (
         <Dialog
           key={entry.id}
+          anchor={entry.anchor}
+          returnFocus={entry.returnFocus}
           title={entry.title}
           message={entry.message}
           detail={entry.detail}

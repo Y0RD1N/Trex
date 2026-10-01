@@ -1,7 +1,5 @@
 /**
- * Barra lateral (≈290 px): franja superior arrastrable, cabecera con ✳ +
- * "trex" + botón de añadir proyecto, buscador de proyectos (Ctrl+K), lista de
- * proyectos con icono de carpeta y menú "⋯" por fila, y pie con los ajustes.
+ * Navegación de proyectos y sesiones, con controles planos y búsqueda global.
  *
  * La franja superior es la barra de título de la ventana sin bordes: lleva
  * `data-tauri-drag-region` (solo en contenedores y textos; nunca en botones ni
@@ -12,12 +10,13 @@
  * `.sidebar-inner`, de modo que el área principal queda completa y sin huecos.
  */
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { clamp } from "../api";
+import { clamp, normalizeText } from "../api";
 import { MOD_LABEL } from "../platform";
-import type { ClaudeInfo, Project } from "../types";
+import type { ClaudeInfo, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
 import { AlertIcon, GearIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
+import SessionItem, { sessionLabel } from "./SessionItem";
 
 /** Ancho al que vuelve la barra lateral con doble clic en el divisor. */
 const DEFAULT_SIDEBAR_WIDTH = 290;
@@ -30,7 +29,8 @@ type Props = {
   /** Barra lateral oculta: ancho 0 y contenido desvanecido. */
   sidebarCollapsed: boolean;
   claudeInfo: ClaudeInfo | null;
-  tabCounts: Record<string, number>;
+  tabs: TabState[];
+  activeTabId: string | null;
   /** Texto del buscador de proyectos. */
   search: string;
   /** Modo que está pintado ahora mismo (resuelve "system"). */
@@ -41,8 +41,11 @@ type Props = {
   onAdd: () => void;
   onSelect: (projectId: string) => void;
   onQuickOpen: (projectId: string) => void;
+  onSelectSession: (projectId: string, tabId: string) => void;
+  onCloseSession: (tabId: string, trigger: HTMLElement) => void;
+  onRenameSession: (tabId: string, name: string) => void;
   onRename: (projectId: string, name: string) => void;
-  onDelete: (projectId: string) => void;
+  onDelete: (projectId: string, trigger: HTMLElement, returnFocus: HTMLElement | null) => void;
   onReveal: (projectId: string) => void;
   onCopyPath: (path: string) => void;
   onOpenSettings: () => void;
@@ -56,7 +59,8 @@ export default function Sidebar({
   sidebarWidth,
   sidebarCollapsed,
   claudeInfo,
-  tabCounts,
+  tabs,
+  activeTabId,
   search,
   themeMode,
   searchInputRef,
@@ -64,6 +68,9 @@ export default function Sidebar({
   onAdd,
   onSelect,
   onQuickOpen,
+  onSelectSession,
+  onCloseSession,
+  onRenameSession,
   onRename,
   onDelete,
   onReveal,
@@ -73,8 +80,29 @@ export default function Sidebar({
   onResize,
 }: Props) {
   const [dragging, setDragging] = useState(false);
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const onResizeRef = useRef(onResize);
   onResizeRef.current = onResize;
+
+  // Los atajos pueden activar sesiones de carpetas que el usuario contrajo.
+  useEffect(() => {
+    if (!activeTabId || !activeProjectId) return;
+    setCollapsedProjects((previous) => {
+      if (!previous.has(activeProjectId)) return previous;
+      const next = new Set(previous);
+      next.delete(activeProjectId);
+      return next;
+    });
+  }, [activeTabId, activeProjectId]);
+
+  const toggleProject = (projectId: string): void => {
+    setCollapsedProjects((previous) => {
+      const next = new Set(previous);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  };
 
   // Arrastre del divisor: el ancho sigue al puntero y se limita a un rango útil.
   useEffect(() => {
@@ -103,15 +131,12 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}
+      className={`sidebar${sidebarCollapsed ? " collapsed" : ""}${sidebarWidth <= 220 ? " compact" : ""}`}
       style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
     >
-      <div className="sidebar-inner">
+      <div className="sidebar-clip" inert={sidebarCollapsed} aria-hidden={sidebarCollapsed || undefined}>
+      <div className="sidebar-inner" style={{ width: sidebarWidth }}>
         <div className="sidebar-top" data-tauri-drag-region="deep">
-          {/* Hueco que dejan los antiguos semáforos: sigue siendo la zona para
-              arrastrar la ventana desde la esquina superior izquierda. */}
-          <div className="sidebar-drag" data-tauri-drag-region aria-hidden="true" />
-
           <header className="sidebar-header" data-tauri-drag-region>
             <span className="sidebar-brand" aria-hidden="true" data-tauri-drag-region>
               ✳
@@ -119,15 +144,7 @@ export default function Sidebar({
             <span className="sidebar-name" data-tauri-drag-region>
               trex
             </span>
-            <button
-              type="button"
-              className="sq-btn sidebar-add tip tip-below tip-right"
-              data-tip="Añadir proyecto"
-              aria-label="Añadir proyecto"
-              onClick={onAdd}
-            >
-              <PlusIcon size={16} />
-            </button>
+            <span className="sidebar-caption" data-tauri-drag-region>workspace</span>
           </header>
         </div>
 
@@ -141,9 +158,9 @@ export default function Sidebar({
               className="search-input"
               type="text"
               value={search}
-              placeholder="Buscar proyectos…"
+              placeholder="Buscar…"
               spellCheck={false}
-              aria-label="Buscar proyectos"
+              aria-label="Buscar proyectos y sesiones"
               onChange={(event) => onSearchChange(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
@@ -162,21 +179,49 @@ export default function Sidebar({
         </div>
 
         <div className="sidebar-section-label"><span>Proyectos</span><span>{projects.length}</span></div>
-        <div className="project-list">
-          {projects.map((project) => (
-            <ProjectItem
-              key={project.id}
-              project={project}
-              active={project.id === activeProjectId}
-              tabCount={tabCounts[project.id] ?? 0}
-              onSelect={() => onSelect(project.id)}
-              onQuickOpen={() => onQuickOpen(project.id)}
-              onReveal={() => onReveal(project.id)}
-              onCopyPath={() => onCopyPath(project.path)}
-              onRename={(name) => onRename(project.id, name)}
-              onDelete={() => onDelete(project.id)}
-            />
-          ))}
+        <nav className="project-list" aria-label="Proyectos y sesiones">
+          {projects.map((project) => {
+            const sessions = tabs.filter((tab) => tab.projectId === project.id);
+            const expanded = query.length > 0 || !collapsedProjects.has(project.id);
+            const needle = normalizeText(query);
+            const matchesProject = normalizeText(project.name).includes(needle) || normalizeText(project.path).includes(needle);
+            const visibleSessions = matchesProject ? sessions : sessions.filter((tab) => normalizeText(sessionLabel(tab)).includes(needle));
+            return (
+              <div className="project-group" key={project.id}>
+                <ProjectItem
+                  project={project}
+                  active={project.id === activeProjectId}
+                  tabCount={sessions.length}
+                  expanded={expanded}
+                  onToggleExpanded={() => toggleProject(project.id)}
+                  onSelect={() => onSelect(project.id)}
+                  onQuickOpen={() => onQuickOpen(project.id)}
+                  onReveal={() => onReveal(project.id)}
+                  onCopyPath={() => onCopyPath(project.path)}
+                  onRename={(name) => onRename(project.id, name)}
+                  onDelete={(trigger, returnFocus) => onDelete(project.id, trigger, returnFocus)}
+                />
+                {visibleSessions.length > 0 && (
+                  <div className={`project-sessions${expanded ? " expanded" : ""}`}
+                    inert={!expanded} aria-hidden={!expanded || undefined}
+                    aria-label={`Sesiones de ${project.name}`}>
+                    <div className="project-sessions-clip"><div className="project-sessions-inner">
+                    {visibleSessions.map((tab) => (
+                      <SessionItem
+                        key={tab.id}
+                        tab={tab}
+                        active={tab.id === activeTabId && project.id === activeProjectId}
+                        onSelect={() => onSelectSession(project.id, tab.id)}
+                        onClose={trigger => onCloseSession(tab.id, trigger)}
+                        onRename={(name) => onRenameSession(tab.id, name)}
+                      />
+                    ))}
+                    </div></div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           {noResults && (
             <div className="sidebar-empty sidebar-empty-centered">
@@ -189,7 +234,7 @@ export default function Sidebar({
               Todavía no hay proyectos. Añade una carpeta para empezar.
             </div>
           )}
-        </div>
+        </nav>
 
         <footer className="sidebar-footer">
           {claudeMissing && (
@@ -205,26 +250,37 @@ export default function Sidebar({
           )}
 
           <div className="sidebar-footer-row">
-            <button type="button" className="sidebar-settings" onClick={onOpenSettings}>
-              <span className="sidebar-settings-icon" aria-hidden="true">
-                <GearIcon size={16} />
-              </span>
-              <span className="sidebar-settings-label">Ajustes</span>
-            </button>
             <button
               type="button"
-              className="icon-btn sidebar-theme tip tip-right"
+              className="icon-btn tip"
+              data-tip="Añadir proyecto"
+              aria-label="Añadir proyecto"
+              onClick={onAdd}
+            >
+              <PlusIcon size={17} />
+            </button>
+            <span className="sidebar-footer-spacer" />
+            <button
+              type="button"
+              className="icon-btn sidebar-theme tip"
               data-tip={goesToLight ? "Modo claro (Ctrl+Shift+L)" : "Modo oscuro (Ctrl+Shift+L)"}
               aria-label={themeTitle}
               onClick={onToggleTheme}
             >
               {goesToLight ? <SunIcon size={16} /> : <MoonIcon size={16} />}
             </button>
-            <span className="kbd sidebar-kbd" aria-hidden="true">
-              {MOD_LABEL} ,
-            </span>
+            <button
+              type="button"
+              className="icon-btn tip"
+              data-tip={`Ajustes (${MOD_LABEL} ,)`}
+              aria-label="Ajustes"
+              onClick={onOpenSettings}
+            >
+              <GearIcon size={16} />
+            </button>
           </div>
         </footer>
+      </div>
       </div>
 
       <div

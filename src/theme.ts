@@ -134,14 +134,13 @@ const cssVar = (name: string, fallback: string): string => {
 };
 
 /**
- * Paleta oscura: fondo negro intenso (coincide con --term-bg) y colores ANSI
- * con contraste alto.
+ * Paleta oscura: grafito integrado con la interfaz y colores ANSI legibles.
  */
 const DARK_TERMINAL: ITheme = {
-  background: "#000000",
+  background: "#202022",
   foreground: "#e4e7ec",
   cursor: "#e8834a",
-  cursorAccent: "#000000",
+  cursorAccent: "#202022",
   selectionBackground: "rgba(118, 143, 184, 0.32)",
   selectionInactiveBackground: "rgba(118, 143, 184, 0.18)",
   black: "#2b3340",
@@ -167,10 +166,10 @@ const DARK_TERMINAL: ITheme = {
  * siendo legibles sobre blanco (contraste AA).
  */
 const LIGHT_TERMINAL: ITheme = {
-  background: "#fbfbfd",
+  background: "#faf9f6",
   foreground: "#1b1f27",
   cursor: "#b3541f",
-  cursorAccent: "#fbfbfd",
+  cursorAccent: "#faf9f6",
   selectionBackground: "rgba(37, 99, 235, 0.16)",
   selectionInactiveBackground: "rgba(37, 99, 235, 0.08)",
   black: "#24292f",
@@ -201,7 +200,8 @@ export const getTerminalTheme = (mode: ThemeMode): ITheme => {
     mode === "light"
       ? cssVar("--accent-strong", "#b3541f")
       : cssVar("--accent", "#e8834a");
-  return { ...base, cursor };
+  const background = cssVar("--term-bg", base.background ?? "#202022");
+  return { ...base, background, cursorAccent: background, cursor };
 };
 
 /** Decoraciones de la búsqueda (coherentes con el modo activo). */

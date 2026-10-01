@@ -129,6 +129,7 @@ export type SpawnRequest = {
   cols: number;
   rows: number;
   launchMode: string;
+  flowControl?: boolean;
 };
 
 /** Pestaña viva en la interfaz (estado de React, no persistido tal cual). */

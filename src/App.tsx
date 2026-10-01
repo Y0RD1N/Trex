@@ -29,6 +29,7 @@ import {
   saveConfig,
 } from "./api";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { usePresence } from "./hooks/usePresence";
 import { applyTheme, getThemeMode, onThemeChange, type ThemeMode } from "./theme";
 import type {
   AppConfig,
@@ -47,7 +48,9 @@ import Sidebar from "./components/Sidebar";
 import TerminalTabs from "./components/TerminalTabs";
 import TerminalView from "./components/TerminalView";
 import Toast from "./components/Toast";
+import TooltipProvider from "./components/TooltipProvider";
 import ProjectHome from "./components/ProjectHome";
+import { sessionLabel } from "./components/SessionItem";
 import WelcomeScreen from "./components/WelcomeScreen";
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
@@ -89,6 +92,7 @@ function AppShell() {
   const [claudeInfo, setClaudeInfo] = useState<ClaudeInfo | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsPresence = usePresence(settingsOpen ? true : null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null);
   /** Modo realmente pintado (resuelve "system" con la preferencia del equipo). */
@@ -120,10 +124,10 @@ function AppShell() {
 
   /** Ctrl+K (⌘K): lleva el foco al buscador de proyectos desde cualquier sitio. */
   const focusSearch = useCallback(() => {
+    setConfig((prev) => prev ? { ...prev, ui: { ...prev.ui, sidebarCollapsed: false } } : prev);
     const input = searchInputRef.current;
     if (!input) return;
-    input.focus();
-    input.select();
+    requestAnimationFrame(() => { input.focus(); input.select(); });
   }, []);
 
   // --- Carga inicial ---------------------------------------------------------
@@ -178,6 +182,7 @@ function AppShell() {
 
   const redetectClaude = useCallback(() => {
     void (async () => {
+      setClaudeInfo(null);
       try {
         setClaudeInfo(await detectClaudeCode());
       } catch (error) {
@@ -189,17 +194,20 @@ function AppShell() {
 
   // --- Persistencia (con debounce) --------------------------------------------
 
+  // Títulos OSC y códigos de salida son estado transitorio. Solo los campos
+  // restaurables deben reprogramar la escritura del archivo de configuración.
+  const persistedTabsKey = JSON.stringify(tabs.map<PersistedTab>((tab) => ({
+    projectId: tab.projectId,
+    kind: tab.kind,
+    subtitle: tab.subtitle,
+  })));
   useEffect(() => {
     if (!config || !loadedRef.current) return;
     const payload: AppConfig = {
       ...config,
       ui: {
         ...config.ui,
-        lastTabs: tabs.map<PersistedTab>((tab) => ({
-          projectId: tab.projectId,
-          kind: tab.kind,
-          subtitle: tab.subtitle,
-        })),
+        lastTabs: JSON.parse(persistedTabsKey) as PersistedTab[],
       },
     };
     const timer = window.setTimeout(() => {
@@ -208,7 +216,7 @@ function AppShell() {
       });
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [config, tabs]);
+  }, [config, persistedTabsKey]);
 
   // Tema y acento se aplican en vivo cuando cambia la configuración y, si la
   // apariencia es "system", también cuando el sistema cambia de modo.
@@ -331,6 +339,7 @@ function AppShell() {
   }, []);
 
   const addProject = useCallback(async () => {
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>("button") : null;
     let selected: string | null = null;
     try {
       selected = await open({
@@ -340,6 +349,7 @@ function AppShell() {
       });
     } catch (error) {
       void dialog.alert({
+        trigger,
         title: "No se pudo abrir el selector de carpetas",
         message: "Comprueba los permisos del sistema e inténtalo de nuevo.",
         detail: formatError(error),
@@ -394,11 +404,13 @@ function AppShell() {
     );
   }, []);
 
-  const deleteProject = useCallback(async (projectId: string) => {
+  const deleteProject = useCallback(async (projectId: string, trigger: HTMLElement, returnFocus: HTMLElement | null) => {
     const project = configRef.current?.projects.find((item) => item.id === projectId);
     if (!project) return;
 
     const ok = await dialog.confirm({
+      trigger,
+      returnFocus,
       title: `Eliminar «${project.name}»`,
       message: "Se quitará el proyecto de la lista y se cerrarán sus pestañas abiertas.",
       detail: "La carpeta del proyecto no se modifica: solo desaparece de trex.",
@@ -498,16 +510,17 @@ function AppShell() {
     );
   }, []);
 
-  const closeTab = useCallback(async (tabId: string) => {
+  const closeTab = useCallback(async (tabId: string, trigger?: HTMLElement) => {
     const tab = tabsRef.current.find((item) => item.id === tabId);
     if (!tab) return;
 
     const settings = configRef.current?.settings;
     if (settings?.confirmCloseTab && !tab.exited) {
       const ok = await dialog.confirm({
-        title: `Cerrar «${tab.subtitle}»`,
+        trigger,
+        title: `Cerrar «${sessionLabel(tab)}»`,
         message: "El proceso que se está ejecutando en esta pestaña se terminará.",
-        detail: "Puedes volver a abrirla cuando quieras desde la barra de pestañas.",
+        detail: "Puedes volver a abrirla cuando quieras desde Nueva sesión (+).",
         confirmLabel: "Cerrar pestaña",
         cancelLabel: "Cancelar",
         tone: "danger",
@@ -540,7 +553,7 @@ function AppShell() {
 
   const closeActiveTab = useCallback(() => {
     const id = activeTabIdRef.current;
-    if (id) void closeTab(id);
+    if (id) void closeTab(id, document.querySelector<HTMLElement>(".session-row.active .session-close") ?? undefined);
   }, [closeTab]);
 
   const cycleTab = useCallback((direction: 1 | -1) => {
@@ -573,7 +586,11 @@ function AppShell() {
   }, []);
 
   const handleTabTitle = useCallback((tabId: string, title: string) => {
-    setTabs((prev) => prev.map((tab) => (tab.id === tabId ? { ...tab, oscTitle: title } : tab)));
+    setTabs((prev) => {
+      const tab = prev.find(item => item.id === tabId);
+      if (!tab || tab.oscTitle === title) return prev;
+      return prev.map(item => item.id === tabId ? { ...item, oscTitle: title } : item);
+    });
   }, []);
 
   // --- Ajustes y tipografía ------------------------------------------------------
@@ -628,6 +645,9 @@ function AppShell() {
    * la configuración y se recuerda en el siguiente arranque.
    */
   const toggleSidebar = useCallback(() => {
+    if (document.querySelector(".sidebar")?.contains(document.activeElement)) {
+      document.querySelector<HTMLButtonElement>(".panel-toggle")?.focus({ preventScroll: true });
+    }
     setConfig((prev) =>
       prev
         ? { ...prev, ui: { ...prev.ui, sidebarCollapsed: !prev.ui.sidebarCollapsed } }
@@ -653,7 +673,10 @@ function AppShell() {
       nextTab: () => cycleTab(1),
       prevTab: () => cycleTab(-1),
       selectTab: selectTabByIndex,
-      toggleSettings: () => setSettingsOpen((prev) => !prev),
+      toggleSettings: () => {
+        if (settingsOpen) window.dispatchEvent(new Event("trex:settings-close"));
+        else setSettingsOpen(true);
+      },
       toggleTheme,
       openInExplorer: () => {
         const projectId = configRef.current?.ui.activeProjectId;
@@ -676,15 +699,10 @@ function AppShell() {
     return all.filter(
       (project) =>
         normalizeText(project.name).includes(needle) ||
-        normalizeText(project.path).includes(needle),
+        normalizeText(project.path).includes(needle) ||
+        tabs.some((tab) => tab.projectId === project.id && normalizeText(sessionLabel(tab)).includes(needle)),
     );
-  }, [config?.projects, search]);
-
-  const tabCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const tab of tabs) counts[tab.projectId] = (counts[tab.projectId] ?? 0) + 1;
-    return counts;
-  }, [tabs]);
+  }, [config?.projects, search, tabs]);
 
   if (!config) return <Splash />;
 
@@ -700,7 +718,8 @@ function AppShell() {
         sidebarWidth={config.ui.sidebarWidth}
         sidebarCollapsed={config.ui.sidebarCollapsed}
         claudeInfo={claudeInfo}
-        tabCounts={tabCounts}
+        tabs={tabs}
+        activeTabId={activeTabId}
         search={search}
         themeMode={themeMode}
         searchInputRef={searchInputRef}
@@ -708,8 +727,14 @@ function AppShell() {
         onAdd={() => void addProject()}
         onSelect={selectProject}
         onQuickOpen={(projectId) => openTab(projectId, "claude")}
+        onSelectSession={(projectId, tabId) => {
+          selectProject(projectId);
+          setActiveTabId(tabId);
+        }}
+        onCloseSession={(tabId, trigger) => void closeTab(tabId, trigger)}
+        onRenameSession={renameTab}
         onRename={renameProject}
-        onDelete={(projectId) => void deleteProject(projectId)}
+        onDelete={(projectId, trigger, returnFocus) => void deleteProject(projectId, trigger, returnFocus)}
         onReveal={revealProject}
         onCopyPath={copyPath}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -728,11 +753,11 @@ function AppShell() {
           onRevealProject={
             activeProjectId ? () => revealProject(activeProjectId) : null
           }
-          onSelect={setActiveTabId}
-          onClose={(tabId) => void closeTab(tabId)}
-          onRename={renameTab}
           onNew={() => {
             if (activeProjectId) openTab(activeProjectId, "claude");
+          }}
+          onNewShell={() => {
+            if (activeProjectId) openTab(activeProjectId, "shell");
           }}
           onOpenSettings={() => setSettingsOpen(true)}
         />
@@ -799,8 +824,10 @@ function AppShell() {
         )}
       </main>
 
-      {settingsOpen && (
+      {settingsPresence.value && (
         <SettingsPanel
+          entering={settingsPresence.entering}
+          leaving={settingsPresence.leaving}
           settings={config.settings}
           appInfo={appInfo}
           claudeInfo={claudeInfo}
@@ -827,6 +854,7 @@ export default function App() {
   return (
     <DialogProvider>
       <AppShell />
+      <TooltipProvider />
     </DialogProvider>
   );
 }

@@ -15,6 +15,7 @@ use base64::Engine as _;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use crate::output_flow::OutputFlow;
 
 fn default_cols() -> u16 {
     80
@@ -43,6 +44,9 @@ pub struct SpawnRequest {
     /// "arg" (pasa el comando como argumento del shell) o "inject" (lo escribe tras arrancar).
     #[serde(default)]
     pub launch_mode: Option<String>,
+    /// El frontend devuelve créditos después de procesar cada bloque.
+    #[serde(default)]
+    pub flow_control: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +84,7 @@ struct Session {
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     alive: bool,
+    output_flow: Arc<OutputFlow>,
 }
 
 struct Inner {
@@ -473,53 +478,7 @@ impl PtyState {
 
         let id = req.id.clone();
         let writer = Arc::new(Mutex::new(writer));
-
-        // Hilo lector: PTY -> frontend (base64 para preservar UTF-8).
-        {
-            let app = app.clone();
-            let id = id.clone();
-            thread::spawn(move || {
-                let mut buf = [0u8; 16384];
-                let decoder = base64::engine::general_purpose::STANDARD;
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let payload = serde_json::json!({
-                                "data": decoder.encode(&buf[..n]),
-                            });
-                            if app.emit(&format!("pty-data-{id}"), payload).is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            });
-        }
-
-        // Hilo de espera: avisa del fin del proceso y libera la sesión.
-        {
-            let app = app.clone();
-            let id = id.clone();
-            let state = self.clone();
-            let mut child = child;
-            thread::spawn(move || {
-                let code = match child.wait() {
-                    Ok(status) => status.exit_code() as i64,
-                    Err(_) => -1,
-                };
-                let _ = app.emit(
-                    &format!("pty-exit-{id}"),
-                    serde_json::json!({ "code": code }),
-                );
-                if let Ok(mut inner) = state.inner.lock() {
-                    if let Some(session) = inner.sessions.get_mut(&id) {
-                        session.alive = false;
-                    }
-                }
-            });
-        }
+        let output_flow = Arc::new(OutputFlow::new(req.flow_control));
 
         let args_preview = args.join(" ");
         let session = Session {
@@ -534,11 +493,69 @@ impl PtyState {
             master: pair.master,
             killer,
             alive: true,
+            output_flow: output_flow.clone(),
         };
-
         {
             let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
             inner.sessions.insert(id.clone(), session);
+        }
+
+        // Hilo lector: PTY -> frontend (base64 para preservar UTF-8).
+        let (reader_done_tx, reader_done_rx) = std::sync::mpsc::channel();
+        {
+            let app = app.clone();
+            let id = id.clone();
+            let output_flow = output_flow.clone();
+            thread::spawn(move || {
+                let mut buf = [0u8; 16384];
+                let decoder = base64::engine::general_purpose::STANDARD;
+                let event = format!("pty-data-{id}");
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if !output_flow.reserve(n) { break; }
+                            let payload = serde_json::json!({
+                                "data": decoder.encode(&buf[..n]),
+                            });
+                            if app.emit(&event, payload).is_err() {
+                                output_flow.stop();
+                                break;
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
+                }
+                let _ = reader_done_tx.send(());
+            });
+        }
+
+        // Hilo de espera: avisa del fin del proceso y libera la sesión.
+        {
+            let app = app.clone();
+            let id = id.clone();
+            let state = self.clone();
+            let mut child = child;
+            thread::spawn(move || {
+                let code = match child.wait() {
+                    Ok(status) => status.exit_code() as i64,
+                    Err(_) => -1,
+                };
+                // Permite vaciar la cola final antes de avisar. No espera
+                // indefinidamente a un descendiente que conserve el PTY abierto
+                // ni al cierre de ConPTY (que puede necesitar soltar el master).
+                let _ = reader_done_rx.recv_timeout(Duration::from_millis(500));
+                let _ = app.emit(
+                    &format!("pty-exit-{id}"),
+                    serde_json::json!({ "code": code }),
+                );
+                if let Ok(mut inner) = state.inner.lock() {
+                    if let Some(session) = inner.sessions.get_mut(&id) {
+                        session.alive = false;
+                    }
+                }
+            });
         }
 
         // Modo "inject": el shell arranca interactivo y escribimos el comando después.
@@ -586,6 +603,16 @@ impl PtyState {
         w.flush().map_err(|e| format!("No se pudo vaciar el buffer: {e}"))
     }
 
+    pub fn acknowledge(&self, id: &str, bytes: usize) -> Result<(), String> {
+        let flow = {
+            let inner = self.inner.lock().map_err(|e| e.to_string())?;
+            inner.sessions.get(id).map(|s| s.output_flow.clone())
+        };
+        // Un último callback puede llegar después de cerrar la pestaña.
+        if let Some(flow) = flow { flow.acknowledge(bytes); }
+        Ok(())
+    }
+
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         let session = inner
@@ -613,6 +640,7 @@ impl PtyState {
             inner.sessions.remove(id)
         };
         if let Some(session) = session.as_mut() {
+            session.output_flow.stop();
             let _ = session.killer.kill();
             session.alive = false;
             // Al soltar el master (drop) el PTY se cierra y el proceso recibe EOF/HUP.

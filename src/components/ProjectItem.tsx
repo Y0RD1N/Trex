@@ -1,34 +1,35 @@
 /**
  * Elemento de proyecto en la barra lateral.
  *
- * Fila de 44 px con el icono de carpeta (el identificador visual: ya no hay
- * punto de color), el nombre, el contador discreto de pestañas abiertas y el
- * botón "⋯" que abre el menú de opciones. El renombrado en línea se hace con
- * doble clic en el nombre o desde el propio menú (el plugin dialog v2 no
- * expone prompt()).
+ * Fila compacta de carpeta con expansión de sesiones y menú contextual.
+ * El nombre se puede editar con doble clic o desde el propio menú.
  */
 import { useEffect, useRef, useState } from "react";
+import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { Project } from "../types";
-import { CopyIcon, EllipsisIcon, FolderIcon, PencilIcon, TrashIcon } from "./Icons";
+import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, PencilIcon, TrashIcon } from "./Icons";
+import DropdownMenu from "./DropdownMenu";
 
 type Props = {
   project: Project;
   active: boolean;
   tabCount: number;
+  expanded: boolean;
+  onToggleExpanded: () => void;
   onSelect: () => void;
   onQuickOpen: () => void;
   onReveal: () => void;
   onCopyPath: () => void;
   onRename: (name: string) => void;
-  onDelete: () => void;
+  onDelete: (trigger: HTMLElement, returnFocus: HTMLElement | null) => void;
 };
-
-type MenuPosition = { x: number; y: number };
 
 export default function ProjectItem({
   project,
   active,
   tabCount,
+  expanded,
+  onToggleExpanded,
   onSelect,
   onQuickOpen,
   onReveal,
@@ -36,44 +37,14 @@ export default function ProjectItem({
   onRename,
   onDelete,
 }: Props) {
-  const [menu, setMenu] = useState<MenuPosition | null>(null);
+  const [menu, setMenu] = useState<FloatingAnchor | null>(null);
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(project.name);
-  const itemRef = useRef<HTMLDivElement | null>(null);
-
-  // Cierra el menú contextual al pulsar fuera o al redimensionar la ventana.
-  useEffect(() => {
-    if (!menu) return;
-    const close = (event: MouseEvent): void => {
-      if (itemRef.current?.querySelector(".context-menu")?.contains(event.target as Node)) return;
-      setMenu(null);
-    };
-    const closeOnResize = (): void => setMenu(null);
-    const closeOnKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") setMenu(null);
-    };
-    window.addEventListener("mousedown", close);
-    window.addEventListener("resize", closeOnResize);
-    window.addEventListener("keydown", closeOnKey);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("resize", closeOnResize);
-      window.removeEventListener("keydown", closeOnKey);
-    };
-  }, [menu]);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     setDraftName(project.name);
   }, [project.name]);
-
-  /** Abre el menú de opciones evitando que se salga de la ventana. */
-  const openMenu = (x: number, y: number): void => {
-    const width = 244;
-    const height = 232;
-    const left = Math.min(x, Math.max(8, window.innerWidth - width - 8));
-    const top = Math.min(y, Math.max(8, window.innerHeight - height - 8));
-    setMenu({ x: left, y: top });
-  };
 
   const startRename = (): void => {
     setDraftName(project.name);
@@ -94,18 +65,28 @@ export default function ProjectItem({
 
   return (
     <div
-      ref={itemRef}
       className={`project-item${active ? " active" : ""}`}
       title={project.path}
       onClick={onSelect}
       onContextMenu={(event) => {
         event.preventDefault();
         onSelect();
-        openMenu(event.clientX, event.clientY);
+        setMenu({ x: event.clientX, y: event.clientY });
       }}
     >
+      {tabCount > 0 ? (
+        <button
+          type="button"
+          className={`project-disclosure${expanded ? " expanded" : ""}`}
+          aria-label={`${expanded ? "Contraer" : "Expandir"} sesiones de ${project.name}`}
+          aria-expanded={expanded}
+          onClick={(event) => { event.stopPropagation(); onToggleExpanded(); }}
+        >
+          <ChevronIcon size={11} />
+        </button>
+      ) : <span className="project-disclosure-placeholder" />}
       <span className="project-icon" aria-hidden="true">
-        <FolderIcon size={20} />
+        <FolderIcon size={16} />
       </span>
 
       <div className="project-info">
@@ -130,7 +111,12 @@ export default function ProjectItem({
             }}
           />
         ) : (
-          <div className="project-name">
+          <button
+            type="button"
+            className="project-name project-select"
+            aria-label={project.name}
+            onClick={(event) => { event.stopPropagation(); onSelect(); }}
+          >
             <span
               className="project-name-text"
               title={`${project.name} — doble clic para renombrar`}
@@ -149,45 +135,55 @@ export default function ProjectItem({
                 {tabCount}
               </span>
             )}
-          </div>
+          </button>
         )}
-        <div className="project-meta">{tabCount > 0 ? `${tabCount} ${tabCount === 1 ? "sesión abierta" : "sesiones abiertas"}` : "Listo para empezar"}</div>
       </div>
 
       <button
+        ref={menuButtonRef}
         type="button"
         className="project-menu-btn"
-        title="Opciones del proyecto"
+        data-tip="Opciones del proyecto"
         aria-label={`Opciones de ${project.name}`}
+        aria-expanded={menu !== null}
+        aria-haspopup="menu"
+        onKeyDown={event => {
+          if (event.key === "ArrowDown") { event.preventDefault(); setMenu({ element: event.currentTarget }); }
+        }}
         onClick={(event) => {
           event.stopPropagation();
-          const rect = event.currentTarget.getBoundingClientRect();
-          openMenu(rect.right - 244, rect.bottom + 4);
+          if (menu) {
+            setMenu(null);
+            return;
+          }
+          setMenu({ element: event.currentTarget });
         }}
       >
         <EllipsisIcon size={16} />
       </button>
 
-      {menu && (
-        <div
-          className="context-menu"
-          style={{ left: menu.x, top: menu.y }}
-          onClick={(event) => event.stopPropagation()}
+      {
+        <DropdownMenu
+          anchor={menu}
+          triggerRef={menuButtonRef}
+          label={`Opciones de ${project.name}`}
+          className="project-context-menu"
+          onClose={() => setMenu(null)}
         >
-          <button type="button" className="context-item" onClick={() => runAction(onQuickOpen)}>
+          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => runAction(onQuickOpen)}>
             <span className="context-icon" aria-hidden="true">
               ✳
             </span>
             Abrir Claude en este proyecto
           </button>
-          <div className="context-sep" />
-          <button type="button" className="context-item" onClick={() => runAction(onReveal)}>
+          <div className="context-sep" role="separator" />
+          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => runAction(onReveal)}>
             <span className="context-icon" aria-hidden="true">
               <FolderIcon size={16} />
             </span>
             Abrir carpeta en el explorador
           </button>
-          <button type="button" className="context-item" onClick={() => runAction(onCopyPath)}>
+          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => runAction(onCopyPath)}>
             <span className="context-icon" aria-hidden="true">
               <CopyIcon size={16} />
             </span>
@@ -195,6 +191,8 @@ export default function ProjectItem({
           </button>
           <button
             type="button"
+            role="menuitem"
+            tabIndex={-1}
             className="context-item"
             onClick={() => runAction(startRename)}
           >
@@ -203,15 +201,18 @@ export default function ProjectItem({
             </span>
             Renombrar
           </button>
-          <div className="context-sep" />
-          <button type="button" className="context-item danger" onClick={() => runAction(onDelete)}>
+          <div className="context-sep" role="separator" />
+          <button type="button" role="menuitem" tabIndex={-1} className="context-item danger" onClick={event => {
+            const trigger = event.currentTarget;
+            runAction(() => onDelete(trigger, menuButtonRef.current));
+          }}>
             <span className="context-icon" aria-hidden="true">
               <TrashIcon size={16} />
             </span>
             Eliminar proyecto
           </button>
-        </div>
-      )}
+        </DropdownMenu>
+      }
     </div>
   );
 }

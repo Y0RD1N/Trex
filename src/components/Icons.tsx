@@ -235,3 +235,7 @@ export function TerminalIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
 export function ArrowRightIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><path d="M5 12h14m-5-5 5 5-5 5" /></svg>;
 }
+
+export function ChevronIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="m9 5 7 7-7 7" /></svg>;
+}

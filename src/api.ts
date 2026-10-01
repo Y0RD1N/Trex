@@ -24,6 +24,12 @@ import type {
 
 /** Decodifica una cadena base64 (payload de `pty-data-*`) a bytes. */
 export const b64ToBytes = (b64: string): Uint8Array => {
+  // WebKit reciente decodifica directamente a bytes sin una cadena intermedia.
+  // Conserva el camino compatible para WebViews que aún no tengan esta API.
+  const fromBase64 = (Uint8Array as typeof Uint8Array & {
+    fromBase64?: (value: string) => Uint8Array;
+  }).fromBase64;
+  if (fromBase64) return fromBase64(b64);
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
@@ -87,6 +93,9 @@ export const ptySpawn = (request: SpawnRequest): Promise<SpawnResponse> =>
 
 export const ptyWrite = (id: string, data: string): Promise<void> =>
   invoke<void>("pty_write", { id, data });
+
+export const ptyAck = (id: string, bytes: number): Promise<void> =>
+  invoke<void>("pty_ack", { id, bytes });
 
 export const ptyResize = (id: string, cols: number, rows: number): Promise<void> =>
   invoke<void>("pty_resize", { id, cols, rows });

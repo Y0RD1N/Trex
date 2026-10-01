@@ -4,6 +4,7 @@
 // Claude Code en el sistema y persistir la configuración del usuario.
 mod config;
 mod pty;
+mod output_flow;
 
 use config::AppConfig;
 use pty::{ClaudeInfo, PtyState, SessionInfo, SpawnRequest, SpawnResponse};
@@ -188,6 +189,11 @@ async fn pty_write(state: State<'_, PtyState>, id: String, data: String) -> Resu
 }
 
 #[tauri::command]
+async fn pty_ack(state: State<'_, PtyState>, id: String, bytes: usize) -> Result<(), String> {
+    state.acknowledge(&id, bytes)
+}
+
+#[tauri::command]
 async fn pty_resize(
     state: State<'_, PtyState>,
     id: String,
@@ -259,6 +265,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
+            pty_ack,
             pty_resize,
             pty_kill,
             pty_list,

@@ -12,6 +12,7 @@ import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { WebglAddon } from "@xterm/addon-webgl";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   DEFAULT_FONT_FAMILY,
@@ -19,13 +20,16 @@ import {
   formatError,
   listenPtyData,
   listenPtyExit,
+  ptyAck,
+  ptyKill,
   ptyResize,
   ptySpawn,
   ptyWrite,
 } from "../api";
-import { CloseIcon, FolderIcon, SearchIcon, TerminalIcon } from "./Icons";
+import { CloseIcon, SearchIcon } from "./Icons";
 import { getSearchDecorations, getTerminalTheme, getThemeMode, onThemeChange } from "../theme";
 import type { Settings } from "../types";
+import { usePresence } from "../hooks/usePresence";
 
 type Status = "spawning" | "running" | "exited" | "error";
 
@@ -66,13 +70,17 @@ function TerminalView({
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const searchRef = useRef<SearchAddon | null>(null);
+  const rendererFailedRef = useRef(false);
   const disposablesRef = useRef<IDisposable[]>([]);
   const unlistensRef = useRef<Array<() => void>>([]);
+  const releaseOutputRef = useRef<(() => void) | null>(null);
   const disposedRef = useRef(false);
   const spawnedRef = useRef(false);
+  const exitedIdRef = useRef<string | null>(null);
   /** Id de sesión actual: cambia al reiniciar el proceso. */
   const currentIdRef = useRef(sessionId);
   const restartCountRef = useRef(0);
+  const restartingRef = useRef(false);
   /** Timer del debounce con el que se avisa al PTY del tamaño final. */
   const ptyResizeTimerRef = useRef<number | null>(null);
   /** Último {cols, rows} enviado al PTY: evita avisos redundantes. */
@@ -96,7 +104,9 @@ function TerminalView({
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [overlayDismissed, setOverlayDismissed] = useState(false);
+  const overlayPresence = usePresence(status !== "running" && !overlayDismissed ? status : null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchPresence = usePresence(searchOpen ? true : null);
   const [searchTerm, setSearchTerm] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -105,6 +115,8 @@ function TerminalView({
   // --- Suscripciones a los eventos del PTY --------------------------------
 
   const cleanSubscriptions = useCallback(() => {
+    releaseOutputRef.current?.();
+    releaseOutputRef.current = null;
     for (const unlisten of unlistensRef.current) {
       try {
         unlisten();
@@ -118,15 +130,48 @@ function TerminalView({
   const subscribe = useCallback(
     async (id: string) => {
       cleanSubscriptions();
+      // Devuelve créditos cuando xterm ha procesado los bytes, no al recibirlos.
+      // Agrupa los avisos para evitar un viaje IPC por cada pequeño fragmento.
+      let parsedBytes = 0;
+      let ackTimer: number | null = null;
+      let released = false;
+      const flushAck = (): void => {
+        if (ackTimer !== null) window.clearTimeout(ackTimer);
+        ackTimer = null;
+        if (!parsedBytes || released) return;
+        const bytes = parsedBytes;
+        parsedBytes = 0;
+        void ptyAck(id, bytes).catch(() => { /* sesión cerrada */ });
+      };
+      const acknowledge = (bytes: number): void => {
+        if (released || disposedRef.current) return;
+        parsedBytes += bytes;
+        if (parsedBytes >= 64 * 1024) flushAck();
+        else if (ackTimer === null) ackTimer = window.setTimeout(flushAck, 8);
+      };
+      releaseOutputRef.current = () => {
+        flushAck();
+        released = true;
+      };
       const unData = await listenPtyData(id, (payload) => {
-        termRef.current?.write(b64ToBytes(payload.data));
+        if (released || disposedRef.current) return;
+        const bytes = b64ToBytes(payload.data);
+        termRef.current?.write(bytes, () => acknowledge(bytes.length));
       });
       const unExit = await listenPtyExit(id, (payload) => {
+        if (released || disposedRef.current) return;
+        exitedIdRef.current = id;
         spawnedRef.current = false;
-        setStatus("exited");
-        setExitCode(payload.code);
-        setOverlayDismissed(false);
-        onExitRef.current(sessionIdRef.current, payload.code);
+        // Barrera de escritura: el aviso no tapa la última salida aún en cola.
+        termRef.current?.write("", () => {
+          if (released || disposedRef.current) return;
+          flushAck();
+          spawnedRef.current = false;
+          setStatus("exited");
+          setExitCode(payload.code);
+          setOverlayDismissed(false);
+          onExitRef.current(sessionIdRef.current, payload.code);
+        });
       });
       if (disposedRef.current) {
         // El componente se desmontó mientras se registraban los listeners.
@@ -210,6 +255,7 @@ function TerminalView({
     const term = termRef.current;
     if (!term || disposedRef.current) return;
     setStatus("spawning");
+    exitedIdRef.current = null;
     setErrorMsg(null);
     setExitCode(null);
     setOverlayDismissed(false);
@@ -233,8 +279,14 @@ function TerminalView({
         cols,
         rows,
         launchMode: mode,
+        flowControl: true,
       });
-      if (disposedRef.current) return;
+      if (disposedRef.current || currentIdRef.current !== id) {
+        // La fila pudo cerrarse mientras el backend todavía arrancaba.
+        void ptyKill(id).catch(() => {});
+        return;
+      }
+      if (exitedIdRef.current === id) return;
       spawnedRef.current = true;
       // El PTY nace con este tamaño: que el debounce no repita el mismo aviso.
       lastPtySizeRef.current = { cols, rows };
@@ -256,11 +308,22 @@ function TerminalView({
 
   /** Reinicia el proceso con un id nuevo derivado del original. */
   const restart = useCallback(() => {
+    if (restartingRef.current) return;
+    restartingRef.current = true;
+    setStatus("spawning");
+    cleanSubscriptions();
+    spawnedRef.current = false;
+    // La sesión finalizada aún conserva el master y el lector en el backend.
+    // Suéltalos antes de crear otro proceso para esta misma vista.
+    void ptyKill(currentIdRef.current).catch(() => {});
     restartCountRef.current += 1;
     currentIdRef.current = `${sessionIdRef.current}-r${restartCountRef.current}`;
-    termRef.current?.reset();
-    void startPty();
-  }, [startPty]);
+    termRef.current?.write("", () => {
+      if (disposedRef.current) return;
+      termRef.current?.reset();
+      void startPty().finally(() => { restartingRef.current = false; });
+    });
+  }, [cleanSubscriptions, startPty]);
 
   // --- Portapapeles ------------------------------------------------------------
 
@@ -309,6 +372,7 @@ function TerminalView({
     const term = new Terminal({
       fontFamily: initialSettings.fontFamily || DEFAULT_FONT_FAMILY,
       fontSize: initialSettings.fontSize,
+      lineHeight: 1.12,
       cursorBlink: initialSettings.cursorBlink,
       scrollback: initialSettings.scrollback,
       allowProposedApi: true,
@@ -368,10 +432,21 @@ function TerminalView({
       }),
     );
 
-    // Título emitido por el programa (OSC 0/2): informativo, para el tooltip
+    // Claude puede emitir muchos títulos OSC seguidos. Publica solo el último
+    // de cada intervalo sin arrastrar React al ritmo de la salida del PTY.
+    let titleTimer: number | null = null;
+    let latestTitle = "";
+    let publishedTitle: string | null = null;
     disposablesRef.current.push(
       term.onTitleChange((title) => {
-        onTitleRef.current(sessionIdRef.current, title);
+        latestTitle = title;
+        if (titleTimer !== null || title === publishedTitle) return;
+        titleTimer = window.setTimeout(() => {
+          titleTimer = null;
+          if (disposedRef.current || latestTitle === publishedTitle) return;
+          publishedTitle = latestTitle;
+          onTitleRef.current(sessionIdRef.current, latestTitle);
+        }, 100);
       }),
     );
 
@@ -386,52 +461,24 @@ function TerminalView({
       if (current) current.options.theme = getTerminalTheme(mode);
     });
 
-    // Reajuste ante cambios de tamaño del contenedor: el callback se agrupa con
-    // rAF y un bucle de "asentamiento" acompaña a las animaciones (la barra
-    // lateral tarda ~220 ms en colapsar). Mientras el tamaño siga cambiando no
-    // hace nada (ya lo ajusta el observer); en la primera medida estable hace un
-    // último fit con las dimensiones definitivas. Sin tamaño nuevo no se
-    // reprograma nada, así que no puede entrar en bucle.
+    // Durante el deslizamiento lateral se conserva la rejilla del terminal:
+    // recalcular columnas en cada fotograma haría saltar y envolver el texto.
+    // Al asentarse se ajusta una vez. El arrastre manual sigue siendo inmediato.
     let resizeRaf = 0;
-    let settleRaf = 0;
-    let settleChecks = 0;
-    let settleFrames = 0;
-    let settleWidth = -1;
-    let settleHeight = -1;
-    const settle = (): void => {
-      settleRaf = 0;
-      const current = hostRef.current;
-      if (!current || disposedRef.current) return;
-      const width = current.clientWidth;
-      const height = current.clientHeight;
-      if (width === settleWidth && height === settleHeight) settleFrames += 1;
-      else {
-        settleFrames = 0;
-        settleWidth = width;
-        settleHeight = height;
+    const resize = (): void => {
+      resizeRaf = 0;
+      if (disposedRef.current) return;
+      const moving = document.querySelector(".sidebar")?.getAnimations().some(animation =>
+        "transitionProperty" in animation && animation.transitionProperty === "width"
+        && animation.playState === "running");
+      if (moving) {
+        resizeRaf = requestAnimationFrame(resize);
+      } else {
+        safeFit();
       }
-      // Tamaño estable o presupuesto agotado (~4 s): fit definitivo y fin.
-      if (settleFrames >= 1 || settleChecks >= 240) {
-        safeFit(true);
-        return;
-      }
-      settleChecks += 1;
-      settleRaf = requestAnimationFrame(settle);
     };
     const observer = new ResizeObserver(() => {
-      if (resizeRaf) return;
-      resizeRaf = requestAnimationFrame(() => {
-        resizeRaf = 0;
-        safeFit();
-        if (!settleRaf) {
-          settleChecks = 0;
-          settleFrames = 0;
-          const current = hostRef.current;
-          settleWidth = current ? current.clientWidth : -1;
-          settleHeight = current ? current.clientHeight : -1;
-          settleRaf = requestAnimationFrame(settle);
-        }
-      });
+      if (!resizeRaf) resizeRaf = requestAnimationFrame(resize);
     });
     observer.observe(host);
 
@@ -446,7 +493,7 @@ function TerminalView({
       unTheme();
       cancelAnimationFrame(initialRaf);
       if (resizeRaf) cancelAnimationFrame(resizeRaf);
-      if (settleRaf) cancelAnimationFrame(settleRaf);
+      if (titleTimer !== null) window.clearTimeout(titleTimer);
       if (ptyResizeTimerRef.current !== null) {
         window.clearTimeout(ptyResizeTimerRef.current);
         ptyResizeTimerRef.current = null;
@@ -456,6 +503,11 @@ function TerminalView({
       observer.disconnect();
       host.removeEventListener("mousedown", onMouseDown);
       cleanSubscriptions();
+      // Tras reiniciar, el id del proceso difiere del id de la fila. El padre
+      // cierra el original; esta vista libera también la sesión reemplazada.
+      if (currentIdRef.current !== sessionIdRef.current) {
+        void ptyKill(currentIdRef.current).catch(() => {});
+      }
       for (const disposable of disposablesRef.current) {
         try {
           disposable.dispose();
@@ -471,16 +523,81 @@ function TerminalView({
     };
   }, [cleanSubscriptions, copySelection, pasteFromClipboard, safeFit, startPty]);
 
+  // Solo la sesión visible reserva un contexto gráfico. Las otras conservan
+  // su proceso y su historial sin multiplicar texturas ni recursos de GPU.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!visible || !term || rendererFailedRef.current) return;
+    let cancelled = false;
+    let addon: WebglAddon | null = null;
+    let contextLoss: IDisposable | null = null;
+    let graphics: WebGL2RenderingContext | null = null;
+    let graphicsCanvas: HTMLCanvasElement | null = null;
+    const release = (): void => {
+      graphicsCanvas?.removeEventListener("webglcontextlost", fallback);
+      graphicsCanvas = null;
+      contextLoss?.dispose();
+      contextLoss = null;
+      addon?.dispose();
+      addon = null;
+      // Soltar texturas no libera inmediatamente el cupo de contextos del
+      // navegador. Ciérralo también para poder cambiar muchas veces de sesión.
+      if (graphics && !graphics.isContextLost()) {
+        graphics.getExtension("WEBGL_lose_context")?.loseContext();
+      }
+      graphics = null;
+    };
+    const fallback = (): void => {
+      rendererFailedRef.current = true;
+      release();
+      if (!disposedRef.current) term.refresh(0, term.rows - 1);
+    };
+    void (async () => {
+      try {
+        await document.fonts.ready;
+        const { WebglAddon } = await import("@xterm/addon-webgl");
+        if (cancelled || disposedRef.current) return;
+        addon = new WebglAddon();
+        contextLoss = addon.onContextLoss(fallback);
+        term.loadAddon(addon);
+        for (const canvas of term.element?.querySelectorAll<HTMLCanvasElement>(".xterm-screen canvas") ?? []) {
+          const context = canvas.getContext("webgl2");
+          if (context) {
+            graphics = context;
+            graphicsCanvas = canvas;
+            // El addon espera a que se recupere el contexto. La app muestra
+            // el renderer compatible de inmediato para evitar una vista vacía.
+            canvas.addEventListener("webglcontextlost", fallback);
+            break;
+          }
+        }
+        safeFit(true);
+      } catch {
+        if (cancelled) return;
+        rendererFailedRef.current = true;
+        release();
+        // Sin WebGL o tras una suspensión, xterm mantiene el dibujado DOM.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      release();
+    };
+  }, [visible, safeFit]);
+
   // --- Cambios de ajustes en vivo ---------------------------------------------
 
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
+    const fontFamily = settings.fontFamily || DEFAULT_FONT_FAMILY;
+    const fontChanged = term.options.fontSize !== settings.fontSize
+      || term.options.fontFamily !== fontFamily;
     term.options.fontSize = settings.fontSize;
-    term.options.fontFamily = settings.fontFamily || DEFAULT_FONT_FAMILY;
+    term.options.fontFamily = fontFamily;
     term.options.cursorBlink = settings.cursorBlink;
     term.options.scrollback = settings.scrollback;
-    const raf = requestAnimationFrame(() => safeFit(true));
+    const raf = fontChanged ? requestAnimationFrame(() => safeFit(true)) : 0;
     return () => cancelAnimationFrame(raf);
   }, [settings.fontSize, settings.fontFamily, settings.cursorBlink, settings.scrollback, safeFit]);
 
@@ -490,7 +607,8 @@ function TerminalView({
     if (!visible) return;
     const raf = requestAnimationFrame(() => {
       safeFit(true);
-      termRef.current?.focus();
+      // Cambiar de proyecto desde un menú no debe quitarle el foco al menú.
+      if (!document.querySelector('[role="menu"], [role="alertdialog"]')) termRef.current?.focus();
     });
     return () => cancelAnimationFrame(raf);
   }, [visible, safeFit]);
@@ -510,29 +628,13 @@ function TerminalView({
 
   return (
     <div className="terminal-view">
-      <div className="session-header">
-        <div className={`session-app-icon${isClaude ? " claude" : ""}`} aria-hidden="true">
-          {isClaude ? "✳" : <TerminalIcon size={17} />}
-        </div>
-        <div className="session-copy">
-          <div className="session-title">{isClaude ? "Claude Code" : "Terminal"}</div>
-          <div className="session-path" title={cwd}>
-            <FolderIcon size={12} />
-            <span>{cwd}</span>
-          </div>
-        </div>
-        <div className={`session-state ${status}`}>
-          <span className="session-state-dot" aria-hidden="true" />
-          <span>{status === "spawning" ? "Conectando" : status === "running" ? "Activo" : status === "exited" ? "Finalizado" : "Error"}</span>
-        </div>
-      </div>
       <div className="term-canvas" ref={hostRef} />
 
       <div className="term-tools">
         <button
           type="button"
-          className="term-tool-btn"
-          title="Buscar en el terminal (Ctrl+F)"
+          className="term-tool-btn tip-below"
+          data-tip="Buscar en el terminal (Ctrl+F)"
           aria-label="Buscar en el terminal"
           onClick={() => setSearchOpen(true)}
         >
@@ -540,8 +642,10 @@ function TerminalView({
         </button>
       </div>
 
-      {searchOpen && (
-        <div className="term-search" onMouseDown={(event) => event.stopPropagation()}>
+      {searchPresence.value && (
+        <div className={`term-search motion-popover${searchPresence.entering ? " entering" : ""}${searchPresence.leaving ? " leaving" : ""}`}
+          inert={searchPresence.leaving} aria-hidden={searchPresence.leaving || undefined}
+          onMouseDown={(event) => event.stopPropagation()}>
           <input
             ref={searchInputRef}
             className="term-search-input"
@@ -563,7 +667,8 @@ function TerminalView({
           <button
             type="button"
             className="term-search-btn"
-            title="Anterior (Shift+Enter)"
+            data-tip="Anterior (Shift+Enter)"
+            aria-label="Resultado anterior"
             onClick={() => runSearch("prev")}
           >
             ↑
@@ -571,7 +676,8 @@ function TerminalView({
           <button
             type="button"
             className="term-search-btn"
-            title="Siguiente (Enter)"
+            data-tip="Siguiente (Enter)"
+            aria-label="Resultado siguiente"
             onClick={() => runSearch("next")}
           >
             ↓
@@ -579,7 +685,7 @@ function TerminalView({
           <button
             type="button"
             className="term-search-btn"
-            title="Cerrar (Esc)"
+            data-tip="Cerrar (Esc)"
             aria-label="Cerrar búsqueda"
             onClick={() => {
               setSearchOpen(false);
@@ -603,25 +709,25 @@ function TerminalView({
         </button>
       )}
 
-      {status === "spawning" && (
-        <div className="term-overlay">
-          <div className="term-overlay-card">
+      {overlayPresence.value && (
+        <div className={`term-overlay${overlayPresence.entering ? " entering" : ""}${overlayPresence.leaving ? " leaving" : ""}`}
+          inert={overlayPresence.leaving} aria-hidden={overlayPresence.leaving || undefined}>
+          <div key={overlayPresence.value}
+            className={`term-overlay-card${overlayPresence.value === "error" ? " term-overlay-error" : ""}`}>
+            {overlayPresence.value === "spawning" ? <>
             <span className="spinner" aria-hidden="true" />
             <span>{isClaude ? "Iniciando Claude…" : "Iniciando terminal…"}</span>
-          </div>
-        </div>
-      )}
-
-      {status === "exited" && !overlayDismissed && (
-        <div className="term-overlay">
-          <div className="term-overlay-card">
-            <div className="term-overlay-title">
+            </> : <>
+            {overlayPresence.value === "error" ? <>
+              <div className="term-overlay-title">No se pudo iniciar el proceso</div>
+              <div className="term-overlay-msg">{errorMsg}</div>
+            </> : <div className="term-overlay-title">
               Proceso finalizado ·{" "}
               {exitCode === null ? "sin código de salida" : `código ${exitCode}`}
-            </div>
+            </div>}
             <div className="term-overlay-actions">
               <button type="button" className="btn btn-primary" onClick={restart}>
-                Reiniciar
+                {overlayPresence.value === "error" ? "Reintentar" : "Reiniciar"}
               </button>
               <button
                 type="button"
@@ -634,27 +740,7 @@ function TerminalView({
                 Ver salida
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {status === "error" && !overlayDismissed && (
-        <div className="term-overlay">
-          <div className="term-overlay-card term-overlay-error">
-            <div className="term-overlay-title">No se pudo iniciar el proceso</div>
-            <div className="term-overlay-msg">{errorMsg}</div>
-            <div className="term-overlay-actions">
-              <button type="button" className="btn btn-primary" onClick={restart}>
-                Reintentar
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setOverlayDismissed(true)}
-              >
-                Ver salida
-              </button>
-            </div>
+            </>}
           </div>
         </div>
       )}

@@ -8,6 +8,8 @@
  * (la ventana no tiene bordes nativos y ya no hay botón de cerrar).
  */
 import { useEffect, useRef, useState } from "react";
+import type { FloatingAnchor } from "../hooks/useFloatingPosition";
+import DropdownMenu from "./DropdownMenu";
 import {
   closeWindow,
   isWindowMaximized,
@@ -35,8 +37,8 @@ type Props = {
 
 export default function WindowControls({ onOpenSettings, onRevealProject }: Props) {
   const [maximized, setMaximized] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const groupRef = useRef<HTMLDivElement | null>(null);
+  const [menu, setMenu] = useState<FloatingAnchor | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // Icono maximizar/restaurar: se consulta al montar y en cada cambio de tamaño.
   useEffect(() => {
@@ -54,49 +56,33 @@ export default function WindowControls({ onOpenSettings, onRevealProject }: Prop
     };
   }, []);
 
-  // El menú se cierra al pulsar fuera o al redimensionar la ventana.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: MouseEvent): void => {
-      if (groupRef.current?.contains(event.target as Node)) return;
-      setMenuOpen(false);
-    };
-    const closeOnResize = (): void => setMenuOpen(false);
-    const closeOnKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    window.addEventListener("mousedown", close);
-    window.addEventListener("resize", closeOnResize);
-    window.addEventListener("keydown", closeOnKey);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("resize", closeOnResize);
-      window.removeEventListener("keydown", closeOnKey);
-    };
-  }, [menuOpen]);
-
   const run = (action: () => void): void => {
-    setMenuOpen(false);
+    setMenu(null);
     action();
   };
 
   return (
-    <div className="window-controls" ref={groupRef}>
+    <div className="window-controls">
       <button
+        ref={menuButtonRef}
         type="button"
-        className="window-btn"
-        title="Más opciones"
+        className="window-btn tip tip-below"
+        data-tip="Más opciones"
         aria-label="Más opciones"
-        aria-expanded={menuOpen}
-        onClick={() => setMenuOpen((open) => !open)}
+        aria-expanded={menu !== null}
+        aria-haspopup="menu"
+        onKeyDown={event => {
+          if (event.key === "ArrowDown") { event.preventDefault(); setMenu({ element: event.currentTarget }); }
+        }}
+        onClick={event => setMenu(menu ? null : { element: event.currentTarget })}
       >
         <EllipsisIcon size={16} />
       </button>
 
       <button
         type="button"
-        className="window-btn"
-        title={maximized ? "Restaurar" : "Maximizar"}
+        className="window-btn tip tip-below"
+        data-tip={maximized ? "Restaurar" : "Maximizar"}
         aria-label={maximized ? "Restaurar ventana" : "Maximizar ventana"}
         onClick={toggleMaximizeWindow}
       >
@@ -105,18 +91,21 @@ export default function WindowControls({ onOpenSettings, onRevealProject }: Prop
 
       <button
         type="button"
-        className="window-btn"
-        title="Minimizar"
+        className="window-btn tip tip-below"
+        data-tip="Minimizar"
         aria-label="Minimizar ventana"
         onClick={minimizeWindow}
       >
         <MinimizeIcon size={16} />
       </button>
 
-      {menuOpen && (
-        <div className="context-menu window-menu">
+      {
+        <DropdownMenu anchor={menu} triggerRef={menuButtonRef} label="Opciones de la aplicación"
+          className="window-menu" onClose={() => setMenu(null)}>
           <button
             type="button"
+            role="menuitem"
+            tabIndex={-1}
             className="context-item"
             onClick={() => run(onOpenSettings)}
           >
@@ -130,6 +119,8 @@ export default function WindowControls({ onOpenSettings, onRevealProject }: Prop
           {onRevealProject && (
             <button
               type="button"
+              role="menuitem"
+              tabIndex={-1}
               className="context-item"
               onClick={() => run(onRevealProject)}
             >
@@ -140,25 +131,25 @@ export default function WindowControls({ onOpenSettings, onRevealProject }: Prop
             </button>
           )}
 
-          <div className="context-sep" />
+          <div className="context-sep" role="separator" />
 
-          <button type="button" className="context-item" onClick={() => run(closeWindow)}>
+          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => run(closeWindow)}>
             <span className="context-icon" aria-hidden="true">
               <PowerIcon size={16} />
             </span>
             Salir de trex
           </button>
 
-          <div className="context-sep" />
+          <div className="context-sep" role="separator" />
 
-          <button type="button" className="context-item" onClick={() => run(closeWindow)}>
+          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => run(closeWindow)}>
             <span className="context-icon" aria-hidden="true">
               <CloseIcon size={16} />
             </span>
             Cerrar ventana
           </button>
-        </div>
-      )}
+        </DropdownMenu>
+      }
     </div>
   );
 }

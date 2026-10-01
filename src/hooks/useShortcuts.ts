@@ -58,11 +58,26 @@ export function useShortcuts(handlers: ShortcutHandlers, options: ShortcutOption
       const key = event.key;
       const h = handlersRef.current;
 
+      // Una confirmación conserva el foco y bloquea los cambios de contexto.
+      if (document.querySelector('[role="alertdialog"], .dialog-overlay.leaving')) {
+        if ([",", "k", "b", "t", "e", "l", "w", "tab", "=", "+", "-", "_", "0"].includes(key.toLowerCase()) || /^[1-9]$/.test(key)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+
       // Ctrl+, es global: abre el panel y también lo cierra cuando ya está abierto.
       if (key === ",") {
         event.preventDefault();
         event.stopPropagation();
         h.toggleSettings();
+        return;
+      }
+
+      // El modal conserva el foco; sus categorías se navegan dentro del panel.
+      if (settingsOpen) {
+        if (["k", "b"].includes(key.toLowerCase())) event.preventDefault();
         return;
       }
 
@@ -82,7 +97,6 @@ export function useShortcuts(handlers: ShortcutHandlers, options: ShortcutOption
         return;
       }
 
-      if (settingsOpen) return;
       if (isEditableTarget(event.target)) return;
 
       const consume = (): void => {
