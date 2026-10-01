@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { clamp, normalizeText } from "../api";
 import { MOD_LABEL } from "../platform";
-import type { ClaudeInfo, Project, TabState } from "../types";
+import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
 import { AlertIcon, GearIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
@@ -29,6 +29,7 @@ type Props = {
   /** Barra lateral oculta: ancho 0 y contenido desvanecido. */
   sidebarCollapsed: boolean;
   claudeInfo: ClaudeInfo | null;
+  profiles: LauncherProfile[];
   tabs: TabState[];
   activeTabId: string | null;
   /** Texto del buscador de proyectos. */
@@ -40,7 +41,7 @@ type Props = {
   onSearchChange: (value: string) => void;
   onAdd: () => void;
   onSelect: (projectId: string) => void;
-  onQuickOpen: (projectId: string) => void;
+  onQuickOpen: (projectId: string, profileId: string) => void;
   onSelectSession: (projectId: string, tabId: string) => void;
   onCloseSession: (tabId: string, trigger: HTMLElement) => void;
   onRenameSession: (tabId: string, name: string) => void;
@@ -59,6 +60,7 @@ export default function Sidebar({
   sidebarWidth,
   sidebarCollapsed,
   claudeInfo,
+  profiles,
   tabs,
   activeTabId,
   search,
@@ -195,7 +197,8 @@ export default function Sidebar({
                   expanded={expanded}
                   onToggleExpanded={() => toggleProject(project.id)}
                   onSelect={() => onSelect(project.id)}
-                  onQuickOpen={() => onQuickOpen(project.id)}
+                  profiles={profiles}
+                  onQuickOpen={profileId => onQuickOpen(project.id, profileId)}
                   onReveal={() => onReveal(project.id)}
                   onCopyPath={() => onCopyPath(project.path)}
                   onRename={(name) => onRename(project.id, name)}

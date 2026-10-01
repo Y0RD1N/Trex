@@ -3,11 +3,36 @@
  * Los nombres de campo viajan tal cual en camelCase a través de `invoke`.
  */
 
-/** Forma en la que el backend lanza el comando de Claude dentro del PTY. */
+/** Forma en la que el backend lanza un asistente dentro del PTY. */
 export type LaunchMode = "arg" | "inject";
 
-/** Tipo de pestaña de terminal: con Claude o shell limpio. */
-export type TabKind = "claude" | "shell";
+/** Asistente de la sesión o shell limpio. */
+export type AgentProvider = "claude" | "codex";
+export type TabKind = AgentProvider | "shell";
+
+export type LauncherProfile = {
+  id: string;
+  name: string;
+  provider: AgentProvider;
+  command: string;
+  args: string;
+  /** Vacío: hereda el shell de la app para las sesiones nuevas. */
+  shell: string;
+  launchMode: LaunchMode;
+  /** Opcional: CLAUDE_CONFIG_DIR o CODEX_HOME, según el proveedor. */
+  configDir: string;
+};
+
+/** Copia de los ajustes con los que nació una sesión: no cambia al editar un perfil. */
+export type SessionLaunch = {
+  profileId: string | null;
+  profileName: string | null;
+  command: string | null;
+  args: string | null;
+  shell: string;
+  launchMode: LaunchMode;
+  env: Record<string, string> | null;
+};
 
 export type Project = {
   id: string;
@@ -21,6 +46,8 @@ export type Project = {
 };
 
 export type Settings = {
+  profiles: LauncherProfile[];
+  defaultProfileId: string;
   shell: string;
   claudeCommand: string;
   claudeArgs: string;
@@ -60,6 +87,7 @@ export type PersistedTab = {
   projectId: string;
   kind: TabKind;
   subtitle: string;
+  launch?: SessionLaunch;
 };
 
 export type AppConfig = {
@@ -133,15 +161,13 @@ export type SpawnRequest = {
 };
 
 /** Pestaña viva en la interfaz (estado de React, no persistido tal cual). */
-export type TabState = {
+export type TabState = SessionLaunch & {
   /** Id único de la sesión PTY (también identifica la pestaña). */
   id: string;
   projectId: string;
   kind: TabKind;
   /** Subtítulo editable que se muestra junto al nombre del proyecto. */
   subtitle: string;
-  command: string | null;
-  args: string | null;
   /** Proceso ya terminado (se muestra un badge y no se cierra sola). */
   exited: boolean;
   exitCode: number | null;

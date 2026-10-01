@@ -1,26 +1,56 @@
 # trex
 
 Terminal de escritorio para **Windows y Linux** pensada para trabajar con
-**Claude Code**: guardas tus proyectos y cada terminal se abre ya dentro de la
-carpeta del proyecto y con Claude ejecutándose.
+**Claude Code y Codex**: guardas tus proyectos y abres sesiones dentro de su
+carpeta, con el asistente y el perfil que elijas.
 
 ## ✨ Qué hace
 
 - **Proyectos**: añades carpetas una sola vez y quedan en la barra lateral.
-- **Terminal con Claude dentro**: el botón `+` de un proyecto abre una pestaña
-  con `cwd` = esa carpeta y `claude` ya arrancado. Nada de `cd` ni de teclear
-  el comando cada vez.
+- **Perfiles de asistentes**: el botón `+` permite elegir Claude Code, Codex
+  o cualquiera de tus perfiles personalizados, dentro de la carpeta del proyecto.
 - **Pestañas**: varias terminales por proyecto, todas vivas a la vez.
-  `Ctrl+T` (Claude) y `Ctrl+Shift+T` (shell limpio).
+  `Ctrl+T` (perfil predeterminado) y `Ctrl+Shift+T` (shell limpio).
 - **Al salir de Claude** vuelves al prompt del shell en la misma pestaña.
 - **Detección de Claude Code**: busca el binario en el `PATH` y en las rutas
   típicas del instalador nativo (Windows: `%USERPROFILE%\.local\bin`), y avisa
   con instrucciones si no lo encuentra.
 - **Ajustes persistentes**: shell (PowerShell, cmd, Git Bash, WSL, bash, zsh…),
-  comando y argumentos de Claude (`--continue`, `--resume`…), tipografía,
+  comandos, argumentos y perfiles de asistentes (`--continue`, `--resume`…), tipografía,
   scrollback y color de acento.
 - **Modo claro y oscuro**: tema claro, oscuro o el del sistema, con color de acento configurable (y el terminal a juego).
 - **Restauración de sesión**: al reabrir, recupera tus pestañas.
+
+## Perfiles y varias cuentas
+
+En **Ajustes → Asistentes** puedes añadir, duplicar y nombrar tantos perfiles
+como necesites. Cada uno tiene su propio comando, argumentos, shell y método de
+inicio. Por ejemplo:
+
+| Nombre | Tipo | Comando |
+|---|---|---|
+| Claude 1 | Claude Code | `claude1` |
+| Claude 2 | Claude Code | `claude2` |
+| Codex | Codex | `codex` |
+
+Los comandos deben existir en tu equipo. En bash, zsh y fish también puedes
+usar alias o funciones definidos en el shell elegido. El botón `+`, el menú de
+cada proyecto y su pantalla de inicio ofrecen todos los perfiles. `Ctrl+T`
+abre el que marques como predeterminado; puedes mantener varias sesiones de
+cualquier perfil abiertas al mismo tiempo.
+
+Si tus comandos ya seleccionan su cuenta, deja vacía **Carpeta de configuración**.
+También puedes indicar una carpeta distinta por perfil en sus opciones avanzadas:
+se pasa como `CLAUDE_CONFIG_DIR` para Claude Code o `CODEX_HOME` para Codex.
+Usa una ruta completa o `~/...`. La cuenta se autentica desde el propio CLI;
+trex no copia credenciales. Consulta las referencias oficiales de
+[Claude Code](https://code.claude.com/docs/en/env-vars) y
+[Codex](https://developers.openai.com/codex/config-advanced/).
+
+Las pestañas abiertas conservan su comando y perfil, incluso al reiniciar trex.
+Editar o eliminar un perfil afecta al menú de sesiones nuevas y no cambia las
+sesiones que ya estaban abiertas. La configuración anterior de Claude se migra
+a un perfil y se añade un perfil inicial de Codex.
 
 ## 🧱 Tecnología
 
@@ -70,7 +100,7 @@ npm run tauri build
 
 | Atajo | Acción |
 |---|---|
-| `Ctrl+T` | Nueva terminal con Claude en el proyecto activo |
+| `Ctrl+T` | Nueva sesión del perfil predeterminado en el proyecto activo |
 | `Ctrl+Shift+T` | Nueva terminal (shell limpio) |
 | `Ctrl+W` | Cerrar pestaña |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cambiar de pestaña |

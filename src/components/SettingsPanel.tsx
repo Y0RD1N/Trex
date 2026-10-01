@@ -5,7 +5,8 @@ import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } 
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
 import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, InfoIcon, MoonIcon, PanelIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
-import { ClaudeStatusCard } from "./WelcomeScreen";
+import LauncherProfiles from "./LauncherProfiles";
+import { profilesError } from "../profiles";
 import "./SettingsPanel.css";
 
 type Props = {
@@ -14,6 +15,8 @@ type Props = {
   settings: Settings;
   appInfo: AppInfo | null;
   claudeInfo: ClaudeInfo | null;
+  codexInfo: ClaudeInfo | null;
+  initialSection?: "appearance" | "profiles";
   onSave: (settings: Settings) => void;
   onClose: () => void;
   onRedetect: () => void;
@@ -22,35 +25,23 @@ type Props = {
 const SECTIONS = [
   { id: "appearance", label: "Apariencia", icon: <SunIcon size={16} />, description: "Elige el tema y el color de tu espacio." },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon size={16} />, description: "Personaliza el texto, el cursor y la terminal." },
-  { id: "claude", label: "Claude Code", icon: <span className="settings-claude-mark">✳</span>, description: "Elige cómo empiezan tus sesiones con Claude." },
+  { id: "profiles", label: "Asistentes", icon: <span className="settings-claude-mark">✳</span>, description: "Perfiles independientes para Claude Code y Codex." },
   { id: "sessions", label: "Sesiones", icon: <PanelIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
   { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
 ] as const;
 type SectionId = typeof SECTIONS[number]["id"];
 
-const START_OPTIONS = [
-  { value: "", label: "Empezar una sesión nueva" },
-  { value: "--continue", label: "Continuar la última conversación" },
-  { value: "--resume", label: "Elegir una conversación anterior" },
-];
-
-export default function SettingsPanel({ entering, leaving, settings, appInfo, claudeInfo, onSave, onClose, onRedetect }: Props) {
+export default function SettingsPanel({ entering, leaving, settings, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect }: Props) {
   const dialog = useDialog();
   const id = useId();
   const [draft, setDraft] = useState<Settings>(settings);
-  const [section, setSection] = useState<SectionId>("appearance");
+  const [section, setSection] = useState<SectionId>(initialSection);
   const [terminalAdvanced, setTerminalAdvanced] = useState(false);
-  const [claudeAdvanced, setClaudeAdvanced] = useState(false);
-  const [installHelp, setInstallHelp] = useState(false);
-  const [customStart, setCustomStart] = useState(false);
   const [scrollbackText, setScrollbackText] = useState(String(settings.scrollback));
   const [copied, setCopied] = useState(false);
-  const [installationInfo, setInstallationInfo] = useState(claudeInfo);
-  if (claudeInfo && claudeInfo !== installationInfo) setInstallationInfo(claudeInfo);
   const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 680px)").matches);
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const argsRef = useRef<HTMLInputElement>(null);
   const historyRef = useRef<HTMLInputElement>(null);
   const copyTimer = useRef<number | undefined>(undefined);
   const closePending = useRef(false);
@@ -82,10 +73,10 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
 
   const scrollback = Number(scrollbackText);
   const validHistory = scrollbackText.trim() !== "" && Number.isInteger(scrollback) && scrollback >= 200 && scrollback <= 200000;
+  const profileError = profilesError(draft.profiles);
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(settings) || scrollback !== settings.scrollback,
     [draft, settings, scrollback]);
   const patch = (partial: Partial<Settings>): void => setDraft(previous => ({ ...previous, ...partial }));
-  const startMode = !customStart && START_OPTIONS.some(option => option.value === draft.claudeArgs) ? draft.claudeArgs : "custom";
   const shellOptions = appInfo?.shellOptions.length ? appInfo.shellOptions : [{ id: "default", label: "Shell del sistema", available: true, program: "" }];
 
   useLayoutEffect(() => {
@@ -126,8 +117,9 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
   }, [requestClose, leaving]);
 
   const save = (): void => {
-    if (!dirty || !validHistory) return;
+    if (!dirty || !validHistory || profileError) return;
     onSave({ ...draft,
+      profiles: draft.profiles.map(profile => ({ ...profile, name: profile.name.trim(), command: profile.command.trim(), args: profile.args.trim(), configDir: profile.configDir.trim() })),
       claudeCommand: draft.claudeCommand.trim() || "claude",
       claudeArgs: draft.claudeArgs.trim(),
       fontSize: clamp(Math.round(draft.fontSize), 10, 24),
@@ -263,56 +255,18 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
                 </Advanced>
               </>}
 
-              {item.id === "claude" && <>
-                <div className="settings-claude-status" role="status" aria-busy={!claudeInfo}>
-                  <span className={!claudeInfo ? "spinner" : `settings-status-dot${claudeInfo.found ? "" : " missing"}`} aria-hidden="true" />
-                  <div>
-                    <strong>{!claudeInfo ? "Comprobando Claude Code…" : claudeInfo.found ? "Claude Code disponible" : "Claude Code no encontrado"}</strong>
-                    <span>{!claudeInfo ? "Buscando la instalación de tu equipo." : claudeInfo.found ? claudeInfo.version?.replace(/\s*\(Claude Code\)/i, "") ?? "Instalación detectada" : "Puedes usar trex con terminales normales."}</span>
-                  </div>
-                  <button type="button" className="btn btn-small btn-ghost" aria-disabled={!claudeInfo} onClick={() => { if (claudeInfo) onRedetect(); }}>Comprobar</button>
-                </div>
-                {installationInfo && !installationInfo.found && <>
-                    <Advanced title="Ver opciones de instalación" open={installHelp} onToggle={() => setInstallHelp(previous => !previous)}>
-                      <ClaudeStatusCard claudeInfo={installationInfo} appInfo={appInfo} onRedetect={() => { if (claudeInfo) onRedetect(); }} />
-                    </Advanced>
-                  </>}
-                <SettingToggle label="Abrir Claude automáticamente" hint="Al crear una sesión de Claude, inicia el asistente. Si lo desactivas, se abre una terminal normal." checked={draft.autoRunClaude} onChange={autoRunClaude => patch({ autoRunClaude })} />
-                <SettingField label="Cómo empezar" hint={draft.autoRunClaude ? "Elige qué conversación abrir al iniciar Claude." : "Activa el inicio automático para usar esta opción."} controlId={`${id}-start`} stacked>
-                  <select id={`${id}-start`} className="input" value={startMode} disabled={!draft.autoRunClaude} onChange={event => {
-                    const value = event.currentTarget.value;
-                    setCustomStart(value === "custom");
-                    if (value === "custom") { setClaudeAdvanced(true); requestAnimationFrame(() => argsRef.current?.focus()); }
-                    else patch({ claudeArgs: value });
-                  }}>
-                    {START_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    <option value="custom">Argumentos personalizados</option>
-                  </select>
-                </SettingField>
-                <p className="settings-note">Tu cuenta y el inicio de sesión se gestionan en Claude Code.</p>
-                <Advanced title="Opciones avanzadas de Claude" open={claudeAdvanced} onToggle={() => setClaudeAdvanced(previous => !previous)}>
-                  <SettingField label="Comando de Claude" hint="Nombre o ruta del ejecutable instalado en tu equipo." controlId={`${id}-command`} stacked>
-                    <input id={`${id}-command`} className="input settings-mono" value={draft.claudeCommand} spellCheck={false} placeholder="claude" onChange={event => patch({ claudeCommand: event.currentTarget.value })} />
-                  </SettingField>
-                  <SettingField label="Argumentos adicionales" hint="Se añaden al comando al iniciar Claude. Puedes usar «Cómo empezar» para las opciones habituales." controlId={`${id}-args`} stacked>
-                    <input ref={argsRef} id={`${id}-args`} className="input settings-mono" value={draft.claudeArgs} spellCheck={false} placeholder="Sin argumentos adicionales" onChange={event => patch({ claudeArgs: event.currentTarget.value })} />
-                  </SettingField>
-                  <SettingField label="Método de inicio" hint="Prueba el modo compatible si tu shell necesita iniciarse antes que Claude." controlId={`${id}-launch`} stacked>
-                    <select id={`${id}-launch`} className="input" value={draft.launchMode} onChange={event => patch({ launchMode: event.currentTarget.value })}>
-                      <option value="arg">Directo (predeterminado)</option>
-                      <option value="inject">Compatible · iniciar desde la terminal</option>
-                    </select>
-                  </SettingField>
-                </Advanced>
-              </>}
+              {item.id === "profiles" && <LauncherProfiles profiles={draft.profiles} defaultProfileId={draft.defaultProfileId}
+                appInfo={appInfo} claudeInfo={claudeInfo} codexInfo={codexInfo} onRedetect={onRedetect}
+                onChange={(profiles, defaultProfileId) => patch({ profiles, defaultProfileId })} />}
 
               {item.id === "sessions" && <div className="settings-toggles">
+                <SettingToggle label="Iniciar un asistente al abrir trex" hint="Si no hay sesiones para restaurar, abre el perfil predeterminado. Si lo desactivas, abre una terminal normal." checked={draft.autoRunClaude} onChange={autoRunClaude => patch({ autoRunClaude })} />
                 <SettingToggle label="Reabrir terminales al iniciar" hint="Abre de nuevo las terminales que dejaste abiertas al cerrar trex." checked={draft.restoreOnStart} onChange={restoreOnStart => patch({ restoreOnStart })} />
                 <SettingToggle label="Preguntar antes de cerrar una sesión activa" hint="Te permite cancelar el cierre si el proceso sigue en marcha." checked={draft.confirmCloseTab} onChange={confirmCloseTab => patch({ confirmCloseTab })} />
               </div>}
 
               {item.id === "about" && <>
-                <div className="settings-about-brand"><span aria-hidden="true">✳</span><div><strong>trex</strong><span>Tu espacio para crear con Claude.</span></div></div>
+                <div className="settings-about-brand"><span aria-hidden="true">✳</span><div><strong>trex</strong><span>Tu espacio para crear con Claude Code y Codex.</span></div></div>
                 <dl className="settings-details">
                   <div><dt>Versión</dt><dd>{appInfo?.version ?? "No disponible"}</dd></div>
                   <div><dt>Plataforma</dt><dd>{appInfo?.platform ?? "No disponible"}</dd></div>
@@ -338,12 +292,13 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
 
         <footer className="settings-footer">
           <div className="settings-save-status" aria-live="polite">
-            {!validHistory ? <button type="button" className="settings-error-link" onClick={reviewHistory}>Revisa el historial del terminal</button>
+            {profileError ? <button type="button" className="settings-error-link" onClick={() => setSection("profiles")}>{profileError}</button>
+              : !validHistory ? <button type="button" className="settings-error-link" onClick={reviewHistory}>Revisa el historial del terminal</button>
               : <><span className={dirty ? "settings-dirty-dot" : "settings-clean-dot"} aria-hidden="true" />{dirty ? "Cambios sin guardar" : "Sin cambios pendientes"}</>}
           </div>
           <div className="modal-actions">
             <button type="button" className="btn btn-ghost" onClick={event => requestClose(event.currentTarget)}>Cerrar</button>
-            <button type="button" className="btn btn-primary" disabled={!dirty || !validHistory} onClick={save}>Guardar cambios</button>
+            <button type="button" className="btn btn-primary" disabled={!dirty || !validHistory || !!profileError} onClick={save}>Guardar cambios</button>
           </div>
         </footer>
       </div>

@@ -6,18 +6,20 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
-import type { Project } from "../types";
+import type { LauncherProfile, Project } from "../types";
 import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, PencilIcon, TrashIcon } from "./Icons";
 import DropdownMenu from "./DropdownMenu";
+import ProfileMenuItems from "./ProfileMenuItems";
 
 type Props = {
   project: Project;
+  profiles: LauncherProfile[];
   active: boolean;
   tabCount: number;
   expanded: boolean;
   onToggleExpanded: () => void;
   onSelect: () => void;
-  onQuickOpen: () => void;
+  onQuickOpen: (profileId: string) => void;
   onReveal: () => void;
   onCopyPath: () => void;
   onRename: (name: string) => void;
@@ -26,6 +28,7 @@ type Props = {
 
 export default function ProjectItem({
   project,
+  profiles,
   active,
   tabCount,
   expanded,
@@ -170,12 +173,7 @@ export default function ProjectItem({
           className="project-context-menu"
           onClose={() => setMenu(null)}
         >
-          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => runAction(onQuickOpen)}>
-            <span className="context-icon" aria-hidden="true">
-              ✳
-            </span>
-            Abrir Claude en este proyecto
-          </button>
+          <ProfileMenuItems profiles={profiles} onOpen={profileId => runAction(() => onQuickOpen(profileId))} />
           <div className="context-sep" role="separator" />
           <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => runAction(onReveal)}>
             <span className="context-icon" aria-hidden="true">

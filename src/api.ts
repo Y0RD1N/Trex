@@ -4,6 +4,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { initialProfiles, normalizeLaunch, normalizeProfiles } from "./profiles";
 import type {
   AppConfig,
   AppInfo,
@@ -87,6 +88,7 @@ export const saveConfig = (config: AppConfig): Promise<AppConfig> =>
 export const getAppInfo = (): Promise<AppInfo> => invoke<AppInfo>("app_info");
 
 export const detectClaude = (): Promise<ClaudeInfo> => invoke<ClaudeInfo>("detect_claude");
+export const detectCodex = (): Promise<ClaudeInfo> => invoke<ClaudeInfo>("detect_codex");
 
 export const ptySpawn = (request: SpawnRequest): Promise<SpawnResponse> =>
   invoke<SpawnResponse>("pty_spawn", { request });
@@ -125,6 +127,8 @@ export const DEFAULT_FONT_FAMILY =
   '"JetBrains Mono Variable", "Hack Nerd Font Mono", "Noto Sans Symbols 2", "Noto Color Emoji", ui-monospace, "Cascadia Mono", monospace';
 
 export const DEFAULT_SETTINGS: Settings = {
+  profiles: initialProfiles({ claudeCommand: "claude", claudeArgs: "", launchMode: "arg" }),
+  defaultProfileId: "claude-default",
   shell: "default",
   claudeCommand: "claude",
   claudeArgs: "",
@@ -329,6 +333,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   const uiRaw = asRecord(root.ui) ?? {};
 
   const settings: Settings = {
+    profiles: [],
+    defaultProfileId: asString(settingsRaw.defaultProfileId, DEFAULT_SETTINGS.defaultProfileId),
     shell: asString(settingsRaw.shell, DEFAULT_SETTINGS.shell),
     claudeCommand: asString(settingsRaw.claudeCommand, DEFAULT_SETTINGS.claudeCommand),
     claudeArgs: asString(settingsRaw.claudeArgs, DEFAULT_SETTINGS.claudeArgs),
@@ -352,6 +358,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     theme: asAccent(settingsRaw.theme),
     appearance: asAppearance(settingsRaw.appearance),
   };
+  settings.profiles = normalizeProfiles(settingsRaw.profiles, settings);
+  if (!settings.profiles.some(profile => profile.id === settings.defaultProfileId)) settings.defaultProfileId = settings.profiles[0].id;
 
   const projects: Project[] = [];
   if (Array.isArray(root.projects)) {
@@ -382,9 +390,11 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
       if (!rec) continue;
       const projectId = asString(rec.projectId, "");
       if (!projectId) continue;
-      const kind: TabKind = rec.kind === "shell" ? "shell" : "claude";
+      const kind: TabKind = rec.kind === "shell" || rec.kind === "codex" ? rec.kind : "claude";
       const subtitle = asString(rec.subtitle, "").trim() || kind;
-      lastTabs.push({ projectId, kind, subtitle });
+      const launch = normalizeLaunch(rec.launch, kind);
+      if (rec.launch != null && !launch) continue;
+      lastTabs.push({ projectId, kind, subtitle, launch });
     }
   }
 

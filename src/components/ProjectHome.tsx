@@ -1,15 +1,18 @@
 import { MOD_LABEL } from "../platform";
-import type { Project } from "../types";
+import type { LauncherProfile, Project } from "../types";
 import { FolderIcon, TerminalIcon, ArrowRightIcon } from "./Icons";
+import AgentIcon from "./AgentIcon";
 
 type Props = {
   project: Project;
-  onClaude: () => void;
+  profiles: LauncherProfile[];
+  defaultProfileId: string;
+  onOpen: (profileId: string) => void;
   onShell: () => void;
   onReveal: () => void;
 };
 
-export default function ProjectHome({ project, onClaude, onShell, onReveal }: Props) {
+export default function ProjectHome({ project, profiles, defaultProfileId, onOpen, onShell, onReveal }: Props) {
   return (
     <section className="project-home" aria-label={`Inicio de ${project.name}`}>
       <div className="project-home-content" key={project.id}>
@@ -21,11 +24,11 @@ export default function ProjectHome({ project, onClaude, onShell, onReveal }: Pr
         </button>
         <p className="home-description">Abre una sesión para empezar a trabajar en este proyecto.</p>
         <div className="home-actions">
-          <button type="button" className="home-action primary" onClick={onClaude}>
-            <span aria-hidden="true">✳</span>
-            <span>Abrir Claude</span>
-            <kbd>{MOD_LABEL} T</kbd>
-          </button>
+          {profiles.map(profile => <button key={profile.id} type="button" className={`home-action${profile.id === defaultProfileId ? " primary" : ""}`} onClick={() => onOpen(profile.id)}>
+            <AgentIcon kind={profile.provider} size={14} />
+            <span>Abrir {profile.name}</span>
+            {profile.id === defaultProfileId && <kbd>{MOD_LABEL} T</kbd>}
+          </button>)}
           <button type="button" className="home-action" onClick={onShell}>
             <TerminalIcon size={14} />
             <span>Abrir terminal</span>

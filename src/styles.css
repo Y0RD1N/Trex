@@ -2304,6 +2304,12 @@ body.dragging-sidebar .sidebar {
 .context-menu.session-create-menu {
   min-width: min(290px, var(--floating-max-width, calc(100vw - 16px)));
 }
+.profile-menu-text { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
+.profile-menu-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-menu-text > span:last-child { font-size: 10px; color: var(--text-dim); }
+.context-item.profile-menu-item { min-height: 46px; }
+.workspace-profile { max-width: 140px; padding: 3px 7px; border-radius: 4px; color: var(--text-dim); background: var(--hover); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 680px) { .workspace-profile { display: none; } }
 .window-controls { gap: 2px; margin-left: 2px; }
 .window-btn { width: 26px; height: 26px; border-radius: 5px; color: var(--text-dim); }
 .panel-toggle { margin-left: 0; }

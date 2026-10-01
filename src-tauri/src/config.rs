@@ -29,8 +29,27 @@ pub struct Project {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherProfile {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: String,
+    #[serde(default)]
+    pub shell: String,
+    #[serde(default)]
+    pub launch_mode: String,
+    #[serde(default)]
+    pub config_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub profiles: Vec<LauncherProfile>,
+    pub default_profile_id: String,
     pub shell: String,
     pub claude_command: String,
     pub claude_args: String,
@@ -52,6 +71,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            // Vacío indica al frontend que debe migrar la instalación anterior.
+            profiles: Vec::new(),
+            default_profile_id: String::new(),
             shell: "default".into(),
             claude_command: "claude".into(),
             claude_args: String::new(),
@@ -147,4 +169,39 @@ pub fn save(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
     fs::write(&tmp, text).map_err(|e| format!("No se pudo escribir la configuración: {e}"))?;
     fs::rename(&tmp, &path).map_err(|e| format!("No se pudo guardar la configuración: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_settings_keep_the_custom_claude_launcher_for_migration() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({
+            "settings": { "claudeCommand": "claude1", "claudeArgs": "--continue", "shell": "zsh" }
+        })).unwrap();
+        assert!(config.settings.profiles.is_empty());
+        assert_eq!(config.settings.claude_command, "claude1");
+        assert_eq!(config.settings.claude_args, "--continue");
+        assert_eq!(config.settings.shell, "zsh");
+    }
+
+    #[test]
+    fn saving_keeps_profiles_and_the_original_launch_of_each_session() {
+        let raw = serde_json::json!({
+            "settings": { "defaultProfileId": "c2", "profiles": [
+                { "id": "c1", "name": "Claude 1", "provider": "claude", "command": "claude1", "args": "--continue", "shell": "zsh", "launchMode": "arg", "configDir": "~/.claude-1" },
+                { "id": "c2", "name": "Claude 2", "provider": "claude", "command": "claude2", "args": "", "shell": "bash", "launchMode": "inject", "configDir": "~/.claude-2" },
+                { "id": "cx", "name": "Codex", "provider": "codex", "command": "codex", "args": "resume --last", "shell": "", "launchMode": "arg", "configDir": "~/.codex-work" }
+            ] },
+            "ui": { "lastTabs": [{ "projectId": "p1", "kind": "codex", "subtitle": "Trabajo", "launch": {
+                "profileId": "cx", "profileName": "Codex", "command": "codex", "args": "resume --last", "shell": "zsh", "launchMode": "arg", "env": { "CODEX_HOME": "~/.codex-work" }
+            } }] }
+        });
+        let config: AppConfig = serde_json::from_value(raw.clone()).unwrap();
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(saved["settings"]["profiles"], raw["settings"]["profiles"]);
+        assert_eq!(saved["settings"]["defaultProfileId"], "c2");
+        assert_eq!(saved["ui"], raw["ui"]);
+    }
 }

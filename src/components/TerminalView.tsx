@@ -47,6 +47,8 @@ export type TerminalViewProps = {
   args: string | null;
   shell: string;
   launchMode: string;
+  env: Record<string, string> | null;
+  launchLabel: string | null;
   settings: Settings;
   /** El padre controla la visibilidad con display:none sin desmontar nada. */
   visible: boolean;
@@ -61,6 +63,8 @@ function TerminalView({
   args,
   shell,
   launchMode,
+  env,
+  launchLabel,
   settings,
   visible,
   onExit,
@@ -89,8 +93,8 @@ function TerminalView({
   const lastFitBoxRef = useRef<{ width: number; height: number }>({ width: -1, height: -1 });
 
   // Refs espejo de las props para usarlas desde callbacks estables.
-  const launchRef = useRef({ cwd, command, args, shell, launchMode });
-  launchRef.current = { cwd, command, args, shell, launchMode };
+  const launchRef = useRef({ cwd, command, args, shell, launchMode, env });
+  launchRef.current = { cwd, command, args, shell, launchMode, env };
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const sessionIdRef = useRef(sessionId);
@@ -110,7 +114,6 @@ function TerminalView({
   const [searchTerm, setSearchTerm] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  const isClaude = command !== null;
 
   // --- Suscripciones a los eventos del PTY --------------------------------
 
@@ -260,7 +263,7 @@ function TerminalView({
     setExitCode(null);
     setOverlayDismissed(false);
     const id = currentIdRef.current;
-    const { cwd: dir, command: cmd, args: extraArgs, shell: sh, launchMode: mode } =
+    const { cwd: dir, command: cmd, args: extraArgs, shell: sh, launchMode: mode, env: profileEnv } =
       launchRef.current;
     const cols = term.cols > 1 ? term.cols : 80;
     const rows = term.rows > 1 ? term.rows : 24;
@@ -275,7 +278,7 @@ function TerminalView({
         command: cmd,
         args: extraArgs,
         shell: sh,
-        env: null,
+        env: profileEnv,
         cols,
         rows,
         launchMode: mode,
@@ -716,7 +719,7 @@ function TerminalView({
             className={`term-overlay-card${overlayPresence.value === "error" ? " term-overlay-error" : ""}`}>
             {overlayPresence.value === "spawning" ? <>
             <span className="spinner" aria-hidden="true" />
-            <span>{isClaude ? "Iniciando Claude…" : "Iniciando terminal…"}</span>
+            <span>{command ? `Iniciando ${launchLabel ?? "asistente"}…` : "Iniciando terminal…"}</span>
             </> : <>
             {overlayPresence.value === "error" ? <>
               <div className="term-overlay-title">No se pudo iniciar el proceso</div>

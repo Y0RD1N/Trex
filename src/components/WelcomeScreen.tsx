@@ -9,7 +9,7 @@ import type { AppInfo, ClaudeInfo } from "../types";
 
 type WelcomeProps = {
   claudeInfo: ClaudeInfo | null;
-  appInfo: AppInfo | null;
+  codexInfo: ClaudeInfo | null;
   onAddProject: () => void;
   onOpenSettings: () => void;
   onRedetect: () => void;
@@ -17,7 +17,7 @@ type WelcomeProps = {
 
 export default function WelcomeScreen({
   claudeInfo,
-  appInfo,
+  codexInfo,
   onAddProject,
   onOpenSettings,
   onRedetect,
@@ -28,17 +28,19 @@ export default function WelcomeScreen({
       <div className="welcome-inner">
         <div className="welcome-logo">✳</div>
         <h1 className="welcome-title">trex</h1>
-        <p className="welcome-sub">Tus proyectos, con Claude ya dentro</p>
+        <p className="welcome-sub">Tus proyectos, Claude Code y Codex en un solo espacio</p>
         <button type="button" className="btn btn-primary btn-big" onClick={onAddProject}>
           + Añadir proyecto
         </button>
-        <ClaudeStatusCard
-          claudeInfo={claudeInfo}
-          appInfo={appInfo}
-          onRedetect={onRedetect}
-        />
+        <section className="claude-card">
+          <p className="claude-card-text">Crea perfiles para tus comandos y cuentas en Ajustes → Asistentes.</p>
+          <div className="claude-rows">
+            {[{ name: "Claude Code", info: claudeInfo }, { name: "Codex", info: codexInfo }].map(({ name, info }) => <div key={name} className="claude-row"><span>{name}</span><span>{!info ? "Comprobando…" : info.found ? "Disponible" : "No detectado"}</span></div>)}
+          </div>
+          <button type="button" className="btn btn-small" onClick={onRedetect}>Volver a comprobar</button>
+        </section>
         <button type="button" className="link-btn" onClick={onOpenSettings}>
-          Ajustes ({MOD_LABEL} ,)
+          Configurar asistentes ({MOD_LABEL} ,)
         </button>
       </div>
     </div>

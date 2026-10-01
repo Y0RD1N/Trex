@@ -5,28 +5,33 @@
 import { useEffect, useRef, useState } from "react";
 import { MOD_LABEL } from "../platform";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
-import type { TabState } from "../types";
+import type { LauncherProfile, TabState } from "../types";
 import { FolderIcon, PanelIcon, PlusIcon, TerminalIcon } from "./Icons";
 import { sessionLabel } from "./SessionItem";
 import WindowControls from "./WindowControls";
 import DropdownMenu from "./DropdownMenu";
+import AgentIcon from "./AgentIcon";
+import ProfileMenuItems from "./ProfileMenuItems";
 
 type Props = {
   tabs: TabState[];
   activeTabId: string | null;
   projectName: string;
   hasProject: boolean;
+  profiles: LauncherProfile[];
+  defaultProfileId: string;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   onRevealProject: (() => void) | null;
-  onNew: () => void;
+  onNew: (profileId: string) => void;
   onNewShell: () => void;
   onOpenSettings: () => void;
+  onOpenProfiles: () => void;
 };
 
 export default function TerminalTabs({
-  tabs, activeTabId, projectName, hasProject, sidebarCollapsed,
-  onToggleSidebar, onRevealProject, onNew, onNewShell, onOpenSettings,
+  tabs, activeTabId, projectName, hasProject, sidebarCollapsed, profiles, defaultProfileId,
+  onToggleSidebar, onRevealProject, onNew, onNewShell, onOpenSettings, onOpenProfiles,
 }: Props) {
   const [menu, setMenu] = useState<FloatingAnchor | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -38,12 +43,13 @@ export default function TerminalTabs({
     <header className="tabs-bar" data-tauri-drag-region="deep">
       <div className="workspace-title" data-tauri-drag-region>
         <span className={current?.kind === "claude" ? "workspace-mark claude" : "workspace-mark"} aria-hidden="true">
-          {current ? current.kind === "claude" ? "✳" : <TerminalIcon size={15} /> : <FolderIcon size={15} />}
+          {current ? <AgentIcon kind={current.kind} /> : <FolderIcon size={15} />}
         </span>
         <span className="workspace-title-text" title={current ? sessionLabel(current) : projectName} data-tauri-drag-region>
           {current ? sessionLabel(current) : hasProject ? projectName : "Tu espacio"}
         </span>
         {current && <span className="workspace-project" data-tauri-drag-region>{projectName}</span>}
+        {current?.profileName && <span className="workspace-profile" title={`Perfil: ${current.profileName} · ${current.command}`} data-tauri-drag-region>{current.profileName}</span>}
       </div>
 
       <div className="session-create">
@@ -66,16 +72,15 @@ export default function TerminalTabs({
         {
           <DropdownMenu anchor={menu} triggerRef={menuButtonRef} label="Crear sesión"
             className="session-create-menu" onClose={() => setMenu(null)}>
-            <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onNew(); }}>
-              <span className="context-icon" aria-hidden="true">✳</span>
-              Nueva sesión de Claude
-              <span className="kbd">{MOD_LABEL} T</span>
-            </button>
+            <ProfileMenuItems profiles={profiles} defaultProfileId={defaultProfileId} onOpen={profileId => { setMenu(null); onNew(profileId); }} />
+            <div className="context-sep" role="separator" />
             <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onNewShell(); }}>
               <span className="context-icon" aria-hidden="true"><TerminalIcon size={16} /></span>
               Nueva terminal
               <span className="kbd">{MOD_LABEL} ⇧ T</span>
             </button>
+            <div className="context-sep" role="separator" />
+            <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onOpenProfiles(); }}>Configurar perfiles…</button>
           </DropdownMenu>
         }
       </div>

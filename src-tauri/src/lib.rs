@@ -225,6 +225,11 @@ async fn detect_claude() -> Result<ClaudeInfo, String> {
 }
 
 #[tauri::command]
+async fn detect_codex() -> Result<ClaudeInfo, String> {
+    Ok(pty::detect_codex())
+}
+
+#[tauri::command]
 async fn app_info(app: AppHandle) -> Result<AppInfo, String> {
     let (default_shell_name, options) = shell_options();
     Ok(AppInfo {
@@ -271,6 +276,7 @@ pub fn run() {
             pty_list,
             pty_kill_all,
             detect_claude,
+            detect_codex,
             app_info,
             load_config,
             save_config,

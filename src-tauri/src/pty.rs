@@ -151,13 +151,15 @@ fn file_exists(p: &str) -> bool {
     std::path::Path::new(p).is_file()
 }
 
-/// Carpetas donde puede vivir Claude Code aunque no esté en el PATH del proceso.
-fn claude_bin_dirs() -> Vec<String> {
+/// Carpetas habituales de los CLI, también al abrir trex desde el escritorio.
+fn agent_bin_dirs() -> Vec<String> {
     let mut dirs: Vec<String> = Vec::new();
 
-    if let Some(found) = which("claude") {
-        if let Some(parent) = std::path::Path::new(&found).parent() {
-            dirs.push(parent.to_string_lossy().to_string());
+    for program in ["claude", "codex"] {
+        if let Some(found) = which(program) {
+            if let Some(parent) = std::path::Path::new(&found).parent() {
+                dirs.push(parent.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -169,16 +171,18 @@ fn claude_bin_dirs() -> Vec<String> {
                 ".bun\\bin",
                 ".claude\\local",
                 "AppData\\Roaming\\npm",
+                "AppData\\Local\\pnpm",
                 "AppData\\Local\\Programs\\claude",
             ] {
                 candidates.push(format!("{home}\\{rel}"));
             }
         } else {
-            for rel in [".local/bin", ".bun/bin", ".claude/local", ".npm-global/bin"] {
+            for rel in [".local/bin", ".bun/bin", ".claude/local", ".npm-global/bin", ".local/share/pnpm", ".local/share/mise/shims", ".volta/bin"] {
                 candidates.push(format!("{home}/{rel}"));
             }
             candidates.push("/usr/local/bin".to_string());
             candidates.push("/usr/bin".to_string());
+            candidates.push("/opt/homebrew/bin".to_string());
         }
         for candidate in candidates {
             if std::path::Path::new(&candidate).is_dir() {
@@ -192,25 +196,36 @@ fn claude_bin_dirs() -> Vec<String> {
     dirs
 }
 
-/// PATH enriquecido con las carpetas de Claude Code que falten.
+/// Conserva la prioridad del PATH del usuario y añade las carpetas que falten.
 fn enriched_path() -> Option<String> {
     let current = std::env::var("PATH").ok().unwrap_or_default();
-    let lower_current = current.to_ascii_lowercase();
-
-    let mut extra: Vec<String> = Vec::new();
-    for dir in claude_bin_dirs() {
-        if !lower_current.contains(&dir.to_ascii_lowercase()) {
-            extra.push(dir);
-        }
-    }
+    let current_dirs: Vec<_> = std::env::split_paths(&current).collect();
+    let extra: Vec<String> = agent_bin_dirs()
+        .into_iter()
+        .filter(|dir| !current_dirs.iter().any(|existing| {
+            if is_windows() { existing.to_string_lossy().eq_ignore_ascii_case(dir) }
+            else { existing == std::path::Path::new(dir) }
+        }))
+        .collect();
     if extra.is_empty() {
         return None;
     }
 
+    let mut combined = Vec::new();
     if !current.is_empty() {
-        extra.push(current);
+        combined.push(current);
     }
-    Some(extra.join(if is_windows() { ";" } else { ":" }))
+    combined.extend(extra);
+    Some(combined.join(if is_windows() { ";" } else { ":" }))
+}
+
+fn expand_config_dir(value: &str) -> String {
+    if value.starts_with("~/") || value.starts_with("~\\") {
+        if let Some(home) = home_dir() {
+            return std::path::Path::new(&home).join(&value[2..]).to_string_lossy().into_owned();
+        }
+    }
+    value.to_string()
 }
 
 fn home_dir() -> Option<String> {
@@ -347,7 +362,10 @@ fn build_command(req: &SpawnRequest) -> Result<(ResolvedShell, Vec<String>, Opti
 
     let mut args: Vec<String> = Vec::new();
 
-    if let Some(cmd) = &command {
+    let inject = req.launch_mode.as_deref()
+        .map(|mode| mode.eq_ignore_ascii_case("inject"))
+        .unwrap_or(false);
+    if let Some(cmd) = command.as_ref().filter(|_| !inject) {
         match shell.kind {
             ShellKind::PowerShell => {
                 args.push("-NoLogo".into());
@@ -392,6 +410,7 @@ fn build_command(req: &SpawnRequest) -> Result<(ResolvedShell, Vec<String>, Opti
                         .unwrap_or_else(|| req.cwd.replace('\\', "/")),
                 );
             }
+            ShellKind::Unix => args.push("-i".into()),
             _ => {}
         }
     }
@@ -432,7 +451,7 @@ impl PtyState {
             cmd.arg(a);
         }
         cmd.cwd(&req.cwd);
-        // Garantiza que `claude` se encuentre aunque el PATH del proceso esté desactualizado.
+        // Encuentra los CLI sin adelantar otra instalación al PATH del usuario.
         if let Some(path) = enriched_path() {
             cmd.env("PATH", path);
         }
@@ -452,7 +471,8 @@ impl PtyState {
         }
         if let Some(extra) = &req.env {
             for (k, v) in extra {
-                cmd.env(k, v);
+                let value = if k == "CODEX_HOME" || k == "CLAUDE_CONFIG_DIR" { expand_config_dir(v) } else { v.clone() };
+                cmd.env(k, value);
             }
         }
         // Algunas herramientas (Claude Code incluido) esperan un ancho de terminal válido.
@@ -563,8 +583,7 @@ impl PtyState {
             .launch_mode
             .as_deref()
             .map(|m| m.eq_ignore_ascii_case("inject"))
-            .unwrap_or(false)
-            || shell.kind == ShellKind::Wsl && command.is_some();
+            .unwrap_or(false);
 
         if inject {
             if let Some(cmd) = command {
@@ -785,7 +804,28 @@ pub fn detect_claude() -> ClaudeInfo {
     }
 }
 
-fn read_claude_version(path: &str) -> Option<String> {
+pub fn detect_codex() -> ClaudeInfo {
+    let mut candidates = Vec::new();
+    if let Some(path) = which("codex") { candidates.push(ClaudeCandidate { path, exists: true }); }
+    for dir in agent_bin_dirs() {
+        let names: &[&str] = if is_windows() { &["codex.exe", "codex.cmd", "codex"] } else { &["codex"] };
+        for name in names {
+            let path = std::path::Path::new(&dir).join(name).to_string_lossy().into_owned();
+            if !candidates.iter().any(|candidate| candidate.path == path) {
+                candidates.push(ClaudeCandidate { exists: file_exists(&path), path });
+            }
+        }
+    }
+    let path = candidates.iter().find(|candidate| candidate.exists).map(|candidate| candidate.path.clone());
+    let version = path.as_deref().and_then(read_cli_version);
+    let source = path.as_ref().map(|path| if which("codex").as_ref() == Some(path) { "PATH".into() } else { "instalación local".into() });
+    ClaudeInfo { found: path.is_some(), path, version, source,
+        hint: Some("Usa el comando codex instalado en tu equipo o configura su ruta en Asistentes.".into()), candidates }
+}
+
+fn read_claude_version(path: &str) -> Option<String> { read_cli_version(path) }
+
+fn read_cli_version(path: &str) -> Option<String> {
     use std::process::{Command, Stdio};
 
     let mut cmd = if is_windows() && path.to_ascii_lowercase().ends_with(".cmd") {
@@ -820,5 +860,73 @@ fn read_claude_version(path: &str) -> Option<String> {
         None
     } else {
         Some(text.lines().next().unwrap_or("").to_string())
+    }
+}
+
+#[cfg(test)]
+mod launcher_tests {
+    use super::*;
+
+    fn request(command: &str, mode: &str) -> SpawnRequest {
+        serde_json::from_value(serde_json::json!({
+            "id": "test-profile", "cwd": std::env::temp_dir().to_string_lossy(),
+            "command": command, "args": "--continue", "shell": "bash", "launchMode": mode
+        })).unwrap()
+    }
+
+    #[test]
+    fn compatible_mode_leaves_the_command_for_injection_instead_of_running_it_twice() {
+        let (_, args, command) = build_command(&request("claude2", "inject")).unwrap();
+        assert_eq!(command.as_deref(), Some("claude2 --continue"));
+        assert!(!args.iter().any(|arg| arg.contains("claude2")));
+        if !is_windows() { assert_eq!(args, vec!["-i"]); }
+    }
+
+    #[test]
+    fn config_directories_expand_home_and_preserve_spaces() {
+        let home = home_dir().unwrap();
+        assert_eq!(expand_config_dir("~/.codex work"), std::path::Path::new(&home).join(".codex work").to_string_lossy());
+        assert_eq!(expand_config_dir("/tmp/claude account 2"), "/tmp/claude account 2");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_pty_resolves_separate_aliases_and_account_directories() {
+        let root = std::env::temp_dir().join(format!("trex-profile-test-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&root).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+        let _cleanup = Cleanup(root.clone());
+        std::fs::write(root.join(".bashrc"), "alias claude1='printf \"claude1|%s|%s\\n\" \"$CLAUDE_CONFIG_DIR\"'\nalias claude2='printf \"claude2|%s|%s\\n\" \"$CLAUDE_CONFIG_DIR\"'\ncodex() { printf 'codex|%s|%s\\n' \"$CODEX_HOME\" \"$*\"; }\n").unwrap();
+        for (program, key, folder, flags) in [
+            ("claude1", "CLAUDE_CONFIG_DIR", "account one", "--continue"),
+            ("claude2", "CLAUDE_CONFIG_DIR", "account two", "--resume"),
+            ("codex", "CODEX_HOME", "codex work", "resume --last"),
+        ] {
+            let mut req = request(program, "arg");
+            req.args = Some(format!("{flags}; exit"));
+            let (shell, args, _) = build_command(&req).unwrap();
+            let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 120, pixel_width: 0, pixel_height: 0 }).unwrap();
+            let mut cmd = CommandBuilder::new(shell.program);
+            cmd.args(args);
+            cmd.cwd(&root);
+            cmd.env("HOME", &root);
+            cmd.env(key, folder);
+            let mut child = pair.slave.spawn_command(cmd).unwrap();
+            drop(pair.slave);
+            let mut reader = pair.master.try_clone_reader().unwrap();
+            let mut output = Vec::new();
+            let mut buffer = [0u8; 1024];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => output.extend_from_slice(&buffer[..count]),
+                }
+            }
+            assert!(child.wait().unwrap().success());
+            let text = String::from_utf8_lossy(&output);
+            assert!(text.contains(&format!("{program}|{folder}|{flags}")), "{text}");
+            assert!(!text.contains("command not found"), "{text}");
+        }
     }
 }

@@ -18,12 +18,14 @@ import {
   clamp,
   deriveProjectName,
   detectClaude as detectClaudeCode,
+  detectCodex,
   formatError,
   getAppInfo,
   loadConfig,
   newProjectId,
   newSessionId,
   normalizePath,
+  normalizeConfig,
   normalizeText,
   ptyKill,
   saveConfig,
@@ -35,6 +37,7 @@ import type {
   AppConfig,
   AppInfo,
   ClaudeInfo,
+  LauncherProfile,
   PersistedTab,
   Project,
   Settings,
@@ -52,6 +55,7 @@ import TooltipProvider from "./components/TooltipProvider";
 import ProjectHome from "./components/ProjectHome";
 import { sessionLabel } from "./components/SessionItem";
 import WelcomeScreen from "./components/WelcomeScreen";
+import { defaultProfile, launchForProfile, restoreLaunch } from "./profiles";
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
 const CLAUDE_INFO_FALLBACK: ClaudeInfo = {
@@ -69,15 +73,14 @@ const buildTab = (
   kind: TabKind,
   subtitle: string,
   settings: Settings,
+  profile: LauncherProfile | null = null,
 ): TabState => {
-  const useClaude = kind === "claude" && settings.autoRunClaude;
   return {
     id: newSessionId(),
     projectId,
     kind,
     subtitle,
-    command: useClaude ? settings.claudeCommand.trim() || "claude" : null,
-    args: useClaude ? settings.claudeArgs.trim() || null : null,
+    ...launchForProfile(settings, profile),
     exited: false,
     exitCode: null,
     oscTitle: null,
@@ -90,6 +93,8 @@ function AppShell() {
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [claudeInfo, setClaudeInfo] = useState<ClaudeInfo | null>(null);
+  const [codexInfo, setCodexInfo] = useState<ClaudeInfo | null>(null);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<"appearance" | "profiles">("appearance");
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsPresence = usePresence(settingsOpen ? true : null);
@@ -146,7 +151,7 @@ function AppShell() {
         failed = true;
       }
       if (cancelled) return;
-      const normalized = failed ? DEFAULT_CONFIG : loaded;
+      const normalized = normalizeConfig(failed ? DEFAULT_CONFIG : loaded);
       setConfig(normalized);
       loadedRef.current = true;
       applyTheme(
@@ -174,6 +179,8 @@ function AppShell() {
         if (!cancelled) setClaudeInfo(CLAUDE_INFO_FALLBACK);
       }
     })();
+    void detectCodex().then(info => { if (!cancelled) setCodexInfo(info); })
+      .catch(() => { if (!cancelled) setCodexInfo(CLAUDE_INFO_FALLBACK); });
 
     return () => {
       cancelled = true;
@@ -181,6 +188,8 @@ function AppShell() {
   }, [showToast]);
 
   const redetectClaude = useCallback(() => {
+    setCodexInfo(null);
+    void detectCodex().then(setCodexInfo).catch(() => setCodexInfo(CLAUDE_INFO_FALLBACK));
     void (async () => {
       setClaudeInfo(null);
       try {
@@ -192,6 +201,9 @@ function AppShell() {
     })();
   }, []);
 
+  const openSettings = useCallback(() => { setSettingsInitialSection("appearance"); setSettingsOpen(true); }, []);
+  const openProfiles = useCallback(() => { setSettingsInitialSection("profiles"); setSettingsOpen(true); }, []);
+
   // --- Persistencia (con debounce) --------------------------------------------
 
   // Títulos OSC y códigos de salida son estado transitorio. Solo los campos
@@ -200,6 +212,8 @@ function AppShell() {
     projectId: tab.projectId,
     kind: tab.kind,
     subtitle: tab.subtitle,
+    launch: { profileId: tab.profileId, profileName: tab.profileName, command: tab.command, args: tab.args,
+      shell: tab.shell, launchMode: tab.launchMode, env: tab.env },
   })));
   useEffect(() => {
     if (!config || !loadedRef.current) return;
@@ -262,9 +276,10 @@ function AppShell() {
 
     if (persisted.length > 0) {
       // Recrea las pestañas de la sesión anterior (mismo proyecto y comando).
-      const restored = persisted.map((tab) =>
-        buildTab(tab.projectId, tab.kind, tab.subtitle, settings),
-      );
+      const restored = persisted.map((tab) => {
+        const launch = restoreLaunch(tab, settings);
+        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch };
+      });
       setTabs(restored);
       // Proyecto activo: el persistido si tiene pestañas restauradas; si no, el de la primera.
       const preferredProject =
@@ -279,8 +294,8 @@ function AppShell() {
     }
 
     if (fallbackProjectId) {
-      const kind: TabKind = settings.autoRunClaude ? "claude" : "shell";
-      const tab = buildTab(fallbackProjectId, kind, kind === "claude" ? "claude" : "shell", settings);
+      const profile = settings.autoRunClaude ? defaultProfile(settings) : null;
+      const tab = buildTab(fallbackProjectId, profile?.provider ?? "shell", profile?.name ?? "shell", settings, profile);
       setTabs([tab]);
       setActiveTabId(tab.id);
     }
@@ -477,20 +492,22 @@ function AppShell() {
 
   // --- Pestañas ---------------------------------------------------------------
 
-  const openTab = useCallback((projectId: string, kind: TabKind, subtitleOverride?: string) => {
+  const openTab = useCallback((projectId: string, profileId: string | null) => {
     const currentConfig = configRef.current;
     if (!currentConfig) return;
     const settings = currentConfig.settings;
     if (!currentConfig.projects.some((project) => project.id === projectId)) return;
 
+    const profile = profileId ? settings.profiles.find(item => item.id === profileId) : null;
+    if (profileId && !profile) return;
     const sameKind = tabsRef.current.filter(
-      (tab) => tab.projectId === projectId && tab.kind === kind,
+      (tab) => tab.projectId === projectId && tab.profileId === (profile?.id ?? null),
     );
-    const base = kind === "claude" ? "claude" : "shell";
+    const base = profile?.name ?? "shell";
     const subtitle =
-      subtitleOverride ?? (sameKind.length === 0 ? base : `${base} ${sameKind.length + 1}`);
+      sameKind.length === 0 ? base : `${base} ${sameKind.length + 1}`;
 
-    const tab = buildTab(projectId, kind, subtitle, settings);
+    const tab = buildTab(projectId, profile?.provider ?? "shell", subtitle, settings, profile ?? null);
     // Actualiza el espejo al instante para numerar bien aperturas seguidas.
     const nextTabs = [...tabsRef.current, tab];
     tabsRef.current = nextTabs;
@@ -661,11 +678,12 @@ function AppShell() {
     {
       newClaudeTab: () => {
         const projectId = configRef.current?.ui.activeProjectId;
-        if (projectId) openTab(projectId, "claude");
+        const settings = configRef.current?.settings;
+        if (projectId && settings) openTab(projectId, defaultProfile(settings).id);
       },
       newShellTab: () => {
         const projectId = configRef.current?.ui.activeProjectId;
-        if (projectId) openTab(projectId, "shell");
+        if (projectId) openTab(projectId, null);
       },
       focusSearch,
       toggleSidebar,
@@ -675,7 +693,7 @@ function AppShell() {
       selectTab: selectTabByIndex,
       toggleSettings: () => {
         if (settingsOpen) window.dispatchEvent(new Event("trex:settings-close"));
-        else setSettingsOpen(true);
+        else openSettings();
       },
       toggleTheme,
       openInExplorer: () => {
@@ -707,7 +725,9 @@ function AppShell() {
   if (!config) return <Splash />;
 
   const activeProject = config.projects.find((project) => project.id === activeProjectId) ?? null;
-  const claudeMissing = claudeInfo !== null && !claudeInfo.found;
+  const preferredProfile = defaultProfile(config.settings);
+  const standardClaude = preferredProfile.provider === "claude" && preferredProfile.command === "claude";
+  const claudeMissing = standardClaude && claudeInfo !== null && !claudeInfo.found;
   const hasProjects = config.projects.length > 0;
 
   return (
@@ -717,7 +737,8 @@ function AppShell() {
         activeProjectId={activeProjectId}
         sidebarWidth={config.ui.sidebarWidth}
         sidebarCollapsed={config.ui.sidebarCollapsed}
-        claudeInfo={claudeInfo}
+        claudeInfo={standardClaude ? claudeInfo : null}
+        profiles={config.settings.profiles}
         tabs={tabs}
         activeTabId={activeTabId}
         search={search}
@@ -726,7 +747,7 @@ function AppShell() {
         onSearchChange={setSearch}
         onAdd={() => void addProject()}
         onSelect={selectProject}
-        onQuickOpen={(projectId) => openTab(projectId, "claude")}
+        onQuickOpen={(projectId, profileId) => openTab(projectId, profileId)}
         onSelectSession={(projectId, tabId) => {
           selectProject(projectId);
           setActiveTabId(tabId);
@@ -737,7 +758,7 @@ function AppShell() {
         onDelete={(projectId, trigger, returnFocus) => void deleteProject(projectId, trigger, returnFocus)}
         onReveal={revealProject}
         onCopyPath={copyPath}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={openSettings}
         onToggleTheme={toggleTheme}
         onResize={setSidebarWidth}
       />
@@ -748,24 +769,27 @@ function AppShell() {
           activeTabId={activeTabId}
           projectName={activeProject?.name ?? "trex"}
           hasProject={activeProjectId !== null}
+          profiles={config.settings.profiles}
+          defaultProfileId={preferredProfile.id}
           sidebarCollapsed={config.ui.sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
           onRevealProject={
             activeProjectId ? () => revealProject(activeProjectId) : null
           }
-          onNew={() => {
-            if (activeProjectId) openTab(activeProjectId, "claude");
+          onNew={(profileId) => {
+            if (activeProjectId) openTab(activeProjectId, profileId);
           }}
           onNewShell={() => {
-            if (activeProjectId) openTab(activeProjectId, "shell");
+            if (activeProjectId) openTab(activeProjectId, null);
           }}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={openSettings}
+          onOpenProfiles={openProfiles}
         />
 
         {hasProjects && claudeMissing && !bannerDismissed && (
           <ClaudeBanner
             hint={claudeInfo?.hint ?? null}
-            onHowToInstall={() => setSettingsOpen(true)}
+            onHowToInstall={openProfiles}
             onDismiss={() => setBannerDismissed(true)}
           />
         )}
@@ -787,8 +811,10 @@ function AppShell() {
                     cwd={project.path}
                     command={tab.command}
                     args={tab.args}
-                    shell={config.settings.shell}
-                    launchMode={config.settings.launchMode}
+                    shell={tab.shell}
+                    launchMode={tab.launchMode}
+                    env={tab.env}
+                    launchLabel={tab.profileName}
                     settings={config.settings}
                     visible={isActive}
                     onExit={handleTabExit}
@@ -801,8 +827,10 @@ function AppShell() {
             {activeProject && projectTabs.length === 0 && (
               <ProjectHome
                 project={activeProject}
-                onClaude={() => openTab(activeProject.id, "claude")}
-                onShell={() => openTab(activeProject.id, "shell")}
+                profiles={config.settings.profiles}
+                defaultProfileId={preferredProfile.id}
+                onOpen={(profileId) => openTab(activeProject.id, profileId)}
+                onShell={() => openTab(activeProject.id, null)}
                 onReveal={() => revealProject(activeProject.id)}
               />
             )}
@@ -816,9 +844,9 @@ function AppShell() {
         ) : (
           <WelcomeScreen
             claudeInfo={claudeInfo}
-            appInfo={appInfo}
+            codexInfo={codexInfo}
             onAddProject={() => void addProject()}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={openProfiles}
             onRedetect={redetectClaude}
           />
         )}
@@ -831,6 +859,8 @@ function AppShell() {
           settings={config.settings}
           appInfo={appInfo}
           claudeInfo={claudeInfo}
+          codexInfo={codexInfo}
+          initialSection={settingsInitialSection}
           onSave={updateSettings}
           onClose={() => setSettingsOpen(false)}
           onRedetect={redetectClaude}
