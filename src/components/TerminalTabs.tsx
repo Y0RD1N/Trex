@@ -1,17 +1,29 @@
 /**
  * Una sola cabecera para la sesión abierta. La navegación vive en la sidebar.
  * Los huecos de la barra siguen siendo arrastrables en la ventana de Tauri.
+ *
+ * Modo inmersivo (`autoHideTopBar`): el contenedor `.bar-slot` pasa a medir 0 y
+ * la barra queda flotando sobre el terminal, fuera de la vista. Al acercar el
+ * cursor al borde superior baja deslizándose (la detección es por coordenadas,
+ * ver `useHoverReveal`), y se esconde de nuevo al alejarlo. Como no ocupa espacio,
+ * aparecer y desaparecer nunca redimensiona el terminal; solo activar o
+ * desactivar el modo lo hace, una vez y animado.
  */
 import { useEffect, useRef, useState } from "react";
+import { useHoverReveal } from "../hooks/useHoverReveal";
 import { MOD_LABEL } from "../platform";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
-import type { LauncherProfile, TabState } from "../types";
+import type { AgentNotice, LauncherProfile, TabState } from "../types";
 import { FolderIcon, PanelIcon, PlusIcon, TerminalIcon } from "./Icons";
 import { sessionLabel } from "./SessionItem";
 import WindowControls from "./WindowControls";
 import DropdownMenu from "./DropdownMenu";
 import AgentIcon from "./AgentIcon";
 import ProfileMenuItems from "./ProfileMenuItems";
+import NotificationCenter from "./NotificationCenter";
+
+/** Alto de la barra en px: `--header-h` (42) más el borde de la ventana. */
+const TOP_BAR_HEIGHT = 43;
 
 type Props = {
   tabs: TabState[];
@@ -22,24 +34,45 @@ type Props = {
   defaultProfileId: string;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  /** Barra oculta hasta acercar el cursor al borde superior. */
+  autoHideTopBar: boolean;
+  onToggleTopBar: () => void;
   onRevealProject: (() => void) | null;
   onNew: (profileId: string) => void;
   onNewShell: () => void;
   onOpenSettings: () => void;
   onOpenProfiles: () => void;
+  notices: AgentNotice[];
+  soundEnabled: boolean;
+  liveTabIds: Set<string>;
+  onOpenNotice: (notice: AgentNotice) => void;
+  onMarkNoticesRead: () => void;
+  onClearNotices: () => void;
+  onToggleSound: () => void;
+  onPreviewSound: () => void;
 };
 
 export default function TerminalTabs({
   tabs, activeTabId, projectName, hasProject, sidebarCollapsed, profiles, defaultProfileId,
-  onToggleSidebar, onRevealProject, onNew, onNewShell, onOpenSettings, onOpenProfiles,
+  onToggleSidebar, autoHideTopBar, onToggleTopBar, onRevealProject, onNew, onNewShell, onOpenSettings, onOpenProfiles,
+  notices, soundEnabled, liveTabIds, onOpenNotice, onMarkNoticesRead, onClearNotices, onToggleSound, onPreviewSound,
 }: Props) {
   const [menu, setMenu] = useState<FloatingAnchor | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const current = tabs.find((tab) => tab.id === activeTabId);
+  // Al activar el modo se enseña la barra un instante para que se vea adónde va.
+  // `openFrom`: la esquina superior izquierda queda para la barra lateral oculta.
+  const reveal = useHoverReveal<HTMLDivElement>({
+    enabled: autoHideTopBar, edge: "top", extent: TOP_BAR_HEIGHT, openFrom: 28,
+    openDelay: 90, closeDelay: 380, introMs: 1400,
+    holdOpen: (slot) => slot.querySelector(":focus-visible") !== null,
+  });
+  const shown = !autoHideTopBar || reveal.revealed;
 
   useEffect(() => setMenu(null), [projectName, activeTabId]);
 
   return (
+    <div ref={reveal.ref} className={`bar-slot${autoHideTopBar ? " auto-hide" : ""}${shown ? " shown" : ""}`} {...reveal.handlers}>
     <header className="tabs-bar" data-tauri-drag-region="deep">
       <div className="workspace-title" data-tauri-drag-region>
         <span className={current?.kind === "claude" ? "workspace-mark claude" : "workspace-mark"} aria-hidden="true">
@@ -95,7 +128,12 @@ export default function TerminalTabs({
       >
         <PanelIcon size={16} />
       </button>
-      <WindowControls onOpenSettings={onOpenSettings} onRevealProject={onRevealProject} />
+      <NotificationCenter notices={notices} soundEnabled={soundEnabled} liveTabIds={liveTabIds}
+        onOpenSession={onOpenNotice} onMarkRead={onMarkNoticesRead} onClear={onClearNotices}
+        onToggleSound={onToggleSound} onPreviewSound={onPreviewSound} />
+      <WindowControls onOpenSettings={onOpenSettings} onRevealProject={onRevealProject}
+        autoHideTopBar={autoHideTopBar} onToggleTopBar={onToggleTopBar} />
     </header>
+    </div>
   );
 }

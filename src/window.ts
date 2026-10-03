@@ -43,6 +43,21 @@ export const isWindowMaximized = async (): Promise<boolean> => {
   }
 };
 
+/** Estado del marco de la ventana: decide si se dibujan las esquinas redondeadas. */
+export type WindowFrameState = "normal" | "maximized" | "fullscreen";
+
+/** Estado actual del marco ("normal" si no hay runtime nativo). */
+export const getWindowFrameState = async (): Promise<WindowFrameState> => {
+  try {
+    const win = getCurrentWindow();
+    if (await win.isFullscreen()) return "fullscreen";
+    if (await win.isMaximized()) return "maximized";
+  } catch {
+    /* sin runtime nativo */
+  }
+  return "normal";
+};
+
 /**
  * Se suscribe a los cambios de tamaño de la ventana (para refrescar el icono
  * maximizar/restaurar). Devuelve la función para darse de baja.

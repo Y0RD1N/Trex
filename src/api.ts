@@ -150,6 +150,8 @@ const DEFAULT_UI: UiStateExtended = {
   sidebarWidth: 290,
   activeProjectId: null,
   sidebarCollapsed: false,
+  notificationSound: true,
+  autoHideTopBar: true,
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -403,6 +405,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     activeProjectId: asNullableString(uiRaw.activeProjectId),
     // Lectura defensiva: cualquier valor que no sea booleano deja la barra expandida.
     sidebarCollapsed: asBool(uiRaw.sidebarCollapsed, false),
+    notificationSound: asBool(uiRaw.notificationSound, true),
+    autoHideTopBar: asBool(uiRaw.autoHideTopBar, true),
     sidebarWidth: clamp(
       Math.round(asNumber(uiRaw.sidebarWidth, DEFAULT_UI.sidebarWidth)),
       180,

@@ -31,11 +31,14 @@ import {
   saveConfig,
 } from "./api";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useWindowFrame } from "./hooks/useWindowFrame";
 import { usePresence } from "./hooks/usePresence";
 import { applyTheme, getThemeMode, onThemeChange, type ThemeMode } from "./theme";
 import type {
   AppConfig,
   AgentActivity,
+  AgentNotice,
+  AgentNoticeKind,
   AppInfo,
   ClaudeInfo,
   LauncherProfile,
@@ -57,6 +60,7 @@ import ProjectHome from "./components/ProjectHome";
 import { sessionLabel } from "./components/SessionItem";
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, restoreLaunch } from "./profiles";
+import { useNotificationSound } from "./hooks/useNotificationSound";
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
 const CLAUDE_INFO_FALLBACK: ClaudeInfo = {
@@ -91,8 +95,14 @@ const buildTab = (
 };
 
 function AppShell() {
+  useWindowFrame();
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [tabs, setTabs] = useState<TabState[]>([]);
+  const [notices, setNotices] = useState<AgentNotice[]>([]);
+  const noticeIdRef = useRef(0);
+  const closingTabIdsRef = useRef(new Set<string>());
+  const playNotificationSound = useNotificationSound(config?.ui.notificationSound ?? true);
+  const liveTabIds = useMemo(() => new Set(tabs.map(tab => tab.id)), [tabs]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [claudeInfo, setClaudeInfo] = useState<ClaudeInfo | null>(null);
   const [codexInfo, setCodexInfo] = useState<ClaudeInfo | null>(null);
@@ -438,7 +448,9 @@ function AppShell() {
     if (!ok) return;
 
     // Termina los procesos del proyecto antes de quitarlo de la lista.
-    for (const tab of tabsRef.current.filter((item) => item.projectId === projectId)) {
+    const closingTabs = tabsRef.current.filter((item) => item.projectId === projectId);
+    for (const tab of closingTabs) closingTabIdsRef.current.add(tab.id);
+    for (const tab of closingTabs) {
       try {
         await ptyKill(tab.id);
       } catch {
@@ -448,6 +460,7 @@ function AppShell() {
 
     const remainingTabs = tabsRef.current.filter((tab) => tab.projectId !== projectId);
     tabsRef.current = remainingTabs;
+    for (const tab of closingTabs) closingTabIdsRef.current.delete(tab.id);
     setTabs(remainingTabs);
     if (!remainingTabs.some((tab) => tab.id === activeTabIdRef.current)) {
       const nextActive =
@@ -547,6 +560,7 @@ function AppShell() {
       if (!ok) return;
     }
 
+    closingTabIdsRef.current.add(tabId);
     try {
       await ptyKill(tabId);
     } catch {
@@ -555,6 +569,7 @@ function AppShell() {
 
     const next = tabsRef.current.filter((item) => item.id !== tabId);
     tabsRef.current = next;
+    closingTabIdsRef.current.delete(tabId);
     setTabs(next);
     if (activeTabIdRef.current === tabId) {
       const lastOfProject = [...next].reverse().find((item) => item.projectId === tab.projectId);
@@ -618,6 +633,30 @@ function AppShell() {
       if (!tab || tab.activity === activity) return prev;
       return prev.map(item => item.id === tabId ? { ...item, activity } : item);
     });
+  }, []);
+
+  const handleAgentNotice = useCallback((tabId: string, kind: AgentNoticeKind) => {
+    const tab = tabsRef.current.find(item => item.id === tabId);
+    const project = configRef.current?.projects.find(item => item.id === tab?.projectId);
+    if (!tab || tab.kind === "shell" || !project || closingTabIdsRef.current.has(tabId)) return;
+    const notice: AgentNotice = { id: ++noticeIdRef.current, tabId, projectId: project.id,
+      sessionName: sessionLabel(tab), projectName: project.name, provider: tab.kind, kind, createdAt: Date.now(), read: false };
+    setNotices(previous => [notice, ...previous].slice(0, 50));
+    void playNotificationSound();
+  }, [playNotificationSound]);
+
+  const openNotice = useCallback((notice: AgentNotice) => {
+    setNotices(previous => previous.map(item => item.id === notice.id ? { ...item, read: true } : item));
+    const tab = tabsRef.current.find(item => item.id === notice.tabId);
+    if (tab) {
+      setSearch("");
+      selectProject(tab.projectId);
+      setActiveTabId(tab.id);
+    } else showToast("Esta sesión ya se cerró.");
+  }, [selectProject, showToast]);
+
+  const toggleNotificationSound = useCallback(() => {
+    setConfig(previous => previous ? { ...previous, ui: { ...previous.ui, notificationSound: !previous.ui.notificationSound } } : previous);
   }, []);
 
   const handleTabTitle = useCallback((tabId: string, title: string) => {
@@ -690,6 +729,16 @@ function AppShell() {
     );
   }, []);
 
+  /**
+   * Alterna el ocultado automático de la barra superior (Ctrl+Shift+B o la
+   * entrada del menú "⋯"). Se persiste en "ui" igual que la barra lateral.
+   */
+  const toggleTopBar = useCallback(() => {
+    setConfig((prev) =>
+      prev ? { ...prev, ui: { ...prev.ui, autoHideTopBar: !prev.ui.autoHideTopBar } } : prev,
+    );
+  }, []);
+
   // --- Atajos de teclado -----------------------------------------------------------
 
   useShortcuts(
@@ -705,6 +754,7 @@ function AppShell() {
       },
       focusSearch,
       toggleSidebar,
+      toggleTopBar,
       closeTab: closeActiveTab,
       nextTab: () => cycleTab(1),
       prevTab: () => cycleTab(-1),
@@ -791,6 +841,8 @@ function AppShell() {
           defaultProfileId={preferredProfile.id}
           sidebarCollapsed={config.ui.sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
+          autoHideTopBar={config.ui.autoHideTopBar}
+          onToggleTopBar={toggleTopBar}
           onRevealProject={
             activeProjectId ? () => revealProject(activeProjectId) : null
           }
@@ -802,6 +854,14 @@ function AppShell() {
           }}
           onOpenSettings={openSettings}
           onOpenProfiles={openProfiles}
+          notices={notices}
+          soundEnabled={config.ui.notificationSound}
+          liveTabIds={liveTabIds}
+          onOpenNotice={openNotice}
+          onMarkNoticesRead={() => setNotices(previous => previous.map(notice => ({ ...notice, read: true })))}
+          onClearNotices={() => setNotices([])}
+          onToggleSound={toggleNotificationSound}
+          onPreviewSound={() => void playNotificationSound()}
         />
 
         {hasProjects && claudeMissing && !bannerDismissed && (
@@ -840,6 +900,7 @@ function AppShell() {
                     onTitle={handleTabTitle}
                     onActivity={handleTabActivity}
                     onRunning={handleTabRunning}
+                    onNotice={handleAgentNotice}
                   />
                 </div>
               );

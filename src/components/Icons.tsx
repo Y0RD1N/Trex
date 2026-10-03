@@ -239,3 +239,17 @@ export function ArrowRightIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
 export function ChevronIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><path d="m9 5 7 7-7 7" /></svg>;
 }
+
+export function FolderPlusIcon({ size = 18, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><path d="M12 10v6m-3-3h6" /></svg>;
+}
+
+export function BellIcon({ size = 18, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>;
+}
+
+export function SoundIcon({ size = 16, strokeWidth = 1.7, muted = false }: IconProps & { muted?: boolean }) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M11 4 6 8H3v8h3l5 4Z" />
+    {muted ? <path d="m16 9 5 6m0-6-5 6" /> : <><path d="M15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14" /></>}
+  </svg>;
+}

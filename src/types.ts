@@ -10,6 +10,18 @@ export type LaunchMode = "arg" | "inject";
 export type AgentProvider = "claude" | "codex";
 export type TabKind = AgentProvider | "shell";
 export type AgentActivity = "idle" | "working" | "waiting";
+export type AgentNoticeKind = "ready" | "attention" | "error";
+export type AgentNotice = {
+  id: number;
+  tabId: string;
+  projectId: string;
+  sessionName: string;
+  projectName: string;
+  provider: AgentProvider;
+  kind: AgentNoticeKind;
+  createdAt: number;
+  read: boolean;
+};
 
 export type LauncherProfile = {
   id: string;
@@ -82,6 +94,10 @@ export type UiStateExtended = UiState & {
   lastTabs?: PersistedTab[];
   /** La barra lateral está oculta (Ctrl+B) y el área principal ocupa todo. */
   sidebarCollapsed: boolean;
+  /** Sonido de los avisos de agentes; el historial de avisos es transitorio. */
+  notificationSound: boolean;
+  /** La barra superior se esconde sola y reaparece al acercar el cursor al borde. */
+  autoHideTopBar: boolean;
 };
 
 export type PersistedTab = {

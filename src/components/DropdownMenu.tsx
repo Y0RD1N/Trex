@@ -31,7 +31,7 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
   useLayoutEffect(() => {
     if (!anchor) { focusedRef.current = false; return; }
     if (!position || focusedRef.current) return;
-    surfaceRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+    surfaceRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
     focusedRef.current = true;
   }, [anchor, position]);
 
@@ -90,7 +90,7 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
   }, [anchor !== null, triggerRef]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    const items = Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []);
+    const items = Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)') ?? []);
     if (!items.length) return;
     const current = items.indexOf(document.activeElement as HTMLElement);
     let next: HTMLElement | undefined;

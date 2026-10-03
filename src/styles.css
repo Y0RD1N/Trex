@@ -189,6 +189,10 @@
   --r-modal: 18px;
   --r-pill: 999px;
 
+  /* Esquinas de la ventana (sin bordes nativos): la ventana es transparente y
+     `.app` dibuja el marco. Maximizada o a pantalla completa se quitan. */
+  --window-radius: 18px;
+
   /* Cabecera de la sidebar y barra de pestañas: exactamente lo mismo. */
   --header-h: 42px;
 }
@@ -204,9 +208,16 @@ body,
   height: 100%;
 }
 
+/* La ventana de Tauri es transparente: solo `.app` pinta fondo, así las
+   esquinas redondeadas dejan ver el escritorio y no un rectángulo opaco. */
+html,
+body,
+#root {
+  background: transparent;
+}
+
 body {
   margin: 0;
-  background: var(--bg-app);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 13px;
@@ -570,6 +581,8 @@ input[type="checkbox"] {
    arrastre siga al puntero sin retardo. */
 .sidebar {
   position: relative;
+  /* Por encima de la barra superior (20): la capa flotante la cubre. */
+  z-index: 40;
   flex: 0 0 auto;
   min-width: 0;
   max-width: 520px;
@@ -587,32 +600,42 @@ body.dragging-sidebar .sidebar {
   display: none;
 }
 
-/* El recorte del contenido vive aquí, no en la barra: así el divisor conserva
-   su zona de agarre (sobresale unos píxeles del borde derecho). */
+/* Sin recorte: al colapsar, el contenido se desliza a la izquierda en sincronía
+   con el ancho (misma duración y curva), así que nunca sobra ni falta nada. Y
+   colapsada, la capa flotante sobresale de esta caja de ancho 0. */
 .sidebar-clip {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   width: 100%;
   display: flex;
-  overflow: hidden;
+  overflow: visible;
 }
 .sidebar-inner {
   flex: 0 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Fondo propio: colapsada, el <aside> mide 0 y no lo aporta; sin esto la capa
+     flotante sería transparente y dejaría ver el terminal. */
+  background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
   opacity: 1;
   transform: none;
-  transition: opacity var(--dur) var(--ease-out), transform var(--dur-layout) var(--ease-layout);
+  transition: opacity var(--dur) var(--ease-out), transform var(--dur-layout) var(--ease-layout),
+    background-color var(--dur) var(--ease-out);
 }
+/* Oculta: fuera de la ventana por la izquierda. Solo se anima el transform: un
+   fundido de opacidad dejaría ver el terminal a través del panel mientras se
+   desliza, y eso se percibe como parpadeo. */
 .sidebar.collapsed .sidebar-inner {
-  opacity: 0;
-  transform: translateX(-8px);
-  transition-duration: var(--dur-exit), var(--dur-layout);
+  opacity: 1;
+  transform: translateX(-100%);
   pointer-events: none;
+  will-change: transform;
+  transition: transform var(--dur-layout) var(--ease-layout),
+    box-shadow 200ms var(--ease-out), background-color var(--dur) var(--ease-out);
 }
 
 /* Franja superior: hueco arrastrable + cabecera. Es la barra de título de la
@@ -1287,7 +1310,15 @@ body.dragging-sidebar .sidebar {
 .context-menu.motion-popover.entering, .context-menu.motion-popover.leaving {
   transform: translateY(var(--menu-shift, -4px));
 }
-.context-menu.motion-popover.leaving { transition-duration: var(--dur-exit); }
+/* Salida con curva de aceleración (ease-in) y sin desplazamiento. Con la curva de
+   entrada (ease-out) la opacidad caía casi del todo en el primer fotograma y el
+   terminal asomaba a través del panel de golpe: se veía como un parpadeo. Así el
+   panel se mantiene sólido al principio y se desvanece al final. */
+.context-menu.motion-popover.leaving {
+  transform: translateY(0);
+  transition-duration: 140ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+}
 .term-search-input {
   width: 190px;
   min-width: 0;
@@ -2034,9 +2065,26 @@ body.dragging-sidebar .sidebar {
 }
 
 /* --- Espacio de trabajo: navegación compacta y superficies planas -------- */
-.app {
+.app,
+.splash {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--window-radius);
+}
+/* Los velos a ventana completa (ajustes, diálogos) siguen el mismo contorno. */
+.modal-backdrop,
+.dialog-overlay {
+  border-radius: var(--window-radius);
+}
+/* Maximizada o a pantalla completa: la ventana llena la pantalla, sin esquinas. */
+:root[data-window-state="maximized"],
+:root[data-window-state="fullscreen"] {
+  --window-radius: 0px;
+}
+:root[data-window-state="maximized"] .app,
+:root[data-window-state="maximized"] .splash,
+:root[data-window-state="fullscreen"] .app,
+:root[data-window-state="fullscreen"] .splash {
+  border-color: transparent;
 }
 .main { min-height: 0; }
 .sidebar {
@@ -2258,6 +2306,15 @@ body.dragging-sidebar .sidebar {
 }
 .sidebar-footer-row { padding: 0; gap: 6px; }
 .sidebar-footer-spacer { flex: 1; }
+.sidebar-footer-control.icon-btn {
+  width: 34px;
+  height: 34px;
+  color: var(--text-muted);
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+}
+.sidebar-footer-control.icon-btn:hover { color: var(--text); background: var(--hover); }
 .sidebar-theme { background: transparent; border-color: transparent; }
 .sidebar-empty { font-size: 11px; padding: 12px; }
 .sidebar.compact .search-kbd, .sidebar.compact .sidebar-caption { display: none; }
@@ -2433,11 +2490,120 @@ body.dragging-sidebar .sidebar {
 .agent-icon[data-activity="waiting"] { color: var(--warn); }
 .agent-icon-claude[data-activity="working"] { animation: trex-agent-turn 3s linear infinite; }
 .agent-icon-codex[data-activity="working"] { animation: trex-agent-breathe 1.6s ease-in-out infinite; }
+.notification-bell.window-btn { position: relative; width: 32px; height: 32px; margin: 0 3px; }
+.notification-bell.has-unread { color: var(--accent-strong); }
+.notification-bell > span:first-child { display: flex; transform-origin: 50% 20%; }
+.notification-bell-motion { animation: trex-bell-ring .65s var(--ease-out); }
+.notification-count {
+  position: absolute; top: 0; right: -2px; min-width: 14px; height: 14px;
+  display: flex; align-items: center; justify-content: center; padding: 0 3px;
+  border-radius: 7px; background: var(--accent); color: var(--accent-contrast);
+  font-size: 9px; line-height: 1; font-weight: 650; font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.context-menu.notification-menu { width: 350px; min-width: 0; padding: 0; overflow: hidden; }
+.notification-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 15px 16px 12px; border-bottom: 1px solid var(--border);
+  color: var(--text); font-size: 13px; font-weight: 550;
+}
+.notification-text-action {
+  padding: 5px 4px; border: 0; background: transparent; color: var(--text-muted);
+  font: 11px var(--font-sans); cursor: pointer; white-space: nowrap; border-radius: 4px;
+}
+.notification-text-action:hover { color: var(--text); background: var(--hover); }
+.notification-empty { display: flex; align-items: center; flex-direction: column; gap: 9px; padding: 26px 24px; color: var(--text-dim); }
+.notification-empty > span { color: var(--text-muted); font-size: 13px; }
+.notification-empty p { margin: 0; font-size: 11px; line-height: 1.6; text-align: center; max-width: 260px; }
+.notification-list { max-height: min(330px, 45vh); overflow-y: auto; padding: 5px; }
+.notification-item {
+  display: flex; align-items: flex-start; width: 100%; gap: 10px; text-align: left;
+  padding: 12px 10px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--text-muted); cursor: pointer; font: 12px var(--font-sans);
+  transition: background var(--t);
+}
+.notification-item:hover, .notification-item:focus-visible { background: var(--hover); }
+.notification-item.unread { background: var(--accent-soft); }
+.notification-symbol { display: flex; align-items: center; justify-content: center; flex: 0 0 24px; height: 24px; border-radius: 6px; }
+.notification-symbol.ready { color: var(--ok); background: var(--ok-bg); }
+.notification-symbol.attention { color: var(--warn); background: var(--warn-bg); }
+.notification-symbol.error { color: var(--danger); background: var(--danger-bg); }
+.notification-copy { display: flex; flex-direction: column; flex: 1; gap: 5px; min-width: 0; }
+.notification-item-title { color: var(--text); font-size: 12px; font-weight: 500; }
+.notification-session { display: flex; align-items: center; gap: 6px; overflow-wrap: anywhere; font-size: 11px; }
+.notification-project { font-size: 10px; color: var(--text-dim); overflow-wrap: anywhere; }
+.notification-time { padding-top: 3px; flex: 0 0 auto; color: var(--text-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+.notification-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--border); }
+.notification-sound { display: flex; align-items: center; gap: 7px; padding: 6px 4px; margin-right: auto; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); font: 11px var(--font-sans); cursor: pointer; }
+.notification-sound:hover { background: var(--hover); color: var(--text); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@keyframes trex-bell-ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-16deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-7deg); } 80% { transform: rotate(3deg); } }
 @keyframes trex-agent-turn { to { transform: rotate(360deg); } }
 @keyframes trex-agent-breathe {
   0%, 100% { transform: scale(.92); opacity: .65; }
   50% { transform: scale(1.08); opacity: 1; }
 }
+/* --- Barra lateral flotante ------------------------------------------------------
+   Colapsada, el cursor en el borde izquierdo la trae de vuelta (ver
+   useHoverReveal) como una capa por encima del terminal. No toca el layout: el terminal no se
+   redimensiona. Entra con un muelle suave y sale más rápido y sin rebote. */
+.sidebar.collapsed.peek .sidebar-inner {
+  transform: translateX(0);
+  pointer-events: auto;
+  border-right-color: var(--border-strong);
+  box-shadow: 28px 0 60px -20px rgba(0, 0, 0, 0.62), 10px 0 24px -14px rgba(0, 0, 0, 0.4);
+  transition: transform 460ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 360ms var(--ease-out), background-color var(--dur) var(--ease-out);
+}
+
+/* --- Barra superior autoocultable (modo inmersivo) -------------------------------
+   `.bar-slot` reserva el alto de la barra. En modo inmersivo mide 0 y la barra
+   (absoluta) cuelga por encima del terminal, fuera de la vista. Aparecer y
+   desaparecer no cambia el layout. Es un deslizamiento limpio de la barra entera:
+   sin fundidos ni entradas escalonadas de sus controles (la barra se veía vacía
+   un instante y parecía un parpadeo). Se esconde sobrepasando 2 px su propio alto,
+   para que no asome la línea inferior sobre el borde de la ventana. */
+.bar-slot {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  height: var(--header-h);
+  transition: height var(--dur-layout) var(--ease-layout);
+}
+.bar-slot.auto-hide {
+  height: 0;
+}
+.bar-slot .tabs-bar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: auto;
+  transform: translateY(0);
+}
+.bar-slot.auto-hide .tabs-bar {
+  will-change: transform;
+  /* Salida: más corta y sin rebote. */
+  transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 200ms var(--ease-out);
+}
+.bar-slot.auto-hide:not(.shown) .tabs-bar {
+  transform: translateY(calc(-100% - 2px));
+  pointer-events: none;
+  box-shadow: none;
+}
+.bar-slot.auto-hide.shown .tabs-bar {
+  box-shadow: 0 18px 36px -18px rgba(0, 0, 0, 0.6), 0 6px 14px -10px rgba(0, 0, 0, 0.4);
+  /* Entrada: muelle suave, igual que la barra lateral. */
+  transition: transform 380ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 300ms var(--ease-out);
+}
+/* Tema claro: sombras más suaves y cálidas. */
+:root[data-theme="light"] .sidebar.collapsed.peek .sidebar-inner {
+  box-shadow: 24px 0 48px -22px rgba(60, 45, 30, 0.3), 8px 0 18px -14px rgba(60, 45, 30, 0.22);
+}
+:root[data-theme="light"] .bar-slot.auto-hide.shown .tabs-bar {
+  box-shadow: 0 16px 32px -20px rgba(60, 45, 30, 0.32), 0 5px 12px -10px rgba(60, 45, 30, 0.2);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-property: none !important;
@@ -2449,6 +2615,7 @@ body.dragging-sidebar .sidebar {
   .session-row { animation: none; }
   .spinner { animation: none; }
   .agent-icon { animation: none !important; }
+  .notification-bell-motion { animation: none !important; }
   .btn:active, .icon-btn:active, .dialog-btn:active, .context-item:active,
   .sq-btn:active, .project-menu-btn:active, .window-btn:active,
   .term-tool-btn:active, .copy-btn:active, .chip:active, .swatch:active { transform: none; }

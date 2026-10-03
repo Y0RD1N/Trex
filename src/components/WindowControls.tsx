@@ -17,7 +17,9 @@ import {
   onWindowResized,
   toggleMaximizeWindow,
 } from "../window";
+import { MOD_LABEL } from "../platform";
 import {
+  CheckIcon,
   CloseIcon,
   EllipsisIcon,
   FolderIcon,
@@ -33,9 +35,12 @@ type Props = {
   onOpenSettings: () => void;
   /** Abre la carpeta del proyecto activo; null si no hay proyecto. */
   onRevealProject: (() => void) | null;
+  /** La barra superior se esconde sola (modo inmersivo). */
+  autoHideTopBar: boolean;
+  onToggleTopBar: () => void;
 };
 
-export default function WindowControls({ onOpenSettings, onRevealProject }: Props) {
+export default function WindowControls({ onOpenSettings, onRevealProject, autoHideTopBar, onToggleTopBar }: Props) {
   const [maximized, setMaximized] = useState(false);
   const [menu, setMenu] = useState<FloatingAnchor | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -130,6 +135,21 @@ export default function WindowControls({ onOpenSettings, onRevealProject }: Prop
               Abrir carpeta del proyecto en el explorador
             </button>
           )}
+
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={autoHideTopBar}
+            tabIndex={-1}
+            className="context-item"
+            onClick={() => run(onToggleTopBar)}
+          >
+            <span className="context-icon" aria-hidden="true">
+              {autoHideTopBar && <CheckIcon size={16} />}
+            </span>
+            Ocultar esta barra automáticamente
+            <span className="kbd">{MOD_LABEL} ⇧ B</span>
+          </button>
 
           <div className="context-sep" role="separator" />
 

@@ -11,6 +11,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -28,9 +29,10 @@ import {
 } from "../api";
 import { CloseIcon, SearchIcon } from "./Icons";
 import { getSearchDecorations, getTerminalTheme, getThemeMode, onThemeChange } from "../theme";
-import type { AgentActivity, Settings, TabKind } from "../types";
+import type { AgentActivity, AgentNoticeKind, Settings, TabKind } from "../types";
 import { ACTIVITY_FOOTER_ROWS, ACTIVITY_SAMPLE_MS, ACTIVITY_SETTLE_MS, activitySignal, screenActivity } from "../agentActivity";
 import { usePresence } from "../hooks/usePresence";
+import { AgentNoticeTracker, NoticeScheduler, noticeSignal } from "../agentNotices";
 
 type Status = "spawning" | "running" | "exited" | "error";
 
@@ -58,6 +60,7 @@ export type TerminalViewProps = {
   onTitle: (tabId: string, title: string) => void;
   onActivity: (tabId: string, activity: AgentActivity) => void;
   onRunning: (tabId: string) => void;
+  onNotice: (tabId: string, kind: AgentNoticeKind) => void;
 };
 
 function TerminalView({
@@ -76,6 +79,7 @@ function TerminalView({
   onTitle,
   onActivity,
   onRunning,
+  onNotice,
 }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -116,6 +120,8 @@ function TerminalView({
   onRunningRef.current = onRunning;
   const kindRef = useRef(kind);
   kindRef.current = kind;
+  const onNoticeRef = useRef(onNotice);
+  onNoticeRef.current = onNotice;
 
   const [status, setStatus] = useState<Status>("spawning");
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -159,10 +165,23 @@ function TerminalView({
       let progress: AgentActivity | undefined;
       let notification: AgentActivity | undefined;
       const activityListeners: IDisposable[] = [];
+      const notices = new AgentNoticeTracker();
+      const publishNotice = (notice: AgentNoticeKind | undefined): void => {
+        if (notice && !released && !disposedRef.current && kindRef.current !== "shell") {
+          onNoticeRef.current(sessionIdRef.current, notice);
+        }
+      };
+      // Los avisos deducidos de la pantalla esperan a que el agente se quede quieto:
+      // el indicador "trabajando" se apaga entre pasos de una misma tarea.
+      const scheduler = new NoticeScheduler(publishNotice);
       const publishActivity = (next: AgentActivity): void => {
         if (released || disposedRef.current || exitedIdRef.current === id || activity === next) return;
         activity = next;
         onActivityRef.current(sessionIdRef.current, next);
+        if (next === "working") scheduler.working();
+        else if (scheduler.cancel() === "ready") notices.resume();
+        const notice = notices.transition(next);
+        if (notice) scheduler.propose(notice);
       };
       const cancelSettle = (): void => {
         if (settleTimer !== null) window.clearTimeout(settleTimer);
@@ -175,6 +194,8 @@ function TerminalView({
         cancelSettle();
         progress = notification = undefined;
         activity = "idle";
+        notices.reset();
+        scheduler.reset();
         if (!disposedRef.current) onActivityRef.current(sessionIdRef.current, "idle");
       };
       const sampleActivity = (): void => {
@@ -217,8 +238,21 @@ function TerminalView({
           activityListeners.push(term.parser.registerOscHandler(osc, data => {
             const next = activitySignal(osc, data);
             if (next !== undefined) {
-              if (osc === 9 && data.startsWith("4;")) progress = next;
+              if (osc === 9 && data.startsWith("4;")) {
+                if (next === "working" && progress !== "working") { notices.begin(); scheduler.working(); }
+                if (next === "idle" && progress === "working") {
+                  const ready = notices.signal("ready");
+                  if (ready) scheduler.propose(ready);
+                }
+                progress = next;
+              }
               else { progress = undefined; notification = next; }
+              // La notificación explícita del propio agente es fiable: sin espera.
+              const notice = noticeSignal(osc, data);
+              if (notice) {
+                const explicit = notices.signal(notice);
+                if (explicit) scheduler.emitNow(explicit);
+              }
               scheduleActivity();
             }
             return false; // Deja que los demás handlers de xterm reciban el OSC.
@@ -252,6 +286,10 @@ function TerminalView({
       });
       const unExit = await listenPtyExit(id, (payload) => {
         if (released || disposedRef.current) return;
+        // Al salir se anuncia ya lo que estuviera pendiente (p. ej. `claude -p`).
+        const exitNotice = notices.exit(payload.code);
+        if (exitNotice) scheduler.emitNow(exitNotice);
+        else scheduler.flush();
         resetActivity();
         exitedIdRef.current = id;
         spawnedRef.current = false;
@@ -484,6 +522,12 @@ function TerminalView({
     term.loadAddon(fit);
     term.loadAddon(search);
     term.loadAddon(links);
+    // Anchos Unicode modernos (15 + grafemas). Por defecto xterm usa las tablas de
+    // Unicode 6 y cuenta 1 celda para emojis como 📁 🧠 ⚡, mientras que Claude Code
+    // y Codex cuentan 2. Con anchos distintos, sus actualizaciones parciales (barra de
+    // estado, pie del compositor) posicionan el cursor por columna y caen desplazadas
+    // o dejan restos sin repintar. Debe cargarse antes de recibir salida del PTY.
+    term.loadAddon(new UnicodeGraphemesAddon());
     termRef.current = term;
     fitRef.current = fit;
     searchRef.current = search;
@@ -556,16 +600,19 @@ function TerminalView({
       if (current) current.options.theme = getTerminalTheme(mode);
     });
 
-    // Durante el deslizamiento lateral se conserva la rejilla del terminal:
-    // recalcular columnas en cada fotograma haría saltar y envolver el texto.
-    // Al asentarse se ajusta una vez. El arrastre manual sigue siendo inmediato.
+    // Mientras se desliza la barra lateral (ancho) o se esconde la superior (alto)
+    // se conserva la rejilla del terminal: recalcular columnas en cada fotograma
+    // haría saltar y envolver el texto. Al asentarse se ajusta una vez. El
+    // arrastre manual sigue siendo inmediato.
     let resizeRaf = 0;
     const resize = (): void => {
       resizeRaf = 0;
       if (disposedRef.current) return;
-      const moving = document.querySelector(".sidebar")?.getAnimations().some(animation =>
-        "transitionProperty" in animation && animation.transitionProperty === "width"
-        && animation.playState === "running");
+      const moving = Array.from(document.querySelectorAll(".sidebar, .bar-slot")).some(element =>
+        element.getAnimations().some(animation =>
+          "transitionProperty" in animation
+          && (animation.transitionProperty === "width" || animation.transitionProperty === "height")
+          && animation.playState === "running"));
       if (moving) {
         resizeRaf = requestAnimationFrame(resize);
       } else {

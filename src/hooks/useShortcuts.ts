@@ -4,8 +4,8 @@
  * Se registran en la fase de captura para interceptar las combinaciones antes
  * de que xterm.js reenvíe la tecla al PTY. Se ignoran cuando el foco está en un
  * campo de formulario (el terminal queda excluido: sus atajos también valen).
- * Ctrl+K (⌘K en macOS) y Ctrl+B (⌘B) son las excepciones: el buscador de
- * proyectos y la barra lateral responden desde cualquier sitio.
+ * Ctrl+K (⌘K en macOS) y Ctrl+B (⌘B, con Mayús la barra superior) son las
+ * excepciones: el buscador de proyectos y las barras responden desde cualquier sitio.
  */
 import { useEffect, useRef } from "react";
 
@@ -23,6 +23,8 @@ export type ShortcutHandlers = {
   focusSearch: () => void;
   /** Muestra u oculta la barra lateral (Ctrl+B). */
   toggleSidebar: () => void;
+  /** Alterna el ocultado automático de la barra superior (Ctrl+Shift+B). */
+  toggleTopBar: () => void;
   increaseFont: () => void;
   decreaseFont: () => void;
   resetFont: () => void;
@@ -89,11 +91,12 @@ export function useShortcuts(handlers: ShortcutHandlers, options: ShortcutOption
         return;
       }
 
-      // Ctrl+B (⌘B): barra lateral, global igual que Ctrl+K.
+      // Ctrl+B (⌘B): barra lateral; con Mayús, barra superior. Globales igual que Ctrl+K.
       if (key.toLowerCase() === "b") {
         event.preventDefault();
         event.stopPropagation();
-        h.toggleSidebar();
+        if (event.shiftKey) h.toggleTopBar();
+        else h.toggleSidebar();
         return;
       }
 

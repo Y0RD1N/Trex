@@ -6,15 +6,20 @@
  * en el input de búsqueda) para poder arrastrar la ventana desde ahí.
  *
  * La barra se puede colapsar (Ctrl+B o el botón de panel de la barra superior):
- * el ancho se anima hasta 0 y el contenido se desvanece y se recorta dentro de
- * `.sidebar-inner`, de modo que el área principal queda completa y sin huecos.
+ * el ancho se anima hasta 0 mientras el contenido se desliza hacia la izquierda,
+ * de modo que el área principal queda completa y sin huecos.
+ *
+ * Colapsada, al acercar el cursor al borde izquierdo reaparece como una capa
+ * flotante (`.peek`) por encima del terminal, sin tocar el layout: el terminal no
+ * se redimensiona. Se esconde al alejar el cursor; el botón de panel la fija.
  */
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { clamp, normalizeText } from "../api";
+import { useHoverReveal } from "../hooks/useHoverReveal";
 import { MOD_LABEL } from "../platform";
 import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
-import { AlertIcon, GearIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon } from "./Icons";
+import { AlertIcon, FolderPlusIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
 import SessionItem, { sessionLabel } from "./SessionItem";
 
@@ -85,6 +90,16 @@ export default function Sidebar({
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const onResizeRef = useRef(onResize);
   onResizeRef.current = onResize;
+  // Escribir en el buscador o renombrar una sesión mantiene la capa abierta.
+  const reveal = useHoverReveal<HTMLElement>({
+    enabled: sidebarCollapsed, edge: "left", extent: sidebarWidth + 1,
+    openDelay: 70, closeDelay: 340,
+    holdOpen: (aside) => {
+      const active = document.activeElement;
+      return active instanceof HTMLInputElement && aside.contains(active);
+    },
+  });
+  const peek = sidebarCollapsed && reveal.revealed;
 
   // Los atajos pueden activar sesiones de carpetas que el usuario contrajo.
   useEffect(() => {
@@ -133,10 +148,12 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`sidebar${sidebarCollapsed ? " collapsed" : ""}${sidebarWidth <= 220 ? " compact" : ""}`}
+      ref={reveal.ref}
+      className={`sidebar${sidebarCollapsed ? " collapsed" : ""}${peek ? " peek" : ""}${sidebarWidth <= 220 ? " compact" : ""}`}
       style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
+      {...reveal.handlers}
     >
-      <div className="sidebar-clip" inert={sidebarCollapsed} aria-hidden={sidebarCollapsed || undefined}>
+      <div className="sidebar-clip" inert={sidebarCollapsed && !peek} aria-hidden={(sidebarCollapsed && !peek) || undefined}>
       <div className="sidebar-inner" style={{ width: sidebarWidth }}>
         <div className="sidebar-top" data-tauri-drag-region="deep">
           <header className="sidebar-header" data-tauri-drag-region>
@@ -198,7 +215,10 @@ export default function Sidebar({
                   onToggleExpanded={() => toggleProject(project.id)}
                   onSelect={() => onSelect(project.id)}
                   profiles={profiles}
-                  onQuickOpen={profileId => onQuickOpen(project.id, profileId)}
+                  onQuickOpen={profileId => {
+                    onQuickOpen(project.id, profileId);
+                    if (peek) reveal.hide();
+                  }}
                   onReveal={() => onReveal(project.id)}
                   onCopyPath={() => onCopyPath(project.path)}
                   onRename={(name) => onRename(project.id, name)}
@@ -214,7 +234,10 @@ export default function Sidebar({
                         key={tab.id}
                         tab={tab}
                         active={tab.id === activeTabId && project.id === activeProjectId}
-                        onSelect={() => onSelectSession(project.id, tab.id)}
+                        onSelect={() => {
+                          onSelectSession(project.id, tab.id);
+                          if (peek) reveal.hide();
+                        }}
                         onClose={trigger => onCloseSession(tab.id, trigger)}
                         onRename={(name) => onRenameSession(tab.id, name)}
                       />
@@ -255,31 +278,31 @@ export default function Sidebar({
           <div className="sidebar-footer-row">
             <button
               type="button"
-              className="icon-btn tip"
+              className="icon-btn sidebar-footer-control tip"
               data-tip="Añadir proyecto"
               aria-label="Añadir proyecto"
               onClick={onAdd}
             >
-              <PlusIcon size={17} />
+              <FolderPlusIcon size={19} />
             </button>
             <span className="sidebar-footer-spacer" />
             <button
               type="button"
-              className="icon-btn sidebar-theme tip"
+              className="icon-btn sidebar-footer-control sidebar-theme tip"
               data-tip={goesToLight ? "Modo claro (Ctrl+Shift+L)" : "Modo oscuro (Ctrl+Shift+L)"}
               aria-label={themeTitle}
               onClick={onToggleTheme}
             >
-              {goesToLight ? <SunIcon size={16} /> : <MoonIcon size={16} />}
+              {goesToLight ? <SunIcon size={19} strokeWidth={1.7} /> : <MoonIcon size={19} strokeWidth={1.7} />}
             </button>
             <button
               type="button"
-              className="icon-btn tip"
+              className="icon-btn sidebar-footer-control tip"
               data-tip={`Ajustes (${MOD_LABEL} ,)`}
               aria-label="Ajustes"
               onClick={onOpenSettings}
             >
-              <GearIcon size={16} />
+              <SettingsIcon size={19} strokeWidth={1.7} />
             </button>
           </div>
         </footer>
