@@ -901,6 +901,7 @@ function AppShell() {
                     onActivity={handleTabActivity}
                     onRunning={handleTabRunning}
                     onNotice={handleAgentNotice}
+                    onMessage={showToast}
                   />
                 </div>
               );

@@ -5,6 +5,7 @@
 mod config;
 mod pty;
 mod output_flow;
+mod clipboard;
 
 use config::AppConfig;
 use pty::{ClaudeInfo, PtyState, SessionInfo, SpawnRequest, SpawnResponse};
@@ -266,6 +267,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(PtyState::default())
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
@@ -280,6 +282,7 @@ pub fn run() {
             app_info,
             load_config,
             save_config,
+            clipboard::read_clipboard,
         ])
         .on_window_event(|window, event| {
             // Al cerrarse la ventana principal se terminan todas las sesiones.

@@ -98,8 +98,19 @@ npm run tauri build
 
 ## ⌨️ Atajos
 
+En **Ajustes → Atajos** puedes cambiar **Pegar texto e imágenes** pulsando una
+combinación en su campo. El valor predeterminado es `Ctrl+V`; se aplica al guardar
+a todas las terminales abiertas y se conserva al reiniciar.
+
+trex consulta el portapapeles nativo de Windows y Linux (X11 y Wayland): pega el
+texto con el modo de pegado del terminal, y para las capturas activa el adjunto
+del asistente. Claude Code recibe `Alt+V` en Windows y `Ctrl+V` en Linux; Codex
+recibe `Ctrl+V` en ambos. `Ctrl+Shift+V` sigue disponible para pegar. Las imágenes
+se adjuntan en las sesiones de asistentes; los shells normales reciben texto.
+
 | Atajo | Acción |
 |---|---|
+| `Ctrl+V` (configurable) | Pegar texto o adjuntar una imagen en Claude Code y Codex |
 | `Ctrl+T` | Nueva sesión del perfil predeterminado en el proyecto activo |
 | `Ctrl+Shift+T` | Nueva terminal (shell limpio) |
 | `Ctrl+W` | Cerrar pestaña |

@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { initialProfiles, normalizeLaunch, normalizeProfiles } from "./profiles";
+import { DEFAULT_PASTE_SHORTCUT, normalizePasteShortcut, type ClipboardContent } from "./paste";
 import type {
   AppConfig,
   AppInfo,
@@ -89,6 +90,7 @@ export const getAppInfo = (): Promise<AppInfo> => invoke<AppInfo>("app_info");
 
 export const detectClaude = (): Promise<ClaudeInfo> => invoke<ClaudeInfo>("detect_claude");
 export const detectCodex = (): Promise<ClaudeInfo> => invoke<ClaudeInfo>("detect_codex");
+export const readClipboard = (): Promise<ClipboardContent> => invoke<ClipboardContent>("read_clipboard");
 
 export const ptySpawn = (request: SpawnRequest): Promise<SpawnResponse> =>
   invoke<SpawnResponse>("pty_spawn", { request });
@@ -138,6 +140,7 @@ export const DEFAULT_SETTINGS: Settings = {
   scrollback: 10000,
   cursorBlink: true,
   copyOnSelect: false,
+  pasteShortcut: DEFAULT_PASTE_SHORTCUT,
   confirmCloseTab: true,
   restoreOnStart: true,
   launchMode: "arg",
@@ -354,6 +357,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     ),
     cursorBlink: asBool(settingsRaw.cursorBlink, DEFAULT_SETTINGS.cursorBlink),
     copyOnSelect: asBool(settingsRaw.copyOnSelect, DEFAULT_SETTINGS.copyOnSelect),
+    pasteShortcut: normalizePasteShortcut(settingsRaw.pasteShortcut),
     confirmCloseTab: asBool(settingsRaw.confirmCloseTab, DEFAULT_SETTINGS.confirmCloseTab),
     restoreOnStart: asBool(settingsRaw.restoreOnStart, DEFAULT_SETTINGS.restoreOnStart),
     launchMode: asString(settingsRaw.launchMode, DEFAULT_SETTINGS.launchMode),

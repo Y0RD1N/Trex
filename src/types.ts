@@ -70,6 +70,8 @@ export type Settings = {
   scrollback: number;
   cursorBlink: boolean;
   copyOnSelect: boolean;
+  /** Atajo común para pegar texto e imágenes en las terminales. */
+  pasteShortcut: string;
   confirmCloseTab: boolean;
   restoreOnStart: boolean;
   launchMode: string;

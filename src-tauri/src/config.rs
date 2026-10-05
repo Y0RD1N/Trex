@@ -59,6 +59,7 @@ pub struct Settings {
     pub scrollback: u32,
     pub cursor_blink: bool,
     pub copy_on_select: bool,
+    pub paste_shortcut: String,
     pub confirm_close_tab: bool,
     pub restore_on_start: bool,
     pub launch_mode: String,
@@ -83,6 +84,7 @@ impl Default for Settings {
             scrollback: 10_000,
             cursor_blink: true,
             copy_on_select: false,
+            paste_shortcut: "Ctrl+V".into(),
             confirm_close_tab: true,
             restore_on_start: true,
             launch_mode: "arg".into(),
@@ -184,12 +186,13 @@ mod tests {
         assert_eq!(config.settings.claude_command, "claude1");
         assert_eq!(config.settings.claude_args, "--continue");
         assert_eq!(config.settings.shell, "zsh");
+        assert_eq!(config.settings.paste_shortcut, "Ctrl+V");
     }
 
     #[test]
     fn saving_keeps_profiles_and_the_original_launch_of_each_session() {
         let raw = serde_json::json!({
-            "settings": { "defaultProfileId": "c2", "profiles": [
+            "settings": { "pasteShortcut": "Ctrl+Alt+V", "defaultProfileId": "c2", "profiles": [
                 { "id": "c1", "name": "Claude 1", "provider": "claude", "command": "claude1", "args": "--continue", "shell": "zsh", "launchMode": "arg", "configDir": "~/.claude-1" },
                 { "id": "c2", "name": "Claude 2", "provider": "claude", "command": "claude2", "args": "", "shell": "bash", "launchMode": "inject", "configDir": "~/.claude-2" },
                 { "id": "cx", "name": "Codex", "provider": "codex", "command": "codex", "args": "resume --last", "shell": "", "launchMode": "arg", "configDir": "~/.codex-work" }
@@ -202,6 +205,7 @@ mod tests {
         let saved = serde_json::to_value(&config).unwrap();
         assert_eq!(saved["settings"]["profiles"], raw["settings"]["profiles"]);
         assert_eq!(saved["settings"]["defaultProfileId"], "c2");
+        assert_eq!(saved["settings"]["pasteShortcut"], "Ctrl+Alt+V");
         assert_eq!(saved["ui"], raw["ui"]);
     }
 }

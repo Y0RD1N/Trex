@@ -13,6 +13,7 @@ const platformText = (): string => {
 
 /** ¿Estamos en macOS? */
 export const IS_MAC: boolean = /mac/i.test(platformText());
+export const IS_WINDOWS: boolean = /win/i.test(platformText());
 
 /** Etiqueta del modificador principal: "⌘" en macOS, "Ctrl" en el resto. */
 export const MOD_LABEL: string = IS_MAC ? "⌘" : "Ctrl";

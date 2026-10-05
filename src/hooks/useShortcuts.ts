@@ -55,6 +55,9 @@ export function useShortcuts(handlers: ShortcutHandlers, options: ShortcutOption
     if (!enabled) return;
 
     const onKeyDown = (event: KeyboardEvent): void => {
+      // El editor de atajos debe poder detectar y rechazar combinaciones
+      // reservadas sin que se activen los controles globales.
+      if (event.target instanceof HTMLElement && event.target.closest("[data-shortcut-recorder]")) return;
       const mod = event.ctrlKey || event.metaKey;
       if (!mod) return;
       const key = event.key;

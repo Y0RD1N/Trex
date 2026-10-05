@@ -10,6 +10,13 @@ type IconProps = {
   strokeWidth?: number;
 };
 
+export function KeyboardIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}>
+    <rect x="2.5" y="5.5" width="19" height="13" rx="2" />
+    <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10" />
+  </svg>;
+}
+
 const svgProps = (size: number, strokeWidth: number) => ({
   width: size,
   height: size,

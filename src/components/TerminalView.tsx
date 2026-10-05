@@ -26,7 +26,10 @@ import {
   ptyResize,
   ptySpawn,
   ptyWrite,
+  readClipboard,
 } from "../api";
+import { clipboardPasteAction, matchesPasteShortcut } from "../paste";
+import { IS_WINDOWS } from "../platform";
 import { CloseIcon, SearchIcon } from "./Icons";
 import { getSearchDecorations, getTerminalTheme, getThemeMode, onThemeChange } from "../theme";
 import type { AgentActivity, AgentNoticeKind, Settings, TabKind } from "../types";
@@ -61,6 +64,7 @@ export type TerminalViewProps = {
   onActivity: (tabId: string, activity: AgentActivity) => void;
   onRunning: (tabId: string) => void;
   onNotice: (tabId: string, kind: AgentNoticeKind) => void;
+  onMessage: (message: string) => void;
 };
 
 function TerminalView({
@@ -80,6 +84,7 @@ function TerminalView({
   onActivity,
   onRunning,
   onNotice,
+  onMessage,
 }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -122,6 +127,9 @@ function TerminalView({
   kindRef.current = kind;
   const onNoticeRef = useRef(onNotice);
   onNoticeRef.current = onNotice;
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+  const pasteQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const [status, setStatus] = useState<Status>("spawning");
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -472,13 +480,27 @@ function TerminalView({
 
   const pasteFromClipboard = useCallback(async () => {
     const term = termRef.current;
-    if (!term) return;
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) term.paste(text);
-    } catch {
-      /* sin permiso de lectura del portapapeles */
-    }
+    const id = currentIdRef.current;
+    if (!term || !spawnedRef.current || disposedRef.current) return;
+    // Mantiene el orden de pegados rápidos. Una sesión cerrada o reiniciada
+    // nunca recibe una lectura que empezó para el proceso anterior.
+    const pending = pasteQueueRef.current.then(async () => {
+      if (disposedRef.current || currentIdRef.current !== id || !spawnedRef.current) return;
+      const content = await readClipboard();
+      if (disposedRef.current || currentIdRef.current !== id || !spawnedRef.current) return;
+      const action = clipboardPasteAction(content, kindRef.current, IS_WINDOWS);
+      if (action.kind === "text") {
+        if (action.text) term.paste(action.text); // Conserva el bracketed paste de xterm.
+      } else if (action.kind === "key") {
+        await ptyWrite(id, action.data);
+      } else {
+        onMessageRef.current("Las imágenes se pueden pegar en sesiones de Claude Code o Codex.");
+      }
+    }).catch(error => {
+      if (!disposedRef.current && currentIdRef.current === id) onMessageRef.current(formatError(error));
+    });
+    pasteQueueRef.current = pending;
+    await pending;
   }, []);
 
   // --- Búsqueda ---------------------------------------------------------------
@@ -545,14 +567,18 @@ function TerminalView({
 
     // Copiar/pegar y búsqueda desde el propio terminal
     term.attachCustomKeyEventHandler((event) => {
-      if (event.type !== "keydown" || !(event.ctrlKey || event.metaKey)) return true;
+      if (event.type !== "keydown" || event.isComposing || event.getModifierState("AltGraph")) return true;
+      if (matchesPasteShortcut(event, settingsRef.current.pasteShortcut)
+        || ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "v")) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) void pasteFromClipboard();
+        return false;
+      }
+      if (!(event.ctrlKey || event.metaKey)) return true;
       const key = event.key.toLowerCase();
       if (event.shiftKey && key === "c") {
         void copySelection();
-        return false;
-      }
-      if (event.shiftKey && key === "v") {
-        void pasteFromClipboard();
         return false;
       }
       if (!event.shiftKey && key === "f") {
