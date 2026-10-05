@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { initialProfiles, normalizeLaunch, normalizeProfiles } from "./profiles";
 import { DEFAULT_PASTE_SHORTCUT, normalizePasteShortcut, type ClipboardContent } from "./paste";
+import { DEFAULT_CURSOR_STYLE, DEFAULT_CURSOR_WIDTH, normalizeCursorStyle, normalizeCursorWidth } from "./cursor";
 import type {
   AppConfig,
   AppInfo,
@@ -139,6 +140,8 @@ export const DEFAULT_SETTINGS: Settings = {
   fontFamily: "",
   scrollback: 10000,
   cursorBlink: true,
+  cursorStyle: DEFAULT_CURSOR_STYLE,
+  cursorWidth: DEFAULT_CURSOR_WIDTH,
   copyOnSelect: false,
   pasteShortcut: DEFAULT_PASTE_SHORTCUT,
   confirmCloseTab: true,
@@ -356,6 +359,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
       200000,
     ),
     cursorBlink: asBool(settingsRaw.cursorBlink, DEFAULT_SETTINGS.cursorBlink),
+    cursorStyle: normalizeCursorStyle(settingsRaw.cursorStyle),
+    cursorWidth: normalizeCursorWidth(settingsRaw.cursorWidth),
     copyOnSelect: asBool(settingsRaw.copyOnSelect, DEFAULT_SETTINGS.copyOnSelect),
     pasteShortcut: normalizePasteShortcut(settingsRaw.pasteShortcut),
     confirmCloseTab: asBool(settingsRaw.confirmCloseTab, DEFAULT_SETTINGS.confirmCloseTab),

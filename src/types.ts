@@ -9,6 +9,7 @@ export type LaunchMode = "arg" | "inject";
 /** Asistente de la sesión o shell limpio. */
 export type AgentProvider = "claude" | "codex";
 export type TabKind = AgentProvider | "shell";
+export type CursorStyle = "auto" | "block" | "bar" | "underline";
 export type AgentActivity = "idle" | "working" | "waiting";
 export type AgentNoticeKind = "ready" | "attention" | "error";
 export type AgentNotice = {
@@ -69,6 +70,8 @@ export type Settings = {
   fontFamily: string;
   scrollback: number;
   cursorBlink: boolean;
+  cursorStyle: CursorStyle;
+  cursorWidth: number;
   copyOnSelect: boolean;
   /** Atajo común para pegar texto e imágenes en las terminales. */
   pasteShortcut: string;

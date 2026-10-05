@@ -58,6 +58,8 @@ pub struct Settings {
     pub font_family: String,
     pub scrollback: u32,
     pub cursor_blink: bool,
+    pub cursor_style: String,
+    pub cursor_width: u32,
     pub copy_on_select: bool,
     pub paste_shortcut: String,
     pub confirm_close_tab: bool,
@@ -83,6 +85,8 @@ impl Default for Settings {
             font_family: String::new(),
             scrollback: 10_000,
             cursor_blink: true,
+            cursor_style: "auto".into(),
+            cursor_width: 1,
             copy_on_select: false,
             paste_shortcut: "Ctrl+V".into(),
             confirm_close_tab: true,
@@ -187,12 +191,14 @@ mod tests {
         assert_eq!(config.settings.claude_args, "--continue");
         assert_eq!(config.settings.shell, "zsh");
         assert_eq!(config.settings.paste_shortcut, "Ctrl+V");
+        assert_eq!(config.settings.cursor_style, "auto");
+        assert_eq!(config.settings.cursor_width, 1);
     }
 
     #[test]
     fn saving_keeps_profiles_and_the_original_launch_of_each_session() {
         let raw = serde_json::json!({
-            "settings": { "pasteShortcut": "Ctrl+Alt+V", "defaultProfileId": "c2", "profiles": [
+            "settings": { "cursorStyle": "bar", "cursorWidth": 4, "cursorBlink": false, "pasteShortcut": "Ctrl+Alt+V", "defaultProfileId": "c2", "profiles": [
                 { "id": "c1", "name": "Claude 1", "provider": "claude", "command": "claude1", "args": "--continue", "shell": "zsh", "launchMode": "arg", "configDir": "~/.claude-1" },
                 { "id": "c2", "name": "Claude 2", "provider": "claude", "command": "claude2", "args": "", "shell": "bash", "launchMode": "inject", "configDir": "~/.claude-2" },
                 { "id": "cx", "name": "Codex", "provider": "codex", "command": "codex", "args": "resume --last", "shell": "", "launchMode": "arg", "configDir": "~/.codex-work" }
@@ -206,6 +212,9 @@ mod tests {
         assert_eq!(saved["settings"]["profiles"], raw["settings"]["profiles"]);
         assert_eq!(saved["settings"]["defaultProfileId"], "c2");
         assert_eq!(saved["settings"]["pasteShortcut"], "Ctrl+Alt+V");
+        assert_eq!(saved["settings"]["cursorStyle"], "bar");
+        assert_eq!(saved["settings"]["cursorWidth"], 4);
+        assert_eq!(saved["settings"]["cursorBlink"], false);
         assert_eq!(saved["ui"], raw["ui"]);
     }
 }

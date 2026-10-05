@@ -18,6 +18,8 @@ carpeta, con el asistente y el perfil que elijas.
 - **Ajustes persistentes**: shell (PowerShell, cmd, Git Bash, WSL, bash, zsh…),
   comandos, argumentos y perfiles de asistentes (`--continue`, `--resume`…), tipografía,
   scrollback y color de acento.
+- **Cursor personalizable**: en Ajustes → Cursor puedes elegir estilos predefinidos,
+  bloque, subrayado o barra vertical de 1 a 6 píxeles, y activar el parpadeo.
 - **Modo claro y oscuro**: tema claro, oscuro o el del sistema, con color de acento configurable (y el terminal a juego).
 - **Restauración de sesión**: al reabrir, recupera tus pestañas.
 
@@ -51,6 +53,13 @@ Las pestañas abiertas conservan su comando y perfil, incluso al reiniciar trex.
 Editar o eliminar un perfil afecta al menú de sesiones nuevas y no cambia las
 sesiones que ya estaban abiertas. La configuración anterior de Claude se migra
 a un perfil y se añade un perfil inicial de Codex.
+
+## Cursor de texto
+
+El cursor se previsualiza antes de guardar y se aplica a todas las terminales
+abiertas en Windows y Linux. **Automático** conserva el cursor que elija cada
+aplicación; al elegir una forma propia, Claude Code y Codex respetan tu estilo.
+El color sigue el acento de **Ajustes → Apariencia**.
 
 ## 🧱 Tecnología
 

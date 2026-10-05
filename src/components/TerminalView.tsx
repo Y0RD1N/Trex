@@ -30,6 +30,7 @@ import {
 } from "../api";
 import { clipboardPasteAction, matchesPasteShortcut } from "../paste";
 import { IS_WINDOWS } from "../platform";
+import { applyCursorOptions, cursorOptions, installCursorPolicy } from "../cursor";
 import { CloseIcon, SearchIcon } from "./Icons";
 import { getSearchDecorations, getTerminalTheme, getThemeMode, onThemeChange } from "../theme";
 import type { AgentActivity, AgentNoticeKind, Settings, TabKind } from "../types";
@@ -528,7 +529,7 @@ function TerminalView({
       fontFamily: initialSettings.fontFamily || DEFAULT_FONT_FAMILY,
       fontSize: initialSettings.fontSize,
       lineHeight: 1.12,
-      cursorBlink: initialSettings.cursorBlink,
+      ...cursorOptions(initialSettings),
       scrollback: initialSettings.scrollback,
       allowProposedApi: true,
       theme: getTerminalTheme(getThemeMode()),
@@ -554,6 +555,7 @@ function TerminalView({
     fitRef.current = fit;
     searchRef.current = search;
     term.open(host);
+    disposablesRef.current.push(installCursorPolicy(term, () => settingsRef.current));
 
     // Teclado → PTY
     disposablesRef.current.push(
@@ -763,11 +765,14 @@ function TerminalView({
       || term.options.fontFamily !== fontFamily;
     term.options.fontSize = settings.fontSize;
     term.options.fontFamily = fontFamily;
-    term.options.cursorBlink = settings.cursorBlink;
     term.options.scrollback = settings.scrollback;
     const raf = fontChanged ? requestAnimationFrame(() => safeFit(true)) : 0;
     return () => cancelAnimationFrame(raf);
-  }, [settings.fontSize, settings.fontFamily, settings.cursorBlink, settings.scrollback, safeFit]);
+  }, [settings.fontSize, settings.fontFamily, settings.scrollback, safeFit]);
+
+  useEffect(() => {
+    if (termRef.current) applyCursorOptions(termRef.current, settings);
+  }, [settings.cursorStyle, settings.cursorWidth, settings.cursorBlink]);
 
   // --- Al activarse la pestaña: reajustar y enfocar ---------------------------
 

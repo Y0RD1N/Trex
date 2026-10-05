@@ -6,6 +6,7 @@ import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
 import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, InfoIcon, KeyboardIcon, MoonIcon, PanelIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
 import LauncherProfiles from "./LauncherProfiles";
+import CursorSettings from "./CursorSettings";
 import { profilesError } from "../profiles";
 import { DEFAULT_PASTE_SHORTCUT, normalizePasteShortcut, pasteShortcutError, shortcutFromEvent } from "../paste";
 import "./SettingsPanel.css";
@@ -26,6 +27,7 @@ type Props = {
 const SECTIONS = [
   { id: "appearance", label: "Apariencia", icon: <SunIcon size={16} />, description: "Elige el tema y el color de tu espacio." },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon size={16} />, description: "Personaliza el texto, el cursor y la terminal." },
+  { id: "cursor", label: "Cursor", icon: <span className="settings-cursor-nav" aria-hidden="true">▏</span>, description: "Ajusta la forma, el grosor y el parpadeo del cursor de texto." },
   { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, description: "Elige cómo pegar en tus terminales." },
   { id: "profiles", label: "Asistentes", icon: <span className="settings-claude-mark">✳</span>, description: "Perfiles independientes para Claude Code y Codex." },
   { id: "sessions", label: "Sesiones", icon: <PanelIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
@@ -216,7 +218,7 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
           </div>
 
           <div className="settings-content">
-            {SECTIONS.map(item => <section key={item.id} hidden={section !== item.id} className={`settings-page${item.id === "terminal" ? " settings-terminal-page" : ""}`} role="tabpanel" tabIndex={0} id={`${id}-panel-${item.id}`} aria-labelledby={`${id}-tab-${item.id}`}>
+            {SECTIONS.map(item => <section key={item.id} hidden={section !== item.id} className={`settings-page${item.id === "terminal" || item.id === "cursor" ? " settings-terminal-page" : ""}`} role="tabpanel" tabIndex={0} id={`${id}-panel-${item.id}`} aria-labelledby={`${id}-tab-${item.id}`}>
               <div className="settings-page-heading">
                 <h3>{item.label}</h3>
                 <p>{item.description}</p>
@@ -261,7 +263,6 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
                   </select>
                 </SettingField>
                 <div className="settings-toggles">
-                  <SettingToggle label="Cursor parpadeante" hint="Hace más fácil encontrar dónde estás escribiendo." checked={draft.cursorBlink} onChange={cursorBlink => patch({ cursorBlink })} />
                   <SettingToggle label="Copiar al seleccionar" hint="Copia el texto en cuanto lo seleccionas con el ratón." checked={draft.copyOnSelect} onChange={copyOnSelect => patch({ copyOnSelect })} />
                 </div>
                 <Advanced title="Opciones avanzadas del terminal" open={terminalAdvanced} onToggle={() => setTerminalAdvanced(previous => !previous)}>
@@ -275,6 +276,8 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
                   </SettingField>
                 </Advanced>
               </>}
+
+              {item.id === "cursor" && <CursorSettings settings={draft} onChange={patch} />}
 
               {item.id === "profiles" && <LauncherProfiles profiles={draft.profiles} defaultProfileId={draft.defaultProfileId}
                 appInfo={appInfo} claudeInfo={claudeInfo} codexInfo={codexInfo} onRedetect={onRedetect}
