@@ -23,6 +23,9 @@ carpeta, con el asistente y el perfil que elijas.
 - **Modo claro y oscuro**: tema claro, oscuro o el del sistema, con color de acento configurable (y el terminal a juego).
 - **Color completo en las terminales**: ANSI, 256 colores y RGB para Claude Code,
   Codex y los shells, incluso si trex se abre desde un entorno que desactiva colores.
+- **Claude en pantalla completa**: usa su interfaz fullscreen dentro del terminal
+  en Windows y Linux, también con aliases y cuentas separadas. La rejilla y el PTY
+  se redimensionan juntos para evitar separadores duplicados al cambiar de pestaña.
 - **Restauración de sesión**: al reabrir, recupera tus pestañas.
 
 ## Perfiles y varias cuentas

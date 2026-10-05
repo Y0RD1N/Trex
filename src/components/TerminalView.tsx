@@ -31,6 +31,7 @@ import {
 import { clipboardPasteAction, matchesPasteShortcut } from "../paste";
 import { IS_WINDOWS } from "../platform";
 import { applyCursorOptions, cursorOptions, installCursorPolicy } from "../cursor";
+import { TerminalResizeCoordinator } from "../terminalResize";
 import { CloseIcon, SearchIcon } from "./Icons";
 import { getSearchDecorations, getTerminalTheme, getThemeMode, onThemeChange } from "../theme";
 import type { AgentActivity, AgentNoticeKind, Settings, TabKind } from "../types";
@@ -39,13 +40,6 @@ import { usePresence } from "../hooks/usePresence";
 import { AgentNoticeTracker, NoticeScheduler, noticeSignal } from "../agentNotices";
 
 type Status = "spawning" | "running" | "exited" | "error";
-
-/**
- * Retardo con el que se avisa al PTY del tamaño final. Cada cambio de tamaño
- * del PTY hace que la TUI (Claude Code) repinte su interfaz completa, así que
- * el aviso se agrupa para que un arrastre del divisor cuente como uno solo.
- */
-const PTY_RESIZE_DEBOUNCE_MS = 120;
 
 export type TerminalViewProps = {
   sessionId: string;
@@ -102,12 +96,7 @@ function TerminalView({
   const currentIdRef = useRef(sessionId);
   const restartCountRef = useRef(0);
   const restartingRef = useRef(false);
-  /** Timer del debounce con el que se avisa al PTY del tamaño final. */
-  const ptyResizeTimerRef = useRef<number | null>(null);
-  /** Último {cols, rows} enviado al PTY: evita avisos redundantes. */
-  const lastPtySizeRef = useRef<{ cols: number; rows: number } | null>(null);
-  /** Última medida del contenedor con la que se ejecutó `fit()`. */
-  const lastFitBoxRef = useRef<{ width: number; height: number }>({ width: -1, height: -1 });
+  const resizeRef = useRef<TerminalResizeCoordinator | null>(null);
 
   // Refs espejo de las props para usarlas desde callbacks estables.
   const launchRef = useRef({ cwd, command, args, shell, launchMode, env });
@@ -326,68 +315,7 @@ function TerminalView({
 
   // --- Ajuste de tamaño ------------------------------------------------------
 
-  /**
-   * Avisa al PTY del tamaño actual, solo si ha cambiado desde el último aviso.
-   * Después de aplicarlo se refresca la vista desde el buffer para eliminar
-   * los restos del repintado anterior del terminal.
-   */
-  const flushPtyResize = useCallback(() => {
-    ptyResizeTimerRef.current = null;
-    const term = termRef.current;
-    if (!term || disposedRef.current || !spawnedRef.current) return;
-    const { cols, rows } = term;
-    const last = lastPtySizeRef.current;
-    if (last && last.cols === cols && last.rows === rows) return;
-    lastPtySizeRef.current = { cols, rows };
-    void ptyResize(currentIdRef.current, cols, rows)
-      .then(() => {
-        if (disposedRef.current) return;
-        // El reflow deja artefactos del repintado anterior: se vuelve a pintar
-        // el buffer completo para que solo se vea su contenido actual.
-        const current = termRef.current;
-        if (current) current.refresh(0, current.rows - 1);
-      })
-      .catch(() => {
-        /* la sesión ya no existe */
-      });
-  }, []);
-
-  /** Reprograma el aviso de tamaño al PTY (debounce: solo cuenta el tamaño final). */
-  const schedulePtyResize = useCallback(() => {
-    if (ptyResizeTimerRef.current !== null) window.clearTimeout(ptyResizeTimerRef.current);
-    ptyResizeTimerRef.current = window.setTimeout(flushPtyResize, PTY_RESIZE_DEBOUNCE_MS);
-  }, [flushPtyResize]);
-
-  /**
-   * Reajusta el terminal al contenedor. El fit visual es inmediato (el terminal
-   * se ve siempre ajustado), pero el aviso al PTY va con debounce para que un
-   * arrastre del divisor o la animación de la barra lateral no generen decenas
-   * de SIGWINCH. `force` salta el atajo de "mismo tamaño" cuando algo externo
-   * cambió las medidas de la rejilla (tamaño de fuente, visibilidad de la pestaña).
-   */
-  const safeFit = useCallback(
-    (force = false) => {
-      const term = termRef.current;
-      const fit = fitRef.current;
-      const host = hostRef.current;
-      if (!term || !fit || !host) return;
-      // Con la pestaña oculta el contenedor no tiene medidas: no hay nada que ajustar.
-      const width = host.clientWidth;
-      const height = host.clientHeight;
-      if (width < 16 || height < 16) return;
-      const lastBox = lastFitBoxRef.current;
-      if (!force && width === lastBox.width && height === lastBox.height) return;
-      try {
-        fit.fit();
-      } catch {
-        /* el terminal aún no está listo para medirse */
-        return;
-      }
-      lastFitBoxRef.current = { width, height };
-      schedulePtyResize();
-    },
-    [schedulePtyResize],
-  );
+  const safeFit = useCallback(() => resizeRef.current?.request(), []);
 
   // --- Arranque del proceso ---------------------------------------------------
 
@@ -429,12 +357,8 @@ function TerminalView({
       if (exitedIdRef.current === id) return;
       spawnedRef.current = true;
       onRunningRef.current(sessionIdRef.current);
-      // El PTY nace con este tamaño: que el debounce no repita el mismo aviso.
-      lastPtySizeRef.current = { cols, rows };
+      resizeRef.current?.spawned(id, { cols, rows });
       setStatus("running");
-      // Si el contenedor cambió mientras arrancaba el proceso, el debounce pudo
-      // consumirse antes de que la sesión estuviera viva: se reprograma.
-      if (term.cols !== cols || term.rows !== rows) schedulePtyResize();
     } catch (error) {
       if (disposedRef.current) return;
       spawnedRef.current = false;
@@ -446,7 +370,7 @@ function TerminalView({
       term.write(`\r\n\x1b[1;31m✖ No se pudo iniciar el proceso\x1b[0m\r\n`);
       term.write(`\x1b[31m${message}\x1b[0m\r\n`);
     }
-  }, [cleanSubscriptions, schedulePtyResize, subscribe]);
+  }, [cleanSubscriptions, subscribe]);
 
   /** Reinicia el proceso con un id nuevo derivado del original. */
   const restart = useCallback(() => {
@@ -555,6 +479,17 @@ function TerminalView({
     fitRef.current = fit;
     searchRef.current = search;
     term.open(host);
+    resizeRef.current = new TerminalResizeCoordinator({
+      measure: () => {
+        if (host.clientWidth < 16 || host.clientHeight < 16) return undefined;
+        return fit.proposeDimensions();
+      },
+      currentSize: () => ({ cols: term.cols, rows: term.rows }),
+      session: () => spawnedRef.current ? currentIdRef.current : null,
+      apply: ({ cols, rows }) => term.resize(cols, rows),
+      notify: (id, { cols, rows }) => ptyResize(id, cols, rows),
+      refresh: () => term.refresh(0, term.rows - 1),
+    });
     disposablesRef.current.push(installCursorPolicy(term, () => settingsRef.current));
 
     // Teclado → PTY
@@ -631,7 +566,7 @@ function TerminalView({
     // Mientras se desliza la barra lateral (ancho) o se esconde la superior (alto)
     // se conserva la rejilla del terminal: recalcular columnas en cada fotograma
     // haría saltar y envolver el texto. Al asentarse se ajusta una vez. El
-    // arrastre manual sigue siendo inmediato.
+    // arrastre manual agrupa también la rejilla y el aviso al proceso.
     let resizeRaf = 0;
     const resize = (): void => {
       resizeRaf = 0;
@@ -664,12 +599,8 @@ function TerminalView({
       cancelAnimationFrame(initialRaf);
       if (resizeRaf) cancelAnimationFrame(resizeRaf);
       if (titleTimer !== null) window.clearTimeout(titleTimer);
-      if (ptyResizeTimerRef.current !== null) {
-        window.clearTimeout(ptyResizeTimerRef.current);
-        ptyResizeTimerRef.current = null;
-      }
-      lastPtySizeRef.current = null;
-      lastFitBoxRef.current = { width: -1, height: -1 };
+      resizeRef.current?.dispose();
+      resizeRef.current = null;
       observer.disconnect();
       host.removeEventListener("mousedown", onMouseDown);
       cleanSubscriptions();
@@ -741,7 +672,7 @@ function TerminalView({
             break;
           }
         }
-        safeFit(true);
+        safeFit();
       } catch {
         if (cancelled) return;
         rendererFailedRef.current = true;
@@ -766,7 +697,7 @@ function TerminalView({
     term.options.fontSize = settings.fontSize;
     term.options.fontFamily = fontFamily;
     term.options.scrollback = settings.scrollback;
-    const raf = fontChanged ? requestAnimationFrame(() => safeFit(true)) : 0;
+    const raf = fontChanged ? requestAnimationFrame(safeFit) : 0;
     return () => cancelAnimationFrame(raf);
   }, [settings.fontSize, settings.fontFamily, settings.scrollback, safeFit]);
 
@@ -779,7 +710,7 @@ function TerminalView({
   useEffect(() => {
     if (!visible) return;
     const raf = requestAnimationFrame(() => {
-      safeFit(true);
+      safeFit();
       // Cambiar de proyecto desde un menú no debe quitarle el foco al menú.
       if (!document.querySelector('[role="menu"], [role="alertdialog"]')) termRef.current?.focus();
     });

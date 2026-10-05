@@ -16,7 +16,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use crate::output_flow::OutputFlow;
-use crate::terminal_env::configure_terminal_colors;
+use crate::terminal_env::{configure_claude_display, configure_terminal_colors};
 
 fn default_cols() -> u16 {
     80
@@ -457,6 +457,7 @@ impl PtyState {
             cmd.env("PATH", path);
         }
         configure_terminal_colors(&mut cmd);
+        configure_claude_display(&mut cmd);
         // Claude usa símbolos Unicode en su TUI. El proceso de la app puede
         // arrancar con una locale heredada sin UTF-8, que hace que el shell y
         // algunas librerías sustituyan esos glifos por cuadros. En Unix,
