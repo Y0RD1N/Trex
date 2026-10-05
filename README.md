@@ -21,6 +21,8 @@ carpeta, con el asistente y el perfil que elijas.
 - **Cursor personalizable**: en Ajustes → Cursor puedes elegir estilos predefinidos,
   bloque, subrayado o barra vertical de 1 a 6 píxeles, y activar el parpadeo.
 - **Modo claro y oscuro**: tema claro, oscuro o el del sistema, con color de acento configurable (y el terminal a juego).
+- **Color completo en las terminales**: ANSI, 256 colores y RGB para Claude Code,
+  Codex y los shells, incluso si trex se abre desde un entorno que desactiva colores.
 - **Restauración de sesión**: al reabrir, recupera tus pestañas.
 
 ## Perfiles y varias cuentas

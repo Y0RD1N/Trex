@@ -6,6 +6,7 @@ mod config;
 mod pty;
 mod output_flow;
 mod clipboard;
+mod terminal_env;
 
 use config::AppConfig;
 use pty::{ClaudeInfo, PtyState, SessionInfo, SpawnRequest, SpawnResponse};
