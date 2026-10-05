@@ -2489,7 +2489,7 @@ body.dragging-sidebar .sidebar {
 .agent-icon[data-activity="working"] { color: var(--accent-strong); }
 .agent-icon[data-activity="waiting"] { color: var(--warn); }
 .agent-icon-claude[data-activity="working"] { animation: trex-agent-turn 3s linear infinite; }
-.agent-icon-codex[data-activity="working"] { animation: trex-agent-breathe 1.6s ease-in-out infinite; }
+.agent-icon-codex:not(.agent-icon-native)[data-activity="working"] { animation: trex-agent-breathe 1.6s ease-in-out infinite; }
 .notification-bell.window-btn { position: relative; width: 32px; height: 32px; margin: 0 3px; }
 .notification-bell.has-unread { color: var(--accent-strong); }
 .notification-bell > span:first-child { display: flex; transform-origin: 50% 20%; }

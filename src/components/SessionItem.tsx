@@ -3,12 +3,7 @@ import type { TabState } from "../types";
 import { CloseIcon } from "./Icons";
 import AgentIcon from "./AgentIcon";
 import { activityLabel } from "../agentActivity";
-
-/** Los títulos de Claude se muestran mientras la sesión no tenga un nombre propio. */
-export function sessionLabel(tab: TabState): string {
-  const automaticName = /^(claude|codex|shell)( \d+)?$/i.test(tab.subtitle);
-  return automaticName && tab.oscTitle?.trim() ? tab.oscTitle.trim() : tab.subtitle;
-}
+import { sessionTitle } from "../sessionTitle";
 
 type Props = {
   tab: TabState;
@@ -21,7 +16,7 @@ type Props = {
 export default function SessionItem({ tab, active, onSelect, onClose, onRename }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const label = sessionLabel(tab);
+  const { label, nativeIndicator } = sessionTitle(tab);
   const activity = tab.exited ? "idle" : tab.activity;
   const stateLabel = tab.exited ? "Proceso finalizado" : activityLabel(activity);
 
@@ -57,7 +52,7 @@ export default function SessionItem({ tab, active, onSelect, onClose, onRename }
           onDoubleClick={() => { setDraft(label); setEditing(true); }}
         >
           <span className="session-kind" aria-hidden="true">
-            <AgentIcon kind={tab.kind} size={14} activity={activity} />
+            <AgentIcon kind={tab.kind} size={14} activity={activity} nativeIndicator={nativeIndicator} />
           </span>
           <span className="session-label">{label}</span>
           {tab.exited && <span className="session-ended" aria-label="Proceso finalizado" />}

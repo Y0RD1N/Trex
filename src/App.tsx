@@ -57,7 +57,7 @@ import TerminalView from "./components/TerminalView";
 import Toast from "./components/Toast";
 import TooltipProvider from "./components/TooltipProvider";
 import ProjectHome from "./components/ProjectHome";
-import { sessionLabel } from "./components/SessionItem";
+import { sessionLabel } from "./sessionTitle";
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, restoreLaunch } from "./profiles";
 import { useNotificationSound } from "./hooks/useNotificationSound";

@@ -21,7 +21,8 @@ import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
 import { AlertIcon, FolderPlusIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
-import SessionItem, { sessionLabel } from "./SessionItem";
+import SessionItem from "./SessionItem";
+import { sessionLabel } from "../sessionTitle";
 
 /** Ancho al que vuelve la barra lateral con doble clic en el divisor. */
 const DEFAULT_SIDEBAR_WIDTH = 290;

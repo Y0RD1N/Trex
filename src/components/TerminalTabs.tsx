@@ -15,7 +15,7 @@ import { MOD_LABEL } from "../platform";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { AgentNotice, LauncherProfile, TabState } from "../types";
 import { FolderIcon, PanelIcon, PlusIcon, TerminalIcon } from "./Icons";
-import { sessionLabel } from "./SessionItem";
+import { sessionTitle } from "../sessionTitle";
 import WindowControls from "./WindowControls";
 import DropdownMenu from "./DropdownMenu";
 import AgentIcon from "./AgentIcon";
@@ -60,6 +60,7 @@ export default function TerminalTabs({
   const [menu, setMenu] = useState<FloatingAnchor | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const current = tabs.find((tab) => tab.id === activeTabId);
+  const title = current ? sessionTitle(current) : null;
   // Al activar el modo se enseña la barra un instante para que se vea adónde va.
   // `openFrom`: la esquina superior izquierda queda para la barra lateral oculta.
   const reveal = useHoverReveal<HTMLDivElement>({
@@ -76,10 +77,10 @@ export default function TerminalTabs({
     <header className="tabs-bar" data-tauri-drag-region="deep">
       <div className="workspace-title" data-tauri-drag-region>
         <span className={current?.kind === "claude" ? "workspace-mark claude" : "workspace-mark"} aria-hidden="true">
-          {current ? <AgentIcon kind={current.kind} activity={current.exited ? "idle" : current.activity} /> : <FolderIcon size={15} />}
+          {current ? <AgentIcon kind={current.kind} activity={current.exited ? "idle" : current.activity} nativeIndicator={title?.nativeIndicator} /> : <FolderIcon size={15} />}
         </span>
-        <span className="workspace-title-text" title={current ? sessionLabel(current) : projectName} data-tauri-drag-region>
-          {current ? sessionLabel(current) : hasProject ? projectName : "Tu espacio"}
+        <span className="workspace-title-text" title={title?.label ?? projectName} data-tauri-drag-region>
+          {title?.label ?? (hasProject ? projectName : "Tu espacio")}
         </span>
         {current && <span className="workspace-project" data-tauri-drag-region>{projectName}</span>}
         {current?.profileName && <span className="workspace-profile" title={`Perfil: ${current.profileName} · ${current.command}`} data-tauri-drag-region>{current.profileName}</span>}
