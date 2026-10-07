@@ -10,6 +10,22 @@ type IconProps = {
   strokeWidth?: number;
 };
 
+export function LayoutIcon({ size = 18, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d="M12 4.5v15M12 12h8.5" /></svg>;
+}
+
+export function SplitIcon({ size = 18, strokeWidth = 1.6, rows = false }: IconProps & { rows?: boolean }) {
+  return <svg {...svgProps(size, strokeWidth)}><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d={rows ? "M3.5 12h17" : "M12 4.5v15"} /></svg>;
+}
+
+export function GridIcon({ size = 18, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d="M12 4.5v15M3.5 12h17" /></svg>;
+}
+
+export function RotateIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M20 10a8 8 0 1 0-2.3 7.8M20 4v6h-6" /></svg>;
+}
+
 export function StarIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><path d="m12 3 2.8 5.7 6.3.9-4.55 4.44 1.07 6.27L12 17.35l-5.62 2.96 1.07-6.27L2.9 9.6l6.3-.9Z" /></svg>;
 }

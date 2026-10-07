@@ -11,8 +11,8 @@ carpeta, con el asistente y el perfil que elijas.
   o cualquiera de tus perfiles personalizados, dentro de la carpeta del proyecto.
 - **Pestañas**: varias terminales por proyecto, todas vivas a la vez.
   `Ctrl+T` (perfil predeterminado) y `Ctrl+Shift+T` (shell limpio).
-- **Terminal dividida**: dos sesiones visibles del mismo proyecto, en columnas
-  o filas, con un separador ajustable y foco independiente.
+- **Terminal dividida**: dos sesiones en columnas o filas, o hasta cuatro en una
+  cuadrícula 2 × 2 por proyecto, con separadores ajustables y foco independiente.
 - **Paleta de comandos**: `Ctrl+K` busca acciones, proyectos, perfiles y sesiones.
 - **Recuperar conversaciones**: continúa el historial local de Claude Code o
   Codex desde el menú de nueva sesión o con `Ctrl+Shift+R`.
@@ -38,7 +38,7 @@ carpeta, con el asistente y el perfil que elijas.
   Minimalista, o ajusta el redondeado, el margen y el borde. Los cambios se
   previsualizan en las terminales abiertas y se conservan al guardar.
 - **Barra lateral organizada**: marca proyectos como favoritos desde su menú
-  para tenerlos arriba. Las sesiones se agrupan por Claude Code, Codex y terminal;
+  para tenerlos arriba. Las sesiones aparecen directamente dentro de su proyecto;
   los nombres completos se muestran al pasar el cursor o enfocar con el teclado.
 - **Movimiento ajustable**: transiciones breves entre sesiones y paneles, con
   reducción de animaciones en Ajustes → Apariencia y respeto a la preferencia del sistema.
@@ -87,14 +87,22 @@ abiertas en Windows y Linux. **Automático** conserva el cursor que elija cada
 aplicación; al elegir una forma propia, Claude Code y Codex respetan tu estilo.
 El color sigue el acento de **Ajustes → Apariencia**.
 
-## Trabajar con dos terminales
+## Trabajar con hasta cuatro terminales
 
-Abre dos sesiones de un proyecto y pulsa el botón **Dividir terminales** de la
-cabecera o `Ctrl+Shift+S`. Cada panel permite elegir su sesión; los botones de su
-cabecera alternan entre columnas y filas o vuelven a un solo panel. Las sesiones
-siguen abiertas al unir los paneles. Arrastra el separador para ajustar el tamaño,
-o enfócalo y usa las flechas; `Home` lo devuelve al 50 %. `Ctrl+Alt+O` cambia el
-foco entre ambos paneles. La distribución se guarda por proyecto.
+En **Distribución de terminales**, en la cabecera, elige una terminal, dos
+columnas, dos filas o **Cuatro paneles · 2 × 2**. Puedes dividir la vista aunque
+solo tengas una sesión abierta: los paneles libres permiten elegir una sesión
+del proyecto o abrir otra con cualquier perfil, incluido un shell. Puedes usar
+cuatro Claude, cuatro Codex o mezclarlos; cada sesión ocupa un solo panel.
+
+El selector de cada panel permite cambiar su sesión o abrir una nueva. Su botón
+de ampliar muestra solo esa terminal y permite restaurar la misma distribución,
+conservando las demás abiertas. Al cerrar
+una sesión, su panel queda libre. Arrastra los separadores para ajustar ancho y
+alto, o enfócalos y usa las flechas; `Home` los devuelve al 50 %.
+`Ctrl+Shift+S` alterna entre una terminal y dos columnas; `Ctrl+Alt+O` recorre los
+paneles ocupados. La distribución se guarda por proyecto, y las divisiones
+anteriores de dos terminales se conservan al actualizar.
 
 ## Recuperar una conversación
 

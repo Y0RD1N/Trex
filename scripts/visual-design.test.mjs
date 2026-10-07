@@ -10,7 +10,7 @@ const pureModule = async path => {
 };
 const { normalizeDesign, matchingFrame, reducedMotion } = await pureModule("../src/visualDesign.ts");
 const { PALETTES, paletteFor, paletteTokens } = await pureModule("../src/palettes.ts");
-const { projectSections, sessionGroups } = await pureModule("../src/sidebarGroups.ts");
+const { projectSections } = await pureModule("../src/sidebarGroups.ts");
 
 test("old and malformed preferences preserve a usable terminal frame", () => {
   assert.deepEqual(normalizeDesign({}), { colorScheme:"trex",terminalRadius:22,terminalMargin:12,terminalBorder:true,motion:"system" });
@@ -49,16 +49,13 @@ test("every palette has readable text and meaningful ANSI colors in light and da
   assert.equal(paletteFor("unknown").id,"trex");
 });
 
-test("favorite sections and assistant groups preserve identities and each group's order", () => {
+test("favorite project sections preserve identities and each section's order", () => {
   const projects=[{id:"a"},{id:"b",favorite:true},{id:"c",favorite:true},{id:"d"}];
   const sections=projectSections(projects);
   assert.deepEqual(sections.map(section=>section.projects.map(p=>p.id)),[["b","c"],["a","d"]]);
   assert.equal(sections[0].projects[0],projects[1]);
   assert.deepEqual(projects.map(p=>p.id),["a","b","c","d"]);
-  const tabs=[{id:"cx",kind:"codex"},{id:"c1",kind:"claude"},{id:"sh",kind:"shell"},{id:"c2",kind:"claude"}];
-  assert.deepEqual(sessionGroups(tabs).map(group=>group.tabs.map(tab=>tab.id)),[["c1","c2"],["cx"],["sh"]]);
   assert.deepEqual(projectSections([]),[]);
-  assert.deepEqual(sessionGroups([]),[]);
 });
 
 test("reduced motion respects both the app preference and the operating system", () => {

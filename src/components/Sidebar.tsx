@@ -19,7 +19,7 @@ import { useHoverReveal } from "../hooks/useHoverReveal";
 import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
-import { projectSections, sessionGroups } from "../sidebarGroups";
+import { projectSections } from "../sidebarGroups";
 import { AlertIcon, FolderPlusIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
@@ -237,9 +237,7 @@ export default function Sidebar({
                     inert={!expanded} aria-hidden={!expanded || undefined}
                     aria-label={`Sesiones de ${project.name}`}>
                     <div className="project-sessions-clip"><div className="project-sessions-inner">
-                    {sessionGroups(visibleSessions).map(group => <div className="session-provider-group" key={group.kind}>
-                    <div className="session-group-label"><span>{group.label}</span><span>{group.tabs.length}</span></div>
-                    {group.tabs.map((tab) => (
+                    {visibleSessions.map((tab) => (
                       <SessionItem
                         key={tab.id}
                         tab={tab}
@@ -252,7 +250,6 @@ export default function Sidebar({
                         onRename={(name) => onRenameSession(tab.id, name)}
                       />
                     ))}
-                    </div>)}
                     </div></div>
                   </div>
                 )}

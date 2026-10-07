@@ -13,7 +13,8 @@ import { useEffect, useRef, useState } from "react";
 import { useHoverReveal } from "../hooks/useHoverReveal";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { AgentNotice, LauncherProfile, TabState } from "../types";
-import { FolderIcon, PanelIcon, PlusIcon, TerminalIcon } from "./Icons";
+import { FolderIcon, GridIcon, LayoutIcon, MaximizeIcon, PanelIcon, PlusIcon, SearchIcon, SplitIcon, TerminalIcon } from "./Icons";
+import type { SplitDirection } from "../splitLayout";
 import { sessionTitle } from "../sessionTitle";
 import WindowControls from "./WindowControls";
 import DropdownMenu from "./DropdownMenu";
@@ -44,9 +45,8 @@ type Props = {
   onOpenProfiles: () => void;
   onCommandPalette: () => void;
   onRecover: () => void;
-  onToggleSplit: () => void;
-  splitActive: boolean;
-  canSplit: boolean;
+  onChangeSplit: (direction: SplitDirection | null) => void;
+  splitDirection: SplitDirection | null;
   shortcuts: ShortcutBindings;
   notices: AgentNotice[];
   soundEnabled: boolean;
@@ -61,11 +61,13 @@ type Props = {
 export default function TerminalTabs({
   tabs, activeTabId, projectName, hasProject, sidebarCollapsed, profiles, defaultProfileId,
   onToggleSidebar, autoHideTopBar, onToggleTopBar, onRevealProject, onNew, onNewShell, onOpenSettings, onOpenProfiles,
-  onCommandPalette,onRecover,onToggleSplit,splitActive,canSplit,shortcuts,
+  onCommandPalette,onRecover,onChangeSplit,splitDirection,shortcuts,
   notices, soundEnabled, liveTabIds, onOpenNotice, onMarkNoticesRead, onClearNotices, onToggleSound, onPreviewSound,
 }: Props) {
   const [menu, setMenu] = useState<FloatingAnchor | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const [layoutMenu, setLayoutMenu] = useState<FloatingAnchor | null>(null);
+  const layoutButtonRef = useRef<HTMLButtonElement>(null);
   const current = tabs.find((tab) => tab.id === activeTabId);
   const title = current ? sessionTitle(current) : null;
   // Al activar el modo se enseña la barra un instante para que se vea adónde va.
@@ -77,7 +79,7 @@ export default function TerminalTabs({
   });
   const shown = !autoHideTopBar || reveal.revealed;
 
-  useEffect(() => setMenu(null), [projectName, activeTabId]);
+  useEffect(() => { setMenu(null); setLayoutMenu(null); }, [projectName, activeTabId]);
 
   return (
     <div ref={reveal.ref} className={`bar-slot${autoHideTopBar ? " auto-hide" : ""}${shown ? " shown" : ""}`} {...reveal.handlers}>
@@ -94,8 +96,20 @@ export default function TerminalTabs({
       </div>
 
       <div className="session-create">
-        <button type="button" className="icon-btn tip tip-below" aria-label="Paleta de comandos" data-tip={`Paleta de comandos (${shortcutLabel(shortcuts.commandPalette)})`} onClick={onCommandPalette}>⌕</button>
-        <button type="button" className={`icon-btn tip tip-below${splitActive ? " active" : ""}`} aria-label={splitActive ? "Unir terminales" : "Dividir terminales"} data-tip={`${splitActive ? "Unir" : "Dividir"} terminales (${shortcutLabel(shortcuts.toggleSplit)})`} disabled={!canSplit && !splitActive} onClick={onToggleSplit}>◫</button>
+        <button type="button" className="icon-btn tip tip-below" aria-label="Paleta de comandos" data-tip={`Paleta de comandos (${shortcutLabel(shortcuts.commandPalette)})`} onClick={onCommandPalette}><SearchIcon size={18} /></button>
+        <button ref={layoutButtonRef} type="button" className={`icon-btn tip tip-below${splitDirection ? " active" : ""}`} aria-label="Distribución de terminales" data-tip={`Distribución de terminales (${shortcutLabel(shortcuts.toggleSplit)})`} aria-expanded={layoutMenu !== null} aria-haspopup="menu" disabled={!hasProject || tabs.length === 0} onClick={event => { setMenu(null); setLayoutMenu(layoutMenu ? null : { element:event.currentTarget }); }} onKeyDown={event => { if (event.key === "ArrowDown") { event.preventDefault(); setMenu(null); setLayoutMenu({ element:event.currentTarget }); } }}>
+          {splitDirection === "grid" ? <GridIcon /> : <LayoutIcon />}
+        </button>
+        <DropdownMenu anchor={layoutMenu} triggerRef={layoutButtonRef} label="Distribución de terminales" onClose={() => setLayoutMenu(null)}>
+          {([
+            { direction:null, label:"Una terminal", icon:<MaximizeIcon size={18} /> },
+            { direction:"columns", label:"Dos columnas", icon:<SplitIcon /> },
+            { direction:"rows", label:"Dos filas", icon:<SplitIcon rows /> },
+            { direction:"grid", label:"Cuatro paneles · 2 × 2", icon:<GridIcon /> },
+          ] as const).map(view => <button key={view.direction ?? "single"} type="button" role="menuitemradio" aria-checked={splitDirection === view.direction} tabIndex={-1} className="context-item" onClick={() => { setLayoutMenu(null); onChangeSplit(view.direction); }}>
+            <span className="context-icon" aria-hidden="true">{view.icon}</span>{view.label}
+          </button>)}
+        </DropdownMenu>
         <button
           ref={menuButtonRef}
           type="button"
@@ -108,7 +122,7 @@ export default function TerminalTabs({
             if (event.key === "ArrowDown") { event.preventDefault(); setMenu({ element: event.currentTarget }); }
           }}
           disabled={!hasProject}
-          onClick={event => setMenu(menu ? null : { element: event.currentTarget })}
+          onClick={event => { setLayoutMenu(null); setMenu(menu ? null : { element: event.currentTarget }); }}
         >
           <PlusIcon size={16} />
         </button>

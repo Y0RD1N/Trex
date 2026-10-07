@@ -28,7 +28,7 @@ const module = async (name) =>
 const { DEFAULT_SHORTCUTS, bindingError, normalizeShortcuts, matchesShortcut } =
   await module("shortcuts");
 const { parseShortcut } = await module("paste");
-const { visibleSplit, clampSplitRatio } = await module("splitLayout");
+const { visibleSplit, clampSplitRatio, normalizeSplitLayout, createSplitLayout, replaceSplitPane, splitPaneStyle } = await module("splitLayout");
 const { canResume, resumedLaunch, validConversationId } =
   await module("conversations");
 const { normalizeConfig } = await module("api");
@@ -82,18 +82,68 @@ test("los atajos comprueban Alt, Shift y la tecla física en teclados distintos"
     ),
   );
 });
-test("los dos paneles conservan su orden al cambiar el foco y sobreviven al cierre de una sesión", () => {
-  const layout = { first: "a", second: "b", direction: "columns", ratio: 0.5 };
+test("los paneles conservan su orden al cambiar el foco y un cierre deja un hueco", () => {
+  const layout = { panes: ["a", "b"], direction: "columns", ratio: 0.5, rowRatio:0.5 };
   assert.strictEqual(visibleSplit(layout, ["a", "b", "c"], "b"), layout);
   assert.deepEqual(visibleSplit(layout, ["a", "b", "c"], "c"), {
     ...layout,
-    first: "c",
+    panes: ["c", "b"],
   });
-  assert.equal(visibleSplit(layout, ["a"], "a"), null);
+  assert.deepEqual(visibleSplit(layout, ["a"], "a").panes, ["a",null]);
   assert.equal(visibleSplit(layout, ["a", "b"], "z"), null);
   assert.equal(clampSplitRatio(NaN), 0.5);
   assert.equal(clampSplitRatio(-1), 0.25);
   assert.equal(clampSplitRatio(2), 0.75);
+});
+test("cuatro paneles permiten cualquier combinación, conservan su posición y no duplican sesiones", () => {
+  // Los IDs pueden corresponder a cuatro Claude, cuatro Codex o perfiles distintos.
+  const ids = ["claude-1", "claude-2", "claude-3", "claude-4", "extra"];
+  const layout = createSplitLayout("grid", ids, ids[0], null);
+  assert.deepEqual(layout.panes, ids.slice(0,4));
+  for (const id of layout.panes) assert.strictEqual(visibleSplit(layout,ids,id),layout);
+  assert.strictEqual(replaceSplitPane(layout,0,ids[2]),layout);
+  assert.strictEqual(replaceSplitPane(layout,4,"extra"),layout);
+  const replacement = replaceSplitPane(layout,2,"extra");
+  assert.deepEqual(replacement.panes,[ids[0],ids[1],"extra",ids[3]]);
+  assert.deepEqual(layout.panes,ids.slice(0,4));
+  const closed = visibleSplit(layout, [ids[0],ids[2],ids[3]], ids[3]);
+  assert.deepEqual(closed.panes,[ids[0],null,ids[2],ids[3]]);
+  assert.strictEqual(createSplitLayout("grid",[ids[0],ids[2],ids[3]],ids[3],closed),closed);
+  assert.deepEqual(visibleSplit(closed,ids,"extra").panes,[ids[0],"extra",ids[2],ids[3]]);
+  const anotherProject = visibleSplit(layout,["another-project"],"another-project");
+  assert.deepEqual(anotherProject.panes,["another-project",null,null,null]);
+  const smaller = createSplitLayout("rows",ids,ids[3],layout);
+  assert.equal(smaller.panes.length,2);
+  assert(smaller.panes.includes(ids[3]));
+});
+test("se puede elegir cuatro paneles con una sola sesión y rellenarlos después", () => {
+  const layout = createSplitLayout("grid",["a"],"a",null);
+  assert.deepEqual(layout.panes,["a",null,null,null]);
+  assert.deepEqual(replaceSplitPane(layout,3,"b").panes,["a",null,null,"b"]);
+  const two = createSplitLayout("columns",["a","b"],"b",null);
+  assert.deepEqual(createSplitLayout("grid",["a","b","c","d"],"b",two).panes,["b","a","c","d"]);
+});
+test("migra los dos paneles anteriores y limita la cuadrícula a cuatro IDs únicos", () => {
+  assert.deepEqual(normalizeSplitLayout({first:"a",second:"b",direction:"rows",ratio:0.6}),{
+    panes:["a","b"],direction:"rows",ratio:0.6,rowRatio:0.5,
+  });
+  assert.deepEqual(normalizeSplitLayout({panes:["a","a",null,"b","c"],direction:"grid",ratio:1,rowRatio:0}).panes,["a",null,null,"b"]);
+  assert.equal(normalizeSplitLayout({panes:[null,null],direction:"rows"}),null);
+  assert.equal(normalizeSplitLayout({first:"a",second:"b",ratio:"invalid"}).ratio,0.5);
+});
+test("los cuatro cuadrantes usan márgenes simétricos y dos ejes independientes", () => {
+  const layout = createSplitLayout("grid",["a"],"a",null);
+  const styles = Array.from({length:4},(_,index)=>splitPaneStyle(layout,index));
+  assert.equal(styles[0].right,styles[2].right);
+  assert.equal(styles[1].left,styles[3].left);
+  assert.equal(styles[0].bottom,styles[1].bottom);
+  assert.equal(styles[2].top,styles[3].top);
+  assert.equal(styles[0].right,styles[1].left);
+  assert.equal(styles[0].bottom,styles[2].top);
+  const resized = splitPaneStyle({...layout,ratio:0.6,rowRatio:0.4},3);
+  assert.match(resized.left,/60%/);
+  assert.match(resized.top,/40%/);
+  assert.equal(splitPaneStyle({...layout,direction:"rows"},1).left,undefined);
 });
 test("recuperar por ID conserva la cuenta, el shell y las opciones del perfil", () => {
   const id = "550e8400-e29b-41d4-a716-446655440000";
@@ -154,6 +204,7 @@ test("la configuración antigua migra y la nueva conserva atajos, paneles e IDs 
   assert.equal(config.ui.lastTabs[0].conversationId, id);
   assert.equal(config.ui.lastTabs[0].id, "t-123-abcd");
   assert.equal(config.ui.splitLayouts.p.direction, "rows");
+  assert.deepEqual(config.ui.splitLayouts.p.panes,["a","b"]);
   assert.equal(
     normalizeConfig({ settings: { pasteShortcut: "Ctrl+K" } }).settings
       .pasteShortcut,

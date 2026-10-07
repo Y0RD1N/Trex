@@ -65,8 +65,11 @@ import { applyDesign } from "./visualDesign";
 import type { ClipboardContent } from "./paste";
 import { resumedLaunch } from "./conversations";
 import { showDesktopNotice } from "./desktopNotifications";
-import { visibleSplit, type SplitLayout } from "./splitLayout";
+import { createSplitLayout, replaceSplitPane, splitPaneStyle, visibleSplit, type SplitDirection, type SplitLayout } from "./splitLayout";
 import SplitDivider from "./components/SplitDivider";
+import SplitPaneHeader from "./components/SplitPaneHeader";
+import AgentIcon from "./components/AgentIcon";
+import { TerminalIcon } from "./components/Icons";
 import CommandPalette from "./components/CommandPalette";
 import RecoverConversations from "./components/RecoverConversations";
 import FeatureDialog from "./components/FeatureDialog";
@@ -116,6 +119,7 @@ function AppShell() {
   const playNotificationSound = useNotificationSound(config?.ui.notificationSound ?? true);
   const liveTabIds = useMemo(() => new Set(tabs.map(tab => tab.id)), [tabs]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [expandedPaneId, setExpandedPaneId] = useState<string | null>(null);
   const [claudeInfo, setClaudeInfo] = useState<ClaudeInfo | null>(null);
   const [codexInfo, setCodexInfo] = useState<ClaudeInfo | null>(null);
   const [settingsInitialSection, setSettingsInitialSection] = useState<"appearance" | "profiles">("appearance");
@@ -331,7 +335,7 @@ function AppShell() {
           : restored[0].projectId;
       const savedSplit = config.ui.splitLayouts[preferredProject];
       const preferredTab =
-        restored.find((tab) => tab.projectId === preferredProject && tab.id === savedSplit?.first) ??
+        restored.find((tab) => tab.projectId === preferredProject && tab.id === savedSplit?.panes.find(id => id !== null)) ??
         restored.find((tab) => tab.projectId === preferredProject) ?? restored[0];
       setActiveTabId(preferredTab.id);
       setActiveProject(preferredProject);
@@ -378,6 +382,8 @@ function AppShell() {
     [tabs, activeProjectId],
   );
   const split = visibleSplit(activeProjectId ? config?.ui.splitLayouts[activeProjectId] ?? null : null,projectTabs.map(tab => tab.id),activeTabId);
+  const paneExpanded = expandedPaneId === activeTabId && !!split?.panes.includes(expandedPaneId);
+  const displayedSplit = paneExpanded ? null : split;
   const updateSplit = useCallback((layout: SplitLayout | null) => {
     setConfig(previous => {
       if (!previous?.ui.activeProjectId) return previous;
@@ -386,19 +392,26 @@ function AppShell() {
       return { ...previous,ui:{ ...previous.ui,splitLayouts } };
     });
   },[]);
-  const toggleSplit = useCallback(() => {
+  const changeSplit = useCallback((direction: SplitDirection | null) => {
     const current = configRef.current, active = activeTabIdRef.current;
     if (!current?.ui.activeProjectId || !active) return;
     const ids = tabsRef.current.filter(tab => tab.projectId === current.ui.activeProjectId).map(tab => tab.id);
-    if (visibleSplit(current.ui.splitLayouts[current.ui.activeProjectId] ?? null,ids,active)) { updateSplit(null); return; }
-    const other = ids.find(id => id !== active);
-    if (!other) { showToast("Abre otra sesión de este proyecto para dividir la terminal."); return; }
-    updateSplit({ first:active,second:other,direction:"columns",ratio:0.5 });
-  },[showToast,updateSplit]);
-  const focusOtherPane = useCallback(() => { if (split) setActiveTabId(activeTabIdRef.current === split.first ? split.second : split.first); },[split]);
+    if (!ids.includes(active)) return;
+    setExpandedPaneId(null);
+    const previous = visibleSplit(current.ui.splitLayouts[current.ui.activeProjectId] ?? null,ids,active);
+    updateSplit(direction ? createSplitLayout(direction, ids, active, previous) : null);
+  },[updateSplit]);
+  const toggleSplit = useCallback(() => changeSplit(split ? null : "columns"), [changeSplit,split]);
+  const focusOtherPane = useCallback(() => {
+    if (!split) return;
+    const ids = split.panes.filter((id): id is string => id !== null);
+    const index = ids.indexOf(activeTabIdRef.current ?? "");
+    if (ids.length) setActiveTabId(ids[(index + 1) % ids.length]);
+  },[split]);
+  const splitKey = JSON.stringify(split);
   useEffect(() => {
-    if (split && activeProjectId && config?.ui.splitLayouts[activeProjectId]?.first !== split.first) updateSplit(split);
-  },[split?.first,activeProjectId,updateSplit]);
+    if (split && activeProjectId && JSON.stringify(config?.ui.splitLayouts[activeProjectId]) !== splitKey) updateSplit(split);
+  },[splitKey,activeProjectId,updateSplit]);
 
   // Si la pestaña activa no es del proyecto visible, activamos la última suya.
   useEffect(() => {
@@ -411,12 +424,15 @@ function AppShell() {
   // --- Proyectos ---------------------------------------------------------------
 
   const selectProject = useCallback((projectId: string) => {
+    setExpandedPaneId(null);
     setConfig((prev) =>
       prev
         ? { ...prev, ui: { ...prev.ui, activeProjectId: projectId, lastProjectId: projectId } }
         : prev,
     );
-    const lastTab = [...tabsRef.current].reverse().find((tab) => tab.projectId === projectId);
+    const savedPanes = configRef.current?.ui.splitLayouts[projectId]?.panes;
+    const lastTab = [...tabsRef.current].reverse().find(tab => tab.projectId === projectId && savedPanes?.includes(tab.id)) ??
+      [...tabsRef.current].reverse().find(tab => tab.projectId === projectId);
     if (lastTab) setActiveTabId(lastTab.id);
   }, []);
 
@@ -600,7 +616,26 @@ function AppShell() {
           }
         : prev,
     );
+    return tab.id;
   }, []);
+
+  const selectPaneSession = (index: number, id: string): void => {
+    if (!split || !projectTabs.some(tab => tab.id === id)) return;
+    const next = replaceSplitPane(split, index, id);
+    if (next === split) return;
+    updateSplit(next);
+    setActiveTabId(id);
+    if (paneExpanded) setExpandedPaneId(id);
+  };
+
+  const newPaneSession = (index: number, profileId: string | null): void => {
+    if (!split || !activeProjectId) return;
+    const id = openTab(activeProjectId, profileId);
+    if (id) {
+      updateSplit(replaceSplitPane(split, index, id));
+      if (paneExpanded) setExpandedPaneId(id);
+    }
+  };
 
   const closeTab = useCallback(async (tabId: string, trigger?: HTMLElement) => {
     const tab = tabsRef.current.find((item) => item.id === tabId);
@@ -632,7 +667,9 @@ function AppShell() {
     closingTabIdsRef.current.delete(tabId);
     setTabs(next);
     if (activeTabIdRef.current === tabId) {
-      const lastOfProject = [...next].reverse().find((item) => item.projectId === tab.projectId);
+      const paneIds = configRef.current?.ui.splitLayouts[tab.projectId]?.panes;
+      const lastOfProject = [...next].reverse().find(item => item.projectId === tab.projectId && paneIds?.includes(item.id)) ??
+        [...next].reverse().find(item => item.projectId === tab.projectId);
       const nextActive = lastOfProject ? lastOfProject.id : null;
       activeTabIdRef.current = nextActive;
       setActiveTabId(nextActive);
@@ -863,9 +900,15 @@ function AppShell() {
   const standardClaude = preferredProfile.provider === "claude" && preferredProfile.command === "claude";
   const claudeMissing = standardClaude && claudeInfo !== null && !claudeInfo.found;
   const hasProjects = config.projects.length > 0;
+  // Las claves conservan cada PTY; el orden del DOM sigue el orden visual para Tab.
+  const terminalTabs = split ? [...tabs].sort((a,b) => {
+    const position = (tab: TabState): number => tab.projectId === activeProjectId && split.panes.includes(tab.id) ? split.panes.indexOf(tab.id) : 4;
+    return position(a) - position(b);
+  }) : tabs;
   const paletteCommands: PaletteCommand[] = [
-    {id:"split",label:split ? "Unir terminales" : "Dividir terminales",group:"Acciones",shortcut:config.settings.shortcuts.toggleSplit,run:toggleSplit,disabled:!activeProject || projectTabs.length<2},
-    {id:"rotate",label:"Cambiar división horizontal / vertical",group:"Acciones",run:()=>{if(split) updateSplit({...split,direction:split.direction === "columns" ? "rows" : "columns"});},disabled:!split},
+    {id:"split",label:split ? "Unir terminales" : "Dividir terminales",group:"Acciones",shortcut:config.settings.shortcuts.toggleSplit,run:toggleSplit,disabled:!activeProject || !projectTabs.length},
+    {id:"grid",label:"Cuatro terminales · cuadrícula 2 × 2",group:"Acciones",run:()=>changeSplit("grid"),disabled:!activeProject || !projectTabs.length},
+    {id:"rotate",label:"Cambiar división horizontal / vertical",group:"Acciones",run:()=>{if(split) changeSplit(split.direction === "columns" ? "rows" : "columns");},disabled:!split || split.direction === "grid"},
     {id:"recover",label:"Recuperar conversación",group:"Acciones",shortcut:config.settings.shortcuts.recoverSessions,run:()=>setRecoveryOpen(true),disabled:!activeProject},
     {id:"settings",label:"Abrir ajustes",group:"Acciones",shortcut:config.settings.shortcuts.toggleSettings,run:openSettings},
     {id:"theme",label:"Cambiar tema claro / oscuro",group:"Acciones",shortcut:config.settings.shortcuts.toggleTheme,run:toggleTheme},
@@ -938,9 +981,8 @@ function AppShell() {
           onOpenProfiles={openProfiles}
           onCommandPalette={() => setPaletteOpen(true)}
           onRecover={() => setRecoveryOpen(true)}
-          onToggleSplit={toggleSplit}
-          splitActive={split !== null}
-          canSplit={projectTabs.length > 1}
+          onChangeSplit={changeSplit}
+          splitDirection={displayedSplit?.direction ?? null}
           shortcuts={config.settings.shortcuts}
           notices={notices}
           soundEnabled={config.ui.notificationSound}
@@ -961,14 +1003,14 @@ function AppShell() {
         )}
 
         {hasProjects ? (
-          <div className={`terminals${split ? ` split-${split.direction}` : ""}`}>
-            {tabs.map((tab) => {
+          <div className={`terminals${displayedSplit ? ` split-${displayedSplit.direction}` : ""}`}>
+            {terminalTabs.map((tab) => {
               const project = config.projects.find((item) => item.id === tab.projectId);
               if (!project) return null;
               const isActive = tab.id === activeTabId && tab.projectId === activeProjectId;
-              const isVisible = tab.projectId === activeProjectId && (split ? tab.id === split.first || tab.id === split.second : isActive);
-              const first = split?.first === tab.id;
-              const paneStyle = split && isVisible ? split.direction === "columns" ? (first ? {right:`calc(${(1-split.ratio)*100}% + var(--terminal-gap) / 2)`} : {left:`calc(${split.ratio*100}% + var(--terminal-gap) / 2)`}) : (first ? {bottom:`calc(${(1-split.ratio)*100}% + var(--terminal-gap) / 2)`} : {top:`calc(${split.ratio*100}% + var(--terminal-gap) / 2)`}) : {};
+              const paneIndex = split?.panes.indexOf(tab.id) ?? -1;
+              const isVisible = tab.projectId === activeProjectId && (displayedSplit ? paneIndex !== -1 : isActive);
+              const paneStyle = displayedSplit && isVisible ? splitPaneStyle(displayedSplit, paneIndex) : {};
               return (
                 <div
                   key={tab.id}
@@ -976,9 +1018,11 @@ function AppShell() {
                   style={{ display: isVisible ? "block" : "none",...paneStyle }}
                   onPointerDownCapture={() => { if(isVisible) setActiveTabId(tab.id); }}
                 >
-                  {split && isVisible && <div className="split-pane-header"><select aria-label={first ? "Sesión del primer panel" : "Sesión del segundo panel"} value={tab.id} onChange={event => { const id=event.currentTarget.value; updateSplit({...split,[first?"first":"second"]:id});setActiveTabId(id); }}>
-                    {projectTabs.map(item=><option key={item.id} value={item.id} disabled={item.id===(first?split.second:split.first)}>{sessionLabel(item)}</option>)}
-                  </select><button className="icon-btn" aria-label="Cambiar orientación de los paneles" data-tip="Alternar lado a lado / arriba y abajo" onClick={()=>updateSplit({...split,direction:split.direction==="columns"?"rows":"columns"})}>↔</button><button className="icon-btn" aria-label="Unir terminales" data-tip="Volver a una terminal" onClick={()=>updateSplit(null)}>▢</button></div>}
+                  {split && isVisible && <SplitPaneHeader layout={split} index={paneIndex} tabs={projectTabs} profiles={config.settings.profiles}
+                    expanded={paneExpanded}
+                    onSelect={id => selectPaneSession(paneIndex,id)} onNew={profileId => newPaneSession(paneIndex,profileId)}
+                    onRotate={() => changeSplit(split.direction === "columns" ? "rows" : "columns")}
+                    onSingle={() => { setActiveTabId(tab.id); setExpandedPaneId(paneExpanded ? null : tab.id); }} />}
                   <TerminalView
                     sessionId={tab.id}
                     cwd={project.path}
@@ -1003,7 +1047,21 @@ function AppShell() {
                 </div>
               );
             })}
-            {split && <SplitDivider layout={split} onChange={updateSplit} />}
+            {displayedSplit && displayedSplit.panes.map((id,index) => id === null && <div key={`empty-${index}`} className="terminal-host split-pane empty-split-pane" style={splitPaneStyle(displayedSplit,index)}>
+              <SplitPaneHeader layout={displayedSplit} index={index} tabs={projectTabs} profiles={config.settings.profiles}
+                onSelect={id => selectPaneSession(index,id)} onNew={profileId => newPaneSession(index,profileId)}
+                onRotate={() => changeSplit(displayedSplit.direction === "columns" ? "rows" : "columns")} onSingle={() => changeSplit(null)} />
+              <div className="split-pane-empty">
+                <span className="split-empty-mark" aria-hidden="true"><TerminalIcon size={24} /></span>
+                <h3>Panel {index + 1}</h3><p>Elige una sesión arriba o abre una nueva.</p>
+                <div className="split-empty-actions">
+                  {config.settings.profiles.map(profile => <button key={profile.id} className="split-empty-action" onClick={() => newPaneSession(index,profile.id)}><AgentIcon kind={profile.provider} activity="idle" /><span>{profile.name}</span></button>)}
+                  <button className="split-empty-action" onClick={() => newPaneSession(index,null)}><TerminalIcon /><span>Terminal</span></button>
+                </div>
+              </div>
+            </div>)}
+            {displayedSplit && displayedSplit.direction !== "rows" && <SplitDivider layout={displayedSplit} axis="columns" onChange={updateSplit} />}
+            {displayedSplit && displayedSplit.direction !== "columns" && <SplitDivider layout={displayedSplit} axis="rows" onChange={updateSplit} />}
 
             {activeProject && projectTabs.length === 0 && (
               <ProjectHome

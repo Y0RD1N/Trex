@@ -9,7 +9,7 @@ import { DEFAULT_PASTE_SHORTCUT, parseShortcut, type ClipboardContent } from "./
 import { DEFAULT_CURSOR_STYLE, DEFAULT_CURSOR_WIDTH, normalizeCursorStyle, normalizeCursorWidth } from "./cursor";
 import { normalizeDesign } from "./visualDesign";
 import { normalizeShortcuts, bindingError, keyError } from "./shortcuts";
-import { clampSplitRatio, type SplitLayout } from "./splitLayout";
+import { normalizeSplitLayout, type SplitLayout } from "./splitLayout";
 import { validConversationId } from "./conversations";
 import type {
   AppConfig,
@@ -430,8 +430,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
 
   const splitLayouts: Record<string,SplitLayout> = {};
   for (const [projectId,value] of Object.entries(asRecord(uiRaw.splitLayouts) ?? {})) {
-    const layout = asRecord(value);
-    if (layout && typeof layout.first === "string" && typeof layout.second === "string" && layout.first !== layout.second) splitLayouts[projectId] = { first:layout.first, second:layout.second, direction:layout.direction === "rows" ? "rows" : "columns", ratio:clampSplitRatio(asNumber(layout.ratio,0.5)) };
+    const layout = normalizeSplitLayout(value);
+    if (layout) splitLayouts[projectId] = layout;
   }
   const ui: UiStateExtended = {
     lastProjectId: asNullableString(uiRaw.lastProjectId),
