@@ -1,7 +1,7 @@
 .launcher-profiles { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .profile-list { display: flex; flex-direction: column; gap: 4px; max-height: 192px; overflow-y: auto; overscroll-behavior: contain; padding: 3px; margin: -3px; }
 .profile-list .profile-card { flex-shrink: 0; }
-.profile-card { display: flex; align-items: center; gap: 11px; min-width: 0; width: 100%; padding: 11px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer; text-align: left; transition: background-color var(--t), border-color var(--t), color var(--t); }
+.profile-card { display: flex; align-items: center; gap: 10px; min-width: 0; width: 100%; padding: 12px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--text-muted); cursor: pointer; text-align: left; transition: background-color var(--t), border-color var(--t), color var(--t); }
 .profile-card:hover { background: var(--hover); color: var(--text); }
 .profile-card.selected { background: var(--session-selected); border-color: var(--border); color: var(--text); }
 .profile-card-icon { display: flex; align-items: center; justify-content: center; width: 20px; flex: 0 0 auto; }
@@ -15,6 +15,7 @@
 .profile-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-muted); font-size: 12px; }
 .profile-editor-heading > span, .profile-editor-heading > div { display: flex; align-items: center; gap: 7px; }
 .profile-editor-heading .icon-btn { width: 28px; height: 28px; }
+.profile-editor-heading .icon-btn svg, .profile-add-actions .btn svg { width: 16px; height: 16px; stroke-width: 1.6; }
 .profile-field { display: flex; flex-direction: column; gap: 8px; color: var(--text); font-size: 12px; min-width: 0; }
 .profile-field small { font-size: 11px; line-height: 1.6; color: var(--text-dim); overflow-wrap: anywhere; }
 .profile-status { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }

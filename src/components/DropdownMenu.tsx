@@ -8,6 +8,9 @@ type Props = {
   triggerRef: RefObject<HTMLButtonElement | null>;
   label: string;
   className?: string;
+  id?: string;
+  style?: CSSProperties;
+  focusSelected?: boolean;
   onClose: () => void;
   children: ReactNode;
 };
@@ -15,7 +18,7 @@ type Props = {
 const MENU_OPEN_EVENT = "trex:menu-open";
 
 /** Una sola política de posición, cierre y teclado para todos los menús. */
-export default function DropdownMenu({ anchor, triggerRef, label, className = "", onClose, children }: Props) {
+export default function DropdownMenu({ anchor, triggerRef, label, className = "", id, style, focusSelected = false, onClose, children }: Props) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -29,11 +32,19 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
   });
 
   useLayoutEffect(() => {
-    if (!anchor) { focusedRef.current = false; return; }
+    if (!anchor) {
+      focusedRef.current = false;
+      searchRef.current = { text: "", time: 0 };
+      return;
+    }
     if (!position || focusedRef.current) return;
-    surfaceRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+    const surface = surfaceRef.current;
+    const selected = focusSelected ? surface?.querySelector<HTMLElement>('[role^="menuitem"][aria-checked="true"]:not(:disabled)') : null;
+    const first = surface?.querySelector<HTMLElement>('[role^="menuitem"]:not(:disabled)');
+    (selected ?? first)?.focus({ preventScroll: true });
+    selected?.scrollIntoView({ block: "nearest" });
     focusedRef.current = true;
-  }, [anchor, position]);
+  }, [anchor, position, focusSelected]);
 
   useEffect(() => {
     if (!anchor) return;
@@ -118,12 +129,13 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
   return createPortal(
     <div
       ref={surfaceRef}
+      id={id}
       role={presence.leaving ? undefined : "menu"}
       aria-hidden={presence.leaving || undefined}
       inert={presence.leaving}
       aria-label={label}
       className={`context-menu floating-surface motion-popover ${className}${presence.entering ? " entering" : ""}${presence.leaving ? " leaving" : ""}`}
-      style={{ left: position?.left ?? 8, top: position?.top ?? 8,
+      style={{ ...style, left: position?.left ?? 8, top: position?.top ?? 8,
         visibility: position ? "visible" : "hidden", transformOrigin: position?.origin,
         "--menu-shift": position?.side === "top" ? "4px" : "-4px" } as CSSProperties}
       onKeyDown={onKeyDown}

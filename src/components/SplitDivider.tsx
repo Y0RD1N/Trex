@@ -61,8 +61,6 @@ export default function SplitDivider({
           });
         }
       }}
-    >
-      <span />
-    </div>
+    />
   );
 }

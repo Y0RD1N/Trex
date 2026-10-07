@@ -4,7 +4,8 @@ import { ACCENT_PRESETS, DEFAULT_FONT_FAMILY, clamp } from "../api";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
-import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, InfoIcon, KeyboardIcon, MoonIcon, PanelIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
+import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, InfoIcon, KeyboardIcon, MoonIcon, PanelIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
+import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
 import CursorSettings from "./CursorSettings";
 import WorkspaceAppearance from "./WorkspaceAppearance";
@@ -32,10 +33,10 @@ type Props = {
 const SECTIONS = [
   { id: "appearance", label: "Apariencia", icon: <SunIcon size={16} />, description: "Elige el tema y el color de tu espacio." },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon size={16} />, description: "Personaliza el texto, el cursor y la terminal." },
-  { id: "cursor", label: "Cursor", icon: <span className="settings-cursor-nav" aria-hidden="true">▏</span>, description: "Ajusta la forma, el grosor y el parpadeo del cursor de texto." },
+  { id: "cursor", label: "Cursor", icon: <CursorIcon />, description: "Ajusta la forma, el grosor y el parpadeo del cursor de texto." },
   { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, description: "Personaliza las combinaciones del teclado." },
-  { id: "notifications", label: "Notificaciones", icon: <InfoIcon size={16} />, description: "Avisos del escritorio cuando tus asistentes necesitan atención." },
-  { id: "profiles", label: "Asistentes", icon: <span className="settings-claude-mark">✳</span>, description: "Perfiles independientes para Claude Code y Codex." },
+  { id: "notifications", label: "Notificaciones", icon: <BellIcon size={16} strokeWidth={1.6} />, description: "Avisos del escritorio cuando tus asistentes necesitan atención." },
+  { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, description: "Perfiles independientes para Claude Code y Codex." },
   { id: "sessions", label: "Sesiones", icon: <PanelIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
   { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
 ] as const;
@@ -252,10 +253,10 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
                   </div>
                 </SettingField>
                 <SettingField label="Shell" hint="El programa que ejecuta tus comandos." controlId={`${id}-shell`}>
-                  <select id={`${id}-shell`} className="input" value={draft.shell} onChange={event => patch({ shell: event.currentTarget.value })}>
-                    {!shellOptions.some(option => option.id === draft.shell) && <option value={draft.shell}>{draft.shell} (actual)</option>}
-                    {shellOptions.map(option => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}{option.available ? "" : " — no disponible"}</option>)}
-                  </select>
+                  <Select id={`${id}-shell`} value={draft.shell} onChange={shell => patch({ shell })} options={[
+                    ...(!shellOptions.some(option => option.id === draft.shell) ? [{ value: draft.shell, label: `${draft.shell} (actual)` }] : []),
+                    ...shellOptions.map(option => ({ value: option.id, label: option.label, disabled: !option.available, description: option.available ? undefined : "No disponible" })),
+                  ]} />
                 </SettingField>
                 <div className="settings-toggles">
                   <SettingToggle label="Copiar al seleccionar" hint="Copia el texto en cuanto lo seleccionas con el ratón." checked={draft.copyOnSelect} onChange={copyOnSelect => patch({ copyOnSelect })} />

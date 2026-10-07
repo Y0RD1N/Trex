@@ -51,7 +51,7 @@ export default function NotificationsSettings({
           }
         />
       </label>
-      <button
+      <div className="settings-notification-actions"><button
         type="button"
         className="btn btn-ghost"
         disabled={busy}
@@ -72,7 +72,7 @@ export default function NotificationsSettings({
       <p role="status" className="settings-note">
         {status ||
           "Windows requiere la app instalada. En Linux se usa el servicio de notificaciones del escritorio."}
-      </p>
+      </p></div>
     </div>
   );
 }

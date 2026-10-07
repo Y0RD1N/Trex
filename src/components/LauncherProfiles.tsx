@@ -3,6 +3,7 @@ import type { AgentProvider, AppInfo, ClaudeInfo, LauncherProfile } from "../typ
 import { PROVIDER_NAMES } from "../profiles";
 import { ChevronIcon, CopyIcon, PlusIcon, TrashIcon } from "./Icons";
 import AgentIcon from "./AgentIcon";
+import Select from "./Select";
 import "./LauncherProfiles.css";
 
 type Props = {
@@ -54,7 +55,7 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
     <div className="profile-list" aria-label="Perfiles de asistentes">
       {profiles.map(profile => <button key={profile.id} type="button" className={`profile-card${profile.id === selected.id ? " selected" : ""}`}
         aria-pressed={profile.id === selected.id} onClick={() => { setSelectedId(profile.id); setAdvanced(false); }}>
-        <span className="profile-card-icon"><AgentIcon kind={profile.provider} size={17} /></span>
+        <span className="profile-card-icon"><AgentIcon kind={profile.provider} size={16} /></span>
         <span className="profile-card-text"><span>{profile.name.trim() || "Sin nombre"}</span><span>{profile.command.trim() || "Sin comando"}</span></span>
         {profile.id === defaultProfileId && <span className="profile-default-badge">Predeterminado</span>}
       </button>)}
@@ -65,7 +66,7 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
     </div>
 
     <div className="profile-editor">
-      <div className="profile-editor-heading"><span><AgentIcon kind={selected.provider} /> {PROVIDER_NAMES[selected.provider]}</span>
+      <div className="profile-editor-heading"><span><AgentIcon kind={selected.provider} size={16} /> {PROVIDER_NAMES[selected.provider]}</span>
         <div><button type="button" className="icon-btn" title="Duplicar perfil" aria-label="Duplicar perfil" onClick={() => add(selected.provider, selected)}><CopyIcon size={14} /></button>
           <button type="button" className="icon-btn" title="Eliminar perfil" aria-label="Eliminar perfil" disabled={profiles.length <= 1} onClick={remove}><TrashIcon size={14} /></button></div>
       </div>
@@ -82,10 +83,10 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
       </div>
       {standard && info && !info.found && <p className="settings-note">Instala el CLI en tu equipo o indica la ruta de su ejecutable.</p>}
       <div className="profile-field"><label htmlFor={`${id}-start`}>Cómo empezar</label>
-        <select id={`${id}-start`} className="input" value={startMode} onChange={event => {
-          if (event.currentTarget.value === "custom") { setCustomStartId(selected.id); setAdvanced(true); requestAnimationFrame(() => document.getElementById(`${id}-args`)?.focus()); }
-          else { setCustomStartId(null); patch({ args: event.currentTarget.value }); }
-        }}>{startOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}<option value="custom">Argumentos personalizados</option></select></div>
+        <Select id={`${id}-start`} value={startMode} onChange={value => {
+          if (value === "custom") { setCustomStartId(selected.id); setAdvanced(true); requestAnimationFrame(() => document.getElementById(`${id}-args`)?.focus()); }
+          else { setCustomStartId(null); patch({ args: value }); }
+        }} options={[...startOptions, { value: "custom", label: "Argumentos personalizados" }]} /></div>
       <label className="profile-default-control"><input type="radio" name={`${id}-default-profile`} checked={selected.id === defaultProfileId} onChange={() => onChange(profiles, selected.id)} />
         <span>Usar este perfil con Ctrl+T y al iniciar trex</span></label>
       <p className="settings-note">La cuenta se gestiona en el propio asistente. Cambiar un perfil solo afecta a las sesiones nuevas.</p>
@@ -99,14 +100,14 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
             <div className="profile-field"><label htmlFor={`${id}-config-dir`}>Carpeta de configuración (opcional)</label><input id={`${id}-config-dir`} className="input settings-mono" value={selected.configDir} spellCheck={false}
               placeholder={selected.provider === "codex" ? "~/.codex-trabajo" : "~/.claude-cuenta-2"} aria-describedby={`${id}-config-hint`} onChange={event => patch({ configDir: event.currentTarget.value })} />
               <small id={`${id}-config-hint`}>Para separar la configuración y la cuenta mediante {selected.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"}. Déjala vacía si tu comando ya lo gestiona.</small></div>
-            <div className="profile-field"><label htmlFor={`${id}-shell`}>Shell del perfil</label><select id={`${id}-shell`} className="input" value={selected.shell} onChange={event => patch({ shell: event.currentTarget.value })}>
-              <option value="">Usar el shell de trex</option>
-              {!appInfo?.shellOptions.some(option => option.id === selected.shell) && selected.shell && <option value={selected.shell}>{selected.shell} (actual)</option>}
-              {appInfo?.shellOptions.map(option => <option key={option.id} value={option.id} disabled={!option.available}>{option.label}</option>)}
-            </select></div>
-            <div className="profile-field"><label htmlFor={`${id}-launch`}>Método de inicio</label><select id={`${id}-launch`} className="input" value={selected.launchMode} onChange={event => patch({ launchMode: event.currentTarget.value === "inject" ? "inject" : "arg" })}>
-              <option value="arg">Directo</option><option value="inject">Compatible · escribir el comando en la terminal</option>
-            </select></div>
+            <div className="profile-field"><label htmlFor={`${id}-shell`}>Shell del perfil</label><Select id={`${id}-shell`} value={selected.shell} onChange={shell => patch({ shell })} options={[
+              { value: "", label: "Usar el shell de trex" },
+              ...(!appInfo?.shellOptions.some(option => option.id === selected.shell) && selected.shell ? [{ value: selected.shell, label: `${selected.shell} (actual)` }] : []),
+              ...(appInfo?.shellOptions.map(option => ({ value: option.id, label: option.label, disabled: !option.available, description: option.available ? undefined : "No disponible" })) ?? []),
+            ]} /></div>
+            <div className="profile-field"><label htmlFor={`${id}-launch`}>Método de inicio</label><Select id={`${id}-launch`} value={selected.launchMode} onChange={value => patch({ launchMode: value === "inject" ? "inject" : "arg" })} options={[
+              { value: "arg", label: "Directo" }, { value: "inject", label: "Compatible", description: "Escribir el comando en la terminal" },
+            ]} /></div>
           </div></div>
         </div>
       </div>

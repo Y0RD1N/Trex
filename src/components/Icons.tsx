@@ -49,6 +49,14 @@ const svgProps = (size: number, strokeWidth: number) => ({
   "aria-hidden": true,
 });
 
+export function CursorIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 4v16M8 4h8M8 20h8" /></svg>;
+}
+
+export function ProfilesIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="2" /><path d="M5.5 16a3.5 3.5 0 0 1 7 0M16 9h2M16 13h2" /></svg>;
+}
+
 /** Sol: pasar a modo claro. */
 export function SunIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return (

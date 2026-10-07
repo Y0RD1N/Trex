@@ -10,6 +10,8 @@ import type {
 } from "../types";
 import FeatureDialog from "./FeatureDialog";
 import AgentIcon from "./AgentIcon";
+import Select from "./Select";
+import { ArrowRightIcon } from "./Icons";
 export default function RecoverConversations({
   project,
   settings,
@@ -97,19 +99,13 @@ export default function RecoverConversations({
       <div className="recovery-controls">
         <label>
           Perfil
-          <select
+          <Select
             data-autofocus
-            className="input"
             aria-label="Perfil para recuperar conversación"
             value={profile.id}
-            onChange={(event) => setProfileId(event.currentTarget.value)}
-          >
-            {settings.profiles.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+            onChange={setProfileId}
+            options={settings.profiles.map(item => ({ value: item.id, label: item.name, icon: <AgentIcon kind={item.provider} size={16} /> }))}
+          />
         </label>
         <label>
           Buscar
@@ -142,7 +138,7 @@ export default function RecoverConversations({
               key={conversation.id}
               onClick={() => onResume(profile, conversation)}
             >
-              <AgentIcon kind={conversation.provider} />
+              <AgentIcon kind={conversation.provider} size={16} />
               <span>
                 <strong>{conversation.title}</strong>
                 <small>
@@ -150,7 +146,7 @@ export default function RecoverConversations({
                   {conversation.id.slice(0, 8)}
                 </small>
               </span>
-              <span className="conversation-open">Continuar →</span>
+              <span className="conversation-open">Continuar <ArrowRightIcon size={16} /></span>
             </button>
           ))
         ) : (

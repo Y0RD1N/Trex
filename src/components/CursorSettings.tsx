@@ -3,6 +3,7 @@ import { CURSOR_PRESETS, MAX_CURSOR_WIDTH, MIN_CURSOR_WIDTH, type CursorAppearan
 import { DEFAULT_FONT_FAMILY } from "../api";
 import type { CursorStyle, Settings } from "../types";
 import { CheckIcon } from "./Icons";
+import Select from "./Select";
 
 function CursorSample({ settings, blink = false }: { settings: CursorAppearance; blink?: boolean }) {
   const style = settings.cursorStyle === "auto" ? "block" : settings.cursorStyle;
@@ -51,10 +52,11 @@ export default function CursorSettings({ settings, onChange }: { settings: Setti
     </div>
     <div className="setting-field">
       <div className="setting-field-info"><label htmlFor={`${id}-shape`}>Forma del cursor</label><p id={`${id}-shape-hint`}>Automático permite que cada aplicación elija su cursor.</p></div>
-      <select id={`${id}-shape`} className="input" value={settings.cursorStyle} aria-describedby={`${id}-shape-hint`}
-        onChange={event => onChange({ cursorStyle: event.currentTarget.value as CursorStyle })}>
-        <option value="auto">Automático</option><option value="bar">Barra vertical</option><option value="block">Bloque</option><option value="underline">Subrayado</option>
-      </select>
+      <Select id={`${id}-shape`} value={settings.cursorStyle} aria-describedby={`${id}-shape-hint`}
+        onChange={value => onChange({ cursorStyle: value as CursorStyle })} options={[
+          { value: "auto", label: "Automático" }, { value: "bar", label: "Barra vertical" },
+          { value: "block", label: "Bloque" }, { value: "underline", label: "Subrayado" },
+        ]} />
     </div>
     {settings.cursorStyle === "bar" && <div className="setting-field">
       <div className="setting-field-info"><span id={`${id}-width`}>Grosor de la barra</span><p>De 1 a 6 píxeles; elige lo que te resulte más cómodo.</p></div>
