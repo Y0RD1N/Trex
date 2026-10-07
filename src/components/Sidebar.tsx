@@ -44,7 +44,7 @@ type Props = {
   shortcuts: ShortcutBindings;
   /** Modo que está pintado ahora mismo (resuelve "system"). */
   themeMode: ThemeMode;
-  /** Campo de búsqueda: el atajo Ctrl+K enfoca este input desde App. */
+  /** Campo de búsqueda: el atajo configurado enfoca este input desde App. */
   searchInputRef: RefObject<HTMLInputElement | null>;
   onSearchChange: (value: string) => void;
   onAdd: () => void;
@@ -301,7 +301,7 @@ export default function Sidebar({
             <button
               type="button"
               className="icon-btn sidebar-footer-control sidebar-theme tip"
-              data-tip={goesToLight ? "Modo claro (Ctrl+Shift+L)" : "Modo oscuro (Ctrl+Shift+L)"}
+              data-tip={`${goesToLight ? "Modo claro" : "Modo oscuro"} (${shortcutLabel(shortcuts.toggleTheme)})`}
               aria-label={themeTitle}
               onClick={onToggleTheme}
             >

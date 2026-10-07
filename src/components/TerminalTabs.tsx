@@ -115,7 +115,7 @@ export default function TerminalTabs({
         {
           <DropdownMenu anchor={menu} triggerRef={menuButtonRef} label="Crear sesión"
             className="session-create-menu" onClose={() => setMenu(null)}>
-            <ProfileMenuItems profiles={profiles} defaultProfileId={defaultProfileId} onOpen={profileId => { setMenu(null); onNew(profileId); }} />
+            <ProfileMenuItems profiles={profiles} defaultProfileId={defaultProfileId} defaultShortcut={shortcuts.newClaudeTab} onOpen={profileId => { setMenu(null); onNew(profileId); }} />
             <div className="context-sep" role="separator" />
             <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onNewShell(); }}>
               <span className="context-icon" aria-hidden="true"><TerminalIcon size={16} /></span>

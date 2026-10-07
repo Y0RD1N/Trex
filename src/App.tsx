@@ -1010,6 +1010,7 @@ function AppShell() {
                 project={activeProject}
                 profiles={config.settings.profiles}
                 defaultProfileId={preferredProfile.id}
+                shortcuts={config.settings.shortcuts}
                 onOpen={(profileId) => openTab(activeProject.id, profileId)}
                 onShell={() => openTab(activeProject.id, null)}
                 onReveal={() => revealProject(activeProject.id)}
