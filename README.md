@@ -21,6 +21,16 @@ carpeta, con el asistente y el perfil que elijas.
 - **Cursor personalizable**: en Ajustes → Cursor puedes elegir estilos predefinidos,
   bloque, subrayado o barra vertical de 1 a 6 píxeles, y activar el parpadeo.
 - **Modo claro y oscuro**: tema claro, oscuro o el del sistema, con color de acento configurable (y el terminal a juego).
+- **Paletas completas con vista previa**: Grafito, Océano, Bosque y Ciruela combinan
+  la interfaz, el texto, los colores ANSI y la selección del terminal en claro y oscuro.
+- **Marco personalizable**: en Ajustes → Apariencia elige Compacto, Cómodo o
+  Minimalista, o ajusta el redondeado, el margen y el borde. Los cambios se
+  previsualizan en las terminales abiertas y se conservan al guardar.
+- **Barra lateral organizada**: marca proyectos como favoritos desde su menú
+  para tenerlos arriba. Las sesiones se agrupan por Claude Code, Codex y terminal;
+  los nombres completos se muestran al pasar el cursor o enfocar con el teclado.
+- **Movimiento ajustable**: transiciones breves entre sesiones y paneles, con
+  reducción de animaciones en Ajustes → Apariencia y respeto a la preferencia del sistema.
 - **Color completo en las terminales**: ANSI, 256 colores y RGB para Claude Code,
   Codex y los shells, incluso si trex se abre desde un entorno que desactiva colores.
 - **Claude en pantalla completa**: usa su interfaz fullscreen dentro del terminal

@@ -2,6 +2,7 @@
  * Tipos del contrato entre el frontend (React) y el backend (Rust/Tauri).
  * Los nombres de campo viajan tal cual en camelCase a través de `invoke`.
  */
+import type { ColorScheme, MotionPreference } from "./visualDesign";
 
 /** Forma en la que el backend lanza un asistente dentro del PTY. */
 export type LaunchMode = "arg" | "inject";
@@ -53,6 +54,7 @@ export type Project = {
   name: string;
   path: string;
   color?: string | null;
+  favorite?: boolean;
   createdAt: number;
   lastOpenedAt?: number | null;
   defaultCommand?: string | null;
@@ -82,6 +84,11 @@ export type Settings = {
   theme: string;
   /** Apariencia de la interfaz: "dark" | "light" | "system". */
   appearance: string;
+  colorScheme: ColorScheme;
+  terminalRadius: number;
+  terminalMargin: number;
+  terminalBorder: boolean;
+  motion: MotionPreference;
 };
 
 export type UiState = {

@@ -19,6 +19,8 @@ pub struct Project {
     #[serde(default)]
     pub color: Option<String>,
     #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
     pub created_at: u64,
     #[serde(default)]
     pub last_opened_at: Option<u64>,
@@ -69,6 +71,11 @@ pub struct Settings {
     pub theme: String,
     /// Apariencia de la interfaz: "dark" | "light" | "system".
     pub appearance: String,
+    pub color_scheme: String,
+    pub terminal_radius: u32,
+    pub terminal_margin: u32,
+    pub terminal_border: bool,
+    pub motion: String,
 }
 
 impl Default for Settings {
@@ -94,6 +101,11 @@ impl Default for Settings {
             launch_mode: "arg".into(),
             theme: "#e8834a".into(),
             appearance: "dark".into(),
+            color_scheme: "trex".into(),
+            terminal_radius: 22,
+            terminal_margin: 12,
+            terminal_border: true,
+            motion: "system".into(),
         }
     }
 }
@@ -193,6 +205,30 @@ mod tests {
         assert_eq!(config.settings.paste_shortcut, "Ctrl+V");
         assert_eq!(config.settings.cursor_style, "auto");
         assert_eq!(config.settings.cursor_width, 1);
+        assert_eq!(config.settings.color_scheme, "trex");
+        assert_eq!(config.settings.terminal_radius, 22);
+        assert_eq!(config.settings.terminal_margin, 12);
+        assert!(config.settings.terminal_border);
+        assert_eq!(config.settings.motion, "system");
+    }
+
+    #[test]
+    fn visual_preferences_and_favorites_survive_saving_without_changing_launchers() {
+        let raw = serde_json::json!({
+            "projects": [{ "id": "p", "name": "Proyecto", "path": "/work/project", "favorite": true }],
+            "settings": { "colorScheme": "forest", "terminalRadius": 0, "terminalMargin": 6, "terminalBorder": false, "motion": "reduced", "claudeCommand": "claude-work" }
+        });
+        let config: AppConfig = serde_json::from_value(raw).unwrap();
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(saved["projects"][0]["favorite"], true);
+        assert_eq!(saved["settings"]["colorScheme"], "forest");
+        assert_eq!(saved["settings"]["terminalRadius"], 0);
+        assert_eq!(saved["settings"]["terminalMargin"], 6);
+        assert_eq!(saved["settings"]["terminalBorder"], false);
+        assert_eq!(saved["settings"]["motion"], "reduced");
+        assert_eq!(saved["settings"]["claudeCommand"], "claude-work");
+        let old_project: Project = serde_json::from_value(serde_json::json!({ "id": "old", "name": "Antes", "path": "/work/old" })).unwrap();
+        assert!(!old_project.favorite);
     }
 
     #[test]

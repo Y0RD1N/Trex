@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { LauncherProfile, Project } from "../types";
-import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, PencilIcon, TrashIcon } from "./Icons";
+import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, PencilIcon, StarIcon, TrashIcon } from "./Icons";
 import DropdownMenu from "./DropdownMenu";
 import ProfileMenuItems from "./ProfileMenuItems";
 
@@ -23,6 +23,7 @@ type Props = {
   onReveal: () => void;
   onCopyPath: () => void;
   onRename: (name: string) => void;
+  onToggleFavorite: () => void;
   onDelete: (trigger: HTMLElement, returnFocus: HTMLElement | null) => void;
 };
 
@@ -38,6 +39,7 @@ export default function ProjectItem({
   onReveal,
   onCopyPath,
   onRename,
+  onToggleFavorite,
   onDelete,
 }: Props) {
   const [menu, setMenu] = useState<FloatingAnchor | null>(null);
@@ -69,7 +71,6 @@ export default function ProjectItem({
   return (
     <div
       className={`project-item${active ? " active" : ""}`}
-      title={project.path}
       onClick={onSelect}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -116,13 +117,13 @@ export default function ProjectItem({
         ) : (
           <button
             type="button"
-            className="project-name project-select"
+            className="project-name project-select tip"
+            data-tip={`${project.name}\n${project.path}\nDoble clic para renombrar`}
             aria-label={project.name}
             onClick={(event) => { event.stopPropagation(); onSelect(); }}
           >
             <span
               className="project-name-text"
-              title={`${project.name} — doble clic para renombrar`}
               onDoubleClick={(event) => {
                 event.stopPropagation();
                 startRename();
@@ -138,6 +139,7 @@ export default function ProjectItem({
                 {tabCount}
               </span>
             )}
+            {project.favorite && <span className="project-favorite-mark" aria-label="Favorito"><StarIcon size={11} /></span>}
           </button>
         )}
       </div>
@@ -175,6 +177,10 @@ export default function ProjectItem({
         >
           <ProfileMenuItems profiles={profiles} onOpen={profileId => runAction(() => onQuickOpen(profileId))} />
           <div className="context-sep" role="separator" />
+          <button type="button" role="menuitemcheckbox" tabIndex={-1} className="context-item" aria-checked={!!project.favorite} onClick={() => runAction(onToggleFavorite)}>
+            <span className="context-icon" aria-hidden="true"><StarIcon size={16} /></span>
+            {project.favorite ? "Quitar de favoritos" : "Añadir a favoritos"}
+          </button>
           <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => runAction(onReveal)}>
             <span className="context-icon" aria-hidden="true">
               <FolderIcon size={16} />

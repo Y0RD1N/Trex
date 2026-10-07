@@ -60,6 +60,7 @@ import ProjectHome from "./components/ProjectHome";
 import { sessionLabel } from "./sessionTitle";
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, restoreLaunch } from "./profiles";
+import { applyDesign } from "./visualDesign";
 import { useNotificationSound } from "./hooks/useNotificationSound";
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
@@ -169,7 +170,9 @@ function AppShell() {
       applyTheme(
         normalized.settings.appearance,
         normalized.settings.theme || DEFAULT_SETTINGS.theme,
+        normalized.settings.colorScheme,
       );
+      applyDesign(normalized.settings);
       if (failed) showToast("No se pudo cargar la configuración; se usarán valores por defecto.");
     })();
 
@@ -248,8 +251,11 @@ function AppShell() {
   // apariencia es "system", también cuando el sistema cambia de modo.
   useEffect(() => {
     if (!config) return;
-    applyTheme(config.settings.appearance, config.settings.theme || DEFAULT_SETTINGS.theme);
-  }, [config?.settings.appearance, config?.settings.theme]);
+    applyTheme(config.settings.appearance, config.settings.theme || DEFAULT_SETTINGS.theme, config.settings.colorScheme);
+  }, [config?.settings.appearance, config?.settings.theme, config?.settings.colorScheme]);
+  useEffect(() => {
+    if (config) applyDesign(config.settings);
+  }, [config?.settings.terminalRadius, config?.settings.terminalMargin, config?.settings.terminalBorder, config?.settings.motion]);
 
   // El icono sol/luna del pie de la sidebar refleja el modo realmente pintado.
   useEffect(() => onThemeChange(setThemeMode), []);
@@ -429,6 +435,10 @@ function AppShell() {
           }
         : prev,
     );
+  }, []);
+
+  const toggleFavorite = useCallback((projectId: string) => {
+    setConfig(previous => previous ? { ...previous, projects: previous.projects.map(project => project.id === projectId ? { ...project, favorite: !project.favorite } : project) } : previous);
   }, []);
 
   const deleteProject = useCallback(async (projectId: string, trigger: HTMLElement, returnFocus: HTMLElement | null) => {
@@ -823,6 +833,7 @@ function AppShell() {
         onCloseSession={(tabId, trigger) => void closeTab(tabId, trigger)}
         onRenameSession={renameTab}
         onRename={renameProject}
+        onToggleFavorite={toggleFavorite}
         onDelete={(projectId, trigger, returnFocus) => void deleteProject(projectId, trigger, returnFocus)}
         onReveal={revealProject}
         onCopyPath={copyPath}

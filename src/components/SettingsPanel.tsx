@@ -7,6 +7,8 @@ import { useDialog } from "./DialogProvider";
 import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, InfoIcon, KeyboardIcon, MoonIcon, PanelIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
 import LauncherProfiles from "./LauncherProfiles";
 import CursorSettings from "./CursorSettings";
+import WorkspaceAppearance from "./WorkspaceAppearance";
+import { applyDesign, normalizeDesign } from "../visualDesign";
 import { profilesError } from "../profiles";
 import { DEFAULT_PASTE_SHORTCUT, normalizePasteShortcut, pasteShortcutError, shortcutFromEvent } from "../paste";
 import "./SettingsPanel.css";
@@ -45,17 +47,17 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
   const [copied, setCopied] = useState(false);
   const [recordingShortcut, setRecordingShortcut] = useState(false);
   const [shortcutCaptureError, setShortcutCaptureError] = useState<string | null>(null);
-  const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 680px)").matches);
+  const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 680px), (max-height: 560px)").matches);
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const historyRef = useRef<HTMLInputElement>(null);
   const copyTimer = useRef<number | undefined>(undefined);
   const closePending = useRef(false);
-  const savedThemeRef = useRef({ appearance: settings.appearance, theme: settings.theme });
-  savedThemeRef.current = { appearance: settings.appearance, theme: settings.theme };
+  const savedThemeRef = useRef(settings);
+  savedThemeRef.current = settings;
 
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 680px)");
+    const media = window.matchMedia("(max-width: 680px), (max-height: 560px)");
     const update = (): void => setCompact(media.matches);
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
@@ -71,9 +73,12 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
     };
   }, [leaving]);
 
-  useEffect(() => { applyTheme(draft.appearance, draft.theme); }, [draft.appearance, draft.theme]);
+  useEffect(() => { applyTheme(draft.appearance, draft.theme, draft.colorScheme); }, [draft.appearance, draft.theme, draft.colorScheme]);
+  useEffect(() => { applyDesign(draft); }, [draft.terminalRadius, draft.terminalMargin, draft.terminalBorder, draft.motion]);
   useEffect(() => () => {
-    applyTheme(savedThemeRef.current.appearance, savedThemeRef.current.theme);
+    const saved = savedThemeRef.current;
+    applyTheme(saved.appearance, saved.theme, saved.colorScheme);
+    applyDesign(saved);
     window.clearTimeout(copyTimer.current);
   }, []);
 
@@ -134,6 +139,7 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
       shell: draft.shell || "default",
       launchMode: draft.launchMode === "inject" ? "inject" : "arg",
       appearance: normalizeAppearance(draft.appearance),
+      ...normalizeDesign(draft),
       pasteShortcut: normalizePasteShortcut(draft.pasteShortcut),
     });
   };
@@ -230,6 +236,7 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
                   <AppearanceControl value={normalizeAppearance(draft.appearance)} labelledBy={`${id}-theme`} onChange={appearance => patch({ appearance })} />
                   <p className="settings-note">Sistema se adapta al tema claro u oscuro de tu equipo.</p>
                 </div>
+                <WorkspaceAppearance settings={draft} onChange={patch} />
                 <div className="settings-block">
                   <h4 id={`${id}-accent`}>Color de acento</h4>
                   <div className="settings-accents" role="group" aria-labelledby={`${id}-accent`}>

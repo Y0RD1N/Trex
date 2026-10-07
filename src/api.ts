@@ -7,6 +7,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { initialProfiles, normalizeLaunch, normalizeProfiles } from "./profiles";
 import { DEFAULT_PASTE_SHORTCUT, normalizePasteShortcut, type ClipboardContent } from "./paste";
 import { DEFAULT_CURSOR_STYLE, DEFAULT_CURSOR_WIDTH, normalizeCursorStyle, normalizeCursorWidth } from "./cursor";
+import { normalizeDesign } from "./visualDesign";
 import type {
   AppConfig,
   AppInfo,
@@ -149,6 +150,7 @@ export const DEFAULT_SETTINGS: Settings = {
   launchMode: "arg",
   theme: "#e8834a",
   appearance: "dark",
+  ...normalizeDesign({}),
 };
 
 const DEFAULT_UI: UiStateExtended = {
@@ -368,6 +370,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     launchMode: asString(settingsRaw.launchMode, DEFAULT_SETTINGS.launchMode),
     theme: asAccent(settingsRaw.theme),
     appearance: asAppearance(settingsRaw.appearance),
+    ...normalizeDesign(settingsRaw),
   };
   settings.profiles = normalizeProfiles(settingsRaw.profiles, settings);
   if (!settings.profiles.some(profile => profile.id === settings.defaultProfileId)) settings.defaultProfileId = settings.profiles[0].id;
@@ -385,6 +388,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
         path,
         name: asString(rec.name, deriveProjectName(path)),
         color: asNullableString(rec.color),
+        favorite: asBool(rec.favorite, false),
         createdAt: asNumber(rec.createdAt, Date.now()),
         lastOpenedAt:
           typeof rec.lastOpenedAt === "number" ? rec.lastOpenedAt : null,

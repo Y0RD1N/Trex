@@ -44,10 +44,10 @@ export default function SessionItem({ tab, active, onSelect, onClose, onRename }
       ) : (
         <button
           type="button"
-          className="session-select"
+          className="session-select tip"
           aria-current={active ? "page" : undefined}
           aria-label={`${label} · ${stateLabel}`}
-          title={`${label} · ${stateLabel}${tab.profileName ? ` · Perfil: ${tab.profileName} (${tab.command})` : ""}\nDoble clic para renombrar`}
+          data-tip={`${label}\n${stateLabel}${tab.profileName ? ` · Perfil: ${tab.profileName} (${tab.command})` : ""}\nDoble clic para renombrar`}
           onClick={onSelect}
           onDoubleClick={() => { setDraft(label); setEditing(true); }}
         >

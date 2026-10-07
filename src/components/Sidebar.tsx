@@ -19,6 +19,7 @@ import { useHoverReveal } from "../hooks/useHoverReveal";
 import { MOD_LABEL } from "../platform";
 import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
+import { projectSections, sessionGroups } from "../sidebarGroups";
 import { AlertIcon, FolderPlusIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
@@ -52,6 +53,7 @@ type Props = {
   onCloseSession: (tabId: string, trigger: HTMLElement) => void;
   onRenameSession: (tabId: string, name: string) => void;
   onRename: (projectId: string, name: string) => void;
+  onToggleFavorite: (projectId: string) => void;
   onDelete: (projectId: string, trigger: HTMLElement, returnFocus: HTMLElement | null) => void;
   onReveal: (projectId: string) => void;
   onCopyPath: (path: string) => void;
@@ -80,6 +82,7 @@ export default function Sidebar({
   onCloseSession,
   onRenameSession,
   onRename,
+  onToggleFavorite,
   onDelete,
   onReveal,
   onCopyPath,
@@ -198,9 +201,10 @@ export default function Sidebar({
           </div>
         </div>
 
-        <div className="sidebar-section-label"><span>Proyectos</span><span>{projects.length}</span></div>
         <nav className="project-list" aria-label="Proyectos y sesiones">
-          {projects.map((project) => {
+          {projectSections(projects).map(section => <section key={section.id} className="sidebar-project-section" aria-label={section.label}>
+          <div className="sidebar-section-label"><span>{section.label}</span><span>{section.projects.length}</span></div>
+          {section.projects.map((project) => {
             const sessions = tabs.filter((tab) => tab.projectId === project.id);
             const expanded = query.length > 0 || !collapsedProjects.has(project.id);
             const needle = normalizeText(query);
@@ -223,6 +227,7 @@ export default function Sidebar({
                   onReveal={() => onReveal(project.id)}
                   onCopyPath={() => onCopyPath(project.path)}
                   onRename={(name) => onRename(project.id, name)}
+                  onToggleFavorite={() => onToggleFavorite(project.id)}
                   onDelete={(trigger, returnFocus) => onDelete(project.id, trigger, returnFocus)}
                 />
                 {visibleSessions.length > 0 && (
@@ -230,7 +235,9 @@ export default function Sidebar({
                     inert={!expanded} aria-hidden={!expanded || undefined}
                     aria-label={`Sesiones de ${project.name}`}>
                     <div className="project-sessions-clip"><div className="project-sessions-inner">
-                    {visibleSessions.map((tab) => (
+                    {sessionGroups(visibleSessions).map(group => <div className="session-provider-group" key={group.kind}>
+                    <div className="session-group-label"><span>{group.label}</span><span>{group.tabs.length}</span></div>
+                    {group.tabs.map((tab) => (
                       <SessionItem
                         key={tab.id}
                         tab={tab}
@@ -243,12 +250,14 @@ export default function Sidebar({
                         onRename={(name) => onRenameSession(tab.id, name)}
                       />
                     ))}
+                    </div>)}
                     </div></div>
                   </div>
                 )}
               </div>
             );
           })}
+          </section>)}
 
           {noResults && (
             <div className="sidebar-empty sidebar-empty-centered">
