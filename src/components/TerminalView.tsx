@@ -29,6 +29,9 @@ import {
   readClipboard,
 } from "../api";
 import { clipboardPasteAction, matchesPasteShortcut } from "../paste";
+import type { ClipboardContent } from "../paste";
+import { matchesShortcut, shortcutLabel } from "../shortcuts";
+import { invoke } from "@tauri-apps/api/core";
 import { IS_WINDOWS } from "../platform";
 import { applyCursorOptions, cursorOptions, installCursorPolicy } from "../cursor";
 import { TerminalResizeCoordinator } from "../terminalResize";
@@ -54,6 +57,8 @@ export type TerminalViewProps = {
   settings: Settings;
   /** El padre controla la visibilidad con display:none sin desmontar nada. */
   visible: boolean;
+  focused: boolean;
+  onImagePreview: (image: Extract<ClipboardContent, {kind:"image"}>, tabId: string) => Promise<boolean>;
   onExit: (tabId: string, code: number | null) => void;
   onTitle: (tabId: string, title: string) => void;
   onActivity: (tabId: string, activity: AgentActivity) => void;
@@ -74,6 +79,8 @@ function TerminalView({
   kind,
   settings,
   visible,
+  focused,
+  onImagePreview,
   onExit,
   onTitle,
   onActivity,
@@ -120,6 +127,8 @@ function TerminalView({
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
   const pasteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const focusedRef = useRef(focused); focusedRef.current = focused;
+  const previewRef = useRef(onImagePreview); previewRef.current = onImagePreview;
 
   const [status, setStatus] = useState<Status>("spawning");
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -413,11 +422,16 @@ function TerminalView({
       if (disposedRef.current || currentIdRef.current !== id || !spawnedRef.current) return;
       const content = await readClipboard();
       if (disposedRef.current || currentIdRef.current !== id || !spawnedRef.current) return;
+      if (content.kind === "image" && kindRef.current !== "shell" && settingsRef.current.imagePastePreview) {
+        if (!await previewRef.current(content, sessionIdRef.current)) return;
+        if (disposedRef.current || currentIdRef.current !== id || !spawnedRef.current) return;
+      }
       const action = clipboardPasteAction(content, kindRef.current, IS_WINDOWS);
       if (action.kind === "text") {
         if (action.text) term.paste(action.text); // Conserva el bracketed paste de xterm.
       } else if (action.kind === "key") {
-        await ptyWrite(id, action.data);
+        if (content.kind === "image" && content.fingerprint) await invoke("paste_clipboard_image", { id, provider: kindRef.current, fingerprint: content.fingerprint });
+        else await ptyWrite(id, action.data);
       } else {
         onMessageRef.current("Las imágenes se pueden pegar en sesiones de Claude Code o Codex.");
       }
@@ -512,13 +526,11 @@ function TerminalView({
         if (!event.repeat) void pasteFromClipboard();
         return false;
       }
-      if (!(event.ctrlKey || event.metaKey)) return true;
-      const key = event.key.toLowerCase();
-      if (event.shiftKey && key === "c") {
+      if (matchesShortcut(event,settingsRef.current.shortcuts.copySelection)) {
         void copySelection();
         return false;
       }
-      if (!event.shiftKey && key === "f") {
+      if (matchesShortcut(event,settingsRef.current.shortcuts.terminalSearch)) {
         setSearchOpen(true);
         return false;
       }
@@ -712,10 +724,11 @@ function TerminalView({
     const raf = requestAnimationFrame(() => {
       safeFit();
       // Cambiar de proyecto desde un menú no debe quitarle el foco al menú.
-      if (!document.querySelector('[role="menu"], [role="alertdialog"]')) termRef.current?.focus();
+      const control = document.activeElement instanceof HTMLElement && document.activeElement.closest(".split-pane-header");
+      if (focusedRef.current && !control && !document.querySelector('[role="menu"], [role="dialog"], [role="alertdialog"]')) termRef.current?.focus();
     });
     return () => cancelAnimationFrame(raf);
-  }, [visible, safeFit]);
+  }, [visible, focused, safeFit]);
 
   // --- Barra de búsqueda ------------------------------------------------------
 
@@ -738,7 +751,7 @@ function TerminalView({
         <button
           type="button"
           className="term-tool-btn tip-below"
-          data-tip="Buscar en el terminal (Ctrl+F)"
+          data-tip={`Buscar en el terminal (${shortcutLabel(settings.shortcuts.terminalSearch)})`}
           aria-label="Buscar en el terminal"
           onClick={() => setSearchOpen(true)}
         >

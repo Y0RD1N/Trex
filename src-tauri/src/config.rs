@@ -64,6 +64,10 @@ pub struct Settings {
     pub cursor_width: u32,
     pub copy_on_select: bool,
     pub paste_shortcut: String,
+    pub shortcuts: std::collections::HashMap<String,String>,
+    pub image_paste_preview: bool,
+    pub desktop_notifications: bool,
+    pub notify_when_focused: bool,
     pub confirm_close_tab: bool,
     pub restore_on_start: bool,
     pub launch_mode: String,
@@ -96,6 +100,10 @@ impl Default for Settings {
             cursor_width: 1,
             copy_on_select: false,
             paste_shortcut: "Ctrl+V".into(),
+            shortcuts: std::collections::HashMap::new(),
+            image_paste_preview: true,
+            desktop_notifications: true,
+            notify_when_focused: false,
             confirm_close_tab: true,
             restore_on_start: true,
             launch_mode: "arg".into(),
@@ -210,13 +218,16 @@ mod tests {
         assert_eq!(config.settings.terminal_margin, 12);
         assert!(config.settings.terminal_border);
         assert_eq!(config.settings.motion, "system");
+        assert!(config.settings.shortcuts.is_empty());
+        assert!(config.settings.image_paste_preview);
+        assert!(config.settings.desktop_notifications);
     }
 
     #[test]
     fn visual_preferences_and_favorites_survive_saving_without_changing_launchers() {
         let raw = serde_json::json!({
             "projects": [{ "id": "p", "name": "Proyecto", "path": "/work/project", "favorite": true }],
-            "settings": { "colorScheme": "forest", "terminalRadius": 0, "terminalMargin": 6, "terminalBorder": false, "motion": "reduced", "claudeCommand": "claude-work" }
+            "settings": { "colorScheme": "forest", "terminalRadius": 0, "terminalMargin": 6, "terminalBorder": false, "motion": "reduced", "claudeCommand": "claude-work", "shortcuts":{"commandPalette":"Ctrl+Y"}, "imagePastePreview":false,"desktopNotifications":false,"notifyWhenFocused":true }
         });
         let config: AppConfig = serde_json::from_value(raw).unwrap();
         let saved = serde_json::to_value(&config).unwrap();
@@ -227,6 +238,10 @@ mod tests {
         assert_eq!(saved["settings"]["terminalBorder"], false);
         assert_eq!(saved["settings"]["motion"], "reduced");
         assert_eq!(saved["settings"]["claudeCommand"], "claude-work");
+        assert_eq!(saved["settings"]["shortcuts"]["commandPalette"],"Ctrl+Y");
+        assert_eq!(saved["settings"]["imagePastePreview"],false);
+        assert_eq!(saved["settings"]["desktopNotifications"],false);
+        assert_eq!(saved["settings"]["notifyWhenFocused"],true);
         let old_project: Project = serde_json::from_value(serde_json::json!({ "id": "old", "name": "Antes", "path": "/work/old" })).unwrap();
         assert!(!old_project.favorite);
     }

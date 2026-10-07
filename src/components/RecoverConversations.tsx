@@ -1,0 +1,165 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { listConversations, canResume } from "../conversations";
+import { launchForProfile } from "../profiles";
+import { formatError, normalizeText } from "../api";
+import type {
+  Conversation,
+  LauncherProfile,
+  Project,
+  Settings,
+} from "../types";
+import FeatureDialog from "./FeatureDialog";
+import AgentIcon from "./AgentIcon";
+export default function RecoverConversations({
+  project,
+  settings,
+  onResume,
+  onClose,
+}: {
+  project: Project;
+  settings: Settings;
+  onResume: (profile: LauncherProfile, conversation: Conversation) => void;
+  onClose: () => void;
+}) {
+  const [profileId, setProfileId] = useState(settings.defaultProfileId),
+    [items, setItems] = useState<Conversation[]>([]),
+    [query, setQuery] = useState(""),
+    [loading, setLoading] = useState(false),
+    [error, setError] = useState(""),
+    [revision, setRevision] = useState(0);
+  const generation = useRef(0);
+  const profile =
+    settings.profiles.find((item) => item.id === profileId) ??
+    settings.profiles[0];
+  const supported = canResume(
+    launchForProfile(settings, profile),
+    profile.provider,
+  );
+  useEffect(() => {
+    const request = ++generation.current;
+    setItems([]);
+    setError("");
+    if (!supported) {
+      setLoading(false);
+      setError(
+        "Este perfil ya contiene opciones de recuperación o un modo especial. Elige un perfil sin esas opciones.",
+      );
+      return;
+    }
+    setLoading(true);
+    void listConversations(profile.provider, profile.configDir, project.path)
+      .then((result) => {
+        if (generation.current === request) setItems(result);
+      })
+      .catch((error) => {
+        if (generation.current === request) setError(formatError(error));
+      })
+      .finally(() => {
+        if (generation.current === request) setLoading(false);
+      });
+    return () => {
+      generation.current++;
+    };
+  }, [
+    profile.id,
+    profile.provider,
+    profile.configDir,
+    project.path,
+    supported,
+    revision,
+  ]);
+  const shown = useMemo(
+    () =>
+      items.filter((item) =>
+        normalizeText(item.title).includes(normalizeText(query)),
+      ),
+    [items, query],
+  );
+  return (
+    <FeatureDialog
+      title="Recuperar conversación"
+      onClose={onClose}
+      footer={
+        <>
+          <span className="feature-hint">
+            {project.name} · historial local de este perfil
+          </span>
+          <button
+            className="btn btn-ghost"
+            disabled={loading}
+            onClick={() => setRevision((value) => value + 1)}
+          >
+            Actualizar
+          </button>
+        </>
+      }
+    >
+      <div className="recovery-controls">
+        <label>
+          Perfil
+          <select
+            data-autofocus
+            className="input"
+            aria-label="Perfil para recuperar conversación"
+            value={profile.id}
+            onChange={(event) => setProfileId(event.currentTarget.value)}
+          >
+            {settings.profiles.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Buscar
+          <input
+            className="input"
+            aria-label="Buscar conversaciones"
+            placeholder="Nombre de la conversación…"
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+          />
+        </label>
+      </div>
+      <p className="feature-hint">
+        Se abre una terminal nueva con el contexto guardado por{" "}
+        {profile.provider === "claude" ? "Claude Code" : "Codex"}.
+      </p>
+      <div className="conversation-results" aria-busy={loading}>
+        {loading ? (
+          <p className="feature-empty" role="status">
+            Buscando conversaciones…
+          </p>
+        ) : error ? (
+          <p className="feature-empty" role="status">
+            {error}
+          </p>
+        ) : shown.length ? (
+          shown.map((conversation) => (
+            <button
+              className="conversation-item"
+              key={conversation.id}
+              onClick={() => onResume(profile, conversation)}
+            >
+              <AgentIcon kind={conversation.provider} />
+              <span>
+                <strong>{conversation.title}</strong>
+                <small>
+                  {new Date(conversation.updatedAt).toLocaleString()} ·{" "}
+                  {conversation.id.slice(0, 8)}
+                </small>
+              </span>
+              <span className="conversation-open">Continuar →</span>
+            </button>
+          ))
+        ) : (
+          <p className="feature-empty">
+            No hay conversaciones guardadas para este proyecto y perfil
+            {query ? " con ese nombre" : ""}.
+          </p>
+        )}
+      </div>
+    </FeatureDialog>
+  );
+}

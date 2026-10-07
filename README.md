@@ -11,6 +11,17 @@ carpeta, con el asistente y el perfil que elijas.
   o cualquiera de tus perfiles personalizados, dentro de la carpeta del proyecto.
 - **Pestañas**: varias terminales por proyecto, todas vivas a la vez.
   `Ctrl+T` (perfil predeterminado) y `Ctrl+Shift+T` (shell limpio).
+- **Terminal dividida**: dos sesiones visibles del mismo proyecto, en columnas
+  o filas, con un separador ajustable y foco independiente.
+- **Paleta de comandos**: `Ctrl+K` busca acciones, proyectos, perfiles y sesiones.
+- **Recuperar conversaciones**: continúa el historial local de Claude Code o
+  Codex desde el menú de nueva sesión o con `Ctrl+Shift+R`.
+- **Vista previa de capturas**: revisa la imagen y la sesión de destino antes de
+  adjuntarla. El texto se pega directamente.
+- **Atajos personalizables**: cambia las combinaciones en Ajustes → Atajos,
+  con detección de conflictos y opción de restablecer los valores iniciales.
+- **Avisos del escritorio**: notificaciones cuando un asistente termina,
+  necesita atención o encuentra un error; por defecto, con TREX en segundo plano.
 - **Al salir de Claude** vuelves al prompt del shell en la misma pestaña.
 - **Detección de Claude Code**: busca el binario en el `PATH` y en las rutas
   típicas del instalador nativo (Windows: `%USERPROFILE%\.local\bin`), y avisa
@@ -76,6 +87,46 @@ abiertas en Windows y Linux. **Automático** conserva el cursor que elija cada
 aplicación; al elegir una forma propia, Claude Code y Codex respetan tu estilo.
 El color sigue el acento de **Ajustes → Apariencia**.
 
+## Trabajar con dos terminales
+
+Abre dos sesiones de un proyecto y pulsa el botón **Dividir terminales** de la
+cabecera o `Ctrl+Shift+S`. Cada panel permite elegir su sesión; los botones de su
+cabecera alternan entre columnas y filas o vuelven a un solo panel. Las sesiones
+siguen abiertas al unir los paneles. Arrastra el separador para ajustar el tamaño,
+o enfócalo y usa las flechas; `Home` lo devuelve al 50 %. `Ctrl+Alt+O` cambia el
+foco entre ambos paneles. La distribución se guarda por proyecto.
+
+## Recuperar una conversación
+
+En **Nueva sesión → Recuperar conversación** elige un perfil y una conversación
+del proyecto actual. TREX lee su historial local y abre una terminal con
+`claude --resume ID` o `codex resume ID`, conservando las opciones y la cuenta de
+ese perfil. Las pestañas recuperadas conservan el comando de continuación al
+reiniciar la app. La recuperación requiere que el historial siga en el equipo.
+
+Indica **Carpeta de configuración** cuando un alias o función del shell elige
+una cuenta distinta: TREX necesita esa ruta para localizar su historial. Si está
+vacía, usa `CLAUDE_CONFIG_DIR` o `CODEX_HOME` del entorno de la app y, en su
+defecto, `~/.claude` o `~/.codex`. El selector lee el sistema de archivos donde
+se ejecuta TREX; un historial alojado dentro de WSL requiere una ruta accesible
+desde Windows. Los perfiles que ya incluyen `--resume`, `--continue` o un modo
+no interactivo muestran una indicación para usar otro perfil.
+
+## Capturas y notificaciones
+
+El pegado de imágenes muestra una vista previa por defecto. **Pegar imagen**
+adjunta la captura a la sesión indicada; después puedes escribir el mensaje y
+enviarlo desde el asistente. **Cancelar** conserva la conversación. Si el
+portapapeles cambia mientras revisas la imagen, TREX pide que vuelvas a pegarla.
+Puedes desactivar la revisión en **Ajustes → Terminal**.
+
+En **Ajustes → Notificaciones** activa o silencia los avisos del escritorio y
+elige si quieres recibirlos mientras usas TREX. **Probar y habilitar
+notificaciones** comprueba los permisos y envía un aviso de prueba. Windows
+requiere la app instalada; Linux utiliza el servicio de notificaciones del
+escritorio, según el [plugin de Tauri](https://v2.tauri.app/plugin/notification/).
+El historial de avisos de la cabecera sigue disponible.
+
 ## 🧱 Tecnología
 
 | Capa | Tecnología |
@@ -98,7 +149,7 @@ scripts/make_icon.py     genera el icono de la app
 
 ## 🚀 Desarrollo
 
-Requisitos: Node 18+, Rust estable y, en Windows, WebView2 + Visual Studio
+Requisitos: Node 22.12+ o 24+, Rust estable y, en Windows, WebView2 + Visual Studio
 Build Tools (C++).
 
 ```bash
@@ -108,6 +159,10 @@ npm run tauri dev
 
 La configuración del usuario vive en el directorio de configuración de la app
 (`%APPDATA%\com.trex.app\config.json` en Windows).
+
+Las comprobaciones se ejecutan con `npm test`, `npm run build` y
+`cargo test --manifest-path src-tauri/Cargo.toml --lib`. GitHub Actions ejecuta
+esas mismas comprobaciones en Windows y Ubuntu.
 
 ## 📦 Compilar
 
@@ -122,9 +177,10 @@ npm run tauri build
 
 ## ⌨️ Atajos
 
-En **Ajustes → Atajos** puedes cambiar **Pegar texto e imágenes** pulsando una
-combinación en su campo. El valor predeterminado es `Ctrl+V`; se aplica al guardar
-a todas las terminales abiertas y se conserva al reiniciar.
+En **Ajustes → Atajos** puedes cambiar las acciones de esta tabla pulsando una
+combinación en su campo. **Pegar texto e imágenes** conserva `Ctrl+V` como valor
+predeterminado. Los cambios se aplican al guardar a las terminales abiertas y
+se conservan al reiniciar. Las combinaciones duplicadas se rechazan.
 
 trex consulta el portapapeles nativo de Windows y Linux (X11 y Wayland): pega el
 texto con el modo de pegado del terminal, y para las capturas activa el adjunto
@@ -135,6 +191,11 @@ se adjuntan en las sesiones de asistentes; los shells normales reciben texto.
 | Atajo | Acción |
 |---|---|
 | `Ctrl+V` (configurable) | Pegar texto o adjuntar una imagen en Claude Code y Codex |
+| `Ctrl+K` | Paleta de comandos |
+| `Ctrl+Shift+K` | Buscar proyectos y sesiones en la barra lateral |
+| `Ctrl+Shift+S` | Dividir o unir terminales |
+| `Ctrl+Alt+O` | Enfocar el otro panel |
+| `Ctrl+Shift+R` | Recuperar una conversación |
 | `Ctrl+T` | Nueva sesión del perfil predeterminado en el proyecto activo |
 | `Ctrl+Shift+T` | Nueva terminal (shell limpio) |
 | `Ctrl+W` | Cerrar pestaña |
@@ -146,6 +207,9 @@ se adjuntan en las sesiones de asistentes; los shells normales reciben texto.
 | `Ctrl+,` | Ajustes |
 | `Ctrl+Shift+L` | Alternar entre modo claro y oscuro |
 | `Ctrl+Shift+E` | Abrir el proyecto en el explorador |
+
+`Ctrl+1…9` mantiene la selección de sesiones; `Ctrl+Shift+V` sigue disponible
+como pegado alternativo. `Ctrl+C`, `Ctrl+D` y `Ctrl+Z` se reservan para el shell.
 
 ## 📝 Notas
 

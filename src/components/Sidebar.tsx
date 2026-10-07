@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { clamp, normalizeText } from "../api";
 import { useHoverReveal } from "../hooks/useHoverReveal";
-import { MOD_LABEL } from "../platform";
+import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
 import { projectSections, sessionGroups } from "../sidebarGroups";
@@ -41,6 +41,7 @@ type Props = {
   activeTabId: string | null;
   /** Texto del buscador de proyectos. */
   search: string;
+  shortcuts: ShortcutBindings;
   /** Modo que está pintado ahora mismo (resuelve "system"). */
   themeMode: ThemeMode;
   /** Campo de búsqueda: el atajo Ctrl+K enfoca este input desde App. */
@@ -72,6 +73,7 @@ export default function Sidebar({
   tabs,
   activeTabId,
   search,
+  shortcuts,
   themeMode,
   searchInputRef,
   onSearchChange,
@@ -145,8 +147,8 @@ export default function Sidebar({
   const claudeMissing = claudeInfo !== null && !claudeInfo.found;
   const goesToLight = themeMode === "dark";
   const themeTitle = goesToLight
-    ? "Cambiar a modo claro (Ctrl+Shift+L)"
-    : "Cambiar a modo oscuro (Ctrl+Shift+L)";
+    ? `Cambiar a modo claro (${shortcutLabel(shortcuts.toggleTheme)})`
+    : `Cambiar a modo oscuro (${shortcutLabel(shortcuts.toggleTheme)})`;
   const query = search.trim();
   const noResults = projects.length === 0 && query.length > 0;
 
@@ -195,7 +197,7 @@ export default function Sidebar({
             />
             {search.length === 0 && (
               <span className="kbd search-kbd" aria-hidden="true">
-                {MOD_LABEL} K
+                {shortcutLabel(shortcuts.focusSearch)}
               </span>
             )}
           </div>
@@ -308,7 +310,7 @@ export default function Sidebar({
             <button
               type="button"
               className="icon-btn sidebar-footer-control tip"
-              data-tip={`Ajustes (${MOD_LABEL} ,)`}
+              data-tip={`Ajustes (${shortcutLabel(shortcuts.toggleSettings)})`}
               aria-label="Ajustes"
               onClick={onOpenSettings}
             >

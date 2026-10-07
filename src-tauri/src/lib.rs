@@ -6,6 +6,7 @@ mod config;
 mod pty;
 mod output_flow;
 mod clipboard;
+mod conversations;
 mod terminal_env;
 
 use config::AppConfig;
@@ -263,12 +264,19 @@ async fn save_config(app: AppHandle, config: AppConfig) -> Result<AppConfig, Str
 
 // --- Arranque ---------------------------------------------------------------
 
+#[tauri::command]
+async fn desktop_notification(app: AppHandle, title: String, body: String) -> Result<(),String> {
+    use tauri_plugin_notification::NotificationExt;
+    tauri::async_runtime::spawn_blocking(move || app.notification().builder().title(title).body(body).show().map_err(|e| format!("No se pudo mostrar el aviso del escritorio: {e}"))).await.map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
@@ -284,6 +292,9 @@ pub fn run() {
             load_config,
             save_config,
             clipboard::read_clipboard,
+            clipboard::paste_clipboard_image,
+            conversations::list_conversations,
+            desktop_notification,
         ])
         .on_window_event(|window, event| {
             // Al cerrarse la ventana principal se terminan todas las sesiones.

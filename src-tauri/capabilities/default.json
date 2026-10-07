@@ -20,6 +20,8 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-message",
-    "dialog:allow-confirm"
+    "dialog:allow-confirm",
+    "core:window:allow-is-focused",
+    "notification:default"
   ]
 }

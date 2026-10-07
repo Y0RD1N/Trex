@@ -45,6 +45,7 @@ import type {
   PersistedTab,
   Project,
   Settings,
+  Conversation,
   TabKind,
   TabState,
 } from "./types";
@@ -61,6 +62,15 @@ import { sessionLabel } from "./sessionTitle";
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, restoreLaunch } from "./profiles";
 import { applyDesign } from "./visualDesign";
+import type { ClipboardContent } from "./paste";
+import { resumedLaunch } from "./conversations";
+import { showDesktopNotice } from "./desktopNotifications";
+import { visibleSplit, type SplitLayout } from "./splitLayout";
+import SplitDivider from "./components/SplitDivider";
+import CommandPalette from "./components/CommandPalette";
+import RecoverConversations from "./components/RecoverConversations";
+import FeatureDialog from "./components/FeatureDialog";
+import type { PaletteCommand } from "./commandPalette";
 import { useNotificationSound } from "./hooks/useNotificationSound";
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
@@ -82,6 +92,7 @@ const buildTab = (
   profile: LauncherProfile | null = null,
 ): TabState => {
   return {
+    conversationId: null,
     id: newSessionId(),
     projectId,
     kind,
@@ -110,6 +121,18 @@ function AppShell() {
   const [settingsInitialSection, setSettingsInitialSection] = useState<"appearance" | "profiles">("appearance");
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen,setPaletteOpen] = useState(false);
+  const [recoveryOpen,setRecoveryOpen] = useState(false);
+  const [imagePreview,setImagePreview] = useState<{ image: Extract<ClipboardContent,{kind:"image"}>; tabId:string; resolve:(paste:boolean)=>void } | null>(null);
+  const imagePreviewRef = useRef(imagePreview); imagePreviewRef.current = imagePreview;
+  const previewImage = useCallback((image: Extract<ClipboardContent,{kind:"image"}>,tabId:string): Promise<boolean> => new Promise(resolve => {
+    imagePreviewRef.current?.resolve(false);
+    const preview = { image, tabId, resolve };
+    imagePreviewRef.current = preview;
+    setImagePreview(preview);
+  }),[]);
+  const dismissImage = useCallback((paste:boolean) => { imagePreviewRef.current?.resolve(paste); imagePreviewRef.current = null; setImagePreview(null); },[]);
+  useEffect(() => () => { imagePreviewRef.current?.resolve(false); },[]);
   const settingsPresence = usePresence(settingsOpen ? true : null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null);
@@ -140,7 +163,7 @@ function AppShell() {
     setToast({ id: toastIdRef.current, message });
   }, []);
 
-  /** Ctrl+K (⌘K): lleva el foco al buscador de proyectos desde cualquier sitio. */
+  /** Lleva el foco al buscador de proyectos desde cualquier sitio. */
   const focusSearch = useCallback(() => {
     setConfig((prev) => prev ? { ...prev, ui: { ...prev.ui, sidebarCollapsed: false } } : prev);
     const input = searchInputRef.current;
@@ -224,9 +247,11 @@ function AppShell() {
   // Títulos OSC y códigos de salida son estado transitorio. Solo los campos
   // restaurables deben reprogramar la escritura del archivo de configuración.
   const persistedTabsKey = JSON.stringify(tabs.map<PersistedTab>((tab) => ({
+    id:tab.id,
     projectId: tab.projectId,
     kind: tab.kind,
     subtitle: tab.subtitle,
+    conversationId:tab.conversationId,
     launch: { profileId: tab.profileId, profileName: tab.profileName, command: tab.command, args: tab.args,
       shell: tab.shell, launchMode: tab.launchMode, env: tab.env },
   })));
@@ -296,7 +321,7 @@ function AppShell() {
       // Recrea las pestañas de la sesión anterior (mismo proyecto y comando).
       const restored = persisted.map((tab) => {
         const launch = restoreLaunch(tab, settings);
-        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch };
+        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch, id:tab.id ?? newSessionId(), conversationId:tab.conversationId ?? null };
       });
       setTabs(restored);
       // Proyecto activo: el persistido si tiene pestañas restauradas; si no, el de la primera.
@@ -304,7 +329,9 @@ function AppShell() {
         fallbackProjectId && restored.some((tab) => tab.projectId === fallbackProjectId)
           ? fallbackProjectId
           : restored[0].projectId;
+      const savedSplit = config.ui.splitLayouts[preferredProject];
       const preferredTab =
+        restored.find((tab) => tab.projectId === preferredProject && tab.id === savedSplit?.first) ??
         restored.find((tab) => tab.projectId === preferredProject) ?? restored[0];
       setActiveTabId(preferredTab.id);
       setActiveProject(preferredProject);
@@ -350,6 +377,28 @@ function AppShell() {
     () => (activeProjectId ? tabs.filter((tab) => tab.projectId === activeProjectId) : []),
     [tabs, activeProjectId],
   );
+  const split = visibleSplit(activeProjectId ? config?.ui.splitLayouts[activeProjectId] ?? null : null,projectTabs.map(tab => tab.id),activeTabId);
+  const updateSplit = useCallback((layout: SplitLayout | null) => {
+    setConfig(previous => {
+      if (!previous?.ui.activeProjectId) return previous;
+      const splitLayouts = { ...previous.ui.splitLayouts };
+      if (layout) splitLayouts[previous.ui.activeProjectId] = layout; else delete splitLayouts[previous.ui.activeProjectId];
+      return { ...previous,ui:{ ...previous.ui,splitLayouts } };
+    });
+  },[]);
+  const toggleSplit = useCallback(() => {
+    const current = configRef.current, active = activeTabIdRef.current;
+    if (!current?.ui.activeProjectId || !active) return;
+    const ids = tabsRef.current.filter(tab => tab.projectId === current.ui.activeProjectId).map(tab => tab.id);
+    if (visibleSplit(current.ui.splitLayouts[current.ui.activeProjectId] ?? null,ids,active)) { updateSplit(null); return; }
+    const other = ids.find(id => id !== active);
+    if (!other) { showToast("Abre otra sesión de este proyecto para dividir la terminal."); return; }
+    updateSplit({ first:active,second:other,direction:"columns",ratio:0.5 });
+  },[showToast,updateSplit]);
+  const focusOtherPane = useCallback(() => { if (split) setActiveTabId(activeTabIdRef.current === split.first ? split.second : split.first); },[split]);
+  useEffect(() => {
+    if (split && activeProjectId && config?.ui.splitLayouts[activeProjectId]?.first !== split.first) updateSplit(split);
+  },[split?.first,activeProjectId,updateSplit]);
 
   // Si la pestaña activa no es del proyecto visible, activamos la última suya.
   useEffect(() => {
@@ -517,7 +566,7 @@ function AppShell() {
 
   // --- Pestañas ---------------------------------------------------------------
 
-  const openTab = useCallback((projectId: string, profileId: string | null) => {
+  const openTab = useCallback((projectId: string, profileId: string | null, conversation?: Conversation) => {
     const currentConfig = configRef.current;
     if (!currentConfig) return;
     const settings = currentConfig.settings;
@@ -533,6 +582,7 @@ function AppShell() {
       sameKind.length === 0 ? base : `${base} ${sameKind.length + 1}`;
 
     const tab = buildTab(projectId, profile?.provider ?? "shell", subtitle, settings, profile ?? null);
+    if (conversation && profile) { Object.assign(tab,resumedLaunch(tab,profile.provider,conversation.id)); tab.conversationId = conversation.id; tab.subtitle = conversation.title; }
     // Actualiza el espejo al instante para numerar bien aperturas seguidas.
     const nextTabs = [...tabsRef.current, tab];
     tabsRef.current = nextTabs;
@@ -653,6 +703,8 @@ function AppShell() {
       sessionName: sessionLabel(tab), projectName: project.name, provider: tab.kind, kind, createdAt: Date.now(), read: false };
     setNotices(previous => [notice, ...previous].slice(0, 50));
     void playNotificationSound();
+    const settings = configRef.current?.settings;
+    if (settings) void showDesktopNotice(notice,settings).catch(error => console.warn("Notificación del escritorio:",formatError(error)));
   }, [playNotificationSound]);
 
   const openNotice = useCallback((notice: AgentNotice) => {
@@ -763,6 +815,10 @@ function AppShell() {
         if (projectId) openTab(projectId, null);
       },
       focusSearch,
+      commandPalette: () => setPaletteOpen(true),
+      recoverSessions: () => { if (configRef.current?.ui.activeProjectId) setRecoveryOpen(true); },
+      toggleSplit,
+      focusOtherPane,
       toggleSidebar,
       toggleTopBar,
       closeTab: closeActiveTab,
@@ -782,7 +838,7 @@ function AppShell() {
       decreaseFont: () => changeFontSize(-1),
       resetFont: resetFontSize,
     },
-    { enabled: config !== null, settingsOpen },
+    { enabled: config !== null, settingsOpen, modalOpen: paletteOpen || recoveryOpen || imagePreview !== null, bindings:config?.settings.shortcuts },
   );
 
   // --- Datos derivados para la interfaz ---------------------------------------------
@@ -807,6 +863,20 @@ function AppShell() {
   const standardClaude = preferredProfile.provider === "claude" && preferredProfile.command === "claude";
   const claudeMissing = standardClaude && claudeInfo !== null && !claudeInfo.found;
   const hasProjects = config.projects.length > 0;
+  const paletteCommands: PaletteCommand[] = [
+    {id:"split",label:split ? "Unir terminales" : "Dividir terminales",group:"Acciones",shortcut:config.settings.shortcuts.toggleSplit,run:toggleSplit,disabled:!activeProject || projectTabs.length<2},
+    {id:"rotate",label:"Cambiar división horizontal / vertical",group:"Acciones",run:()=>{if(split) updateSplit({...split,direction:split.direction === "columns" ? "rows" : "columns"});},disabled:!split},
+    {id:"recover",label:"Recuperar conversación",group:"Acciones",shortcut:config.settings.shortcuts.recoverSessions,run:()=>setRecoveryOpen(true),disabled:!activeProject},
+    {id:"settings",label:"Abrir ajustes",group:"Acciones",shortcut:config.settings.shortcuts.toggleSettings,run:openSettings},
+    {id:"theme",label:"Cambiar tema claro / oscuro",group:"Acciones",shortcut:config.settings.shortcuts.toggleTheme,run:toggleTheme},
+    {id:"sidebar",label:"Mostrar / ocultar barra lateral",group:"Acciones",shortcut:config.settings.shortcuts.toggleSidebar,run:toggleSidebar},
+    {id:"folder",label:"Abrir carpeta del proyecto",group:"Acciones",run:()=>{if(activeProject) revealProject(activeProject.id);},disabled:!activeProject},
+    {id:"add",label:"Añadir proyecto",group:"Acciones",run:()=>void addProject()},
+    {id:"shell",label:"Nueva terminal",group:"Crear sesión",shortcut:config.settings.shortcuts.newShellTab,run:()=>{if(activeProject)openTab(activeProject.id,null);},disabled:!activeProject},
+    ...config.settings.profiles.map(profile=>({id:`profile-${profile.id}`,label:`Nueva sesión · ${profile.name}`,detail:profile.command,group:"Crear sesión",run:()=>{if(activeProject)openTab(activeProject.id,profile.id);},disabled:!activeProject})),
+    ...config.projects.map(project=>({id:`project-${project.id}`,label:project.name,detail:project.path,group:"Proyectos",run:()=>{setSearch("");selectProject(project.id);}})),
+    ...tabs.map(tab=>({id:`tab-${tab.id}`,label:sessionLabel(tab),detail:config.projects.find(project=>project.id===tab.projectId)?.name,group:"Sesiones abiertas",run:()=>{setSearch("");selectProject(tab.projectId);setActiveTabId(tab.id);}})),
+  ];
 
   return (
     <div className="app">
@@ -820,6 +890,7 @@ function AppShell() {
         tabs={tabs}
         activeTabId={activeTabId}
         search={search}
+        shortcuts={config.settings.shortcuts}
         themeMode={themeMode}
         searchInputRef={searchInputRef}
         onSearchChange={setSearch}
@@ -865,6 +936,12 @@ function AppShell() {
           }}
           onOpenSettings={openSettings}
           onOpenProfiles={openProfiles}
+          onCommandPalette={() => setPaletteOpen(true)}
+          onRecover={() => setRecoveryOpen(true)}
+          onToggleSplit={toggleSplit}
+          splitActive={split !== null}
+          canSplit={projectTabs.length > 1}
+          shortcuts={config.settings.shortcuts}
           notices={notices}
           soundEnabled={config.ui.notificationSound}
           liveTabIds={liveTabIds}
@@ -884,17 +961,24 @@ function AppShell() {
         )}
 
         {hasProjects ? (
-          <div className="terminals">
+          <div className={`terminals${split ? ` split-${split.direction}` : ""}`}>
             {tabs.map((tab) => {
               const project = config.projects.find((item) => item.id === tab.projectId);
               if (!project) return null;
               const isActive = tab.id === activeTabId && tab.projectId === activeProjectId;
+              const isVisible = tab.projectId === activeProjectId && (split ? tab.id === split.first || tab.id === split.second : isActive);
+              const first = split?.first === tab.id;
+              const paneStyle = split && isVisible ? split.direction === "columns" ? (first ? {right:`calc(${(1-split.ratio)*100}% + var(--terminal-gap) / 2)`} : {left:`calc(${split.ratio*100}% + var(--terminal-gap) / 2)`}) : (first ? {bottom:`calc(${(1-split.ratio)*100}% + var(--terminal-gap) / 2)`} : {top:`calc(${split.ratio*100}% + var(--terminal-gap) / 2)`}) : {};
               return (
                 <div
                   key={tab.id}
-                  className="terminal-host"
-                  style={{ display: isActive ? "block" : "none" }}
+                  className={`terminal-host${split && isVisible ? " split-pane" : ""}${isActive ? " focused-pane" : ""}`}
+                  style={{ display: isVisible ? "block" : "none",...paneStyle }}
+                  onPointerDownCapture={() => { if(isVisible) setActiveTabId(tab.id); }}
                 >
+                  {split && isVisible && <div className="split-pane-header"><select aria-label={first ? "Sesión del primer panel" : "Sesión del segundo panel"} value={tab.id} onChange={event => { const id=event.currentTarget.value; updateSplit({...split,[first?"first":"second"]:id});setActiveTabId(id); }}>
+                    {projectTabs.map(item=><option key={item.id} value={item.id} disabled={item.id===(first?split.second:split.first)}>{sessionLabel(item)}</option>)}
+                  </select><button className="icon-btn" aria-label="Cambiar orientación de los paneles" data-tip="Alternar lado a lado / arriba y abajo" onClick={()=>updateSplit({...split,direction:split.direction==="columns"?"rows":"columns"})}>↔</button><button className="icon-btn" aria-label="Unir terminales" data-tip="Volver a una terminal" onClick={()=>updateSplit(null)}>▢</button></div>}
                   <TerminalView
                     sessionId={tab.id}
                     cwd={project.path}
@@ -906,7 +990,9 @@ function AppShell() {
                     launchLabel={tab.profileName}
                     kind={tab.kind}
                     settings={config.settings}
-                    visible={isActive}
+                    visible={isVisible}
+                    focused={isActive}
+                    onImagePreview={previewImage}
                     onExit={handleTabExit}
                     onTitle={handleTabTitle}
                     onActivity={handleTabActivity}
@@ -917,6 +1003,7 @@ function AppShell() {
                 </div>
               );
             })}
+            {split && <SplitDivider layout={split} onChange={updateSplit} />}
 
             {activeProject && projectTabs.length === 0 && (
               <ProjectHome
@@ -964,6 +1051,15 @@ function AppShell() {
       {toast && (
         <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />
       )}
+      {paletteOpen && <CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)} />}
+      {recoveryOpen && activeProject && <RecoverConversations project={activeProject} settings={config.settings} onClose={()=>setRecoveryOpen(false)} onResume={(profile,conversation)=>{
+        setRecoveryOpen(false); const existing=tabs.find(tab=>!tab.exited && tab.profileId===profile.id && tab.conversationId===conversation.id);
+        if(existing) setActiveTabId(existing.id); else { try { openTab(activeProject.id,profile.id,conversation); } catch(error) { showToast(formatError(error)); } }
+      }} />}
+      {imagePreview && <FeatureDialog title="Vista previa de la captura" onClose={()=>dismissImage(false)} footer={<><button className="btn btn-ghost" onClick={()=>dismissImage(false)}>Cancelar</button><button className="btn btn-primary" onClick={()=>dismissImage(true)}>Pegar imagen</button></>}>
+        {imagePreview.image.preview ? <img className="clipboard-preview" src={imagePreview.image.preview} alt="Captura que se adjuntará al asistente" /> : <p>No se pudo mostrar la vista previa.</p>}
+        <p className="feature-hint">{imagePreview.image.width} × {imagePreview.image.height} px · {sessionLabel(tabs.find(tab=>tab.id===imagePreview.tabId) ?? {subtitle:"Sesión",oscTitle:null,kind:"shell"})}</p><p className="feature-hint">Se adjunta a la sesión. El mensaje se envía cuando pulses Enter en el asistente.</p>
+      </FeatureDialog>}
     </div>
   );
 }

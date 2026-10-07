@@ -10,7 +10,10 @@ import CursorSettings from "./CursorSettings";
 import WorkspaceAppearance from "./WorkspaceAppearance";
 import { applyDesign, normalizeDesign } from "../visualDesign";
 import { profilesError } from "../profiles";
-import { DEFAULT_PASTE_SHORTCUT, normalizePasteShortcut, pasteShortcutError, shortcutFromEvent } from "../paste";
+import { parseShortcut } from "../paste";
+import { bindingError } from "../shortcuts";
+import ShortcutSettings from "./ShortcutSettings";
+import NotificationsSettings from "./NotificationsSettings";
 import "./SettingsPanel.css";
 
 type Props = {
@@ -30,7 +33,8 @@ const SECTIONS = [
   { id: "appearance", label: "Apariencia", icon: <SunIcon size={16} />, description: "Elige el tema y el color de tu espacio." },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon size={16} />, description: "Personaliza el texto, el cursor y la terminal." },
   { id: "cursor", label: "Cursor", icon: <span className="settings-cursor-nav" aria-hidden="true">▏</span>, description: "Ajusta la forma, el grosor y el parpadeo del cursor de texto." },
-  { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, description: "Elige cómo pegar en tus terminales." },
+  { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, description: "Personaliza las combinaciones del teclado." },
+  { id: "notifications", label: "Notificaciones", icon: <InfoIcon size={16} />, description: "Avisos del escritorio cuando tus asistentes necesitan atención." },
   { id: "profiles", label: "Asistentes", icon: <span className="settings-claude-mark">✳</span>, description: "Perfiles independientes para Claude Code y Codex." },
   { id: "sessions", label: "Sesiones", icon: <PanelIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
   { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
@@ -45,8 +49,6 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
   const [terminalAdvanced, setTerminalAdvanced] = useState(false);
   const [scrollbackText, setScrollbackText] = useState(String(settings.scrollback));
   const [copied, setCopied] = useState(false);
-  const [recordingShortcut, setRecordingShortcut] = useState(false);
-  const [shortcutCaptureError, setShortcutCaptureError] = useState<string | null>(null);
   const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 680px), (max-height: 560px)").matches);
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -85,7 +87,7 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
   const scrollback = Number(scrollbackText);
   const validHistory = scrollbackText.trim() !== "" && Number.isInteger(scrollback) && scrollback >= 200 && scrollback <= 200000;
   const profileError = profilesError(draft.profiles);
-  const shortcutError = pasteShortcutError(draft.pasteShortcut);
+  const shortcutError = bindingError(draft.shortcuts,draft.pasteShortcut);
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(settings) || scrollback !== settings.scrollback,
     [draft, settings, scrollback]);
   const patch = (partial: Partial<Settings>): void => setDraft(previous => ({ ...previous, ...partial }));
@@ -140,7 +142,7 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
       launchMode: draft.launchMode === "inject" ? "inject" : "arg",
       appearance: normalizeAppearance(draft.appearance),
       ...normalizeDesign(draft),
-      pasteShortcut: normalizePasteShortcut(draft.pasteShortcut),
+      pasteShortcut: parseShortcut(draft.pasteShortcut)!,
     });
   };
 
@@ -180,20 +182,6 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
     }).catch(() => setCopied(false));
   };
 
-  const recordPasteShortcut = (event: KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === "Tab") return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.key === "Escape") { setRecordingShortcut(false); event.currentTarget.blur(); return; }
-    if (event.nativeEvent.getModifierState("AltGraph")) { setShortcutCaptureError("AltGr se reserva para escribir caracteres."); return; }
-    if (["Control", "Alt", "Shift", "Meta"].includes(event.key) || event.repeat || event.nativeEvent.isComposing) return;
-    const candidate = shortcutFromEvent(event.nativeEvent);
-    const error = candidate ? pasteShortcutError(candidate) : "Usa una combinación con Ctrl, Alt o Meta, o Mayús+Insert.";
-    setShortcutCaptureError(error);
-    if (!candidate || error) return;
-    patch({ pasteShortcut: candidate });
-    setRecordingShortcut(false);
-  };
 
   return (
     <div className={`modal-backdrop settings-backdrop${entering ? " entering" : ""}${leaving ? " leaving" : ""}`}
@@ -290,26 +278,9 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
                 appInfo={appInfo} claudeInfo={claudeInfo} codexInfo={codexInfo} onRedetect={onRedetect}
                 onChange={(profiles, defaultProfileId) => patch({ profiles, defaultProfileId })} />}
 
-              {item.id === "shortcuts" && <>
-                <SettingField label="Pegar texto e imágenes" hint="Haz clic en el campo y pulsa la combinación que quieras usar en Claude Code, Codex y las terminales." controlId={`${id}-paste-shortcut`} stacked>
-                  <input id={`${id}-paste-shortcut`} className={`input settings-shortcut-input${recordingShortcut ? " recording" : ""}`}
-                    data-shortcut-recorder readOnly value={recordingShortcut ? "Pulsa tu nuevo atajo…" : draft.pasteShortcut}
-                    aria-describedby={`${id}-paste-shortcut-hint ${id}-paste-shortcut-error`}
-                    onFocus={() => setRecordingShortcut(true)} onClick={() => setRecordingShortcut(true)}
-                    onBlur={() => setRecordingShortcut(false)} onKeyDown={recordPasteShortcut} />
-                </SettingField>
-                <p id={`${id}-paste-shortcut-error`} className="settings-shortcut-error" role="status">{shortcutCaptureError ?? shortcutError}</p>
-                <div className="settings-shortcut-actions">
-                  <button type="button" className="btn btn-ghost" disabled={draft.pasteShortcut === DEFAULT_PASTE_SHORTCUT && !shortcutCaptureError}
-                    onClick={() => { patch({ pasteShortcut: DEFAULT_PASTE_SHORTCUT }); setShortcutCaptureError(null); setRecordingShortcut(false); }}>Restablecer Ctrl+V</button>
-                  <span className="settings-note">Predeterminado: <kbd>Ctrl+V</kbd></span>
-                </div>
-                <div className="settings-block settings-paste-info">
-                  <h4>Un atajo para los dos asistentes</h4>
-                  <p className="settings-note">Pega texto o adjunta capturas en Claude Code y Codex, tanto en Windows como en Linux. Las terminales sin asistente reciben texto.</p>
-                  <p className="settings-note">Ctrl+Shift+V también permite pegar. El cambio se aplica a las terminales abiertas al guardar.</p>
-                </div>
-              </>}
+              {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
+              {item.id === "notifications" && <NotificationsSettings settings={draft} onChange={patch} />}
+              {item.id === "terminal" && <SettingToggle label="Revisar capturas antes de pegarlas" hint="Muestra la imagen y permite confirmarla o cancelar. El texto se pega directamente con el mismo atajo." checked={draft.imagePastePreview} onChange={imagePastePreview=>patch({imagePastePreview})} />}
 
               {item.id === "sessions" && <div className="settings-toggles">
                 <SettingToggle label="Iniciar un asistente al abrir trex" hint="Si no hay sesiones para restaurar, abre el perfil predeterminado. Si lo desactivas, abre una terminal normal." checked={draft.autoRunClaude} onChange={autoRunClaude => patch({ autoRunClaude })} />

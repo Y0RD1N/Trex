@@ -1,0 +1,350 @@
+//! Recuperación local de conversaciones; no ejecuta los CLI ni envía mensajes.
+use serde::Serialize;
+use serde_json::Value;
+use std::{
+    collections::HashMap,
+    fs,
+    io::{BufRead, BufReader, Read},
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
+};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Conversation {
+    pub id: String,
+    pub provider: String,
+    pub title: String,
+    pub cwd: String,
+    pub updated_at: u64,
+}
+pub fn valid_id(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+}
+fn home() -> PathBuf {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+fn root(provider: &str, dir: &str) -> PathBuf {
+    if dir == "~" {
+        return home();
+    }
+    if let Some(rest) = dir.strip_prefix("~/").or_else(|| dir.strip_prefix("~\\")) {
+        return home().join(rest);
+    }
+    if !dir.trim().is_empty() {
+        return PathBuf::from(dir);
+    }
+    let variable = if provider == "codex" {
+        "CODEX_HOME"
+    } else {
+        "CLAUDE_CONFIG_DIR"
+    };
+    std::env::var_os(variable)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            home().join(if provider == "codex" {
+                ".codex"
+            } else {
+                ".claude"
+            })
+        })
+}
+fn same_path(a: &str, b: &str) -> bool {
+    let normalize = |value: &str| {
+        let path = value.replace('\\', "/").trim_end_matches('/').to_string();
+        if cfg!(windows) {
+            path.to_lowercase()
+        } else {
+            path
+        }
+    };
+    normalize(a) == normalize(b)
+}
+fn clean_title(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(160)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+fn files(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, u64)>) {
+    if depth > 4 || out.len() >= 20_000 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() && entry.file_name() != "subagents" {
+            files(&entry.path(), depth + 1, out);
+        } else if kind.is_file() && entry.path().extension().is_some_and(|ext| ext == "jsonl") {
+            let modified = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|t| t.as_millis() as u64)
+                .unwrap_or(0);
+            out.push((entry.path(), modified));
+        }
+        if out.len() >= 20_000 {
+            break;
+        }
+    }
+}
+fn metadata(path: &Path, provider: &str, cwd: &str, updated_at: u64) -> Option<Conversation> {
+    let reader = BufReader::new(fs::File::open(path).ok()?.take(512 * 1024));
+    let mut id = String::new();
+    let mut directory = String::new();
+    let mut title = String::new();
+    for line in reader.lines().take(80).flatten() {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if provider == "codex" && value["type"] == "session_meta" {
+            let payload = &value["payload"];
+            id = payload["id"]
+                .as_str()
+                .or_else(|| payload["session_id"].as_str())
+                .unwrap_or("")
+                .to_string();
+            directory = payload["cwd"].as_str().unwrap_or("").to_string();
+            title = payload["title"]
+                .as_str()
+                .map(clean_title)
+                .unwrap_or_default();
+            break;
+        }
+        if provider == "claude" {
+            if value["isSidechain"] == true {
+                return None;
+            }
+            if directory.is_empty() {
+                directory = value["cwd"].as_str().unwrap_or("").to_string();
+            }
+            if id.is_empty() {
+                id = value["sessionId"].as_str().unwrap_or("").to_string();
+            }
+            if value["type"] == "custom-title" {
+                title = value["customTitle"]
+                    .as_str()
+                    .map(clean_title)
+                    .unwrap_or_default();
+            }
+            if value["type"] == "user" && title.is_empty() {
+                let content = &value["message"]["content"];
+                let text = content.as_str().or_else(|| {
+                    content.as_array().and_then(|blocks| {
+                        blocks.iter().find_map(|block| {
+                            if block["type"] == "text" {
+                                block["text"].as_str()
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                });
+                if let Some(text) = text.filter(|text| !text.starts_with('<')) {
+                    title = clean_title(text);
+                }
+            }
+            if !directory.is_empty() && !same_path(&directory, cwd) {
+                return None;
+            }
+        }
+    }
+    if !valid_id(&id) || !same_path(&directory, cwd) {
+        return None;
+    }
+    if title.is_empty() {
+        title = format!("Conversación · {}", &id[..8]);
+    }
+    Some(Conversation {
+        id,
+        provider: provider.to_string(),
+        title,
+        cwd: directory,
+        updated_at,
+    })
+}
+pub fn list(provider: &str, config_dir: &str, cwd: &str) -> Result<Vec<Conversation>, String> {
+    if !["claude", "codex"].contains(&provider) {
+        return Err("Proveedor desconocido.".into());
+    }
+    if !Path::new(cwd).is_dir() {
+        return Err("La carpeta del proyecto no existe.".into());
+    }
+    let root = root(provider, config_dir);
+    let mut candidates = Vec::new();
+    files(
+        &root.join(if provider == "codex" {
+            "sessions"
+        } else {
+            "projects"
+        }),
+        0,
+        &mut candidates,
+    );
+    candidates.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
+    let mut titles = HashMap::new();
+    if provider == "codex" {
+        if let Ok(file) = fs::File::open(root.join("session_index.jsonl")) {
+            for line in BufReader::new(file.take(4 * 1024 * 1024)).lines().flatten() {
+                if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                    if let (Some(id), Some(name)) =
+                        (value["id"].as_str(), value["thread_name"].as_str())
+                    {
+                        titles.insert(id.to_string(), clean_title(name));
+                    }
+                }
+            }
+        }
+    }
+    let mut sessions = HashMap::new();
+    for (path, time) in candidates.into_iter().take(2000) {
+        if let Some(mut conversation) = metadata(&path, provider, cwd, time) {
+            if let Some(title) = titles.get(&conversation.id) {
+                conversation.title = title.clone();
+            }
+            sessions
+                .entry(conversation.id.clone())
+                .or_insert(conversation);
+        }
+    }
+    let mut result: Vec<_> = sessions.into_values().collect();
+    result.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+    result.truncate(100);
+    Ok(result)
+}
+#[tauri::command]
+pub async fn list_conversations(
+    provider: String,
+    config_dir: String,
+    cwd: String,
+) -> Result<Vec<Conversation>, String> {
+    tauri::async_runtime::spawn_blocking(move || list(&provider, &config_dir, &cwd))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn ids_cannot_contain_shell_commands_or_paths() {
+        assert!(valid_id("550e8400-e29b-41d4-a716-446655440000"));
+        for id in [
+            "",
+            "../../secrets",
+            "550e8400-e29b-41d4-a716-44665544000;",
+            "550e8400xe29bx41d4xa716x446655440000",
+        ] {
+            assert!(!valid_id(id));
+        }
+    }
+    #[test]
+    fn metadata_limits_sessions_to_the_project_and_skips_subagents() {
+        let path = std::env::temp_dir().join(format!("trex-resume-{}.jsonl", std::process::id()));
+        fs::write(&path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"550e8400-e29b-41d4-a716-446655440000\",\"cwd\":\"/work/project\"}}\n").unwrap();
+        assert!(metadata(&path, "codex", "/work/project", 1).is_some());
+        assert!(metadata(&path, "codex", "/work/another", 1).is_none());
+        fs::write(&path,"{\"type\":\"user\",\"isSidechain\":true,\"sessionId\":\"550e8400-e29b-41d4-a716-446655440000\",\"cwd\":\"/work/project\"}\n").unwrap();
+        assert!(metadata(&path, "claude", "/work/project", 1).is_none());
+        let _ = fs::remove_file(path);
+    }
+    #[test]
+    fn recovery_reads_each_profile_without_mixing_projects_or_subagents() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp =
+            std::env::temp_dir().join(format!("trex-history-test-{}-{stamp}", std::process::id()));
+        let project = temp.join("project with spaces");
+        let other = temp.join("another project");
+        let claude = temp.join("claude account");
+        let codex = temp.join("codex account");
+        for dir in [
+            &project,
+            &other,
+            &claude.join("projects/example/subagents"),
+            &codex.join("sessions/2026/10/07"),
+        ] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let write = |path: PathBuf, values: Vec<Value>| {
+            let text = values
+                .into_iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            fs::write(path, format!("malformed JSON\n{text}\n{{truncated")).unwrap();
+        };
+        write(
+            claude.join("projects/example/conversation.jsonl"),
+            vec![
+                serde_json::json!({"type":"user","sessionId":id,"cwd":project,"message":{"content":[{"type":"image"},{"type":"text","text":"Primera consulta"}]}}),
+                serde_json::json!({"type":"custom-title","customTitle":"Diseño de terminales"}),
+            ],
+        );
+        write(
+            claude.join("projects/example/subagents/agent.jsonl"),
+            vec![
+                serde_json::json!({"type":"user","sessionId":"650e8400-e29b-41d4-a716-446655440000","cwd":project}),
+            ],
+        );
+        write(
+            claude.join("projects/example/other.jsonl"),
+            vec![
+                serde_json::json!({"type":"user","sessionId":"750e8400-e29b-41d4-a716-446655440000","cwd":other}),
+            ],
+        );
+        write(
+            codex.join("sessions/2026/10/07/conversation.jsonl"),
+            vec![serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":project}})],
+        );
+        fs::write(
+            codex.join("session_index.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({"id":id,"thread_name":"Pruebas del portapapeles"})
+            ),
+        )
+        .unwrap();
+        let cwd = project.to_str().unwrap();
+        let claude_sessions = list("claude", claude.to_str().unwrap(), cwd).unwrap();
+        let codex_sessions = list("codex", codex.to_str().unwrap(), cwd).unwrap();
+        assert_eq!(claude_sessions.len(), 1);
+        assert_eq!(codex_sessions.len(), 1);
+        assert_eq!(claude_sessions[0].title, "Diseño de terminales");
+        assert_eq!(codex_sessions[0].title, "Pruebas del portapapeles");
+        assert_eq!(claude_sessions[0].provider, "claude");
+        assert_eq!(codex_sessions[0].provider, "codex");
+        assert!(
+            list("codex", temp.join("empty account").to_str().unwrap(), cwd)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(list("unknown", codex.to_str().unwrap(), cwd).is_err());
+        assert!(temp.is_absolute() && temp.starts_with(std::env::temp_dir()));
+        fs::remove_dir_all(&temp).unwrap();
+    }
+}

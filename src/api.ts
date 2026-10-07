@@ -5,9 +5,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { initialProfiles, normalizeLaunch, normalizeProfiles } from "./profiles";
-import { DEFAULT_PASTE_SHORTCUT, normalizePasteShortcut, type ClipboardContent } from "./paste";
+import { DEFAULT_PASTE_SHORTCUT, parseShortcut, type ClipboardContent } from "./paste";
 import { DEFAULT_CURSOR_STYLE, DEFAULT_CURSOR_WIDTH, normalizeCursorStyle, normalizeCursorWidth } from "./cursor";
 import { normalizeDesign } from "./visualDesign";
+import { normalizeShortcuts, bindingError, keyError } from "./shortcuts";
+import { clampSplitRatio, type SplitLayout } from "./splitLayout";
+import { validConversationId } from "./conversations";
 import type {
   AppConfig,
   AppInfo,
@@ -145,6 +148,10 @@ export const DEFAULT_SETTINGS: Settings = {
   cursorWidth: DEFAULT_CURSOR_WIDTH,
   copyOnSelect: false,
   pasteShortcut: DEFAULT_PASTE_SHORTCUT,
+  shortcuts: normalizeShortcuts({}, DEFAULT_PASTE_SHORTCUT),
+  imagePastePreview: true,
+  desktopNotifications: true,
+  notifyWhenFocused: false,
   confirmCloseTab: true,
   restoreOnStart: true,
   launchMode: "arg",
@@ -160,6 +167,7 @@ const DEFAULT_UI: UiStateExtended = {
   sidebarCollapsed: false,
   notificationSound: true,
   autoHideTopBar: true,
+  splitLayouts: {},
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -341,6 +349,9 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   const root = asRecord(raw) ?? {};
   const settingsRaw = asRecord(root.settings) ?? {};
   const uiRaw = asRecord(root.ui) ?? {};
+  let pasteShortcut = typeof settingsRaw.pasteShortcut === "string" && !keyError(settingsRaw.pasteShortcut,true) ? parseShortcut(settingsRaw.pasteShortcut)! : DEFAULT_PASTE_SHORTCUT;
+  let shortcuts = normalizeShortcuts(settingsRaw.shortcuts, pasteShortcut);
+  if (bindingError(shortcuts,pasteShortcut)) { pasteShortcut = DEFAULT_PASTE_SHORTCUT; shortcuts = normalizeShortcuts(settingsRaw.shortcuts,pasteShortcut); }
 
   const settings: Settings = {
     profiles: [],
@@ -364,7 +375,11 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     cursorStyle: normalizeCursorStyle(settingsRaw.cursorStyle),
     cursorWidth: normalizeCursorWidth(settingsRaw.cursorWidth),
     copyOnSelect: asBool(settingsRaw.copyOnSelect, DEFAULT_SETTINGS.copyOnSelect),
-    pasteShortcut: normalizePasteShortcut(settingsRaw.pasteShortcut),
+    pasteShortcut,
+    shortcuts,
+    imagePastePreview: asBool(settingsRaw.imagePastePreview, true),
+    desktopNotifications: asBool(settingsRaw.desktopNotifications, true),
+    notifyWhenFocused: asBool(settingsRaw.notifyWhenFocused, false),
     confirmCloseTab: asBool(settingsRaw.confirmCloseTab, DEFAULT_SETTINGS.confirmCloseTab),
     restoreOnStart: asBool(settingsRaw.restoreOnStart, DEFAULT_SETTINGS.restoreOnStart),
     launchMode: asString(settingsRaw.launchMode, DEFAULT_SETTINGS.launchMode),
@@ -409,10 +424,15 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
       const subtitle = asString(rec.subtitle, "").trim() || kind;
       const launch = normalizeLaunch(rec.launch, kind);
       if (rec.launch != null && !launch) continue;
-      lastTabs.push({ projectId, kind, subtitle, launch });
+      lastTabs.push({ id: typeof rec.id === "string" && /^t-[a-z0-9-]+$/i.test(rec.id) ? rec.id : undefined, projectId, kind, subtitle, launch, conversationId: validConversationId(rec.conversationId) ? rec.conversationId : null });
     }
   }
 
+  const splitLayouts: Record<string,SplitLayout> = {};
+  for (const [projectId,value] of Object.entries(asRecord(uiRaw.splitLayouts) ?? {})) {
+    const layout = asRecord(value);
+    if (layout && typeof layout.first === "string" && typeof layout.second === "string" && layout.first !== layout.second) splitLayouts[projectId] = { first:layout.first, second:layout.second, direction:layout.direction === "rows" ? "rows" : "columns", ratio:clampSplitRatio(asNumber(layout.ratio,0.5)) };
+  }
   const ui: UiStateExtended = {
     lastProjectId: asNullableString(uiRaw.lastProjectId),
     activeProjectId: asNullableString(uiRaw.activeProjectId),
@@ -426,6 +446,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
       520,
     ),
     lastTabs,
+    splitLayouts,
   };
 
   return {

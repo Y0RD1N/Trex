@@ -1,0 +1,41 @@
+name: Windows and Linux checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Rust toolchain
+        run: rustup update stable --no-self-update
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Frontend tests
+        run: npm test
+      - name: Build frontend
+        run: npm run build
+      - name: Native backend tests
+        run: cargo +stable test --locked --manifest-path src-tauri/Cargo.toml --lib

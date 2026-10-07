@@ -1,12 +1,12 @@
 import type { TabKind } from "./types";
 
 export const DEFAULT_PASTE_SHORTCUT = "Ctrl+V";
-export type ClipboardContent = { kind: "text"; text: string } | { kind: "image" };
+export type ClipboardContent = { kind: "text"; text: string } | { kind: "image"; preview?: string; width?: number; height?: number; fingerprint?: string };
 type KeyEvent = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "altKey" | "shiftKey" | "metaKey" | "isComposing">;
 const MODIFIERS = ["Ctrl", "Alt", "Shift", "Meta"] as const;
-const SPECIAL_KEYS = ["Insert", "Delete", "Home", "End", "PageUp", "PageDown", "Space"];
+const SPECIAL_KEYS = ["Insert", "Delete", "Home", "End", "PageUp", "PageDown", "Space", "Tab", ",", "Equal", "Minus", "Slash"];
 
-function parseShortcut(value: string): string | null {
+export function parseShortcut(value: string): string | null {
   const parts = value.split("+").map(part => part.trim());
   const rawKey = parts.pop() ?? "";
   const key = /^[a-z0-9]$/i.test(rawKey) ? rawKey.toUpperCase()
@@ -43,13 +43,15 @@ export function shortcutFromEvent(event: KeyEvent): string | null {
   if (event.isComposing) return null;
   const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3)
     : /^Digit[0-9]$/.test(event.code) ? event.code.slice(5)
+    : event.code === "Equal" || event.code === "Minus" || event.code === "Slash" ? event.code
     : event.key === " " ? "Space" : event.key;
   const modifiers = MODIFIERS.filter(modifier => ({ Ctrl: event.ctrlKey, Alt: event.altKey, Shift: event.shiftKey, Meta: event.metaKey })[modifier]);
   return parseShortcut([...modifiers, key].join("+"));
 }
 
 export function matchesPasteShortcut(event: KeyEvent, shortcut: string): boolean {
-  return shortcutFromEvent(event) === normalizePasteShortcut(shortcut);
+  const parsed = parseShortcut(shortcut);
+  return parsed !== null && shortcutFromEvent(event) === parsed;
 }
 
 export type PasteAction = { kind: "text"; text: string } | { kind: "key"; data: string } | { kind: "unsupported" };

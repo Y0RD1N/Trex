@@ -11,7 +11,6 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useHoverReveal } from "../hooks/useHoverReveal";
-import { MOD_LABEL } from "../platform";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { AgentNotice, LauncherProfile, TabState } from "../types";
 import { FolderIcon, PanelIcon, PlusIcon, TerminalIcon } from "./Icons";
@@ -21,6 +20,7 @@ import DropdownMenu from "./DropdownMenu";
 import AgentIcon from "./AgentIcon";
 import ProfileMenuItems from "./ProfileMenuItems";
 import NotificationCenter from "./NotificationCenter";
+import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 
 /** Alto de la barra en px: `--header-h` (42) más el borde de la ventana. */
 const TOP_BAR_HEIGHT = 43;
@@ -42,6 +42,12 @@ type Props = {
   onNewShell: () => void;
   onOpenSettings: () => void;
   onOpenProfiles: () => void;
+  onCommandPalette: () => void;
+  onRecover: () => void;
+  onToggleSplit: () => void;
+  splitActive: boolean;
+  canSplit: boolean;
+  shortcuts: ShortcutBindings;
   notices: AgentNotice[];
   soundEnabled: boolean;
   liveTabIds: Set<string>;
@@ -55,6 +61,7 @@ type Props = {
 export default function TerminalTabs({
   tabs, activeTabId, projectName, hasProject, sidebarCollapsed, profiles, defaultProfileId,
   onToggleSidebar, autoHideTopBar, onToggleTopBar, onRevealProject, onNew, onNewShell, onOpenSettings, onOpenProfiles,
+  onCommandPalette,onRecover,onToggleSplit,splitActive,canSplit,shortcuts,
   notices, soundEnabled, liveTabIds, onOpenNotice, onMarkNoticesRead, onClearNotices, onToggleSound, onPreviewSound,
 }: Props) {
   const [menu, setMenu] = useState<FloatingAnchor | null>(null);
@@ -87,6 +94,8 @@ export default function TerminalTabs({
       </div>
 
       <div className="session-create">
+        <button type="button" className="icon-btn tip tip-below" aria-label="Paleta de comandos" data-tip={`Paleta de comandos (${shortcutLabel(shortcuts.commandPalette)})`} onClick={onCommandPalette}>⌕</button>
+        <button type="button" className={`icon-btn tip tip-below${splitActive ? " active" : ""}`} aria-label={splitActive ? "Unir terminales" : "Dividir terminales"} data-tip={`${splitActive ? "Unir" : "Dividir"} terminales (${shortcutLabel(shortcuts.toggleSplit)})`} disabled={!canSplit && !splitActive} onClick={onToggleSplit}>◫</button>
         <button
           ref={menuButtonRef}
           type="button"
@@ -111,9 +120,10 @@ export default function TerminalTabs({
             <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onNewShell(); }}>
               <span className="context-icon" aria-hidden="true"><TerminalIcon size={16} /></span>
               Nueva terminal
-              <span className="kbd">{MOD_LABEL} ⇧ T</span>
+              <span className="kbd">{shortcutLabel(shortcuts.newShellTab)}</span>
             </button>
             <div className="context-sep" role="separator" />
+            <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => {setMenu(null);onRecover();}}>Recuperar conversación…<span className="kbd">{shortcutLabel(shortcuts.recoverSessions)}</span></button>
             <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onOpenProfiles(); }}>Configurar perfiles…</button>
           </DropdownMenu>
         }
@@ -122,7 +132,7 @@ export default function TerminalTabs({
       <button
         type="button"
         className="window-btn panel-toggle tip tip-below"
-        data-tip={`${sidebarCollapsed ? "Mostrar" : "Ocultar"} barra lateral (${MOD_LABEL}+B)`}
+        data-tip={`${sidebarCollapsed ? "Mostrar" : "Ocultar"} barra lateral (${shortcutLabel(shortcuts.toggleSidebar)})`}
         aria-label={sidebarCollapsed ? "Mostrar barra lateral" : "Ocultar barra lateral"}
         aria-expanded={!sidebarCollapsed}
         onClick={onToggleSidebar}

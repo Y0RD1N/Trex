@@ -3,6 +3,8 @@
  * Los nombres de campo viajan tal cual en camelCase a través de `invoke`.
  */
 import type { ColorScheme, MotionPreference } from "./visualDesign";
+import type { ShortcutBindings } from "./shortcuts";
+import type { SplitLayout } from "./splitLayout";
 
 /** Forma en la que el backend lanza un asistente dentro del PTY. */
 export type LaunchMode = "arg" | "inject";
@@ -77,6 +79,10 @@ export type Settings = {
   copyOnSelect: boolean;
   /** Atajo común para pegar texto e imágenes en las terminales. */
   pasteShortcut: string;
+  shortcuts: ShortcutBindings;
+  imagePastePreview: boolean;
+  desktopNotifications: boolean;
+  notifyWhenFocused: boolean;
   confirmCloseTab: boolean;
   restoreOnStart: boolean;
   launchMode: string;
@@ -110,13 +116,16 @@ export type UiStateExtended = UiState & {
   notificationSound: boolean;
   /** La barra superior se esconde sola y reaparece al acercar el cursor al borde. */
   autoHideTopBar: boolean;
+  splitLayouts: Record<string,SplitLayout>;
 };
 
 export type PersistedTab = {
+  id?: string;
   projectId: string;
   kind: TabKind;
   subtitle: string;
   launch?: SessionLaunch;
+  conversationId?: string | null;
 };
 
 export type AppConfig = {
@@ -191,6 +200,7 @@ export type SpawnRequest = {
 
 /** Pestaña viva en la interfaz (estado de React, no persistido tal cual). */
 export type TabState = SessionLaunch & {
+  conversationId: string | null;
   /** Id único de la sesión PTY (también identifica la pestaña). */
   id: string;
   projectId: string;
@@ -212,3 +222,5 @@ export type PtyDataPayload = { data: string };
 
 /** Payload del evento `pty-exit-<id>`. */
 export type PtyExitPayload = { code: number | null };
+
+export type Conversation = { id: string; provider: AgentProvider; title: string; cwd: string; updatedAt: number };
