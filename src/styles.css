@@ -2369,7 +2369,7 @@ body.dragging-sidebar .sidebar {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-create { position: relative; }
+.session-create { position: relative; display: flex; align-items: center; gap: 4px; }
 .context-menu.session-create-menu {
   min-width: min(290px, var(--floating-max-width, calc(100vw - 16px)));
 }
