@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from "react";
 import DropdownMenu from "./DropdownMenu";
 import { CheckIcon, ChevronIcon } from "./Icons";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
@@ -17,10 +17,15 @@ type Props = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "value" | "onChange" 
   options: SelectOption[];
   onChange: (value: string) => void;
   placeholder?: string;
+  align?: "start" | "end";
+  /** Clase extra del menú desplegable. */
+  menuClassName?: string;
+  /** Al cambiar, el menú se abre sin pulsar el botón. */
+  openSignal?: number;
 };
 
 /** Selector con el mismo menú, teclado y tema en Windows y Linux. */
-export default function Select({ value, options, onChange, placeholder = "Elegir…", className = "", disabled, ...buttonProps }: Props) {
+export default function Select({ value, options, onChange, placeholder = "Elegir…", className = "", disabled, align, menuClassName = "", openSignal = 0, ...buttonProps }: Props) {
   const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
@@ -34,6 +39,8 @@ export default function Select({ value, options, onChange, placeholder = "Elegir
       setAnchor({ element: triggerRef.current });
     }
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (openSignal) open(); }, [openSignal]);
   const choose = (option: SelectOption): void => {
     setAnchor(null);
     triggerRef.current?.focus({ preventScroll: true });
@@ -56,8 +63,8 @@ export default function Select({ value, options, onChange, placeholder = "Elegir
       <span className="select-value">{selected?.label ?? placeholder}</span>
       <ChevronIcon size={14} />
     </button>
-    <DropdownMenu id={menuId} anchor={anchor} triggerRef={triggerRef} label={label} focusSelected
-      className="select-menu" onClose={() => setAnchor(null)}
+    <DropdownMenu id={menuId} anchor={anchor} triggerRef={triggerRef} label={label} focusSelected align={align}
+      className={`select-menu ${menuClassName}`.trim()} onClose={() => setAnchor(null)}
       style={{ "--select-width": `${menuWidth}px` } as CSSProperties}>
       {options.map((option, index) => <div className="select-option-group" key={option.value}>
         {option.group && (index === 0 || options[index - 1].group !== option.group) &&

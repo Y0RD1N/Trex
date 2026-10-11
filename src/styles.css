@@ -2221,22 +2221,21 @@ body.dragging-sidebar .sidebar {
 .project-disclosure svg { transition: transform var(--dur-layout) var(--ease-layout); }
 .project-disclosure.expanded svg { transform: rotate(90deg); }
 .project-disclosure:hover { color: var(--text); }
+.project-disclosure:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 0; }
 .project-menu-btn { width: 22px; height: 22px; border-radius: 4px; opacity: 0; }
 .project-item:hover .project-menu-btn, .project-item:focus-within .project-menu-btn { opacity: 1; }
+/* Las sesiones se revelan sin moverse: crece el hueco y aparecen con un
+   fundido que empieza despacio, para que la fila no asome recortada como una
+   franja ni dé un saltito al colocarse. */
 .project-sessions {
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
-  transition: grid-template-rows var(--dur-layout) var(--ease-layout), opacity var(--dur) var(--ease-out);
+  transition: grid-template-rows var(--dur-layout) var(--ease-layout), opacity 220ms cubic-bezier(0.45, 0, 0.55, 1);
 }
 .project-sessions.expanded { grid-template-rows: 1fr; opacity: 1; }
 .project-sessions-clip { min-height: 0; overflow: hidden; }
-.project-sessions-inner {
-  padding: 1px 0 3px;
-  transform: translateY(-4px);
-  transition: transform var(--dur-layout) var(--ease-layout);
-}
-.project-sessions.expanded .project-sessions-inner { transform: none; }
+.project-sessions-inner { padding: 1px 0 3px; }
 .session-row {
   display: flex;
   align-items: center;
@@ -2694,6 +2693,45 @@ body.dragging-sidebar .sidebar {
 }
 :root[data-theme="light"] .bar-slot.auto-hide.shown .tabs-bar {
   box-shadow: 0 16px 32px -20px rgba(60, 45, 30, 0.32), 0 5px 12px -10px rgba(60, 45, 30, 0.2);
+}
+
+/* --- Marco de cristal negro ----------------------------------------------------
+   En oscuro, la barra lateral y el hueco alrededor de la sesión son una sola
+   lámina de cristal negro con luces suaves detrás: el acento arriba y un azul
+   frío abajo. Colapsada, la barra (y la barra superior autoocultable) flota
+   sobre la sesión y difumina de verdad lo que tiene debajo. */
+:root[data-theme="dark"] .app {
+  position: relative;
+  isolation: isolate;
+  background: #0a0a0c;
+}
+:root[data-theme="dark"] .app::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(560px 380px at -80px -60px, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%),
+    radial-gradient(520px 420px at -40px 108%, rgba(90, 110, 255, 0.08), transparent 70%);
+}
+:root[data-theme="dark"] :is(.sidebar, .main, .terminals, .sidebar-footer, .tabs-bar) {
+  background: transparent;
+}
+:root[data-theme="dark"] .sidebar-inner {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.014), rgba(255, 255, 255, 0) 40%), rgba(8, 8, 10, 0.3);
+  -webkit-backdrop-filter: blur(28px) saturate(125%);
+  backdrop-filter: blur(28px) saturate(125%);
+  border-right-color: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .sidebar.collapsed .sidebar-inner,
+:root[data-theme="dark"] .bar-slot.auto-hide .tabs-bar {
+  background: rgba(8, 8, 10, 0.74);
+  -webkit-backdrop-filter: blur(24px) saturate(125%);
+  backdrop-filter: blur(24px) saturate(125%);
+}
+:root[data-theme="dark"] .sidebar.collapsed.peek .sidebar-inner {
+  border-right-color: rgba(255, 255, 255, 0.07);
 }
 
 @media (prefers-reduced-motion: reduce) {

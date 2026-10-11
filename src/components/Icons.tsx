@@ -288,3 +288,61 @@ export function SoundIcon({ size = 16, strokeWidth = 1.7, muted = false }: IconP
     {muted ? <path d="m16 9 5 6m0-6-5 6" /> : <><path d="M15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14" /></>}
   </svg>;
 }
+
+// --- Chat -------------------------------------------------------------------
+
+export function ArrowUpIcon({ size = 16, strokeWidth = 2 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 19V5m-6 6 6-6 6 6" /></svg>;
+}
+
+export function ArrowDownIcon({ size = 16, strokeWidth = 1.8 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 5v14m6-6-6 6-6-6" /></svg>;
+}
+
+export function StopIcon({ size = 14 }: IconProps) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" /></svg>;
+}
+
+export function FileIcon({ size = 15, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z" /><path d="M14 3.5v5h5M8.5 13h7M8.5 16.5h5" /></svg>;
+}
+
+export function GlobeIcon({ size = 15, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5c-2.3-2.4-3.4-5.2-3.4-8.5S9.7 5.9 12 3.5Z" /></svg>;
+}
+
+export function SparkIcon({ size = 15, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 3.5 13.9 9l5.6 2-5.6 2-1.9 5.5-1.9-5.5-5.6-2 5.6-2Z" /><path d="M18.5 3.5v3M17 5h3" /></svg>;
+}
+
+export function ListIcon({ size = 15, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M9 6.5h11M9 12h11M9 17.5h11" /><path d="m3.8 6.4 1.2 1.2 2-2.2M3.8 11.9 5 13.1l2-2.2" /><circle cx="5.2" cy="17.5" r="1" /></svg>;
+}
+
+export function MapIcon({ size = 15, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="m9 4.5-5.5 2v13l5.5-2 6 2 5.5-2v-13l-5.5 2Z" /><path d="M9 4.5v13m6-11v13" /></svg>;
+}
+
+export function WrenchIcon({ size = 15, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M14.7 6.3a4 4 0 0 0-5.2 5.2l-5.3 5.3a1.6 1.6 0 0 0 2.3 2.3l5.3-5.3a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.1-.6-.6-2.1Z" /></svg>;
+}
+
+export function ShieldIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 3.5 5 6v5.5c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6Z" /><path d="m9.2 12.2 2 2 3.8-4.1" /></svg>;
+}
+
+export function PaperclipIcon({ size = 16, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="m20 11.5-7.7 7.7a5 5 0 0 1-7.1-7.1l8.1-8.1a3.3 3.3 0 0 1 4.7 4.7l-8 8a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3" /></svg>;
+}
+
+export function QuestionIcon({ size = 15, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><circle cx="12" cy="12" r="8.5" /><path d="M9.6 9.4a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.7" /><circle cx="12" cy="17" r=".6" fill="currentColor" /></svg>;
+}
+
+export function ImageIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><circle cx="9" cy="9.5" r="1.6" /><path d="m20.5 15.5-4.6-4.6-8.9 8.6" /></svg>;
+}
+
+export function BranchIcon({ size = 13, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><circle cx="6.5" cy="5.5" r="2" /><circle cx="6.5" cy="18.5" r="2" /><circle cx="17.5" cy="7.5" r="2" /><path d="M6.5 7.5v9M17.5 9.5c0 4-5 3.5-9.6 7.3" /></svg>;
+}

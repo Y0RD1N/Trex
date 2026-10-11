@@ -2,13 +2,18 @@
 //
 // El backend expone comandos Tauri para gestionar sesiones PTY, detectar
 // Claude Code en el sistema y persistir la configuración del usuario.
+mod agent;
+mod attachments;
 mod config;
 mod pty;
 mod output_flow;
 mod clipboard;
 mod conversations;
+mod files;
+mod git;
 mod terminal_env;
 
+use agent::{AgentSpawnRequest, AgentSpawnResponse, AgentState};
 use config::AppConfig;
 use pty::{ClaudeInfo, PtyState, SessionInfo, SpawnRequest, SpawnResponse};
 use serde::Serialize;
@@ -223,6 +228,26 @@ async fn pty_kill_all(state: State<'_, PtyState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn agent_spawn(
+    app: AppHandle,
+    state: State<'_, AgentState>,
+    request: AgentSpawnRequest,
+) -> Result<AgentSpawnResponse, String> {
+    let emit = agent::tauri_emitter(app, request.id.clone());
+    state.spawn(request, emit)
+}
+
+#[tauri::command]
+async fn agent_write(state: State<'_, AgentState>, id: String, line: String) -> Result<(), String> {
+    state.write_line(&id, &line)
+}
+
+#[tauri::command]
+async fn agent_kill(state: State<'_, AgentState>, id: String) -> Result<(), String> {
+    state.kill(&id)
+}
+
+#[tauri::command]
 async fn detect_claude() -> Result<ClaudeInfo, String> {
     Ok(pty::detect_claude())
 }
@@ -278,6 +303,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())
+        .manage(AgentState::default())
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
@@ -286,6 +312,9 @@ pub fn run() {
             pty_kill,
             pty_list,
             pty_kill_all,
+            agent_spawn,
+            agent_write,
+            agent_kill,
             detect_claude,
             detect_codex,
             app_info,
@@ -294,12 +323,20 @@ pub fn run() {
             clipboard::read_clipboard,
             clipboard::paste_clipboard_image,
             conversations::list_conversations,
+            conversations::read_conversation,
+            attachments::read_image_file,
+            attachments::read_clipboard_image,
+            git::git_branch,
+            files::list_project_files,
             desktop_notification,
         ])
         .on_window_event(|window, event| {
             // Al cerrarse la ventana principal se terminan todas las sesiones.
             if matches!(event, WindowEvent::CloseRequested { .. }) {
                 if let Some(state) = window.try_state::<PtyState>() {
+                    state.kill_all();
+                }
+                if let Some(state) = window.try_state::<AgentState>() {
                     state.kill_all();
                 }
             }

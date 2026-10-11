@@ -9,6 +9,9 @@ export const listConversations = (
   cwd: string,
 ): Promise<Conversation[]> =>
   invoke("list_conversations", { provider, configDir, cwd });
+/** Mensajes guardados de una conversación de Claude Code, para pintarla en el chat. */
+export const readConversation = (configDir: string, id: string): Promise<unknown[]> =>
+  invoke("read_conversation", { configDir, id });
 /** No añade argumentos a perfiles que ya eligen su conversación o ejecutan un modo distinto. */
 export function canResume(
   launch: SessionLaunch,

@@ -233,6 +233,87 @@ pub fn list(provider: &str, config_dir: &str, cwd: &str) -> Result<Vec<Conversat
     result.truncate(100);
     Ok(result)
 }
+/// Texto máximo de cada resultado de herramienta al mostrar el historial.
+const HISTORY_TEXT_LIMIT: usize = 30_000;
+/// Mensajes más recientes que se devuelven de una conversación larga.
+const HISTORY_ENTRIES: usize = 1_500;
+
+fn truncate_text(value: &mut Value) {
+    if let Some(text) = value.as_str() {
+        if text.len() > HISTORY_TEXT_LIMIT {
+            let cut: String = text.chars().take(HISTORY_TEXT_LIMIT).collect();
+            *value = Value::String(format!("{cut}…"));
+        }
+    }
+}
+
+/// Deja solo lo que el chat necesita: sin imágenes en base64 ni archivos completos.
+fn slim_entry(mut value: Value) -> Option<Value> {
+    let kind = value["type"].as_str()?.to_string();
+    if !["user", "assistant"].contains(&kind.as_str()) || value["isSidechain"] == true || value["isMeta"] == true {
+        return None;
+    }
+    if let Some(blocks) = value["message"]["content"].as_array_mut() {
+        for block in blocks.iter_mut() {
+            if block["type"] == "image" {
+                *block = serde_json::json!({ "type": "image" });
+            } else if block["type"] == "tool_result" {
+                truncate_text(&mut block["content"]);
+                if let Some(parts) = block["content"].as_array_mut() {
+                    for part in parts.iter_mut() {
+                        if part["type"] == "image" { *part = serde_json::json!({ "type": "image" }); }
+                        truncate_text(&mut part["text"]);
+                    }
+                }
+            }
+        }
+    }
+    let result = &value["toolUseResult"];
+    let patch = result.get("structuredPatch").map(|patch| serde_json::json!({
+        "filePath": result["filePath"], "structuredPatch": patch,
+    }));
+    Some(serde_json::json!({
+        "type": kind,
+        "uuid": value["uuid"],
+        "timestamp": value["timestamp"],
+        "message": value["message"].take(),
+        "toolUseResult": patch,
+    }))
+}
+
+/// Mensajes de una conversación de Claude Code para mostrarla en el chat.
+pub fn history(config_dir: &str, id: &str) -> Result<Vec<Value>, String> {
+    if !valid_id(id) {
+        return Err("La conversación necesita un identificador válido.".into());
+    }
+    let projects = root("claude", config_dir).join("projects");
+    let file_name = format!("{id}.jsonl");
+    let path = fs::read_dir(&projects)
+        .map_err(|_| "No se encontró el historial de Claude Code.".to_string())?
+        .flatten()
+        .map(|entry| entry.path().join(&file_name))
+        .find(|path| path.is_file())
+        .ok_or_else(|| "No se encontró esta conversación en el equipo.".to_string())?;
+    let file = fs::File::open(&path).map_err(|e| format!("No se pudo abrir el historial: {e}"))?;
+    let mut entries: Vec<Value> = BufReader::new(file.take(96 * 1024 * 1024))
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .filter_map(slim_entry)
+        .collect();
+    if entries.len() > HISTORY_ENTRIES {
+        entries.drain(..entries.len() - HISTORY_ENTRIES);
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn read_conversation(config_dir: String, id: String) -> Result<Vec<Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || history(&config_dir, &id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn list_conversations(
     provider: String,
@@ -346,5 +427,38 @@ mod tests {
         assert!(list("unknown", codex.to_str().unwrap(), cwd).is_err());
         assert!(temp.is_absolute() && temp.starts_with(std::env::temp_dir()));
         fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn history_keeps_the_visible_chat_and_drops_heavy_or_hidden_entries() {
+        let stamp = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let temp = std::env::temp_dir().join(format!("trex-chat-history-{}-{stamp}", std::process::id()));
+        let folder = temp.join("projects/-home-me-app");
+        fs::create_dir_all(&folder).unwrap();
+        let id = "550e8400-e29b-41d4-a716-446655440001";
+        let lines = [
+            serde_json::json!({"type": "mode", "mode": "default"}),
+            serde_json::json!({"type": "user", "uuid": "u1", "message": {"role": "user", "content": [
+                {"type": "text", "text": "hola"}, {"type": "image", "source": {"data": "AAAA"}}]}}),
+            serde_json::json!({"type": "user", "isMeta": true, "message": {"role": "user", "content": "<interno>"}}),
+            serde_json::json!({"type": "assistant", "isSidechain": true, "message": {"content": []}}),
+            serde_json::json!({"type": "assistant", "uuid": "a1", "message": {"id": "m1", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Edit", "input": {}}]}}),
+            serde_json::json!({"type": "user", "uuid": "u2", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "x".repeat(HISTORY_TEXT_LIMIT + 50)}]},
+                "toolUseResult": {"filePath": "/app/a.ts", "originalFile": "enorme", "structuredPatch": [{"lines": ["-a", "+b"]}]}}),
+        ];
+        let text = lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        fs::write(folder.join(format!("{id}.jsonl")), format!("{text}\n{{roto")).unwrap();
+
+        let entries = history(&temp.to_string_lossy(), id).unwrap();
+        fs::remove_dir_all(&temp).unwrap();
+        assert_eq!(entries.iter().map(|e| e["uuid"].as_str().unwrap()).collect::<Vec<_>>(), ["u1", "a1", "u2"]);
+        assert_eq!(entries[0]["message"]["content"][1], serde_json::json!({"type": "image"}));
+        let result = entries[2]["message"]["content"][0]["content"].as_str().unwrap();
+        assert!(result.ends_with('…') && result.chars().count() == HISTORY_TEXT_LIMIT + 1);
+        assert_eq!(entries[2]["toolUseResult"]["filePath"], "/app/a.ts");
+        assert!(entries[2]["toolUseResult"].get("originalFile").is_none());
+        assert!(history(&temp.to_string_lossy(), "../../etc/passwd").is_err());
     }
 }

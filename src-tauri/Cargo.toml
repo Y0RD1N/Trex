@@ -29,6 +29,9 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

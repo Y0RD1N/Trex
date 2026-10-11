@@ -11,6 +11,8 @@ type Props = {
   id?: string;
   style?: CSSProperties;
   focusSelected?: boolean;
+  /** Borde del botón con el que se alinea el menú (por defecto, el final). */
+  align?: "start" | "end";
   onClose: () => void;
   children: ReactNode;
 };
@@ -18,7 +20,7 @@ type Props = {
 const MENU_OPEN_EVENT = "trex:menu-open";
 
 /** Una sola política de posición, cierre y teclado para todos los menús. */
-export default function DropdownMenu({ anchor, triggerRef, label, className = "", id, style, focusSelected = false, onClose, children }: Props) {
+export default function DropdownMenu({ anchor, triggerRef, label, className = "", id, style, focusSelected = false, align = "end", onClose, children }: Props) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -27,8 +29,10 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
   const presence = usePresence(anchor);
   const retainedAnchor = presence.value;
   const position = useFloatingPosition(retainedAnchor, surfaceRef, {
-    align: retainedAnchor && "element" in retainedAnchor ? "end" : "start",
+    align: retainedAnchor && "element" in retainedAnchor ? align : "start",
     gap: retainedAnchor && "element" in retainedAnchor ? 6 : 0,
+    // Al cerrar, el botón puede cambiar de ancho (nuevo valor): el menú se queda quieto mientras se desvanece.
+    frozen: presence.leaving,
   });
 
   useLayoutEffect(() => {

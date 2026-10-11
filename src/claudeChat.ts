@@ -1,0 +1,336 @@
+/**
+ * Protocolo de Claude Code en modo chat (`claude -p` con stream-json).
+ *
+ * El CLI se ejecuta sin terminal: recibe un JSON por línea en stdin y emite
+ * eventos JSON por línea en stdout. Este módulo convierte esos eventos en el
+ * estado común del chat (`chatState`) y construye los mensajes de vuelta. No
+ * toca la interfaz ni el backend, así que se prueba sin Tauri.
+ */
+import {
+  addNotice, baseReducer, choiceAnswers, finalize, initialChatState, list, record, resultText, text,
+  type BaseChatAction, type ChatItem, type ChatState, type DiffLine, type Json, type ModelInfo, type OutgoingImage, type QuestionChoice,
+} from "./chatState";
+import { parseClaudeAgents, parseClaudeCommands } from "./chatCommands";
+
+export type ChatAction =
+  | BaseChatAction
+  | { type: "line"; event: unknown; now: number }
+  | { type: "history"; entries: unknown[] }
+  | { type: "catalog"; models: unknown; permissionMode?: unknown; commands?: unknown; agents?: unknown }
+  | { type: "applied"; model?: unknown; effort?: unknown };
+
+// --- Mensajes hacia el CLI ----------------------------------------------------
+
+/** Opciones que convierten el CLI en un proceso de chat por stdin/stdout. */
+export function claudeChatFlags(profileArgs: string | null, conversationId: string | null,
+  choices: { model?: string | null; effort?: string | null; mode?: string | null } = {}): string[] {
+  const flags = [
+    "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+    "--include-partial-messages",
+    // Los permisos y las preguntas con opciones llegan como peticiones que el chat responde.
+    "--permission-prompt-tool", "stdio",
+  ];
+  const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
+  if (conversationId && !choosesConversation) flags.push("--resume", conversationId);
+  // Al reanudar el proceso se conserva lo que se eligió en el chat.
+  if (choices.model) flags.push("--model", choices.model);
+  if (choices.effort) flags.push("--effort", choices.effort);
+  const choosesMode = /(^|\s)(--permission-mode|--dangerously-skip-permissions)(\s|=|$)/.test(profileArgs ?? "");
+  if (choices.mode && choices.mode !== "manual" && PERMISSION_MODES.has(choices.mode) && !choosesMode) flags.push("--permission-mode", choices.mode);
+  return flags;
+}
+
+export function userMessageLine(text: string, images: OutgoingImage[] = []): string {
+  const content = images.length
+    ? [...images.map(image => ({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } })),
+      ...(text ? [{ type: "text", text }] : [])]
+    : text;
+  return JSON.stringify({ type: "user", message: { role: "user", content } });
+}
+
+export const controlLine = (requestId: string, request: Json): string =>
+  JSON.stringify({ type: "control_request", request_id: requestId, request });
+
+export function permissionLine(requestId: string, allowed: boolean, input: Json, remember: unknown[] = []): string {
+  const response = allowed
+    ? { behavior: "allow", updatedInput: input, ...(remember.length ? { updatedPermissions: remember } : {}) }
+    : { behavior: "deny", message: "El usuario denegó este permiso." };
+  return JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: requestId, response } });
+}
+
+export const controlErrorLine = (requestId: string, error: string): string =>
+  JSON.stringify({ type: "control_response", response: { subtype: "error", request_id: requestId, error } });
+
+// --- Lectura de eventos -------------------------------------------------------
+
+/** Diff legible a partir del parche que devuelve Edit/Write. */
+export function patchLines(patch: unknown): DiffLine[] | null {
+  const hunks = list(patch);
+  if (!hunks.length) return null;
+  const lines: DiffLine[] = [];
+  hunks.forEach((hunk, index) => {
+    if (index > 0) lines.push({ kind: "gap", text: "…" });
+    for (const line of list(record(hunk)?.lines)) {
+      const value = text(line);
+      lines.push(value.startsWith("+") ? { kind: "add", text: value.slice(1) }
+        : value.startsWith("-") ? { kind: "del", text: value.slice(1) } : { kind: "ctx", text: value.slice(1) });
+    }
+  });
+  return lines;
+}
+
+/** Respuestas en el formato que espera el CLI: pregunta → texto elegido. */
+export function answeredInput(input: Json, choices: QuestionChoice[]): Json {
+  const answers: Record<string, string> = {};
+  for (const choice of choices) {
+    const value = choiceAnswers(choice).join(", ");
+    if (value) answers[choice.question] = value;
+  }
+  return { ...input, answers };
+}
+
+const answerText = (answers: Json): string =>
+  Object.entries(answers).map(([question, answer]) => `${question}\n→ ${text(answer)}`).join("\n\n");
+
+/** Mensajes internos del CLI que no escribió la persona (etiquetas, avisos). */
+const hiddenUserText = (value: string): boolean => {
+  const trimmed = value.trim();
+  return !trimmed || trimmed.startsWith("<") || trimmed.startsWith("Caveat:");
+};
+const interruptedText = (value: string): boolean => /^\[Request interrupted by user/.test(value.trim());
+
+function upsertTool(items: ChatItem[], block: Json): ChatItem[] {
+  const id = text(block.id);
+  const input = record(block.input) ?? {};
+  const index = items.findIndex(item => item.kind === "tool" && item.id === id);
+  if (index === -1) {
+    return [...items, { kind: "tool", id, name: text(block.name) || "Herramienta", input, status: "running", output: null, patch: null }];
+  }
+  const current = items[index];
+  if (current.kind !== "tool") return items;
+  const next = [...items];
+  next[index] = { ...current, name: text(block.name) || current.name, input: Object.keys(input).length ? input : current.input };
+  return next;
+}
+
+/** Bloques de un mensaje del asistente (en directo o desde el historial). */
+function applyAssistant(state: ChatState, message: Json): ChatState {
+  const messageId = text(message.id) || `m-${state.items.length}`;
+  let items = state.items;
+  list(message.content).forEach((raw, index) => {
+    const block = record(raw);
+    if (!block) return;
+    if (block.type === "tool_use") {
+      items = upsertTool(items, block);
+      return;
+    }
+    if (block.type !== "text" && block.type !== "thinking") return;
+    const kind = block.type;
+    const value = kind === "text" ? text(block.text) : text(block.thinking);
+    // Completa el bloque que llegó por partes; si no existe, lo añade.
+    const position = items.findIndex(item => item.kind === kind && item.messageId === messageId && !item.final);
+    if (position !== -1) {
+      const current = items[position] as Extract<ChatItem, { kind: "text" | "thinking" }>;
+      items = [...items];
+      items[position] = { ...current, text: value || current.text, final: true };
+    } else if (value.trim()) {
+      items = [...items, { kind, id: `${messageId}:${kind}:${index}:${items.length}`, messageId, text: value, final: true }];
+    }
+  });
+  return { ...state, items };
+}
+
+/** Resultados de herramientas y mensajes del usuario. */
+function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatState {
+  const message = record(event.message) ?? {};
+  const toolResult = record(event.tool_use_result) ?? record(event.toolUseResult);
+  let items = state.items;
+  const content = typeof message.content === "string" ? [{ type: "text", text: message.content }] : list(message.content);
+  const typed: string[] = [];
+  let images = 0;
+  for (const raw of content) {
+    const block = record(raw);
+    if (!block) continue;
+    if (block.type === "tool_result") {
+      const id = text(block.tool_use_id);
+      const index = items.findIndex(item => item.kind === "tool" && item.id === id);
+      if (index === -1) continue;
+      const current = items[index];
+      if (current.kind !== "tool") continue;
+      items = [...items];
+      const answers = record(toolResult?.answers);
+      items[index] = { ...current, status: block.is_error === true ? "error" : "done",
+        output: answers ? answerText(answers) : resultText(block.content),
+        patch: patchLines(toolResult?.structuredPatch) ?? current.patch };
+    } else if (block.type === "text") {
+      const value = text(block.text);
+      if (interruptedText(value)) {
+        items = [...items, { kind: "notice", id: `n-${items.length}-${text(event.uuid)}`, tone: "info", text: "Detenido. Puedes seguir escribiendo." }];
+      } else if (fromHistory && !hiddenUserText(value)) typed.push(value);
+    } else if (block.type === "image" && fromHistory) images += 1;
+  }
+  if (typed.length || images) {
+    items = [...items, { kind: "user", id: text(event.uuid) || `u-${items.length}`, text: typed.join("\n\n"), images, previews: [] }];
+  }
+  return { ...state, items };
+}
+
+function applyResult(state: ChatState, event: Json, now: number): ChatState {
+  const interrupted = event.subtype === "error_during_execution";
+  let items = finalize(state.items).map(item => item.kind === "tool" && item.status === "running" && interrupted ? { ...item, status: "error" as const } : item);
+  const message = text(event.result) || list(event.errors).map(text).filter(Boolean).join("\n");
+  if (event.is_error === true && !interrupted) {
+    items = [...items, { kind: "notice", id: `e-${items.length}`, tone: "error", text: message || "Claude no pudo completar la respuesta." }];
+  } else if (!interrupted && state.turnStartedAt !== null) {
+    const durationMs = typeof event.duration_ms === "number" ? event.duration_ms : now - state.turnStartedAt;
+    items = [...items, { kind: "turn", id: `t-${items.length}`, durationMs }];
+  }
+  const pendingTurns = state.queuedAfterInterrupt ?? Math.max(0, state.pendingTurns - 1);
+  return {
+    ...state, items, pendingTurns, queuedAfterInterrupt: null,
+    turnStartedAt: pendingTurns > 0 ? now : null,
+    costUsd: typeof event.total_cost_usd === "number" ? event.total_cost_usd : state.costUsd,
+    sessionId: text(event.session_id) || state.sessionId,
+  };
+}
+
+function applyStream(state: ChatState, event: Json): ChatState {
+  const type = event.type;
+  if (type === "message_start") {
+    return { ...state, stream: { messageId: text(record(event.message)?.id) || null, blocks: {} } };
+  }
+  const messageId = state.stream.messageId;
+  const index = typeof event.index === "number" ? event.index : -1;
+  if (!messageId || index < 0) return state;
+  if (type === "content_block_start") {
+    const block = record(event.content_block) ?? {};
+    if (block.type === "tool_use") {
+      const items = upsertTool(state.items, block);
+      return { ...state, items, stream: { messageId, blocks: { ...state.stream.blocks, [index]: text(block.id) } } };
+    }
+    if (block.type !== "text" && block.type !== "thinking") return state;
+    const id = `${messageId}:${block.type}:${index}`;
+    const item: ChatItem = { kind: block.type, id, messageId, text: block.type === "text" ? text(block.text) : text(block.thinking), final: false };
+    return { ...state, items: [...state.items, item], stream: { messageId, blocks: { ...state.stream.blocks, [index]: id } } };
+  }
+  if (type === "content_block_delta") {
+    const delta = record(event.delta) ?? {};
+    const piece = delta.type === "text_delta" ? text(delta.text) : delta.type === "thinking_delta" ? text(delta.thinking) : "";
+    const id = state.stream.blocks[index];
+    if (!piece || !id) return state;
+    const position = state.items.findIndex(item => item.id === id);
+    const current = state.items[position];
+    if (!current || (current.kind !== "text" && current.kind !== "thinking") || current.final) return state;
+    const items = [...state.items];
+    items[position] = { ...current, text: current.text + piece };
+    return { ...state, items };
+  }
+  return state;
+}
+
+const PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto", "manual"]);
+
+function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
+  const event = record(raw);
+  if (!event) return state;
+  // Los subagentes trabajan dentro de su herramienta Task: no se mezclan en el hilo.
+  if (typeof event.parent_tool_use_id === "string") return state;
+  switch (event.type) {
+    case "stream_event":
+      return applyStream(state, record(event.event) ?? {});
+    case "assistant":
+      return applyAssistant(state, record(event.message) ?? {});
+    case "user":
+      return applyUser(state, event, false);
+    case "result":
+      return applyResult(state, event, now);
+    case "system": {
+      if (event.subtype === "init") {
+        return { ...state, sessionId: text(event.session_id) || state.sessionId, model: text(event.model) || state.model,
+          permissionMode: text(event.permissionMode) || state.permissionMode };
+      }
+      if (event.subtype === "status" && typeof event.permissionMode === "string" && PERMISSION_MODES.has(event.permissionMode)) {
+        return { ...state, permissionMode: event.permissionMode };
+      }
+      if (event.subtype === "compact_boundary") {
+        return { ...state, items: [...state.items, { kind: "notice", id: `c-${state.items.length}`, tone: "info", text: "Conversación resumida para liberar contexto." }] };
+      }
+      return state;
+    }
+    case "control_request": {
+      const request = record(event.request) ?? {};
+      if (request.subtype !== "can_use_tool") return state;
+      const id = text(event.request_id);
+      if (!id || state.items.some(item => item.kind === "permission" && item.id === id)) return state;
+      return { ...state, items: [...state.items, {
+        kind: "permission", id, toolName: text(request.tool_name) || "Herramienta",
+        toolUseId: text(request.tool_use_id) || null, input: record(request.input) ?? {},
+        description: text(request.description), suggestions: list(request.permission_suggestions), state: "pending",
+      }] };
+    }
+    case "control_response": {
+      const response = record(record(event.response)?.response) ?? {};
+      if (Array.isArray(response.still_queued)) return { ...state, queuedAfterInterrupt: response.still_queued.length };
+      const mode = text(response.mode);
+      return mode && PERMISSION_MODES.has(mode) ? { ...state, permissionMode: mode } : state;
+    }
+    case "rate_limit_event": {
+      const info = record(event.rate_limit_info) ?? {};
+      if (info.status === "allowed" || info.status === "allowed_warning" || typeof info.status !== "string") return state;
+      const reset = typeof info.resetsAt === "number" ? new Date(info.resetsAt * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+      return { ...state, items: addNotice(state.items, "warn",
+        reset ? `Alcanzaste el límite de uso. Se restablece a las ${reset}.` : "Alcanzaste el límite de uso de tu cuenta.", "r") };
+    }
+    default:
+      return state;
+  }
+}
+
+export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  switch (action.type) {
+    case "line":
+      return applyEvent(state, action.event, action.now);
+    case "history": {
+      let replay: ChatState = { ...initialChatState(), process: state.process };
+      for (const raw of action.entries) {
+        const entry = record(raw);
+        if (entry?.type === "assistant") replay = applyAssistant(replay, record(entry.message) ?? {});
+        else if (entry?.type === "user") replay = applyUser(replay, entry, true);
+      }
+      // Una herramienta sin resultado quedó cortada al cerrar la sesión anterior.
+      const history = finalize(replay.items).map(item => item.kind === "tool" && item.status === "running" ? { ...item, status: "done" as const } : item);
+      // Sustituye un historial anterior en vez de repetirlo.
+      return { ...state, items: [...history, ...state.items.slice(state.historyCount)], historyCount: history.length };
+    }
+    case "catalog": {
+      const models = parseModels(action.models);
+      const mode = text(action.permissionMode);
+      const commands = parseClaudeCommands(action.commands), agents = parseClaudeAgents(action.agents);
+      return { ...state, models: models.length ? models : state.models,
+        commands: commands.length ? commands : state.commands, agents: agents.length ? agents : state.agents,
+        permissionMode: state.permissionMode ?? (PERMISSION_MODES.has(mode) ? mode : null) };
+    }
+    case "applied":
+      return { ...state, model: text(action.model) || state.model, effort: text(action.effort) || state.effort };
+    default:
+      return baseReducer(state, action);
+  }
+}
+
+// --- Catálogo de modelos -----------------------------------------------------
+
+/** Alias del CLI: van en la lista principal; las versiones concretas, aparte. */
+const MAIN_MODELS = ["default", "fable", "opus", "sonnet", "haiku"];
+
+/** Catálogo de modelos de la respuesta a `initialize`. */
+export function parseModels(raw: unknown): ModelInfo[] {
+  return list(raw).map(record).filter((model): model is Json => !!model && typeof model.value === "string" && !!model.value)
+    .map(model => ({
+      value: text(model.value),
+      resolvedModel: text(model.resolvedModel) || text(model.value),
+      displayName: text(model.displayName) || text(model.value),
+      description: text(model.description),
+      efforts: model.supportsEffort === false ? [] : list(model.supportedEffortLevels).filter((level): level is string => typeof level === "string"),
+      featured: MAIN_MODELS.includes(text(model.value)),
+    }));
+}

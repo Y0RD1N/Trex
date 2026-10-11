@@ -3,7 +3,8 @@ import { useLayoutEffect, useState, type RefObject } from "react";
 export type AnchorRect = Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">;
 export type FloatingAnchor = { element: HTMLElement } | { rect: AnchorRect } | { x: number; y: number };
 export type FloatingSide = "top" | "bottom";
-type Options = { side?: FloatingSide; align?: "start" | "center" | "end"; gap?: number; track?: boolean };
+/** `frozen` conserva la última posición: una capa que se desvanece no debe moverse. */
+type Options = { side?: FloatingSide; align?: "start" | "center" | "end"; gap?: number; track?: boolean; frozen?: boolean };
 type Position = { left: number; top: number; origin: string; side: FloatingSide };
 type Measurement = { anchor: FloatingAnchor; surface: HTMLElement; position: Position };
 
@@ -11,13 +12,13 @@ type Measurement = { anchor: FloatingAnchor; surface: HTMLElement; position: Pos
 export function useFloatingPosition(
   anchor: FloatingAnchor | null,
   surfaceRef: RefObject<HTMLElement | null>,
-  { side = "bottom", align = "end", gap = 6, track = false }: Options = {},
+  { side = "bottom", align = "end", gap = 6, track = false, frozen = false }: Options = {},
 ): Position | null {
   const [measurement, setMeasurement] = useState<Measurement | null>(null);
 
   useLayoutEffect(() => {
     if (!anchor) { setMeasurement(null); return; }
-    if (!surfaceRef.current) return;
+    if (!surfaceRef.current || frozen) return;
     const surface = surfaceRef.current;
     const update = (): void => {
       const margin = 8;
@@ -77,7 +78,7 @@ export function useFloatingPosition(
       window.visualViewport?.removeEventListener("resize", update);
       window.visualViewport?.removeEventListener("scroll", update);
     };
-  }, [anchor, surfaceRef, side, align, gap, track]);
+  }, [anchor, surfaceRef, side, align, gap, track, frozen]);
 
   // Una reapertura no debe pintar ni enfocar con las coordenadas de otra capa.
   return measurement?.anchor === anchor && measurement.surface === surfaceRef.current

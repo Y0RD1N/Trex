@@ -18,7 +18,8 @@ export type ShortcutOptions = {
 };
 const editable = (target: EventTarget | null): boolean =>
   target instanceof HTMLElement &&
-  !target.closest(".xterm") &&
+  // La terminal y la caja del chat son el foco habitual: los atajos de la app siguen activos.
+  !target.closest(".xterm, .chat-composer") &&
   (target.isContentEditable ||
     ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 export function useShortcuts(

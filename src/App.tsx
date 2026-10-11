@@ -55,6 +55,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import Sidebar from "./components/Sidebar";
 import TerminalTabs from "./components/TerminalTabs";
 import TerminalView from "./components/TerminalView";
+import ChatView from "./components/ChatView";
 import Toast from "./components/Toast";
 import TooltipProvider from "./components/TooltipProvider";
 import ProjectHome from "./components/ProjectHome";
@@ -64,6 +65,7 @@ import { defaultProfile, launchForProfile, restoreLaunch } from "./profiles";
 import { applyDesign } from "./visualDesign";
 import type { ClipboardContent } from "./paste";
 import { resumedLaunch } from "./conversations";
+import { codexChatSupported } from "./codexChat";
 import { showDesktopNotice } from "./desktopNotifications";
 import { createSplitLayout, replaceSplitPane, splitPaneStyle, visibleSplit, type SplitDirection, type SplitLayout } from "./splitLayout";
 import SplitDivider from "./components/SplitDivider";
@@ -758,6 +760,21 @@ function AppShell() {
     setConfig(previous => previous ? { ...previous, ui: { ...previous.ui, notificationSound: !previous.ui.notificationSound } } : previous);
   }, []);
 
+  /** El chat guarda su conversación para reanudarla al reabrir trex. */
+  const handleConversation = useCallback((tabId: string, conversationId: string) => {
+    setTabs(prev => prev.some(tab => tab.id === tabId && tab.conversationId !== conversationId)
+      ? prev.map(tab => tab.id === tabId ? { ...tab, conversationId } : tab) : prev);
+  }, []);
+
+  /** Como en las apps de chat, la sesión toma el nombre del primer mensaje si no se renombró. */
+  const handleChatTitle = useCallback((tabId: string, title: string) => {
+    setTabs(prev => prev.map(tab => {
+      const name = tab.profileName ?? "";
+      const automatic = !!name && (tab.subtitle === name || (tab.subtitle.startsWith(`${name} `) && /^\d+$/.test(tab.subtitle.slice(name.length + 1))));
+      return tab.id === tabId && title && automatic ? { ...tab, subtitle: title } : tab;
+    }));
+  }, []);
+
   const handleTabTitle = useCallback((tabId: string, title: string) => {
     setTabs((prev) => {
       const tab = prev.find(item => item.id === tabId);
@@ -1023,7 +1040,27 @@ function AppShell() {
                     onSelect={id => selectPaneSession(paneIndex,id)} onNew={profileId => newPaneSession(paneIndex,profileId)}
                     onRotate={() => changeSplit(split.direction === "columns" ? "rows" : "columns")}
                     onSingle={() => { setActiveTabId(tab.id); setExpandedPaneId(paneExpanded ? null : tab.id); }} />}
-                  <TerminalView
+                  {tab.kind !== "shell" && (tab.kind === "claude" || codexChatSupported(tab.args)) ? <ChatView
+                    provider={tab.kind}
+                    sessionId={tab.id}
+                    cwd={project.path}
+                    projectName={project.name}
+                    command={tab.command}
+                    args={tab.args}
+                    shell={tab.shell}
+                    env={tab.env}
+                    conversationId={tab.conversationId}
+                    settings={config.settings}
+                    visible={isVisible}
+                    focused={isActive}
+                    onExit={handleTabExit}
+                    onRunning={handleTabRunning}
+                    onActivity={handleTabActivity}
+                    onNotice={handleAgentNotice}
+                    onConversation={handleConversation}
+                    onTitle={handleChatTitle}
+                    onMessage={showToast}
+                  /> : <TerminalView
                     sessionId={tab.id}
                     cwd={project.path}
                     command={tab.command}
@@ -1043,7 +1080,7 @@ function AppShell() {
                     onRunning={handleTabRunning}
                     onNotice={handleAgentNotice}
                     onMessage={showToast}
-                  />
+                  />}
                 </div>
               );
             })}

@@ -49,6 +49,50 @@ carpeta, con el asistente y el perfil que elijas.
   se redimensionan juntos para evitar separadores duplicados al cambiar de pestaña.
 - **Restauración de sesión**: al reabrir, recupera tus pestañas.
 
+## Claude Code y Codex como chat
+
+Las sesiones de Claude Code y de Codex se abren como una conversación, igual
+que en una app de chat: escribes abajo (`Enter` envía, `Shift+Enter` añade una
+línea) y la respuesta aparece con formato, bloques de código y tablas. Por
+detrás, trex ejecuta tu CLI instalado sin terminal, con la misma cuenta,
+carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
+`codex app-server`.
+
+- **Herramientas**: cada lectura, búsqueda, edición o comando aparece como una
+  fila; al pulsarla ves el diff o la salida. La lista de tareas se muestra
+  como una checklist.
+- **Permisos**: cuando el asistente necesita permiso, aparece una tarjeta con
+  **Permitir**, la opción de permitirlo en la sesión o siempre, y **Denegar**.
+  El selector de la caja de mensaje cambia el modo: Preguntar, Aceptar
+  ediciones o Planificar en Claude; Solo lectura, Automático, Planificar o
+  Acceso total en Codex.
+- **Modelo y esfuerzo**: los selectores muestran los modelos de tu cuenta y
+  solo los niveles de esfuerzo que admite cada uno. En Codex se aplican desde
+  el siguiente mensaje.
+- **Planes**: en modo Planificar, Codex muestra el plan entero con un botón
+  **Implementar el plan**, que vuelve a Automático y lo pone en marcha.
+- **Imágenes**: pega una captura (`Ctrl+V` o tu atajo de pegado), arrástrala a
+  la conversación o usa el clip. Se reducen a 1920 px y se comprimen antes de
+  enviarlas; puedes quitar cualquiera antes de pulsar Enter.
+- **Preguntas**: cuando el asistente necesita que elijas, muestra las opciones
+  como botones con un campo para escribir otra respuesta.
+- **Menciones con `@`**: escribe `@` para buscar archivos y carpetas del
+  proyecto (respeta el `.gitignore`); en Claude también aparecen sus
+  subagentes (`@agent-Explore`). `Tab` entra en una carpeta.
+- **Comandos con `/`**: al principio del mensaje, `/` lista los comandos. En
+  Claude son los de tu Claude Code (`/context`, `/compact`, tus skills…). En
+  Codex, trex ofrece los suyos: `/new`, `/compact`, `/review`, `/init`,
+  `/status` y `/mcp`, y `$` para usar una skill. En los dos, `/model`,
+  `/effort` y `/permissions` abren los selectores y `/clear` (o `/new`) empieza
+  una conversación nueva.
+- **Detener**: `Esc` o el botón cuadrado interrumpen la respuesta en curso. En
+  Codex, lo que escribas mientras trabaja se suma a la respuesta en curso.
+- **Continuar**: la conversación se guarda en el historial del asistente; al
+  reabrir trex o al recuperarla se muestra de nuevo y sigue donde quedó.
+
+Los perfiles de Codex con opciones que solo existen en la terminal (otro
+subcomando, `--profile`, `--remote`…) siguen abriéndose como terminal.
+
 ## Perfiles y varias cuentas
 
 En **Ajustes → Asistentes** puedes añadir, duplicar y nombrar tantos perfiles

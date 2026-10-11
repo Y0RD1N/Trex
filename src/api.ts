@@ -114,6 +114,31 @@ export const ptyKill = (id: string): Promise<number | null> =>
 
 export const ptyList = (): Promise<SessionInfo[]> => invoke<SessionInfo[]>("pty_list");
 
+/** Proceso de un asistente en modo chat: JSON por líneas, sin terminal. */
+export type AgentSpawnRequest = {
+  id: string;
+  cwd: string;
+  command: string;
+  profileArgs: string | null;
+  flags: string[];
+  shell: string;
+  env: Record<string, string> | null;
+};
+
+export const agentSpawn = (request: AgentSpawnRequest): Promise<{ id: string; program: string; viaShell: boolean }> =>
+  invoke("agent_spawn", { request });
+
+export const agentWrite = (id: string, line: string): Promise<void> =>
+  invoke<void>("agent_write", { id, line });
+
+export const agentKill = (id: string): Promise<void> => invoke<void>("agent_kill", { id });
+
+/** Rama de git del proyecto (null si la carpeta no es un repositorio). */
+/** Archivos del proyecto (relativos a su carpeta) para las menciones con `@`. */
+export const listProjectFiles = (cwd: string): Promise<string[]> => invoke<string[]>("list_project_files", { cwd });
+
+export const gitBranch = (cwd: string): Promise<string | null> => invoke<string | null>("git_branch", { cwd });
+
 // --- Eventos ----------------------------------------------------------------
 
 export const listenPtyData = (
@@ -127,6 +152,15 @@ export const listenPtyExit = (
   callback: (payload: PtyExitPayload) => void,
 ): Promise<UnlistenFn> =>
   listen<PtyExitPayload>(`pty-exit-${id}`, (event) => callback(event.payload));
+
+export const listenAgentLine = (id: string, callback: (line: string) => void): Promise<UnlistenFn> =>
+  listen<{ line: string }>(`agent-line-${id}`, (event) => callback(event.payload.line));
+
+export const listenAgentStderr = (id: string, callback: (line: string) => void): Promise<UnlistenFn> =>
+  listen<{ line: string }>(`agent-stderr-${id}`, (event) => callback(event.payload.line));
+
+export const listenAgentExit = (id: string, callback: (code: number | null) => void): Promise<UnlistenFn> =>
+  listen<{ code: number | null }>(`agent-exit-${id}`, (event) => callback(event.payload.code));
 
 // --- Valores por defecto ----------------------------------------------------
 

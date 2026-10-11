@@ -113,13 +113,17 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn is_windows() -> bool {
+pub(crate) fn is_windows() -> bool {
     cfg!(windows)
 }
 
 /// Busca un ejecutable en el PATH (con extensiones en Windows).
 fn which(program: &str) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
+    which_in(program, std::env::var_os("PATH")?)
+}
+
+/// Busca un ejecutable en una lista de carpetas con el formato de PATH.
+pub(crate) fn which_in(program: &str, path: std::ffi::OsString) -> Option<String> {
     let exts: Vec<String> = if is_windows() {
         std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
@@ -198,7 +202,7 @@ fn agent_bin_dirs() -> Vec<String> {
 }
 
 /// Conserva la prioridad del PATH del usuario y añade las carpetas que falten.
-fn enriched_path() -> Option<String> {
+pub(crate) fn enriched_path() -> Option<String> {
     let current = std::env::var("PATH").ok().unwrap_or_default();
     let current_dirs: Vec<_> = std::env::split_paths(&current).collect();
     let extra: Vec<String> = agent_bin_dirs()
@@ -220,7 +224,7 @@ fn enriched_path() -> Option<String> {
     Some(combined.join(if is_windows() { ";" } else { ":" }))
 }
 
-fn expand_config_dir(value: &str) -> String {
+pub(crate) fn expand_config_dir(value: &str) -> String {
     if value.starts_with("~/") || value.starts_with("~\\") {
         if let Some(home) = home_dir() {
             return std::path::Path::new(&home).join(&value[2..]).to_string_lossy().into_owned();
@@ -240,7 +244,7 @@ fn home_dir() -> Option<String> {
 }
 
 /// Convierte una ruta de Windows a su equivalente dentro de WSL (C:\a\b -> /mnt/c/a/b).
-fn windows_path_to_wsl(p: &str) -> Option<String> {
+pub(crate) fn windows_path_to_wsl(p: &str) -> Option<String> {
     let bytes: Vec<char> = p.chars().collect();
     if bytes.len() < 2 || bytes[1] != ':' {
         return None;
@@ -250,22 +254,22 @@ fn windows_path_to_wsl(p: &str) -> Option<String> {
     Some(format!("/mnt/{drive}{rest}"))
 }
 
-struct ResolvedShell {
-    program: String,
+pub(crate) struct ResolvedShell {
+    pub(crate) program: String,
     name: String,
     /// Cómo hay que pasar el comando a este shell.
-    kind: ShellKind,
+    pub(crate) kind: ShellKind,
 }
 
 #[derive(PartialEq)]
-enum ShellKind {
+pub(crate) enum ShellKind {
     PowerShell,
     Cmd,
     Unix,
     Wsl,
 }
 
-fn resolve_shell(shell_id: &str) -> Result<ResolvedShell, String> {
+pub(crate) fn resolve_shell(shell_id: &str) -> Result<ResolvedShell, String> {
     let id = shell_id.trim().to_ascii_lowercase();
     let id = if id.is_empty() { "default".to_string() } else { id };
 
