@@ -1331,8 +1331,10 @@
 .chat-glass-menu .context-item[aria-checked="true"] {
   background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
+.context-menu.chat-glass-menu.leaving .context-item[data-held] { background: var(--glass-menu-hover); }
 .chat-glass-menu .context-item[aria-checked="true"]:hover,
-.chat-glass-menu .context-item[aria-checked="true"]:focus-visible {
+.chat-glass-menu .context-item[aria-checked="true"]:focus-visible,
+.context-menu.chat-glass-menu.leaving .context-item[aria-checked="true"][data-held] {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .context-menu.chat-tray-menu {

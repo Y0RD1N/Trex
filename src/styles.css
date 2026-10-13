@@ -1317,6 +1317,8 @@ body.dragging-sidebar .sidebar {
   transform: scale(.985);
 }
 .motion-popover.leaving { transition-duration: var(--dur-exit); pointer-events: none; }
+/* La opción bajo el cursor o con el foco conserva su resaltado mientras el menú se desvanece. */
+.context-menu.leaving .context-item[data-held] { background: var(--hover); }
 /* El texto mantiene su tamaño y su capa durante toda la apertura en WebKit. */
 .context-menu.motion-popover {
   transform: translateY(0);

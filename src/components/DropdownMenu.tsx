@@ -34,6 +34,17 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
     // Al cerrar, el botón puede cambiar de ancho (nuevo valor): el menú se queda quieto mientras se desvanece.
     frozen: presence.leaving,
   });
+  // Al cerrarse, el menú se desvanece tal como estaba: sin pasar la marca a la
+  // opción recién elegida ni perder el resaltado de la que estaba bajo el cursor.
+  const shownRef = useRef(children);
+  if (!presence.leaving) shownRef.current = children;
+  const heldRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    const held = heldRef.current;
+    if (!presence.leaving || !held) return;
+    held.dataset.held = "";
+    return () => { delete held.dataset.held; };
+  }, [presence.leaving]);
 
   useLayoutEffect(() => {
     if (!anchor) {
@@ -143,10 +154,16 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
         visibility: position ? "visible" : "hidden", transformOrigin: position?.origin,
         "--menu-shift": position?.side === "top" ? "4px" : "-4px" } as CSSProperties}
       onKeyDown={onKeyDown}
+      onPointerOver={event => { heldRef.current = (event.target as Element).closest<HTMLElement>(".context-item"); }}
+      onPointerLeave={() => { heldRef.current = null; }}
+      onFocus={event => {
+        const item = (event.target as Element).closest<HTMLElement>(".context-item");
+        if (item?.matches(":focus-visible")) heldRef.current = item;
+      }}
       onClick={event => event.stopPropagation()}
       onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}
     >
-      {children}
+      {presence.leaving ? shownRef.current : children}
     </div>,
     document.body,
   );

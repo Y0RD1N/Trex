@@ -44,8 +44,10 @@ export function useFloatingPosition(
       const preferredLeft = align === "start" ? rect.left
         : align === "end" ? rect.right - width : (rect.left + rect.right - width) / 2;
       const preferredTop = resolvedSide === "top" ? rect.top - height - gap : rect.bottom + gap;
-      const left = Math.max(leftEdge, Math.min(preferredLeft, rightEdge - width));
-      const top = Math.max(topEdge, Math.min(preferredTop, bottomEdge - height));
+      // Píxeles enteros: con medio píxel, WebKit recoloca la capa al empezar o acabar
+      // una transición y el menú da un salto de 1 px.
+      const left = Math.round(Math.max(leftEdge, Math.min(preferredLeft, rightEdge - width)));
+      const top = Math.round(Math.max(topEdge, Math.min(preferredTop, bottomEdge - height)));
       const horizontalOrigin = Math.max(0, Math.min(width, (rect.left + rect.right) / 2 - left));
       const next: Position = {
         left, top, side: resolvedSide,

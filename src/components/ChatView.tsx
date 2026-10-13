@@ -530,7 +530,8 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           onModel={model => { session.setModel(model); backToInput(); }} openSignal={menuSignal.model} />
         {efforts.length > 0 && <>
           <span className="chat-tray-sep" aria-hidden="true" />
-          <EffortMenu levels={efforts} effort={state.effort} onEffort={session.setEffort} openSignal={menuSignal.effort} />
+          <EffortMenu levels={efforts} effort={state.effort} onEffort={effort => { session.setEffort(effort); backToInput(); }}
+            openSignal={menuSignal.effort} />
         </>}
         <span className="chat-composer-spacer" />
         {usage && <ContextMeter usage={usage} product={agent.product} busy={running || state.process !== "ready"}
