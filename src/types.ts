@@ -117,6 +117,8 @@ export type UiStateExtended = UiState & {
   /** La barra superior se esconde sola y reaparece al acercar el cursor al borde. */
   autoHideTopBar: boolean;
   splitLayouts: Record<string,SplitLayout>;
+  /** Último modo de permisos elegido en un chat de cada asistente: lo heredan los chats nuevos. */
+  chatModes?: Partial<Record<AgentProvider, string>>;
 };
 
 export type PersistedTab = {
@@ -126,6 +128,8 @@ export type PersistedTab = {
   subtitle: string;
   launch?: SessionLaunch;
   conversationId?: string | null;
+  /** Modo de permisos elegido en el chat de la pestaña. */
+  chatMode?: string | null;
 };
 
 export type AppConfig = {
@@ -201,6 +205,8 @@ export type SpawnRequest = {
 /** Pestaña viva en la interfaz (estado de React, no persistido tal cual). */
 export type TabState = SessionLaunch & {
   conversationId: string | null;
+  /** Modo de permisos elegido en el chat (se guarda con la pestaña). */
+  chatMode: string | null;
   /** Id único de la sesión PTY (también identifica la pestaña). */
   id: string;
   projectId: string;

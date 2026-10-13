@@ -7,19 +7,25 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { formatError } from "../api";
 import { readConversation } from "../conversations";
-import { initialChatState, type OutgoingImage, type PermissionItem, type QuestionChoice } from "../chatState";
+import {
+  allowsAll, autoAllowed, initialChatState, needsAnswer, record, type OutgoingImage, type PermissionItem, type QuestionChoice,
+} from "../chatState";
 import { answeredInput, chatReducer, claudeChatFlags, controlErrorLine, controlLine, permissionLine, userMessageLine } from "../claudeChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 
+/** Peticiones propias cuya respuesta hay que atender: datos que guardar o un cambio que deshacer. */
+type Control =
+  | { kind: "initialize" | "settings" | "context" }
+  | { kind: "mode"; permissionMode: string | null; modeChoice: string | null };
+
 export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env, conversationId } = options;
-  const [state, dispatch] = useReducer(chatReducer, undefined, initialChatState);
+  const [state, dispatch] = useReducer(chatReducer, options.mode, initialChatState);
   const stateRef = useRef(state);
   stateRef.current = state;
   const callbacks = useRef(options);
   callbacks.current = options;
-  /** Peticiones propias cuya respuesta trae datos: catálogo de modelos y ajustes en uso. */
-  const pendingControlsRef = useRef(new Map<string, "initialize" | "settings">());
+  const pendingControlsRef = useRef(new Map<string, Control>());
   /** Tras empezar una conversación nueva, la de la pestaña ya no se reanuda. */
   const freshRef = useRef(false);
 
@@ -28,31 +34,47 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     void writeRef.current(line).catch(error => dispatch({ type: "notice", id: localId(), tone: "error", text: formatError(error) }));
   }, []);
 
-  /** Petición de control al CLI; `kind` marca las que devuelven datos que hay que guardar. */
-  const control = useCallback((request: Record<string, unknown>, kind?: "initialize" | "settings") => {
+  /** Petición de control al CLI; `pending` marca las que traen una respuesta que atender. */
+  const control = useCallback((request: Record<string, unknown>, pending?: Control) => {
     const id = localId();
-    if (kind) pendingControlsRef.current.set(id, kind);
+    if (pending) pendingControlsRef.current.set(id, pending);
     writeOrReport(controlLine(id, request));
   }, [writeOrReport]);
-  const refreshSettings = useCallback(() => control({ subtype: "get_settings" }, "settings"), [control]);
+  const refreshSettings = useCallback(() => control({ subtype: "get_settings" }, { kind: "settings" }), [control]);
+  /** Lo mismo que mide `/context`; el CLI lo calcula al momento, sin llamar al modelo. */
+  const refreshContext = useCallback(() => control({ subtype: "get_context_usage" }, { kind: "context" }), [control]);
 
   const handleLine = useCallback((line: string) => {
     let event: unknown;
     try { event = JSON.parse(line); } catch { return; /* ruido del shell antes del CLI */ }
-    const message = event as { type?: string; request_id?: string; request?: { subtype?: string };
-      response?: { subtype?: string; request_id?: string; response?: Record<string, unknown> } };
+    const message = event as { type?: string; subtype?: string; parent_tool_use_id?: unknown; request_id?: string;
+      request?: { subtype?: string; tool_name?: unknown; input?: unknown };
+      response?: { subtype?: string; request_id?: string; response?: Record<string, unknown>; error?: string } };
     const reply = message?.type === "control_response" ? message.response : undefined;
-    const kind = reply?.request_id ? pendingControlsRef.current.get(reply.request_id) : undefined;
-    if (reply?.request_id && kind) {
+    const pending = reply?.request_id ? pendingControlsRef.current.get(reply.request_id) : undefined;
+    if (reply?.request_id && pending) {
       pendingControlsRef.current.delete(reply.request_id);
       const data = reply.subtype === "success" ? reply.response ?? {} : {};
-      if (kind === "initialize") {
+      if (pending.kind === "initialize") {
         dispatch({ type: "catalog", models: data.models, permissionMode: data.current_permission_mode, commands: data.commands, agents: data.agents });
-      }
-      else {
+      } else if (pending.kind === "settings") {
         const applied = (data.applied ?? {}) as Record<string, unknown>;
         dispatch({ type: "applied", model: applied.model, effort: applied.effort });
+      } else if (pending.kind === "context") {
+        dispatch({ type: "context", data });
+      } else if (pending.kind === "mode" && reply.subtype !== "success") {
+        const reason = reply.error ?? "";
+        dispatch({ type: "modeRejected", permissionMode: pending.permissionMode, modeChoice: pending.modeChoice,
+          message: /bypassPermissions|skip-permissions/.test(reason)
+            ? "Esta sesión de Claude Code no admite «Permitir todo» (su perfil lo impide, por ejemplo con --restricted)."
+            : `No se pudo cambiar el modo de permisos: ${reason || "Claude Code lo rechazó."}` });
       }
+      return;
+    }
+    // Con «Permitir todo», lo que el CLI aún consulte se acepta sin mostrar la tarjeta.
+    if (message?.type === "control_request" && message.request?.subtype === "can_use_tool" && message.request_id
+      && allowsAll(stateRef.current.permissionMode) && !needsAnswer(String(message.request.tool_name ?? ""))) {
+      writeOrReport(permissionLine(message.request_id, true, record(message.request.input) ?? {}));
       return;
     }
     // Peticiones del CLI que el chat aún no atiende: se rechazan para no bloquearlo.
@@ -61,7 +83,9 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       return;
     }
     dispatch({ type: "line", event, now: Date.now() });
-  }, [writeOrReport]);
+    // Al terminar cada respuesta se vuelve a medir el contexto, con el desglose por partes.
+    if (message?.type === "result" && typeof message.parent_tool_use_id !== "string") refreshContext();
+  }, [writeOrReport, refreshContext]);
 
   const agent = useAgentProcess(sessionId, {
     onLine: handleLine,
@@ -85,13 +109,14 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       if (!procId) return;
       dispatch({ type: "spawned" });
       callbacks.current.onRunning(sessionId);
-      // Modelos disponibles y modelo/esfuerzo en uso, antes del primer mensaje.
-      control({ subtype: "initialize" }, "initialize");
+      // Modelos disponibles, modelo/esfuerzo en uso y contexto (el de la conversación reanudada), antes del primer mensaje.
+      control({ subtype: "initialize" }, { kind: "initialize" });
       refreshSettings();
+      refreshContext();
     } catch (error) {
       dispatch({ type: "spawnFailed", message: `No se pudo iniciar Claude Code: ${formatError(error)}` });
     }
-  }, [agent, sessionId, cwd, command, args, shell, env, control, refreshSettings]);
+  }, [agent, sessionId, cwd, command, args, shell, env, control, refreshSettings, refreshContext]);
 
   // Arranque: historial guardado (si se recupera una conversación) y proceso.
   useEffect(() => {
@@ -145,8 +170,11 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     interrupt,
     answer,
     setMode: mode => {
+      const before = stateRef.current;
       dispatch({ type: "mode", mode });
-      control({ subtype: "set_permission_mode", mode });
+      control({ subtype: "set_permission_mode", mode }, { kind: "mode", permissionMode: before.permissionMode, modeChoice: before.modeChoice });
+      // Lo que estaba esperando permiso se acepta al pasar a «Permitir todo».
+      if (allowsAll(mode)) for (const item of autoAllowed(before.items)) answer(item, true, false);
     },
     // Cambiar de modelo puede cambiar también el esfuerzo: después se leen los valores reales.
     setModel: model => {

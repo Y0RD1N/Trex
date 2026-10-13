@@ -22,6 +22,8 @@ export type ChatSessionOptions = {
   shell: string;
   env: Record<string, string> | null;
   conversationId: string | null;
+  /** Modo de permisos con el que empieza la sesión (el que la pestaña tenía elegido). */
+  mode: string | null;
   onExit: (tabId: string, code: number | null) => void;
   onRunning: (tabId: string) => void;
 };

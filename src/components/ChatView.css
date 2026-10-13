@@ -1380,6 +1380,84 @@
   padding-left: 4px;
   border-left: 1px solid var(--border);
 }
+
+/* --- Uso del contexto -----------------------------------------------------
+   Anillo en la bandeja y desglose en un menú de cristal. El color avisa
+   cuando la conversación se acerca al límite. */
+.chat-context.high, .chat-context-menu.high { --context-color: #e5a50a; }
+.chat-context.critical, .chat-context-menu.critical { --context-color: #f0616d; }
+.chat-tray .chat-context { gap: 5px; font-variant-numeric: tabular-nums; }
+.chat-tray .chat-context.high .chat-tray-text,
+.chat-tray .chat-context.critical .chat-tray-text { color: var(--context-color); }
+.chat-context-ring circle { fill: none; stroke-width: 2; }
+.chat-context-ring .track { stroke: color-mix(in srgb, var(--text) 14%, transparent); }
+.chat-context-ring .value {
+  stroke: var(--context-color, var(--accent));
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  transition: stroke-dashoffset 420ms var(--ease-out), stroke var(--t);
+}
+.context-menu.chat-context-menu { width: 288px; }
+.chat-context-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+.chat-context-head strong {
+  color: var(--context-color, var(--text));
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.chat-context-head span { color: var(--text-muted); font-size: 12px; }
+.chat-context-bar {
+  display: flex;
+  gap: 1px;
+  height: 7px;
+  margin: 0 10px 12px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.chat-context-bar i { flex: none; min-width: 2px; height: 100%; }
+.chat-context-bar i.reserve { margin-left: auto; }
+.chat-context-bar i.reserve,
+.chat-context-parts i.reserve {
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.22) 0 2px, transparent 2px 4px);
+}
+.chat-context-parts {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0 10px 10px;
+  list-style: none;
+  font-size: 12.5px;
+}
+.chat-context-parts li { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-muted); }
+.chat-context-parts span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-context-parts b {
+  color: var(--text);
+  font: 500 11.5px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.chat-context-parts li.muted b { color: var(--text-dim); }
+.chat-context-parts i { flex: 0 0 8px; height: 8px; border-radius: 3px; }
+.chat-context-parts i.reserve { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16); }
+.chat-context-parts i.free { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 24%, transparent); }
+.chat-context-note {
+  margin: 0;
+  padding: 9px 10px 8px;
+  border-top: 1px solid var(--dock-edge, rgba(255, 255, 255, 0.06));
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.context-item.chat-context-compact { justify-content: space-between; min-height: 34px; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; }
+.chat-context-compact small { color: var(--text-dim); font: 11px var(--font-mono); }
+.chat-context-compact:disabled { opacity: 0.5; cursor: default; }
 .chat-effort-bars {
   display: inline-flex;
   align-items: flex-end;
@@ -1515,3 +1593,9 @@
 :root[data-theme="light"] .chat-code .hljs-punctuation { color: #57606a; }
 :root[data-theme="light"] .chat-code .hljs-addition { color: #116329; background: rgba(46, 160, 67, 0.12); }
 :root[data-theme="light"] .chat-code .hljs-deletion { color: #82071e; background: rgba(248, 81, 73, 0.12); }
+:root[data-theme="light"] .chat-context-bar i.reserve,
+:root[data-theme="light"] .chat-context-parts i.reserve {
+  background: repeating-linear-gradient(135deg, rgba(16, 24, 40, 0.22) 0 2px, transparent 2px 4px);
+}
+:root[data-theme="light"] .chat-context.high, :root[data-theme="light"] .chat-context-menu.high { --context-color: #b7791f; }
+:root[data-theme="light"] .chat-context.critical, :root[data-theme="light"] .chat-context-menu.critical { --context-color: #d1242f; }

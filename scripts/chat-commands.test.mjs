@@ -103,7 +103,7 @@ test("Codex keeps context usage, skills and a fresh conversation keeps the choic
     { type: "mode", mode: "plan" },
     { type: "send", id: "u1", text: "hola", now: 0 },
   ].reduce(codex.codexReducer, shared.initialChatState());
-  assert.deepEqual(state.usage, { used: 18334, window: 258400 });
+  assert.deepEqual(state.usage, { used: 18334, window: 258400, parts: [], reserve: null, total: null });
   assert.equal(state.skills.length, 1);
   state = codex.codexReducer(state, { type: "reset" });
   assert.deepEqual([state.items.length, state.pendingTurns, state.models.length, state.skills.length, state.modeChoice, state.usage],

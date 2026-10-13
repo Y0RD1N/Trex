@@ -262,3 +262,50 @@ test("model and effort follow the CLI and survive a restart of the process", () 
   assert.ok(!chat.claudeChatFlags("--dangerously-skip-permissions", null, { mode: "plan" }).includes("--permission-mode"));
   assert.ok(!chat.claudeChatFlags(null, null, { mode: "manual" }).includes("--permission-mode"));
 });
+
+test("«Permitir todo» can be chosen at any time and a rejected mode goes back to the previous one", () => {
+  assert.ok(chat.claudeChatFlags(null, null).includes("--allow-dangerously-skip-permissions"));
+  assert.ok(!chat.claudeChatFlags("--restricted", null).includes("--allow-dangerously-skip-permissions"), "el modo restringido no lo admite");
+  assert.ok(!chat.claudeChatFlags("--restricted", null, { mode: "bypassPermissions" }).includes("--permission-mode"));
+  assert.equal(chat.claudeChatFlags("--dangerously-skip-permissions", null).filter((flag) => flag.includes("skip-permissions")).length, 0);
+  assert.deepEqual(chat.claudeChatFlags(null, null, { mode: "bypassPermissions" }).slice(-2), ["--permission-mode", "bypassPermissions"]);
+  let state = run([{ type: "mode", mode: "bypassPermissions" }], initialChatState("acceptEdits"));
+  assert.deepEqual([state.permissionMode, state.modeChoice], ["bypassPermissions", "bypassPermissions"]);
+  state = run([{ type: "modeRejected", permissionMode: "acceptEdits", modeChoice: "acceptEdits", message: "No se pudo cambiar el modo de permisos: no" }], state);
+  assert.deepEqual([state.permissionMode, state.modeChoice, state.items.at(-1).tone], ["acceptEdits", "acceptEdits", "warn"]);
+  // Al aprobar un plan el CLI cambia de modo: eso pasa a ser lo elegido para reanudar.
+  state = run([line({ type: "system", subtype: "status", status: null, permissionMode: "default" })], run([{ type: "mode", mode: "plan" }]));
+  assert.deepEqual([state.permissionMode, state.modeChoice], ["default", "default"]);
+  assert.equal(run([line({ type: "system", subtype: "status", status: null, permissionMode: "default" })]).modeChoice, null);
+});
+
+test("only real permissions are accepted on their own; questions and plans still wait for the person", () => {
+  const permission = (id, toolName) => ({ kind: "permission", id, toolName, toolUseId: null, input: {}, description: "", suggestions: [], state: "pending" });
+  const items = [permission("a", "Bash"), permission("b", "AskUserQuestion"), permission("c", "ExitPlanMode"), { ...permission("d", "Edit"), state: "allowed" }];
+  assert.deepEqual(chat.autoAllowed(items).map((item) => item.id), ["a"]);
+  assert.ok(chat.allowsAll("bypassPermissions") && chat.allowsAll("full"));
+  assert.ok(!chat.allowsAll("acceptEdits") && !chat.allowsAll("auto") && !chat.allowsAll(null));
+});
+
+test("context usage: the /context measure, live updates while answering and the share of the window", () => {
+  const measure = {
+    categories: [
+      { name: "System prompt", tokens: 3234, kind: "used" }, { name: "System tools", tokens: 8259, kind: "used" },
+      { name: "MCP tools (deferred)", tokens: 13586, isDeferred: true, kind: "deferred" }, { name: "Skills", tokens: 5289, kind: "used" },
+      { name: "Messages", tokens: 4553, kind: "used" }, { name: "Autocompact buffer", tokens: 33000, kind: "buffer" },
+      { name: "Free space", tokens: 945034, kind: "free" },
+    ],
+    totalTokens: 21335, maxTokens: 1000000, percentage: 2,
+  };
+  let state = run([{ type: "context", data: measure }]);
+  assert.deepEqual(state.usage, { used: 21335, window: 1000000, reserve: 33000, total: null,
+    parts: [{ name: "Instrucciones del sistema", tokens: 3234 }, { name: "Herramientas", tokens: 8259 }, { name: "Skills", tokens: 5289 }] });
+  assert.equal(Math.round(chat.contextPercent(state.usage) * 10) / 10, 2.1);
+  // Cada petición al modelo trae lo que entra en la ventana, venga o no de la caché.
+  state = run([stream({ type: "message_start", message: { id: "m1", usage: { input_tokens: 2, cache_creation_input_tokens: 11891, cache_read_input_tokens: 10073, output_tokens: 1 } } })], state);
+  assert.deepEqual([state.usage.used, state.usage.window, state.usage.parts.length], [21966, 1000000, 3]);
+  assert.equal(run([{ type: "context", data: { error: "x" } }], state).usage.used, 21966, "una respuesta sin datos no borra la medida");
+  assert.equal(run([stream({ type: "message_start", message: { id: "m2" } })]).usage, null);
+  assert.equal(run([{ type: "reset" }], state).usage, null);
+  assert.deepEqual([chat.formatTokens(950), chat.formatTokens(21966), chat.formatTokens(258400), chat.formatTokens(1000000)], ["950", "22 k", "258 k", "1 M"]);
+});

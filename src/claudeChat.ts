@@ -8,7 +8,8 @@
  */
 import {
   addNotice, baseReducer, choiceAnswers, finalize, initialChatState, list, record, resultText, text,
-  type BaseChatAction, type ChatItem, type ChatState, type DiffLine, type Json, type ModelInfo, type OutgoingImage, type QuestionChoice,
+  type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type DiffLine, type Json, type ModelInfo, type OutgoingImage,
+  type QuestionChoice,
 } from "./chatState";
 import { parseClaudeAgents, parseClaudeCommands } from "./chatCommands";
 
@@ -17,7 +18,11 @@ export type ChatAction =
   | { type: "line"; event: unknown; now: number }
   | { type: "history"; entries: unknown[] }
   | { type: "catalog"; models: unknown; permissionMode?: unknown; commands?: unknown; agents?: unknown }
-  | { type: "applied"; model?: unknown; effort?: unknown };
+  | { type: "applied"; model?: unknown; effort?: unknown }
+  /** Respuesta a `get_context_usage`: lo mismo que muestra `/context`. */
+  | { type: "context"; data: unknown }
+  /** El CLI rechazó el modo elegido: se vuelve al anterior. */
+  | { type: "modeRejected"; permissionMode: string | null; modeChoice: string | null; message: string };
 
 // --- Mensajes hacia el CLI ----------------------------------------------------
 
@@ -30,13 +35,17 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
     // Los permisos y las preguntas con opciones llegan como peticiones que el chat responde.
     "--permission-prompt-tool", "stdio",
   ];
+  // «Permitir todo» solo se puede elegir en mitad de la sesión si el CLI arrancó con esta opción.
+  const restricted = /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? "");
+  if (!restricted && !/(^|\s)--(allow-)?dangerously-skip-permissions(\s|=|$)/.test(profileArgs ?? "")) flags.push("--allow-dangerously-skip-permissions");
   const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
   if (conversationId && !choosesConversation) flags.push("--resume", conversationId);
   // Al reanudar el proceso se conserva lo que se eligió en el chat.
   if (choices.model) flags.push("--model", choices.model);
   if (choices.effort) flags.push("--effort", choices.effort);
   const choosesMode = /(^|\s)(--permission-mode|--dangerously-skip-permissions)(\s|=|$)/.test(profileArgs ?? "");
-  if (choices.mode && choices.mode !== "manual" && PERMISSION_MODES.has(choices.mode) && !choosesMode) flags.push("--permission-mode", choices.mode);
+  if (choices.mode && choices.mode !== "manual" && PERMISSION_MODES.has(choices.mode) && !choosesMode
+    && !(restricted && choices.mode === "bypassPermissions")) flags.push("--permission-mode", choices.mode);
   return flags;
 }
 
@@ -197,7 +206,8 @@ function applyResult(state: ChatState, event: Json, now: number): ChatState {
 function applyStream(state: ChatState, event: Json): ChatState {
   const type = event.type;
   if (type === "message_start") {
-    return { ...state, stream: { messageId: text(record(event.message)?.id) || null, blocks: {} } };
+    const message = record(event.message);
+    return { ...state, usage: liveUsage(state.usage, record(message?.usage)), stream: { messageId: text(message?.id) || null, blocks: {} } };
   }
   const messageId = state.stream.messageId;
   const index = typeof event.index === "number" ? event.index : -1;
@@ -250,7 +260,8 @@ function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
           permissionMode: text(event.permissionMode) || state.permissionMode };
       }
       if (event.subtype === "status" && typeof event.permissionMode === "string" && PERMISSION_MODES.has(event.permissionMode)) {
-        return { ...state, permissionMode: event.permissionMode };
+        // El CLI cambia de modo por su cuenta (por ejemplo, al aprobar un plan): lo elegido pasa a ser ese modo.
+        return { ...state, permissionMode: event.permissionMode, modeChoice: state.modeChoice && event.permissionMode };
       }
       if (event.subtype === "compact_boundary") {
         return { ...state, items: [...state.items, { kind: "notice", id: `c-${state.items.length}`, tone: "info", text: "Conversación resumida para liberar contexto." }] };
@@ -312,9 +323,46 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
     case "applied":
       return { ...state, model: text(action.model) || state.model, effort: text(action.effort) || state.effort };
+    case "context":
+      return { ...state, usage: parseContextUsage(action.data) ?? state.usage };
+    case "modeRejected":
+      return { ...state, permissionMode: action.permissionMode, modeChoice: action.modeChoice, items: addNotice(state.items, "warn", action.message, "p") };
     default:
       return baseReducer(state, action);
   }
+}
+
+// --- Uso del contexto ---------------------------------------------------------
+
+/** Nombres de las partes del contexto que mide Claude Code. */
+const CONTEXT_PARTS: Record<string, string> = {
+  "System prompt": "Instrucciones del sistema", "System tools": "Herramientas", "MCP tools": "Herramientas MCP",
+  "MCP server instructions": "Instrucciones de MCP", "Custom agents": "Subagentes", "Memory files": "Memoria (CLAUDE.md)",
+};
+
+/** Uso del contexto según `get_context_usage`. Los mensajes no se guardan: son lo que falta hasta `used`. */
+export function parseContextUsage(raw: unknown): ContextUsage | null {
+  const data = record(raw);
+  if (!data || typeof data.totalTokens !== "number") return null;
+  const categories = list(data.categories).map(record).filter((entry): entry is Json => !!entry && typeof entry.tokens === "number" && entry.tokens > 0);
+  const kind = (entry: Json): string => text(entry.kind)
+    || (entry.isDeferred === true ? "deferred" : entry.name === "Free space" ? "free" : entry.name === "Autocompact buffer" ? "buffer" : "used");
+  const reserve = categories.find(entry => kind(entry) === "buffer")?.tokens;
+  return {
+    used: data.totalTokens,
+    window: typeof data.maxTokens === "number" && data.maxTokens > 0 ? data.maxTokens : null,
+    parts: categories.filter(entry => kind(entry) === "used" && entry.name !== "Messages")
+      .map(entry => ({ name: CONTEXT_PARTS[text(entry.name)] ?? text(entry.name), tokens: entry.tokens as number })),
+    reserve: typeof reserve === "number" ? reserve : null,
+    total: null,
+  };
+}
+
+/** Contexto de la petición que empieza: todo lo que entra al modelo, venga o no de la caché. */
+function liveUsage(usage: ContextUsage | null, raw: Json | null): ContextUsage | null {
+  const count = (key: string): number => typeof raw?.[key] === "number" ? raw[key] as number : 0;
+  const used = count("input_tokens") + count("cache_creation_input_tokens") + count("cache_read_input_tokens");
+  return used ? { ...(usage ?? { window: null, parts: [], reserve: null, total: null }), used } : usage;
 }
 
 // --- Catálogo de modelos -----------------------------------------------------

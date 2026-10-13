@@ -12,6 +12,7 @@ import { normalizeShortcuts, bindingError, keyError } from "./shortcuts";
 import { normalizeSplitLayout, type SplitLayout } from "./splitLayout";
 import { validConversationId } from "./conversations";
 import type {
+  AgentProvider,
   AppConfig,
   AppInfo,
   ClaudeInfo,
@@ -138,6 +139,10 @@ export const agentKill = (id: string): Promise<void> => invoke<void>("agent_kill
 export const listProjectFiles = (cwd: string): Promise<string[]> => invoke<string[]>("list_project_files", { cwd });
 
 export const gitBranch = (cwd: string): Promise<string | null> => invoke<string | null>("git_branch", { cwd });
+
+/** Ventana de contexto de cada modelo de Codex (de su caché local); vacío si no se sabe. */
+export const codexContextWindows = (configDir: string): Promise<Record<string, number>> =>
+  invoke<Record<string, number>>("codex_context_windows", { configDir });
 
 // --- Eventos ----------------------------------------------------------------
 
@@ -448,6 +453,13 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   }
 
   const lastTabs: PersistedTab[] = [];
+  /** Modos de permisos que puede tener guardados un chat de cada asistente. */
+  const CHAT_MODES: Record<AgentProvider, string[]> = {
+    claude: ["default", "acceptEdits", "plan", "bypassPermissions", "auto", "dontAsk"],
+    codex: ["read-only", "auto", "plan", "full"],
+  };
+  const chatMode = (kind: TabKind, value: unknown): string | null =>
+    kind !== "shell" && typeof value === "string" && CHAT_MODES[kind].includes(value) ? value : null;
   if (Array.isArray(uiRaw.lastTabs)) {
     for (const entry of uiRaw.lastTabs) {
       const rec = asRecord(entry);
@@ -458,7 +470,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
       const subtitle = asString(rec.subtitle, "").trim() || kind;
       const launch = normalizeLaunch(rec.launch, kind);
       if (rec.launch != null && !launch) continue;
-      lastTabs.push({ id: typeof rec.id === "string" && /^t-[a-z0-9-]+$/i.test(rec.id) ? rec.id : undefined, projectId, kind, subtitle, launch, conversationId: validConversationId(rec.conversationId) ? rec.conversationId : null });
+      lastTabs.push({ id: typeof rec.id === "string" && /^t-[a-z0-9-]+$/i.test(rec.id) ? rec.id : undefined, projectId, kind, subtitle, launch, conversationId: validConversationId(rec.conversationId) ? rec.conversationId : null,
+        chatMode: chatMode(kind, rec.chatMode) });
     }
   }
 
@@ -482,6 +495,11 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     lastTabs,
     splitLayouts,
   };
+  const chatModes = asRecord(uiRaw.chatModes);
+  for (const provider of ["claude", "codex"] as const) {
+    const mode = chatMode(provider, chatModes?.[provider]);
+    if (mode) ui.chatModes = { ...ui.chatModes, [provider]: mode };
+  }
 
   return {
     version: Math.round(asNumber(root.version, DEFAULT_CONFIG.version)),

@@ -36,6 +36,20 @@ export type ChatItem =
 export type PermissionItem = Extract<ChatItem, { kind: "permission" }>;
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
+/** Una parte fija de lo que ocupa el contexto: instrucciones, herramientas, skills… */
+export type ContextPart = { name: string; tokens: number };
+/** Lo que ocupa la conversación en la ventana de contexto del modelo. */
+export type ContextUsage = {
+  used: number;
+  window: number | null;
+  /** Partes fijas medidas por el asistente (Claude Code); los mensajes son el resto hasta `used`. */
+  parts: ContextPart[];
+  /** Margen que se guarda para resumir la conversación antes de llenar la ventana. */
+  reserve: number | null;
+  /** Tokens procesados en toda la conversación (Codex). */
+  total: number | null;
+};
+
 export type ChatState = {
   items: ChatItem[];
   /** Mensajes enviados cuya respuesta no ha terminado. */
@@ -59,8 +73,8 @@ export type ChatState = {
   commands: CommandInfo[];
   agents: AgentInfo[];
   skills: SkillInfo[];
-  /** Contexto usado en el último turno y tamaño de la ventana, si se conocen. */
-  usage: { used: number; window: number | null } | null;
+  /** Contexto en uso y tamaño de la ventana, si se conocen. */
+  usage: ContextUsage | null;
   costUsd: number | null;
   /** Bloques del mensaje en curso: índice del bloque → id del elemento. */
   stream: { messageId: string | null; blocks: Record<number, string> };
@@ -88,9 +102,10 @@ export type BaseChatAction =
   | { type: "stderr"; line: string }
   | { type: "exit"; code: number | null };
 
-export const initialChatState = (): ChatState => ({
+/** Estado inicial; `mode` es el modo de permisos que la pestaña tenía elegido. */
+export const initialChatState = (mode: string | null = null): ChatState => ({
   items: [], pendingTurns: 0, turnStartedAt: null, sessionId: null, turnId: null, model: null, models: [],
-  modelChoice: null, effort: null, effortChoice: null, permissionMode: null, modeChoice: null,
+  modelChoice: null, effort: null, effortChoice: null, permissionMode: mode, modeChoice: mode,
   commands: [], agents: [], skills: [], usage: null, costUsd: null,
   stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null, historyCount: 0, process: "starting", exitCode: null, stderr: [],
 });
@@ -251,6 +266,33 @@ export const choiceAnswers = (choice: QuestionChoice): string[] => [...choice.se
 export const pendingPermissions = (state: ChatState): number =>
   state.items.filter(item => item.kind === "permission" && item.state === "pending").length;
 
+/** Modos en los que se permite todo: Claude Code sin permisos y Codex con acceso total. */
+const ALLOW_ALL_MODES = new Set(["bypassPermissions", "full"]);
+export const allowsAll = (mode: string | null): boolean => mode !== null && ALLOW_ALL_MODES.has(mode);
+/** Preguntas y planes esperan una respuesta, no un permiso: nunca se aceptan solos. */
+export const needsAnswer = (toolName: string): boolean => toolName === "AskUserQuestion" || toolName === "ExitPlanMode";
+/** Permisos pendientes que se aceptan solos al pasar a un modo que lo permite todo. */
+export const autoAllowed = (items: ChatItem[]): PermissionItem[] =>
+  items.filter((item): item is PermissionItem => item.kind === "permission" && item.state === "pending" && !needsAnswer(item.toolName));
+
+/**
+ * Contexto que se muestra: el medido o, antes del primer mensaje, una
+ * conversación vacía en la ventana del modelo elegido.
+ */
+export function shownUsage(state: ChatState): ContextUsage | null {
+  if (state.usage) return state.usage;
+  const size = currentModel(state.models, state.model, state.modelChoice)?.contextWindow;
+  return size ? { used: 0, window: size, parts: [], reserve: null, total: null } : null;
+}
+
+/** Parte de la ventana de contexto en uso (0–100), si se conoce la ventana. */
+export const contextPercent = (usage: ContextUsage | null): number | null =>
+  usage?.window ? Math.min(100, Math.max(0, (usage.used / usage.window) * 100)) : null;
+
+export const formatTokens = (count: number): string =>
+  count >= 999_500 ? `${(count / 1_000_000).toLocaleString("es", { maximumFractionDigits: 1 })} M`
+    : count >= 1000 ? `${(count / 1000).toLocaleString("es", { maximumFractionDigits: count >= 100_000 ? 0 : 1 })} k` : String(count);
+
 export function chatActivity(state: ChatState): AgentActivity {
   if (pendingPermissions(state) > 0) return "waiting";
   return state.pendingTurns > 0 ? "working" : "idle";
@@ -318,6 +360,8 @@ export type ModelInfo = {
   featured: boolean;
   /** Esfuerzo que usa el modelo si no se elige otro. */
   defaultEffort?: string;
+  /** Tokens que caben en su ventana de contexto, si se conocen antes de usarlo. */
+  contextWindow?: number;
 };
 
 const FAMILY_DESCRIPTIONS: Record<string, string> = {

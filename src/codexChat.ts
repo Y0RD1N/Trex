@@ -21,7 +21,7 @@ export type CodexAction =
   /** Respuesta a `thread/start` o `thread/resume`. */
   | { type: "thread"; response: unknown }
   | { type: "history"; turns: unknown[] }
-  | { type: "models"; data: unknown }
+  | { type: "models"; data: unknown; windows?: Record<string, number> }
   | { type: "skills"; data: unknown }
   | { type: "turnStarted"; turnId: string }
   | { type: "turnFailed"; message: string }
@@ -230,12 +230,24 @@ function modeOf(settings: Json): string | null {
   const sandbox = record(settings.sandboxPolicy) ?? record(settings.sandbox);
   const type = text(sandbox?.type) || text(settings.sandbox);
   if (!type) return null;
-  if (type === "dangerFullAccess" || type === "danger-full-access") return "full";
+  // Sin límites del sandbox pero pidiendo permiso no es «Permitir todo».
+  const asks = settings.approvalPolicy !== undefined && settings.approvalPolicy !== "never";
+  if (type === "dangerFullAccess" || type === "danger-full-access") return asks ? "auto" : "full";
   if (type === "readOnly" || type === "read-only") return "read-only";
   return "auto";
 }
 
 // --- Respuestas a las peticiones de Codex -------------------------------------
+
+/** Peticiones de permiso (no preguntas) que se aceptan solas con «Permitir todo». */
+const APPROVAL_REQUESTS = new Set(["item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval"]);
+
+/** Respuesta que acepta un permiso sin mostrar la tarjeta; null si la petición no es un permiso. */
+export function autoApproval(method: string, params: Json): Json | null {
+  if (!APPROVAL_REQUESTS.has(method)) return null;
+  const item = { request: { id: 0, method }, input: { availableDecisions: params.availableDecisions ?? [], permissions: params.permissions ?? {} } };
+  return answerResult(item as unknown as PermissionItem, true, false);
+}
 
 /** Lo que espera Codex como respuesta a una tarjeta de permiso o de preguntas. */
 export function answerResult(item: PermissionItem, allowed: boolean, remember: boolean, choices: QuestionChoice[] = []): Json {
@@ -558,14 +570,19 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
         && item.request && String(item.request.id) === String(params.requestId) ? { ...item, state: "denied" as const } : item) };
     case "thread/settings/updated": {
       const settings = record(params.threadSettings) ?? {};
+      // Lo elegido en el chat se aplica en el siguiente turno: hasta entonces el hilo puede traer el modo anterior.
       return { ...state, model: text(settings.model) || state.model, effort: text(settings.effort) || state.effort,
-        permissionMode: modeOf(settings) ?? state.permissionMode };
+        permissionMode: state.modeChoice ?? modeOf(settings) ?? state.permissionMode };
     }
     case "thread/tokenUsage/updated": {
       const usage = record(params.tokenUsage) ?? {};
-      const last = record(usage.last) ?? {};
-      const used = typeof last.inputTokens === "number" ? last.inputTokens + (typeof last.outputTokens === "number" ? last.outputTokens : 0) : null;
-      return used === null ? state : { ...state, usage: { used, window: typeof usage.modelContextWindow === "number" ? usage.modelContextWindow : null } };
+      const tokens = (breakdown: Json | null): number | null => !breakdown ? null
+        : typeof breakdown.totalTokens === "number" ? breakdown.totalTokens
+        : typeof breakdown.inputTokens === "number" ? breakdown.inputTokens + (typeof breakdown.outputTokens === "number" ? breakdown.outputTokens : 0) : null;
+      // La última petición al modelo es lo que ocupa ahora la conversación en la ventana.
+      const used = tokens(record(usage.last));
+      return used === null ? state : { ...state, usage: { used, parts: [], reserve: null, total: tokens(record(usage.total)),
+        window: typeof usage.modelContextWindow === "number" && usage.modelContextWindow > 0 ? usage.modelContextWindow : state.usage?.window ?? null } };
     }
     case "thread/compacted":
       return { ...state, items: addNotice(state.items, "info", "Conversación resumida para liberar contexto.", "c") };
@@ -596,7 +613,8 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
 
 // --- Catálogo de modelos ------------------------------------------------------
 
-export function parseCodexModels(raw: unknown): ModelInfo[] {
+/** Catálogo de `model/list`; `windows` son las ventanas de contexto de la caché de Codex. */
+export function parseCodexModels(raw: unknown, windows: Record<string, number> = {}): ModelInfo[] {
   return list(raw).map(record).filter((model): model is Json => !!model && !!text(model.id) && model.hidden !== true)
     .map(model => ({
       value: text(model.model) || text(model.id),
@@ -606,6 +624,7 @@ export function parseCodexModels(raw: unknown): ModelInfo[] {
       efforts: list(model.supportedReasoningEfforts).map(record).map(option => text(option?.reasoningEffort)).filter(Boolean),
       featured: true,
       defaultEffort: text(model.defaultReasoningEffort) || undefined,
+      contextWindow: windows[text(model.model) || text(model.id)] || undefined,
     }));
 }
 
@@ -642,7 +661,7 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
       return { ...state, items: [...items, ...state.items.slice(state.historyCount)], historyCount: items.length };
     }
     case "models": {
-      const models = parseCodexModels(action.data);
+      const models = parseCodexModels(action.data, action.windows);
       return models.length ? { ...state, models } : state;
     }
     case "skills":

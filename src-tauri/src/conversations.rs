@@ -33,7 +33,7 @@ fn home() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_default()
 }
-fn root(provider: &str, dir: &str) -> PathBuf {
+pub(crate) fn root(provider: &str, dir: &str) -> PathBuf {
     if dir == "~" {
         return home();
     }

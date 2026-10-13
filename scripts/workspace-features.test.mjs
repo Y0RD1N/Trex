@@ -191,8 +191,11 @@ test("la configuración antigua migra y la nueva conserva atajos, paneles e IDs 
           projectId: "p",
           kind: "claude",
           conversationId: id,
+          chatMode: "bypassPermissions",
         },
+        { projectId: "p", kind: "codex", chatMode: "bypassPermissions" },
       ],
+      chatModes: { claude: "acceptEdits", codex: "full", shell: "x" },
       splitLayouts: {
         p: { first: "a", second: "b", direction: "rows", ratio: 0.6 },
       },
@@ -203,6 +206,10 @@ test("la configuración antigua migra y la nueva conserva atajos, paneles e IDs 
   assert.equal(config.settings.desktopNotifications, false);
   assert.equal(config.ui.lastTabs[0].conversationId, id);
   assert.equal(config.ui.lastTabs[0].id, "t-123-abcd");
+  assert.equal(config.ui.lastTabs[0].chatMode, "bypassPermissions");
+  assert.equal(config.ui.lastTabs[1].chatMode, null, "un modo de Claude no vale para Codex");
+  assert.deepEqual(config.ui.chatModes, { claude: "acceptEdits", codex: "full" });
+  assert.equal(old.ui.chatModes, undefined);
   assert.equal(config.ui.splitLayouts.p.direction, "rows");
   assert.deepEqual(config.ui.splitLayouts.p.panes,["a","b"]);
   assert.equal(

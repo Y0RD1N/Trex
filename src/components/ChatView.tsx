@@ -13,8 +13,8 @@ import { formatError, gitBranch, listProjectFiles, readClipboard } from "../api"
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
 import { matchesPasteShortcut } from "../paste";
 import {
-  chatActivity, conversationTitle, currentModel, effortLabel, formatDuration, modelName, pendingPermissions, supportedEfforts,
-  type PermissionItem, type QuestionChoice,
+  chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, formatDuration, formatTokens, modelName, pendingPermissions,
+  shownUsage, supportedEfforts, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { applySuggestion, buildSuggestions, findTrigger, localCommand, parseCommand, type Suggestion } from "../chatCommands";
 import type { AgentActivity, AgentNoticeKind, AgentProvider, Settings } from "../types";
@@ -27,6 +27,7 @@ import Select, { type SelectOption } from "./Select";
 import { AlertIcon, ArrowDownIcon, ArrowUpIcon, BranchIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, QuestionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { EffortMenu, ModelMenu } from "./chat/ModelMenu";
+import ContextMeter from "./chat/ContextMeter";
 import Suggestions from "./chat/Suggestions";
 import "./ChatView.css";
 
@@ -40,6 +41,8 @@ export type ChatViewProps = ChatSessionOptions & {
   onNotice: (tabId: string, kind: AgentNoticeKind) => void;
   onConversation: (tabId: string, conversationId: string) => void;
   onTitle: (tabId: string, title: string) => void;
+  /** Modo de permisos elegido: se guarda con la pestaña. */
+  onMode: (tabId: string, provider: AgentProvider, mode: string) => void;
   /** Aviso pasajero (toast) para lo que no debe quedar en el hilo. */
   onMessage: (message: string) => void;
 };
@@ -49,10 +52,11 @@ const PROVIDERS: Record<AgentProvider, { name: string; product: string; defaultM
     name: "Claude", product: "Claude Code", defaultMode: "default",
     modes: [
       { value: "default", label: "Preguntar", description: "Pide permiso antes de editar o ejecutar", icon: <ShieldIcon size={13} /> },
-      { value: "acceptEdits", label: "Aceptar ediciones", description: "Edita archivos sin preguntar", icon: <PencilIcon size={13} /> },
+      { value: "acceptEdits", label: "Aceptar ediciones", description: "Edita sin preguntar; pide permiso para comandos", icon: <PencilIcon size={13} /> },
       { value: "plan", label: "Planificar", description: "Investiga y propone un plan sin cambiar nada", icon: <MapIcon size={13} /> },
+      { value: "bypassPermissions", label: "Permitir todo", description: "Edita y ejecuta sin preguntar nunca; úsalo con cuidado", icon: <AlertIcon size={13} /> },
     ],
-    otherModes: { bypassPermissions: "Sin permisos", auto: "Automático", dontAsk: "No preguntar" },
+    otherModes: { auto: "Automático", dontAsk: "No preguntar" },
   },
   codex: {
     name: "Codex", product: "Codex", defaultMode: "auto",
@@ -60,7 +64,7 @@ const PROVIDERS: Record<AgentProvider, { name: string; product: string; defaultM
       { value: "read-only", label: "Solo lectura", description: "Lee el proyecto y pide permiso para editar o ejecutar", icon: <ShieldIcon size={13} /> },
       { value: "auto", label: "Automático", description: "Edita y ejecuta dentro del proyecto; pregunta antes de salir", icon: <PencilIcon size={13} /> },
       { value: "plan", label: "Planificar", description: "Investiga y propone un plan sin cambiar nada", icon: <MapIcon size={13} /> },
-      { value: "full", label: "Acceso total", description: "Sin preguntar y sin límites; úsalo con cuidado", icon: <AlertIcon size={13} /> },
+      { value: "full", label: "Permitir todo", description: "Acceso total, sin preguntar nunca; úsalo con cuidado", icon: <AlertIcon size={13} /> },
     ],
     otherModes: {},
   },
@@ -71,8 +75,6 @@ const NATIVE_PASTE = ["Ctrl+V", "Meta+V", "Shift+Insert"];
 const hasFiles = (transfer: DataTransfer | null): boolean => !!transfer && Array.from(transfer.types).includes("Files");
 /** Los archivos del proyecto se vuelven a leer si la lista tiene más de esto. */
 const FILES_TTL_MS = 20_000;
-const formatTokens = (count: number): string =>
-  count >= 1000 ? `${(count / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} k` : String(count);
 
 function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const { session, sessionId, cwd, projectName, conversationId, settings, visible, focused } = props;
@@ -235,19 +237,27 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   };
 
   const mode = state.permissionMode === "manual" ? "default" : state.permissionMode ?? agent.defaultMode;
+  // El modo elegido se guarda con la pestaña: sigue igual al volver a abrir la app.
+  useEffect(() => {
+    if (state.modeChoice) callbacks.current.onMode(sessionId, provider, state.modeChoice);
+  }, [state.modeChoice, sessionId, provider]);
+  /** Modo de trabajo al que se vuelve al poner en marcha un plan. */
+  const workModeRef = useRef(mode === "plan" ? agent.defaultMode : mode);
+  useEffect(() => { if (mode !== "plan") workModeRef.current = mode; }, [mode]);
   const modeOptions = agent.modes.some(option => option.value === mode) ? agent.modes
     : [...agent.modes, { value: mode, label: agent.otherModes[mode] ?? mode, icon: <ShieldIcon size={13} /> }];
   const efforts = supportedEfforts(state.models, state.model, state.modelChoice);
+  const usage = shownUsage(state);
 
   const statusText = (): string => {
     const model = currentModel(state.models, state.model, state.modelChoice);
-    const usage = state.usage;
+    const percent = contextPercent(usage);
     return [
       `Estado de ${agent.product}`,
       `Modelo: ${model ? modelName(model) : state.model ?? "sin datos"}`,
       ...(state.effort ? [`Esfuerzo: ${effortLabel(state.effort)}`] : []),
       `Permisos: ${modeOptions.find(option => option.value === mode)?.label ?? mode}`,
-      ...(usage ? [`Contexto: ${formatTokens(usage.used)} tokens${usage.window ? ` de ${formatTokens(usage.window)} (${Math.round((usage.used / usage.window) * 100)} %)` : ""}`] : []),
+      ...(usage ? [`Contexto: ${formatTokens(usage.used)} tokens${usage.window ? ` de ${formatTokens(usage.window)} (${Math.round(percent ?? 0)} %)` : ""}`] : []),
       ...(state.sessionId ? [`Conversación: ${state.sessionId}`] : []),
     ].join("\n");
   };
@@ -367,7 +377,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const planReady = !running && mode === "plan" && latestPlan !== undefined
     && !state.items.slice(state.items.findIndex(item => item.id === latestPlan) + 1).some(item => item.kind === "user");
   const implementPlan = (): void => {
-    session.setMode(agent.defaultMode);
+    session.setMode(workModeRef.current);
     stickRef.current = true;
     session.send("Implementa el plan.", [], []);
   };
@@ -523,6 +533,13 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <EffortMenu levels={efforts} effort={state.effort} onEffort={session.setEffort} openSignal={menuSignal.effort} />
         </>}
         <span className="chat-composer-spacer" />
+        {usage && <ContextMeter usage={usage} product={agent.product} busy={running || state.process !== "ready"}
+          onCompact={() => {
+            stickRef.current = true;
+            // Claude Code resume con su propio `/compact`; Codex, con su petición.
+            if (!runLocal("compact", "")) session.send("/compact", [], []);
+            backToInput();
+          }} />}
         {branch && <span className="chat-tray-info" title={`Rama de git: ${branch}`}><BranchIcon /> <span>{branch}</span></span>}
       </div>
      </div>

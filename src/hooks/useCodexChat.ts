@@ -6,11 +6,13 @@
  * turno; uno enviado mientras Codex trabaja se suma al turno en curso.
  */
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { formatError } from "../api";
-import { initialChatState, type Json, type OutgoingImage, type PermissionItem, type QuestionChoice } from "../chatState";
+import { codexContextWindows, formatError } from "../api";
 import {
-  INIT_PROMPT, OPT_OUT_NOTIFICATIONS, answerResult, codexLaunch, codexReducer, errorLine, notificationLine, requestLine, resultLine,
-  turnOverrides, userInput,
+  allowsAll, autoAllowed, initialChatState, type Json, type OutgoingImage, type PermissionItem, type QuestionChoice,
+} from "../chatState";
+import {
+  INIT_PROMPT, OPT_OUT_NOTIFICATIONS, answerResult, autoApproval, codexLaunch, codexReducer, errorLine, notificationLine, requestLine,
+  resultLine, turnOverrides, userInput,
 } from "../codexChat";
 import { mentionedSkills } from "../chatCommands";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
@@ -26,7 +28,7 @@ type Pending = { resolve: (result: unknown) => void; reject: (error: Error) => v
 
 export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env } = options;
-  const [state, dispatch] = useReducer(codexReducer, undefined, initialChatState);
+  const [state, dispatch] = useReducer(codexReducer, options.mode, initialChatState);
   const stateRef = useRef(state);
   stateRef.current = state;
   const callbacks = useRef(options);
@@ -43,7 +45,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   /** Tras empezar una conversación nueva, la de la pestaña ya no se reanuda. */
   const freshRef = useRef(false);
   /** Modo, modelo y esfuerzo elegidos: se leen al empezar cada turno, sin esperar al render. */
-  const choicesRef = useRef<{ mode: string | null; model: string | null; effort: string | null }>({ mode: null, model: null, effort: null });
+  const choicesRef = useRef<{ mode: string | null; model: string | null; effort: string | null }>({ mode: options.mode, model: null, effort: null });
   const writeRef = useRef<(line: string) => Promise<void>>(() => Promise.resolve());
 
   const notice = useCallback((tone: "info" | "warn" | "error", text: string) => dispatch({ type: "notice", id: localId(), tone, text }), []);
@@ -93,6 +95,11 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       if (error) pending.reject(new Error(error.message || "Codex rechazó la petición."));
       else pending.resolve(message.result);
       return;
+    }
+    // Con «Permitir todo», un permiso que llegue (por ejemplo, de un turno que empezó antes) se acepta sin tarjeta.
+    if (id !== undefined && id !== null && method && allowsAll(choicesRef.current.mode ?? stateRef.current.permissionMode)) {
+      const result = autoApproval(method, (message.params ?? {}) as Json);
+      if (result) { writeOrReport(resultLine(id as string | number, result)); return; }
     }
     // Petición de Codex que el chat no sabe atender: se responde para no bloquearlo.
     if (id !== undefined && id !== null && method && !ANSWERED_IN_CHAT.has(method)) {
@@ -152,7 +159,9 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       capabilities: { experimentalApi: true, requestAttestation: false, optOutNotificationMethods: OPT_OUT_NOTIFICATIONS },
     });
     await writeRef.current(notificationLine("initialized"));
-    void request<{ data?: unknown }>("model/list", {}).then(result => dispatch({ type: "models", data: result?.data })).catch(() => undefined);
+    // Con la ventana de cada modelo, el contexto se ve antes del primer mensaje.
+    void Promise.all([request<{ data?: unknown }>("model/list", {}), codexContextWindows(env?.CODEX_HOME ?? "").catch(() => ({}))])
+      .then(([result, windows]) => dispatch({ type: "models", data: result?.data, windows })).catch(() => undefined);
     void request<{ data?: unknown }>("skills/list", { cwds: [cwd] }).then(result => dispatch({ type: "skills", data: result?.data })).catch(() => undefined);
 
     const overrides: Json = { ...launch.thread };
@@ -173,7 +182,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     const threadId = await newThread(overrides);
     historyLoadedRef.current = true;
     return threadId;
-  }, [request, notice, loadHistory, newThread]);
+  }, [request, notice, loadHistory, newThread, cwd, env]);
 
   const start = useCallback(async (): Promise<void> => {
     rejectPending("Codex se reinició.");
@@ -295,6 +304,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     setMode: mode => {
       choicesRef.current = { ...choicesRef.current, mode };
       dispatch({ type: "mode", mode });
+      // El turno en curso sigue con el modo anterior: lo que pida desde ahora se acepta aquí.
+      if (allowsAll(mode)) for (const item of autoAllowed(stateRef.current.items)) answer(item, true, false);
     },
     setModel: model => {
       choicesRef.current = { ...choicesRef.current, model };

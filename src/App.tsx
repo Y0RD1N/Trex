@@ -38,6 +38,7 @@ import type {
   AppConfig,
   AgentActivity,
   AgentNotice,
+  AgentProvider,
   AgentNoticeKind,
   AppInfo,
   ClaudeInfo,
@@ -98,6 +99,7 @@ const buildTab = (
 ): TabState => {
   return {
     conversationId: null,
+    chatMode: null,
     id: newSessionId(),
     projectId,
     kind,
@@ -258,6 +260,7 @@ function AppShell() {
     kind: tab.kind,
     subtitle: tab.subtitle,
     conversationId:tab.conversationId,
+    chatMode: tab.chatMode,
     launch: { profileId: tab.profileId, profileName: tab.profileName, command: tab.command, args: tab.args,
       shell: tab.shell, launchMode: tab.launchMode, env: tab.env },
   })));
@@ -327,7 +330,7 @@ function AppShell() {
       // Recrea las pestañas de la sesión anterior (mismo proyecto y comando).
       const restored = persisted.map((tab) => {
         const launch = restoreLaunch(tab, settings);
-        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch, id:tab.id ?? newSessionId(), conversationId:tab.conversationId ?? null };
+        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch, id:tab.id ?? newSessionId(), conversationId:tab.conversationId ?? null, chatMode: tab.chatMode ?? null };
       });
       setTabs(restored);
       // Proyecto activo: el persistido si tiene pestañas restauradas; si no, el de la primera.
@@ -767,6 +770,15 @@ function AppShell() {
   }, []);
 
   /** Como en las apps de chat, la sesión toma el nombre del primer mensaje si no se renombró. */
+  const handleChatMode = useCallback((tabId: string, provider: AgentProvider, mode: string) => {
+    setTabs(prev => prev.some(tab => tab.id === tabId && tab.chatMode !== mode)
+      ? prev.map(tab => tab.id === tabId ? { ...tab, chatMode: mode } : tab) : prev);
+    // Planificar es pasajero: los chats nuevos heredan el último modo de trabajo.
+    if (mode === "plan") return;
+    setConfig(previous => !previous || previous.ui.chatModes?.[provider] === mode ? previous
+      : { ...previous, ui: { ...previous.ui, chatModes: { ...previous.ui.chatModes, [provider]: mode } } });
+  }, []);
+
   const handleChatTitle = useCallback((tabId: string, title: string) => {
     setTabs(prev => prev.map(tab => {
       const name = tab.profileName ?? "";
@@ -1050,6 +1062,7 @@ function AppShell() {
                     shell={tab.shell}
                     env={tab.env}
                     conversationId={tab.conversationId}
+                    mode={tab.chatMode ?? config.ui.chatModes?.[tab.kind] ?? null}
                     settings={config.settings}
                     visible={isVisible}
                     focused={isActive}
@@ -1059,6 +1072,7 @@ function AppShell() {
                     onNotice={handleAgentNotice}
                     onConversation={handleConversation}
                     onTitle={handleChatTitle}
+                    onMode={handleChatMode}
                     onMessage={showToast}
                   /> : <TerminalView
                     sessionId={tab.id}

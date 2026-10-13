@@ -64,13 +64,23 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
 - **Permisos**: cuando el asistente necesita permiso, aparece una tarjeta con
   **Permitir**, la opción de permitirlo en la sesión o siempre, y **Denegar**.
   El selector de la caja de mensaje cambia el modo: Preguntar, Aceptar
-  ediciones o Planificar en Claude; Solo lectura, Automático, Planificar o
-  Acceso total en Codex.
+  ediciones, Planificar o Permitir todo en Claude; Solo lectura, Automático,
+  Planificar o Permitir todo en Codex. **Permitir todo** se aplica al momento:
+  lo que estaba esperando permiso se acepta y no vuelve a preguntar (las
+  preguntas con opciones y los planes sí esperan tu respuesta). Cada pestaña
+  recuerda su modo al reabrir trex y los chats nuevos empiezan con el último
+  que elegiste.
+- **Contexto**: en Claude y en Codex, el anillo de la bandeja muestra desde
+  que abres el chat qué parte de la ventana de contexto ocupa la conversación;
+  se pone ámbar al 70 % y rojo al 90 %. Al pulsarlo ves el desglose (en Claude,
+  lo mismo que `/context`; en Codex, también los tokens de toda la
+  conversación) y puedes resumirla con `/compact`.
 - **Modelo y esfuerzo**: los selectores muestran los modelos de tu cuenta y
   solo los niveles de esfuerzo que admite cada uno. En Codex se aplican desde
   el siguiente mensaje.
 - **Planes**: en modo Planificar, Codex muestra el plan entero con un botón
-  **Implementar el plan**, que vuelve a Automático y lo pone en marcha.
+  **Implementar el plan**, que vuelve al modo en que trabajabas y lo pone en
+  marcha.
 - **Imágenes**: pega una captura (`Ctrl+V` o tu atajo de pegado), arrástrala a
   la conversación o usa el clip. Se reducen a 1920 px y se comprimen antes de
   enviarlas; puedes quitar cualquiera antes de pulsar Enter.

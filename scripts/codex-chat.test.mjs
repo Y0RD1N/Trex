@@ -290,3 +290,47 @@ test("a new thread keeps the model and effort chosen in the chat", () => {
   ]);
   assert.deepEqual([state.sessionId, state.model, state.effort, state.permissionMode], ["th-2", "gpt-6.1-sol", "low", "read-only"]);
 });
+
+test("«Permitir todo» accepts Codex permissions on its own, but never its questions", () => {
+  assert.deepEqual(codex.autoApproval("item/commandExecution/requestApproval", { availableDecisions: ["accept", "acceptForSession", "cancel"] }), { decision: "accept" });
+  assert.deepEqual(codex.autoApproval("item/fileChange/requestApproval", {}), { decision: "accept" });
+  assert.deepEqual(codex.autoApproval("item/permissions/requestApproval", { permissions: { network: { enabled: true } } }),
+    { permissions: { network: { enabled: true } }, scope: "turn" });
+  assert.equal(codex.autoApproval("item/tool/requestUserInput", { questions: [] }), null);
+  assert.equal(codex.autoApproval("mcpServer/elicitation/request", {}), null);
+});
+
+test("the mode shown is the one that will apply: chosen in the chat, or what really stops to ask", () => {
+  const thread = (settings) => run([{ type: "thread", response: { thread: { id: "th" }, model: "m", ...settings } }]);
+  assert.equal(thread({ sandbox: { type: "dangerFullAccess" }, approvalPolicy: "never" }).permissionMode, "full");
+  assert.equal(thread({ sandbox: { type: "dangerFullAccess" }, approvalPolicy: "on-request" }).permissionMode, "auto", "sin sandbox pero preguntando no es «Permitir todo»");
+  assert.equal(thread({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "on-request" }).permissionMode, "auto");
+  // Hasta el siguiente turno el hilo conserva el modo anterior; la bandeja enseña el elegido.
+  const settings = rpc("thread/settings/updated", { threadId: "th", threadSettings: { model: "m", effort: "low", approvalPolicy: "on-request",
+    sandboxPolicy: { type: "workspaceWrite" }, collaborationMode: { mode: "default" } } });
+  assert.equal(run([{ type: "mode", mode: "full" }, settings]).permissionMode, "full");
+  assert.equal(run([settings]).permissionMode, "auto");
+  assert.equal(run([], initialChatState("full")).modeChoice, "full", "la pestaña recuerda el modo elegido");
+});
+
+test("context usage counts the last request and keeps the conversation total", () => {
+  const usage = (last, total, modelContextWindow = 475000) => rpc("thread/tokenUsage/updated", { threadId: "th", turnId: "tu",
+    tokenUsage: { last, total, modelContextWindow } });
+  let state = run([usage({ totalTokens: 20876, inputTokens: 20871, outputTokens: 5 }, { totalTokens: 64000, inputTokens: 63000, outputTokens: 1000 })]);
+  assert.deepEqual(state.usage, { used: 20876, window: 475000, parts: [], reserve: null, total: 64000 });
+  state = run([usage({ inputTokens: 30000, outputTokens: 200 }, null, null)], state);
+  assert.deepEqual([state.usage.used, state.usage.window, state.usage.total], [30200, 475000, null], "sin ventana nueva se conserva la anterior");
+});
+
+test("the context shows from the start with the window of the chosen model", () => {
+  const list = [{ id: "a", model: "gpt-6.1-sol", displayName: "Sol", supportedReasoningEfforts: [] },
+    { id: "b", model: "gpt-6-luna", displayName: "Luna", supportedReasoningEfforts: [] }];
+  let state = run([{ type: "models", data: list, windows: { "gpt-6.1-sol": 475000, "gpt-6-luna": 258400 } },
+    { type: "thread", response: { thread: { id: "th" }, model: "gpt-6.1-sol" } }]);
+  assert.deepEqual(shared.shownUsage(state), { used: 0, window: 475000, parts: [], reserve: null, total: null });
+  state = run([{ type: "model", model: "gpt-6-luna" }], state);
+  assert.equal(shared.shownUsage(state).window, 258400, "al cambiar de modelo cambia la ventana");
+  const measured = run([rpc("thread/tokenUsage/updated", { tokenUsage: { last: { totalTokens: 9000 }, total: { totalTokens: 9000 }, modelContextWindow: 475000 } })], state);
+  assert.equal(shared.shownUsage(measured).used, 9000, "lo medido manda");
+  assert.equal(shared.shownUsage(run([{ type: "models", data: list }])), null, "sin ventana conocida no se inventa nada");
+});

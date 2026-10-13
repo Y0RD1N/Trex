@@ -9,6 +9,7 @@ mod pty;
 mod output_flow;
 mod clipboard;
 mod conversations;
+mod codex_models;
 mod files;
 mod git;
 mod terminal_env;
@@ -328,6 +329,7 @@ pub fn run() {
             attachments::read_clipboard_image,
             git::git_branch,
             files::list_project_files,
+            codex_models::codex_context_windows,
             desktop_notification,
         ])
         .on_window_event(|window, event| {
