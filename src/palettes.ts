@@ -17,7 +17,7 @@ const variant = (ui: SurfacePalette, foreground: string, ansi: string[], selecti
 
 export const PALETTES: readonly Palette[] = [
   { id: "trex", name: "Grafito", description: "Neutro y cálido", accent: "#e8834a",
-    dark: variant({ app:"#202022",sidebar:"#19191c",surface:"#242427",elevated:"#2b2b2f",inset:"#161619",border:"#303034",borderStrong:"#444448",text:"#ebebee",muted:"#a6a6af",dim:"#888891",selected:"#37373c" }, "#e4e7ec",
+    dark: variant({ app:"#121212",sidebar:"#060606",surface:"#171717",elevated:"#1d1d1d",inset:"#0b0b0b",border:"#242424",borderStrong:"#383838",text:"#ececec",muted:"#a5a5a5",dim:"#878787",selected:"#1d1d1d" }, "#e4e7ec",
       ["#2b3340","#f2687f","#7fd962","#e6b455","#6cb6ff","#c58af9","#56d4dd","#c8ccd4","#6f7a8c","#ff8095","#9ae86e","#f5cd7c","#8ec7ff","#d8a6ff","#7ee2ea","#f2f4f8"], "#768fb8"),
     light: variant({ app:"#faf9f6",sidebar:"#f1f0ec",surface:"#ffffff",elevated:"#ffffff",inset:"#eae9e5",border:"#e1e0db",borderStrong:"#cecdc6",text:"#29292f",muted:"#62626b",dim:"#6b6b74",selected:"#e2e1dc" }, "#1b1f27",
       ["#24292f","#cf222e","#1a7f37","#9a6700","#0969da","#8250df","#1b7c83","#6b7280","#57606a","#a40e26","#116329","#7d4e00","#0550ae","#6639ba","#0f6672","#12161c"], "#2563eb") },

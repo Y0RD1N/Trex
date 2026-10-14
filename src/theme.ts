@@ -150,7 +150,7 @@ export const getTerminalTheme = (mode: ThemeMode): ITheme => {
     mode === "light"
       ? cssVar("--accent-strong", "#b3541f")
       : cssVar("--accent", "#e8834a");
-  const background = cssVar("--term-bg", palette.background ?? "#202022");
+  const background = cssVar("--term-bg", palette.background ?? "#121212");
   return { ...palette, background, cursorAccent: background, cursor };
 };
 

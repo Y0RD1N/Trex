@@ -15,21 +15,22 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  /* Grafito: superficies escalonadas y bordes neutros. */
-  --bg-app: #202022;
-  --bg-sidebar: #19191c;
-  --bg-surface: #242427;
-  --bg-elevated: #2b2b2f;
-  --bg-inset: #161619;
-  --term-bg: #202022;
+  /* Grafito: casi negro y neutro; la barra lateral es la capa más profunda
+     y las superficies suben en pasos cortos sobre el fondo. */
+  --bg-app: #121212;
+  --bg-sidebar: #060606;
+  --bg-surface: #171717;
+  --bg-elevated: #1d1d1d;
+  --bg-inset: #0b0b0b;
+  --term-bg: #121212;
   --term-fg: #e4e7ec;
 
-  --border: #303034;
-  --border-strong: #444448;
+  --border: #242424;
+  --border-strong: #383838;
 
-  --text: #ebebee;
-  --text-muted: #a6a6af;
-  --text-dim: #888891;
+  --text: #ececec;
+  --text-muted: #a5a5a5;
+  --text-dim: #878787;
 
   --hover: rgba(255, 255, 255, 0.05);
   --active: rgba(255, 255, 255, 0.08);
@@ -41,11 +42,11 @@
   /* Vidrio: grafito translúcido en oscuro, blanco lechoso en claro.
      En oscuro sigue a --bg-sidebar y --bg-elevated para no contrastar con el
      negro puro. */
-  --glass: rgba(32, 32, 34, 0.96);
-  --glass-strong: rgba(43, 43, 47, 0.98);
+  --glass: rgba(18, 18, 18, 0.96);
+  --glass-strong: rgba(29, 29, 29, 0.98);
 
-  --scroll-thumb: #2c2c31;
-  --scroll-thumb-hover: #3a3a40;
+  --scroll-thumb: #2a2a2a;
+  --scroll-thumb-hover: #3a3a3a;
 
   /* Anillo del proyecto activo (foco de macOS). */
   --item-ring: rgba(var(--accent-rgb), 0.55);
@@ -68,10 +69,10 @@
   --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.55);
   --shadow-pop: 0 26px 64px rgba(0, 0, 0, 0.62), 0 6px 18px rgba(0, 0, 0, 0.45);
   --shine: none;
-  --session-selected: #37373c;
+  --session-selected: #1d1d1d;
 
   /* Neutro para que el halo de bienvenida no destaque sobre el negro puro. */
-  --welcome-top: #17171a;
+  --welcome-top: #0e0e0e;
   --glow-opacity: 0.3;
 
   /* Reserva: el JS las reescribe con el acento configurado. */

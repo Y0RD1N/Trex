@@ -117,8 +117,8 @@
 .settings-theme-option:hover { border-color: var(--border-strong); background: var(--hover); }
 .settings-theme-option.selected { border-color: var(--accent-strong); color: var(--text); }
 .settings-theme-preview {
-  --mini-bg: #242427;
-  --mini-side: #19191c;
+  --mini-bg: #171717;
+  --mini-side: #060606;
   --mini-line: #898990;
   display: flex;
   height: 70px;
@@ -128,7 +128,7 @@
   overflow: hidden;
 }
 .settings-theme-preview.light { --mini-bg: #faf9f6; --mini-side: #e9e8e3; --mini-line: #8b8c91; }
-.settings-theme-preview.system { background: linear-gradient(90deg, #faf9f6 50%, #242427 50%); }
+.settings-theme-preview.system { background: linear-gradient(90deg, #faf9f6 50%, #171717 50%); }
 .settings-theme-preview.system .settings-mini-sidebar { background: #e9e8e3; }
 .settings-mini-sidebar { display: flex; flex-direction: column; gap: 5px; width: 28%; background: var(--mini-side); padding: 10px 5px; }
 .settings-mini-sidebar i { height: 3px; border-radius: 1px; background: var(--mini-line); opacity: .6; }
