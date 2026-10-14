@@ -30,6 +30,7 @@ import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage }
 import { EffortMenu, ModelMenu } from "./chat/ModelMenu";
 import { SharedFilesContext } from "./chat/SharedFiles";
 import { useImageViewer } from "./ImageViewer";
+import { useStableCallback } from "../hooks/useStableCallback";
 import ContextMeter from "./chat/ContextMeter";
 import PlanMeter from "./chat/PlanMeter";
 import QuestionPanel from "./chat/QuestionPanel";
@@ -107,6 +108,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   callbacks.current = props;
   const titledRef = useRef(conversationId !== null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const threadRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -167,6 +169,15 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       inputRef.current?.focus({ preventScroll: true });
     }
   }, [visible, focused]);
+
+  // El texto en curso se pinta a ritmo propio (ver AssistantText): el hilo sigue el final al crecer.
+  useLayoutEffect(() => {
+    const thread = threadRef.current, scroller = scrollRef.current;
+    if (!thread || !scroller) return;
+    const observer = new ResizeObserver(() => { if (stickRef.current) scroller.scrollTop = scroller.scrollHeight; });
+    observer.observe(thread);
+    return () => observer.disconnect();
+  }, []);
 
   // La caja flota sobre el hilo: el hilo deja debajo el hueco que ocupa la caja.
   useLayoutEffect(() => {
@@ -377,12 +388,13 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   // Tras elegir en un selector, se sigue escribiendo en la caja.
   const backToInput = (): void => { requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true })); };
 
-  const answer = (item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
+  // Identidad fija: las filas del hilo están memorizadas y no deben repintarse por ella.
+  const answer = useStableCallback((item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
     session.answer(item, allowed, remember, choices);
     stickRef.current = true;
     // La caja vuelve a la vista en el siguiente render (si era una pregunta, ocupaba su sitio).
     backToInput();
-  };
+  });
 
   /** Pregunta del asistente que espera respuesta: ocupa el sitio de la caja de mensaje. */
   const question = state.items.find((item): item is PermissionItem =>
@@ -401,11 +413,11 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   // El plan se puede poner en marcha cuando es lo último que propuso Codex.
   const planReady = !running && mode === "plan" && latestPlan !== undefined
     && !state.items.slice(state.items.findIndex(item => item.id === latestPlan) + 1).some(item => item.kind === "user");
-  const implementPlan = (): void => {
+  const implementPlan = useStableCallback((): void => {
     session.setMode(workModeRef.current);
     stickRef.current = true;
     session.send("Implementa el plan.", [], []);
-  };
+  });
   const stderrTail = state.stderr.slice(-6).join("\n");
 
   return <div ref={rootRef} className={`chat${empty ? " is-empty" : ""}${dragging ? " is-dragging" : ""}`}
@@ -423,7 +435,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     }}>
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
       <SharedFilesContext.Provider value={filesContext}>
-      <div className="chat-thread">
+      <div className="chat-thread" ref={threadRef}>
         {empty && <div className="chat-empty">
           <AgentIcon kind={provider} size={30} activity={activity} />
           <h2>¿En qué trabajamos en {projectName}?</h2>

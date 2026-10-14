@@ -2,7 +2,7 @@
  * Piezas del hilo de chat: mensajes, filas de herramientas, diffs, tareas y
  * peticiones de permiso. Solo pintan; las acciones llegan por props.
  */
-import { memo, useContext, useMemo, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   answersOf, describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
   type DiffLine, type PermissionItem, type ToolItem, type ToolSummary,
@@ -18,7 +18,7 @@ const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
   web: <GlobeIcon />, task: <SparkIcon />, todo: <ListIcon />, plan: <MapIcon />, question: <QuestionIcon />, tool: <WrenchIcon />,
 };
 
-export function UserMessage({ text, images, previews }: { text: string; images: number; previews: string[] }) {
+export const UserMessage = memo(function UserMessage({ text, images, previews }: { text: string; images: number; previews: string[] }) {
   const viewer = useImageViewer();
   const label = (index: number): string => previews.length > 1 ? `Imagen ${index + 1}` : "Imagen";
   return <div className="chat-user-group">
@@ -34,19 +34,43 @@ export function UserMessage({ text, images, previews }: { text: string; images: 
         {images === 1 ? "1 imagen adjunta" : `${images} imágenes adjuntas`}</div>}
     </div>}
   </div>;
+});
+
+/** Como mucho, cada cuánto se vuelve a pintar una respuesta que sigue llegando. */
+const STREAM_RENDER_MS = 100;
+
+/**
+ * Texto que se pinta de una respuesta en curso. Cada trozo que llega cambia el
+ * texto, pero pintarlo entero (Markdown y colores del código) cuesta más cuanto
+ * más largo es: se pinta como mucho cada `STREAM_RENDER_MS`, siempre con lo
+ * último que haya llegado. La respuesta terminada se pinta al momento.
+ */
+function useStreamingText(text: string, streaming: boolean): string {
+  const [shown, setShown] = useState(text);
+  const paintedAtRef = useRef(0);
+  useEffect(() => {
+    if (!streaming) return;
+    const paint = (): void => { paintedAtRef.current = performance.now(); setShown(text); };
+    const wait = STREAM_RENDER_MS - (performance.now() - paintedAtRef.current);
+    if (wait <= 0) { paint(); return; }
+    const timer = window.setTimeout(paint, wait);
+    return () => window.clearTimeout(timer);
+  }, [text, streaming]);
+  return streaming ? shown : text;
 }
 
 export const AssistantText = memo(function AssistantText({ text, streaming, actions }: { text: string; streaming: boolean; actions: boolean }) {
   // Mientras la respuesta llega, un adjunto a medio escribir no se da por inexistente.
   const { cwd } = useContext(SharedFilesContext);
   const files = useMemo(() => ({ cwd, streaming }), [cwd, streaming]);
+  const shown = useStreamingText(text, streaming);
   return <div className={`chat-assistant${streaming ? " streaming" : ""}`}>
-    <SharedFilesContext.Provider value={files}><Markdown text={text} /></SharedFilesContext.Provider>
+    <SharedFilesContext.Provider value={files}><Markdown text={shown} /></SharedFilesContext.Provider>
     {actions && <div className="chat-assistant-actions"><CopyButton text={text} label="Copiar respuesta" /></div>}
   </div>;
 });
 
-export function Thinking({ text }: { text: string }) {
+export const Thinking = memo(function Thinking({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   if (!text.trim()) return null;
   return <div className="chat-thinking">
@@ -55,7 +79,7 @@ export function Thinking({ text }: { text: string }) {
     </button>
     {open && <div className="chat-thinking-text">{text}</div>}
   </div>;
-}
+});
 
 export function DiffView({ lines }: { lines: DiffLine[] }) {
   return <div className="chat-diff" role="group" aria-label="Cambios">
@@ -153,7 +177,7 @@ function toolDetail(item: ToolItem, cwd: string): ReactNode {
   </>;
 }
 
-export function ToolRow({ item, cwd, expanded = false, onImplement }: {
+export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onImplement }: {
   item: ToolItem; cwd: string; expanded?: boolean; onImplement?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -175,7 +199,7 @@ export function ToolRow({ item, cwd, expanded = false, onImplement }: {
     </button>
     {open && <div className="chat-tool-detail">{toolDetail(item, cwd)}</div>}
   </div>;
-}
+});
 
 /** Opciones de "permitir siempre" que propone el propio CLI. */
 function rememberLabel(suggestions: unknown[]): string | null {
@@ -197,7 +221,7 @@ function requestedPermissions(input: Record<string, unknown>): string[] {
   ];
 }
 
-export function PermissionCard({ item, cwd, agent, onAnswer }: {
+export const PermissionCard = memo(function PermissionCard({ item, cwd, agent, onAnswer }: {
   item: PermissionItem;
   cwd: string;
   /** Nombre del asistente para los títulos («Claude», «Codex»). */
@@ -239,11 +263,11 @@ export function PermissionCard({ item, cwd, agent, onAnswer }: {
       </button>
     </div>
   </div>;
-}
+});
 
-export function Notice({ tone, text }: { tone: "info" | "warn" | "error"; text: string }) {
+export const Notice = memo(function Notice({ tone, text }: { tone: "info" | "warn" | "error"; text: string }) {
   return <div className={`chat-notice ${tone}${text.includes("\n") ? " multiline" : ""}`} role={tone === "error" ? "alert" : "status"}>
     <span aria-hidden="true">{tone === "info" ? <InfoIcon size={14} /> : <AlertIcon size={14} />}</span>
     <span>{text}</span>
   </div>;
-}
+});
