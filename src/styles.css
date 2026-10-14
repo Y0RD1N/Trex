@@ -1333,11 +1333,27 @@ body.dragging-sidebar .sidebar {
 /* Salida con curva de aceleración (ease-in) y sin desplazamiento. Con la curva de
    entrada (ease-out) la opacidad caía casi del todo en el primer fotograma y el
    terminal asomaba a través del panel de golpe: se veía como un parpadeo. Así el
-   panel se mantiene sólido al principio y se desvanece al final. */
+   panel se mantiene sólido al principio y se desvanece al final.
+   La opacidad no se anima directamente: WebKitGTK la anima en el compositor y,
+   al terminar, pinta un fotograma la capa con su opacidad de partida antes de
+   aplicar la final. El menú, ya casi invisible, reaparecía entero un instante
+   antes de desmontarse (pasaba en uno de cada tres cierres, con transición o
+   con animación). Una propiedad registrada se anima en el hilo principal, que
+   aplica la opacidad fotograma a fotograma, y ese salto no llega a pintarse. */
+@property --menu-fade {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
 .context-menu.motion-popover.leaving {
   transform: translateY(0);
-  transition-duration: 140ms;
-  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  opacity: var(--menu-fade);
+  transition: none;
+  animation: trex-menu-out 140ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+@keyframes trex-menu-out {
+  from { --menu-fade: 1; }
+  to { --menu-fade: 0; }
 }
 .term-search-input {
   width: 190px;
