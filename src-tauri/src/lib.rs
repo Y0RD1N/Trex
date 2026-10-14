@@ -2,6 +2,7 @@
 //
 // El backend expone comandos Tauri para gestionar sesiones PTY, detectar
 // Claude Code en el sistema y persistir la configuración del usuario.
+mod accounts;
 mod agent;
 mod attachments;
 mod config;
@@ -330,6 +331,7 @@ pub fn run() {
             git::git_branch,
             files::list_project_files,
             codex_models::codex_context_windows,
+            accounts::detect_account_dir,
             desktop_notification,
         ])
         .on_window_event(|window, event| {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listConversations, canResume } from "../conversations";
+import { listConversations, canResume, profileAccountDir } from "../conversations";
 import { launchForProfile } from "../profiles";
 import { formatError, normalizeText } from "../api";
 import type {
@@ -49,7 +49,9 @@ export default function RecoverConversations({
       return;
     }
     setLoading(true);
-    void listConversations(profile.provider, profile.configDir, project.path)
+    // Un lanzador como `claude2` guarda sus conversaciones en su propia carpeta.
+    void profileAccountDir(profile, settings.shell)
+      .then((configDir) => listConversations(profile.provider, configDir, project.path))
       .then((result) => {
         if (generation.current === request) setItems(result);
       })
@@ -66,6 +68,9 @@ export default function RecoverConversations({
     profile.id,
     profile.provider,
     profile.configDir,
+    profile.command,
+    profile.shell,
+    settings.shell,
     project.path,
     supported,
     revision,

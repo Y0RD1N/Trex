@@ -281,16 +281,41 @@ fn slim_entry(mut value: Value) -> Option<Value> {
     }))
 }
 
+/// Carpetas de cuenta de Claude Code donde buscar una conversación: la indicada y,
+/// por si el lanzador elige otra por dentro, las demás `~/.claude*` del equipo
+/// (los ids no se repiten entre cuentas).
+fn claude_roots(config_dir: &str) -> Vec<PathBuf> {
+    claude_roots_in(&home(), root("claude", config_dir))
+}
+fn claude_roots_in(home: &Path, first: PathBuf) -> Vec<PathBuf> {
+    let mut roots = vec![first];
+    if let Ok(entries) = fs::read_dir(home) {
+        let mut others: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".claude"))
+            .map(|entry| entry.path())
+            .filter(|path| path.join("projects").is_dir())
+            .collect();
+        others.sort();
+        for path in others {
+            if !roots.contains(&path) {
+                roots.push(path);
+            }
+        }
+    }
+    roots
+}
+
 /// Mensajes de una conversación de Claude Code para mostrarla en el chat.
 pub fn history(config_dir: &str, id: &str) -> Result<Vec<Value>, String> {
     if !valid_id(id) {
         return Err("La conversación necesita un identificador válido.".into());
     }
-    let projects = root("claude", config_dir).join("projects");
     let file_name = format!("{id}.jsonl");
-    let path = fs::read_dir(&projects)
-        .map_err(|_| "No se encontró el historial de Claude Code.".to_string())?
-        .flatten()
+    let path = claude_roots(config_dir)
+        .into_iter()
+        .filter_map(|root| fs::read_dir(root.join("projects")).ok())
+        .flat_map(|entries| entries.flatten())
         .map(|entry| entry.path().join(&file_name))
         .find(|path| path.is_file())
         .ok_or_else(|| "No se encontró esta conversación en el equipo.".to_string())?;
@@ -430,6 +455,17 @@ mod tests {
     }
 
     #[test]
+    fn a_conversation_is_found_in_the_account_its_launcher_chose() {
+        let home = std::env::temp_dir().join(format!("trex-roots-{}", std::process::id()));
+        for dir in [".claude/projects", ".claude2/projects/-p", ".claude-old", ".codex/sessions"] {
+            fs::create_dir_all(home.join(dir)).unwrap();
+        }
+        let roots = claude_roots_in(&home, home.join(".claude"));
+        assert_eq!(roots, vec![home.join(".claude"), home.join(".claude2")], "solo carpetas de Claude con proyectos");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn history_keeps_the_visible_chat_and_drops_heavy_or_hidden_entries() {
         let stamp = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let temp = std::env::temp_dir().join(format!("trex-chat-history-{}-{stamp}", std::process::id()));
@@ -462,3 +498,4 @@ mod tests {
         assert!(history(&temp.to_string_lossy(), "../../etc/passwd").is_err());
     }
 }
+

@@ -252,6 +252,10 @@ function AppShell() {
 
   // --- Persistencia (con debounce) --------------------------------------------
 
+  /** Primer cambio aún sin guardar y si el último guardado falló. */
+  const pendingSaveRef = useRef<number | null>(null);
+  const saveFailedRef = useRef(false);
+
   // Títulos OSC y códigos de salida son estado transitorio. Solo los campos
   // restaurables deben reprogramar la escritura del archivo de configuración.
   const persistedTabsKey = JSON.stringify(tabs.map<PersistedTab>((tab) => ({
@@ -273,13 +277,22 @@ function AppShell() {
         lastTabs: JSON.parse(persistedTabsKey) as PersistedTab[],
       },
     };
+    // Con cambios seguidos se guarda igualmente: como mucho 2 s después del primero.
+    const since = pendingSaveRef.current ?? Date.now();
+    pendingSaveRef.current = since;
     const timer = window.setTimeout(() => {
-      void saveConfig(payload).catch((error: unknown) => {
-        console.warn("save_config falló:", formatError(error));
-      });
-    }, 400);
+      pendingSaveRef.current = null;
+      void saveConfig(payload)
+        .then(() => { saveFailedRef.current = false; })
+        .catch((error: unknown) => {
+          console.warn("save_config falló:", formatError(error));
+          // Se avisa una vez: si no, las pestañas y sus conversaciones se perderían en silencio al cerrar.
+          if (!saveFailedRef.current) showToast(`No se pudieron guardar las pestañas: ${formatError(error)}`);
+          saveFailedRef.current = true;
+        });
+    }, Math.max(0, Math.min(400, since + 2000 - Date.now())));
     return () => window.clearTimeout(timer);
-  }, [config, persistedTabsKey]);
+  }, [config, persistedTabsKey, showToast]);
 
   // Tema y acento se aplican en vivo cuando cambia la configuración y, si la
   // apariencia es "system", también cuando el sistema cambia de modo.
@@ -603,7 +616,12 @@ function AppShell() {
       sameKind.length === 0 ? base : `${base} ${sameKind.length + 1}`;
 
     const tab = buildTab(projectId, profile?.provider ?? "shell", subtitle, settings, profile ?? null);
-    if (conversation && profile) { Object.assign(tab,resumedLaunch(tab,profile.provider,conversation.id)); tab.conversationId = conversation.id; tab.subtitle = conversation.title; }
+    if (conversation && profile) {
+      // El chat retoma la conversación por su id; la terminal necesita la opción en el comando.
+      const chat = profile.provider === "claude" || codexChatSupported(tab.args);
+      if (!chat) Object.assign(tab,resumedLaunch(tab,profile.provider,conversation.id));
+      tab.conversationId = conversation.id; tab.subtitle = conversation.title;
+    }
     // Actualiza el espejo al instante para numerar bien aperturas seguidas.
     const nextTabs = [...tabsRef.current, tab];
     tabsRef.current = nextTabs;
