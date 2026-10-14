@@ -107,6 +107,20 @@ export function PlusIcon({ size = 16, strokeWidth = 1.8 }: IconProps) {
   );
 }
 
+export function MinusIcon({ size = 16, strokeWidth = 1.8 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M5.2 12h13.6" /></svg>;
+}
+
+/** Descargar o guardar: flecha hacia una bandeja. */
+export function DownloadIcon({ size = 16, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 4v11m0 0-4.2-4.2M12 15l4.2-4.2M4.5 15.5v2.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2.5" /></svg>;
+}
+
+/** Abrir fuera de trex: flecha que sale de un recuadro. */
+export function ExternalIcon({ size = 16, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M13.5 4.5h6v6M19.5 4.5l-8 8M17.5 13.5v4a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h4" /></svg>;
+}
+
 /** Aspa: cerrar. */
 export function CloseIcon({ size = 16, strokeWidth = 1.8 }: IconProps) {
   return (

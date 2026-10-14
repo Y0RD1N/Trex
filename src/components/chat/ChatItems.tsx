@@ -2,7 +2,7 @@
  * Piezas del hilo de chat: mensajes, filas de herramientas, diffs, tareas y
  * peticiones de permiso. Solo pintan; las acciones llegan por props.
  */
-import { memo, useState, type ReactNode } from "react";
+import { memo, useContext, useMemo, useState, type ReactNode } from "react";
 import {
   answersOf, describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
   type DiffLine, type PermissionItem, type ToolItem, type ToolSummary,
@@ -10,6 +10,8 @@ import {
 import { AlertIcon, CheckIcon, ChevronIcon, CloseIcon, FileIcon, GlobeIcon, ImageIcon, InfoIcon, ListIcon, MapIcon, PencilIcon,
   QuestionIcon, SearchIcon, ShieldIcon, SparkIcon, TerminalIcon, WrenchIcon } from "../Icons";
 import Markdown, { CopyButton } from "./Markdown";
+import { SharedFilesContext } from "./SharedFiles";
+import { useImageViewer } from "../ImageViewer";
 
 const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
   read: <FileIcon />, edit: <PencilIcon size={15} />, run: <TerminalIcon size={15} />, search: <SearchIcon size={15} />,
@@ -17,11 +19,12 @@ const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
 };
 
 export function UserMessage({ text, images, previews }: { text: string; images: number; previews: string[] }) {
-  const [enlarged, setEnlarged] = useState<string | null>(null);
+  const viewer = useImageViewer();
+  const label = (index: number): string => previews.length > 1 ? `Imagen ${index + 1}` : "Imagen";
   return <div className="chat-user-group">
     {previews.length > 0 && <div className="chat-user-gallery">
-      {previews.map((preview, index) => <button key={index} type="button" className={`chat-user-thumb${enlarged === preview ? " enlarged" : ""}`}
-        aria-label={enlarged === preview ? "Reducir imagen" : "Ampliar imagen"} onClick={() => setEnlarged(enlarged === preview ? null : preview)}>
+      {previews.map((preview, index) => <button key={index} type="button" className="chat-user-thumb" aria-label="Ver imagen"
+        onClick={() => viewer.open(previews.map((src, position) => ({ src, name: label(position) })), index)}>
         <img src={preview} alt={`Imagen adjunta ${index + 1}`} />
       </button>)}
     </div>}
@@ -34,8 +37,11 @@ export function UserMessage({ text, images, previews }: { text: string; images: 
 }
 
 export const AssistantText = memo(function AssistantText({ text, streaming, actions }: { text: string; streaming: boolean; actions: boolean }) {
+  // Mientras la respuesta llega, un adjunto a medio escribir no se da por inexistente.
+  const { cwd } = useContext(SharedFilesContext);
+  const files = useMemo(() => ({ cwd, streaming }), [cwd, streaming]);
   return <div className={`chat-assistant${streaming ? " streaming" : ""}`}>
-    <Markdown text={text} />
+    <SharedFilesContext.Provider value={files}><Markdown text={text} /></SharedFilesContext.Provider>
     {actions && <div className="chat-assistant-actions"><CopyButton text={text} label="Copiar respuesta" /></div>}
   </div>;
 });

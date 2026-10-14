@@ -20,6 +20,10 @@ test("the chat flags keep the CLI on stdin/stdout and resume without duplicating
   assert.ok(!chat.claudeChatFlags("--continue", "550e8400-e29b-41d4-a716-446655440000").includes("--resume"));
   assert.ok(!chat.claudeChatFlags(null, null).includes("--resume"));
   assert.ok(!chat.claudeChatFlags(null, null).includes("AskUserQuestion"), "las preguntas con opciones tienen interfaz propia");
+  const prompt = chat.claudeChatFlags(null, null);
+  assert.match(prompt[prompt.indexOf("--append-system-prompt") + 1], /attach it/, "sabe adjuntar archivos al chat");
+  assert.ok(!chat.claudeChatFlags("--append-system-prompt 'mío'", null).includes("--append-system-prompt"), "no pisa las instrucciones del perfil");
+  assert.ok(!chat.claudeChatFlags("--system-prompt-file p.md", null).includes("--append-system-prompt"));
 });
 
 test("outgoing messages are single JSON lines in the shape the CLI accepts", () => {

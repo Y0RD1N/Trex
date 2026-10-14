@@ -59,6 +59,7 @@ import TerminalView from "./components/TerminalView";
 import ChatView from "./components/ChatView";
 import Toast from "./components/Toast";
 import TooltipProvider from "./components/TooltipProvider";
+import ImageViewerProvider from "./components/ImageViewer";
 import ProjectHome from "./components/ProjectHome";
 import { sessionLabel } from "./sessionTitle";
 import WelcomeScreen from "./components/WelcomeScreen";
@@ -1208,7 +1209,9 @@ function AppShell() {
 export default function App() {
   return (
     <DialogProvider>
-      <AppShell />
+      <ImageViewerProvider>
+        <AppShell />
+      </ImageViewerProvider>
       <TooltipProvider />
     </DialogProvider>
   );

@@ -4,11 +4,12 @@
  * react-markdown genera elementos de React (nunca HTML crudo), así que el
  * texto del modelo no puede inyectar scripts en la ventana de la app. Los
  * enlaces se abren en el navegador del sistema y las imágenes remotas no se
- * cargan: se muestran como enlace. Los bloques de código llevan colores de
+ * cargan: se muestran como enlace. Los enlaces a archivos locales son archivos
+ * compartidos (ver `SharedFiles`). Los bloques de código llevan colores de
  * sintaxis y los avisos `> [!NOTE]` (como en GitHub) se pintan destacados.
  */
-import { memo, useState, type CSSProperties, type ReactNode } from "react";
-import ReactMarkdown, { type Components, type Options } from "react-markdown";
+import { memo, useContext, useState, type CSSProperties, type ReactNode } from "react";
+import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { common } from "lowlight";
@@ -16,6 +17,8 @@ import dockerfile from "highlight.js/lib/languages/dockerfile";
 import powershell from "highlight.js/lib/languages/powershell";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { nodeText, rehypeCallouts, type HastNode } from "../../chatMarkdown";
+import { attachmentsOf, localFilePath } from "../../sharedFiles";
+import { FileCards, FileLink, SharedFilesContext } from "./SharedFiles";
 import { AlertIcon, CheckIcon, CopyIcon, InfoIcon, SparkIcon } from "../Icons";
 
 const safeUrl = (href: string | undefined): string | null =>
@@ -92,6 +95,9 @@ const REHYPE_PLUGINS: Options["rehypePlugins"] = [
   [rehypeHighlight, { languages: { ...common, dockerfile, powershell }, aliases: { dockerfile: ["docker"], powershell: ["ps1"] } }],
 ];
 
+/** Además de lo que permite react-markdown, los enlaces `file://` y las rutas de Windows (archivos compartidos). */
+const urlTransform = (url: string): string => /^(file:|[a-z]:[\\/])/i.test(url) ? url : defaultUrlTransform(url);
+
 const components: Components = {
   pre: ({ node, children }) => <CodeBlock node={node as HastNode | undefined}>{children}</CodeBlock>,
   blockquote: ({ className, children }) => {
@@ -102,14 +108,35 @@ const components: Components = {
       {children}
     </div>;
   },
-  a: ({ href, children }) => {
+  p: function Paragraph({ node, children }) {
+    const { cwd } = useContext(SharedFilesContext);
+    const files = attachmentsOf(node as HastNode | undefined, cwd);
+    return files ? <FileCards items={files} /> : <p>{children}</p>;
+  },
+  ul: function List({ node, children, className }) {
+    const { cwd } = useContext(SharedFilesContext);
+    const files = attachmentsOf(node as HastNode | undefined, cwd);
+    return files ? <FileCards items={files} /> : <ul className={className}>{children}</ul>;
+  },
+  ol: function OrderedList({ node, children, className, start }) {
+    const { cwd } = useContext(SharedFilesContext);
+    const files = attachmentsOf(node as HastNode | undefined, cwd);
+    return files ? <FileCards items={files} /> : <ol className={className} start={start}>{children}</ol>;
+  },
+  a: function Link({ href, children }) {
+    const { cwd } = useContext(SharedFilesContext);
+    const path = safeUrl(href) ? null : localFilePath(href, cwd);
+    if (path) return <FileLink path={path}>{children}</FileLink>;
     const url = safeUrl(href);
     return <a href={url ?? undefined} title={url ?? undefined} onClick={event => {
       event.preventDefault();
       if (url) void openUrl(url).catch(() => undefined);
     }}>{children}</a>;
   },
-  img: ({ src, alt }) => {
+  img: function Image({ src, alt }) {
+    const { cwd } = useContext(SharedFilesContext);
+    const path = typeof src === "string" && !safeUrl(src) ? localFilePath(src, cwd) : null;
+    if (path) return <FileLink path={path}>{alt || path}</FileLink>;
     const url = safeUrl(typeof src === "string" ? src : undefined);
     return url
       ? <a href={url} onClick={event => { event.preventDefault(); void openUrl(url).catch(() => undefined); }}>{alt || url}</a>
@@ -120,7 +147,7 @@ const components: Components = {
 
 function Markdown({ text }: { text: string }) {
   return <div className="chat-markdown">
-    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={REHYPE_PLUGINS} components={components}>{text}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={REHYPE_PLUGINS} components={components} urlTransform={urlTransform}>{text}</ReactMarkdown>
   </div>;
 }
 

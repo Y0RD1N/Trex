@@ -13,6 +13,7 @@ mod conversations;
 mod codex_models;
 mod files;
 mod git;
+mod shared_files;
 mod terminal_env;
 
 use agent::{AgentSpawnRequest, AgentSpawnResponse, AgentState};
@@ -328,6 +329,11 @@ pub fn run() {
             conversations::read_conversation,
             attachments::read_image_file,
             attachments::read_clipboard_image,
+            shared_files::file_info,
+            shared_files::open_file,
+            shared_files::reveal_file,
+            shared_files::save_file_copy,
+            shared_files::save_file_data,
             git::git_branch,
             files::list_project_files,
             codex_models::codex_context_windows,

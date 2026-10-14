@@ -13,6 +13,7 @@ import {
 } from "./chatState";
 import { parseClaudeAgents, parseClaudeCommands } from "./chatCommands";
 import { claudeRateLimitUsage, parseClaudeUsage } from "./planUsage";
+import { FILE_SHARING_INSTRUCTIONS } from "./sharedFiles";
 
 export type ChatAction =
   | BaseChatAction
@@ -41,6 +42,8 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
   // «Permitir todo» solo se puede elegir en mitad de la sesión si el CLI arrancó con esta opción.
   const restricted = /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? "");
   if (!restricted && !/(^|\s)--(allow-)?dangerously-skip-permissions(\s|=|$)/.test(profileArgs ?? "")) flags.push("--allow-dangerously-skip-permissions");
+  // Cómo adjuntar archivos al chat, salvo que el perfil ya defina las instrucciones del sistema.
+  if (!/(^|\s)--(append-)?system-prompt(-file)?(\s|=|$)/.test(profileArgs ?? "")) flags.push("--append-system-prompt", FILE_SHARING_INSTRUCTIONS);
   const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
   if (conversationId && !choosesConversation) flags.push("--resume", conversationId);
   // Al reanudar el proceso se conserva lo que se eligió en el chat.

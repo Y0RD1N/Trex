@@ -15,6 +15,7 @@ import {
   resultLine, turnOverrides, userInput,
 } from "../codexChat";
 import { mentionedSkills } from "../chatCommands";
+import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
@@ -167,7 +168,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     // Uso del plan de la cuenta; después, Codex avisa de cada cambio con `account/rateLimits/updated`.
     void request("account/rateLimits/read", {}).then(data => dispatch({ type: "plan", data })).catch(() => undefined);
 
-    const overrides: Json = { ...launch.thread };
+    // Cómo adjuntar archivos al chat; las instrucciones de AGENTS.md siguen aparte.
+    const overrides: Json = { developerInstructions: FILE_SHARING_INSTRUCTIONS, ...launch.thread };
     const resumeId = stateRef.current.sessionId ?? (freshRef.current ? null : callbacks.current.conversationId ?? launch.resumeId);
     if (resumeId) {
       try {
@@ -283,7 +285,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     stopRequestedRef.current = false;
     dispatch({ type: "reset" });
     if (!alive || !threadRef.current) { void start(); return; }
-    const opened = newThread({ ...(codexLaunch(args) ?? codexLaunch(null)!).thread });
+    const opened = newThread({ developerInstructions: FILE_SHARING_INSTRUCTIONS, ...(codexLaunch(args) ?? codexLaunch(null)!).thread });
     threadRef.current = opened;
     opened.catch(error => notice("error", `No se pudo abrir la conversación de Codex: ${formatError(error)}`));
   };

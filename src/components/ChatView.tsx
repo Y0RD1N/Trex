@@ -28,6 +28,8 @@ import Select, { type SelectOption } from "./Select";
 import { AlertIcon, ArrowDownIcon, ArrowUpIcon, BranchIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { EffortMenu, ModelMenu } from "./chat/ModelMenu";
+import { SharedFilesContext } from "./chat/SharedFiles";
+import { useImageViewer } from "./ImageViewer";
 import ContextMeter from "./chat/ContextMeter";
 import PlanMeter from "./chat/PlanMeter";
 import QuestionPanel from "./chat/QuestionPanel";
@@ -252,6 +254,8 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const modeOptions = agent.modes.some(option => option.value === mode) ? agent.modes
     : [...agent.modes, { value: mode, label: agent.otherModes[mode] ?? mode, icon: <ShieldIcon size={13} /> }];
   const efforts = supportedEfforts(state.models, state.model, state.modelChoice);
+  const filesContext = useMemo(() => ({ cwd, streaming: false }), [cwd]);
+  const viewer = useImageViewer();
   const speed = fastSpeed(state.models, state.model, state.modelChoice);
   const usage = shownUsage(state);
 
@@ -418,6 +422,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       if (images.length) void addImages(images);
     }}>
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
+      <SharedFilesContext.Provider value={filesContext}>
       <div className="chat-thread">
         {empty && <div className="chat-empty">
           <AgentIcon kind={provider} size={30} activity={activity} />
@@ -458,6 +463,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           </button>
         </div>}
       </div>
+      </SharedFilesContext.Provider>
     </div>
 
     {!atBottom && !empty && <button type="button" className="chat-to-bottom" onClick={scrollToBottom}>
@@ -472,8 +478,11 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       {/* Mientras hay una pregunta, la caja se oculta sin desmontarse: lo escrito sigue ahí al volver. */}
       <form className="chat-composer" hidden={!!question} onSubmit={event => { event.preventDefault(); send(); }}>
         {(attachments.length > 0 || preparing > 0) && <div className="chat-attachments">
-          {attachments.map(image => <div key={image.id} className="chat-attachment">
-            <img src={image.preview} alt={image.name} />
+          {attachments.map((image, index) => <div key={image.id} className="chat-attachment">
+            <button type="button" className="chat-attachment-view" aria-label={`Ver ${image.name}`}
+              onClick={() => viewer.open(attachments.map(item => ({ src: item.preview, name: item.name })), index)}>
+              <img src={image.preview} alt={image.name} />
+            </button>
             <button type="button" className="chat-attachment-remove" aria-label={`Quitar ${image.name}`}
               onClick={() => setAttachments(previous => previous.filter(item => item.id !== image.id))}><CloseIcon size={11} strokeWidth={2.2} /></button>
           </div>)}
