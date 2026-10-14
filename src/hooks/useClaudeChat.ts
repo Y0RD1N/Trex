@@ -13,9 +13,12 @@ import {
 import { answeredInput, chatReducer, claudeChatFlags, controlErrorLine, controlLine, permissionLine, userMessageLine } from "../claudeChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 
+/** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
+const USAGE_INTERVAL_MS = 60_000;
+
 /** Peticiones propias cuya respuesta hay que atender: datos que guardar o un cambio que deshacer. */
 type Control =
-  | { kind: "initialize" | "settings" | "context" }
+  | { kind: "initialize" | "settings" | "context" | "usage" }
   | { kind: "mode"; permissionMode: string | null; modeChoice: string | null };
 
 export function useClaudeChat(options: ChatSessionOptions): ChatSession {
@@ -43,6 +46,13 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const refreshSettings = useCallback(() => control({ subtype: "get_settings" }, { kind: "settings" }), [control]);
   /** Lo mismo que mide `/context`; el CLI lo calcula al momento, sin llamar al modelo. */
   const refreshContext = useCallback(() => control({ subtype: "get_context_usage" }, { kind: "context" }), [control]);
+  /** Lo mismo que `/usage`: sesión de 5 horas, semana y uso extra de la cuenta. */
+  const usageAtRef = useRef(0);
+  const refreshUsage = useCallback((force = false) => {
+    if (!force && Date.now() - usageAtRef.current < USAGE_INTERVAL_MS) return;
+    usageAtRef.current = Date.now();
+    control({ subtype: "get_usage" }, { kind: "usage" });
+  }, [control]);
 
   const handleLine = useCallback((line: string) => {
     let event: unknown;
@@ -62,6 +72,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         dispatch({ type: "applied", model: applied.model, effort: applied.effort });
       } else if (pending.kind === "context") {
         dispatch({ type: "context", data });
+      } else if (pending.kind === "usage") {
+        if (reply.subtype === "success") dispatch({ type: "plan", data });
       } else if (pending.kind === "mode" && reply.subtype !== "success") {
         const reason = reply.error ?? "";
         dispatch({ type: "modeRejected", permissionMode: pending.permissionMode, modeChoice: pending.modeChoice,
@@ -83,9 +95,12 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       return;
     }
     dispatch({ type: "line", event, now: Date.now() });
-    // Al terminar cada respuesta se vuelve a medir el contexto, con el desglose por partes.
-    if (message?.type === "result" && typeof message.parent_tool_use_id !== "string") refreshContext();
-  }, [writeOrReport, refreshContext]);
+    // Al terminar cada respuesta se vuelve a medir el contexto, con el desglose por partes, y el uso del plan.
+    if (message?.type === "result" && typeof message.parent_tool_use_id !== "string") {
+      refreshContext();
+      refreshUsage();
+    }
+  }, [writeOrReport, refreshContext, refreshUsage]);
 
   const agent = useAgentProcess(sessionId, {
     onLine: handleLine,
@@ -113,10 +128,11 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       control({ subtype: "initialize" }, { kind: "initialize" });
       refreshSettings();
       refreshContext();
+      refreshUsage(true);
     } catch (error) {
       dispatch({ type: "spawnFailed", message: `No se pudo iniciar Claude Code: ${formatError(error)}` });
     }
-  }, [agent, sessionId, cwd, command, args, shell, env, control, refreshSettings, refreshContext]);
+  }, [agent, sessionId, cwd, command, args, shell, env, control, refreshSettings, refreshContext, refreshUsage]);
 
   // Arranque: historial guardado (si se recupera una conversación) y proceso.
   useEffect(() => {
@@ -146,9 +162,14 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   };
 
   const answer = (item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
+    // Omitir unas preguntas no es denegar un permiso: Claude sigue a su criterio sin respuestas.
+    if (item.toolName === "AskUserQuestion") {
+      dispatch({ type: "answer", id: item.id, allowed: true });
+      writeOrReport(permissionLine(item.id, true, answeredInput(item.input, allowed ? choices ?? [] : [])));
+      return;
+    }
     dispatch({ type: "answer", id: item.id, allowed });
-    const input = allowed && choices ? answeredInput(item.input, choices) : item.input;
-    writeOrReport(permissionLine(item.id, allowed, input, remember ? item.suggestions : []));
+    writeOrReport(permissionLine(item.id, allowed, item.input, remember ? item.suggestions : []));
   };
 
   const notice = (tone: "info" | "warn" | "error", text: string): void => dispatch({ type: "notice", id: localId(), tone, text });

@@ -8,11 +8,12 @@
  * vuelta. No toca la interfaz ni el backend, así que se prueba sin Tauri.
  */
 import {
-  addNotice, baseReducer, choiceAnswers, clip, finalize, list, record, text, unifiedDiffLines,
+  addNotice, baseReducer, choiceAnswers, clip, finalize, list, questionsOf, record, text, unifiedDiffLines,
   type BaseChatAction, type ChatItem, type ChatState, type Json, type ModelInfo, type OutgoingImage,
   type PermissionItem, type QuestionChoice, type ToolItem, type ToolStatus,
 } from "./chatState";
 import { parseCodexSkills } from "./chatCommands";
+import { parseCodexUsage } from "./planUsage";
 
 export type CodexAction =
   | BaseChatAction
@@ -24,6 +25,8 @@ export type CodexAction =
   | { type: "models"; data: unknown; windows?: Record<string, number> }
   | { type: "skills"; data: unknown }
   | { type: "turnStarted"; turnId: string }
+  /** Respuesta a `account/rateLimits/read`: el uso del plan de la cuenta. */
+  | { type: "plan"; data: unknown }
   | { type: "turnFailed"; message: string }
   /** Preguntas respondidas: quedan en el hilo como en Claude Code. */
   | { type: "answered"; id: string; choices: QuestionChoice[] };
@@ -40,6 +43,12 @@ export type CodexLaunch = {
   /** Opciones del perfil que el chat no usa. */
   ignored: string[];
 };
+
+/**
+ * Sin esta función, Codex solo pregunta con opciones en el modo planificar; con
+ * ella, también al trabajar. Codex la marca «en desarrollo» y avisa al arrancar.
+ */
+export const QUESTIONS_FEATURE = "default_mode_request_user_input";
 
 const SANDBOXES = ["read-only", "workspace-write", "danger-full-access"];
 const APPROVALS = ["untrusted", "on-failure", "on-request", "never"];
@@ -156,7 +165,22 @@ export function codexLaunch(profileArgs: string | null): CodexLaunch | null {
         return null;
     }
   }
+  // Las preguntas con opciones se responden en el chat, salvo que el perfil las apague.
+  if (!launch.flags.some((flag, index) => index > 0 && flag === QUESTIONS_FEATURE && /^--(en|dis)able$/.test(launch.flags[index - 1]))) {
+    launch.flags.push("--enable", QUESTIONS_FEATURE);
+  }
   return launch;
+}
+
+/**
+ * Aviso de funciones «en desarrollo» sin la que activa trex para las preguntas:
+ * null si solo hablaba de ella.
+ */
+export function visibleWarning(message: string): string | null {
+  const match = /^(Under-development features enabled: )([^.]+)\./.exec(message);
+  if (!match) return message;
+  const others = match[2].split(/,\s*/).filter(feature => feature.trim() && feature.trim() !== QUESTIONS_FEATURE);
+  return others.length ? message.replace(match[2], others.join(", ")) : null;
 }
 
 /** El perfil puede abrirse como chat. */
@@ -257,9 +281,11 @@ export function answerResult(item: PermissionItem, allowed: boolean, remember: b
   if (method === "item/tool/requestUserInput") {
     const answers: Json = {};
     const questions = list(item.input.questions).map(record);
+    // Las preguntas que se dejaron sin responder no se mandan.
     choices.forEach((choice, index) => {
       const id = text(questions[index]?.id) || String(index);
-      if (allowed) answers[id] = { answers: choiceAnswers(choice) };
+      const values = choiceAnswers(choice);
+      if (allowed && values.length) answers[id] = { answers: values };
     });
     return { answers };
   }
@@ -519,10 +545,12 @@ function applyRequest(state: ChatState, message: Json, scope: string): ChatState
       break;
     }
     case "item/tool/requestUserInput": {
+      // Sin opciones es una pregunta abierta; `isOther` dice si admite otra respuesta y `isSecret`, si no debe verse.
       const questions = list(params.questions).map(record).filter((question): question is Json => !!question).map(question => ({
         id: text(question.id), header: text(question.header), question: text(question.question), multiSelect: false,
         options: list(question.options).map(record).filter((option): option is Json => !!option)
           .map(option => ({ label: text(option.label), description: text(option.description) })),
+        isOther: question.isOther !== false, isSecret: question.isSecret === true,
       }));
       permission = { ...base, toolName: "AskUserQuestion", input: { questions } };
       break;
@@ -594,12 +622,15 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
       const error = record(params.error) ?? {};
       return { ...state, items: addNotice(state.items, "error", text(error.message) || "Codex informó de un error.", "e") };
     }
-    case "warning":
-      return text(params.message) ? { ...state, items: addNotice(state.items, "warn", text(params.message), "w") } : state;
+    case "warning": {
+      const message = visibleWarning(text(params.message));
+      return message ? { ...state, items: addNotice(state.items, "warn", message, "w") } : state;
+    }
     case "configWarning":
       return { ...state, items: addNotice(state.items, "warn", [text(params.summary), text(params.details)].filter(Boolean).join("\n"), "w") };
     case "account/rateLimits/updated": {
       const limits = record(params.rateLimits) ?? {};
+      state = { ...state, plan: parseCodexUsage(params, state.plan) };
       if (!limits.rateLimitReachedType) return state;
       const reset = record(limits.primary)?.resetsAt;
       const time = typeof reset === "number" ? new Date(reset * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
@@ -668,15 +699,25 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
       return { ...state, skills: parseCodexSkills(action.data) };
     case "turnStarted":
       return state.pendingTurns > 0 ? { ...state, turnId: action.turnId } : state;
+    case "plan":
+      return { ...state, plan: parseCodexUsage(action.data, state.plan) };
     case "turnFailed":
       return { ...state, pendingTurns: 0, turnStartedAt: null, turnId: null, items: addNotice(state.items, "error", action.message, "e") };
     case "answered": {
       const index = state.items.findIndex(item => item.kind === "permission" && item.id === action.id);
       const question = state.items[index];
       if (question?.kind !== "permission") return state;
-      const output = action.choices.map(choice => `${choice.question}\n→ ${choiceAnswers(choice).join(", ")}`).join("\n\n");
+      // Las respuestas secretas no se guardan en el hilo.
+      const secret = new Set(questionsOf(question.input).filter(entry => entry.secret).map(entry => entry.question));
+      const answers: Record<string, string> = {};
+      for (const choice of action.choices) {
+        const value = choiceAnswers(choice).join(", ");
+        if (value) answers[choice.question] = secret.has(choice.question) ? "••••••" : value;
+      }
+      const output = Object.entries(answers).map(([asked, answer]) => `${asked}\n→ ${answer}`).join("\n\n");
       const items = [...state.items];
-      items.splice(index + 1, 0, { kind: "tool", id: `${action.id}:answer`, name: "AskUserQuestion", input: question.input, status: "done", output, patch: null });
+      items.splice(index + 1, 0, { kind: "tool", id: `${action.id}:answer`, name: "AskUserQuestion",
+        input: { ...question.input, answers }, status: "done", output, patch: null });
       return { ...state, items: items.map(item => item.kind === "permission" && item.id === action.id ? { ...item, state: "allowed" as const } : item) };
     }
     case "send": {

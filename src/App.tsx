@@ -75,6 +75,7 @@ import AgentIcon from "./components/AgentIcon";
 import { TerminalIcon } from "./components/Icons";
 import CommandPalette from "./components/CommandPalette";
 import RecoverConversations from "./components/RecoverConversations";
+import UsageDialog from "./components/UsageDialog";
 import FeatureDialog from "./components/FeatureDialog";
 import type { PaletteCommand } from "./commandPalette";
 import { useNotificationSound } from "./hooks/useNotificationSound";
@@ -130,6 +131,8 @@ function AppShell() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen,setPaletteOpen] = useState(false);
+  const [usageOpen,setUsageOpen] = useState(false);
+  const openUsage = useCallback(() => setUsageOpen(true), []);
   const [recoveryOpen,setRecoveryOpen] = useState(false);
   const [imagePreview,setImagePreview] = useState<{ image: Extract<ClipboardContent,{kind:"image"}>; tabId:string; resolve:(paste:boolean)=>void } | null>(null);
   const imagePreviewRef = useRef(imagePreview); imagePreviewRef.current = imagePreview;
@@ -957,6 +960,7 @@ function AppShell() {
     {id:"grid",label:"Cuatro terminales · cuadrícula 2 × 2",group:"Acciones",run:()=>changeSplit("grid"),disabled:!activeProject || !projectTabs.length},
     {id:"rotate",label:"Cambiar división horizontal / vertical",group:"Acciones",run:()=>{if(split) changeSplit(split.direction === "columns" ? "rows" : "columns");},disabled:!split || split.direction === "grid"},
     {id:"recover",label:"Recuperar conversación",group:"Acciones",shortcut:config.settings.shortcuts.recoverSessions,run:()=>setRecoveryOpen(true),disabled:!activeProject},
+    {id:"usage",label:"Ver uso de las cuentas",detail:"Sesión de 5 horas y semana de cada perfil",group:"Acciones",run:openUsage},
     {id:"settings",label:"Abrir ajustes",group:"Acciones",shortcut:config.settings.shortcuts.toggleSettings,run:openSettings},
     {id:"theme",label:"Cambiar tema claro / oscuro",group:"Acciones",shortcut:config.settings.shortcuts.toggleTheme,run:toggleTheme},
     {id:"sidebar",label:"Mostrar / ocultar barra lateral",group:"Acciones",shortcut:config.settings.shortcuts.toggleSidebar,run:toggleSidebar},
@@ -999,6 +1003,7 @@ function AppShell() {
         onReveal={revealProject}
         onCopyPath={copyPath}
         onOpenSettings={openSettings}
+        onOpenUsage={openUsage}
         onToggleTheme={toggleTheme}
         onResize={setSidebarWidth}
       />
@@ -1092,6 +1097,7 @@ function AppShell() {
                     onTitle={handleChatTitle}
                     onMode={handleChatMode}
                     onMessage={showToast}
+                    onOpenUsage={openUsage}
                   /> : <TerminalView
                     sessionId={tab.id}
                     cwd={project.path}
@@ -1180,6 +1186,7 @@ function AppShell() {
         <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />
       )}
       {paletteOpen && <CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)} />}
+      {usageOpen && <UsageDialog settings={config.settings} cwd={appInfo?.homeDir || activeProject?.path || "/"} onClose={()=>setUsageOpen(false)} />}
       {recoveryOpen && activeProject && <RecoverConversations project={activeProject} settings={config.settings} onClose={()=>setRecoveryOpen(false)} onResume={(profile,conversation)=>{
         setRecoveryOpen(false); const existing=tabs.find(tab=>!tab.exited && tab.profileId===profile.id && tab.conversationId===conversation.id);
         if(existing) setActiveTabId(existing.id); else { try { openTab(activeProject.id,profile.id,conversation); } catch(error) { showToast(formatError(error)); } }

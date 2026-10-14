@@ -15,10 +15,14 @@ const turnDone = (status, extra = {}) => rpc("turn/completed", { threadId: "th",
 const kinds = (state) => state.items.map((item) => item.kind);
 
 test("profile arguments become server options or keep the terminal when the chat cannot honour them", () => {
-  assert.deepEqual(codex.codexLaunch(null), { flags: ["app-server"], resumeId: null, thread: {}, ignored: [] });
+  const questions = ["--enable", "default_mode_request_user_input"];
+  assert.deepEqual(codex.codexLaunch(null), { flags: ["app-server", ...questions], resumeId: null, thread: {}, ignored: [] });
   const launch = codex.codexLaunch('-m gpt-6-luna -s read-only -c model_reasoning_summary="detailed" --enable foo --search');
   assert.deepEqual(launch.thread, { model: "gpt-6-luna", sandbox: "read-only" });
-  assert.deepEqual(launch.flags, ["app-server", "-c", 'model_reasoning_summary=detailed', "--enable", "foo", "-c", 'web_search="live"']);
+  assert.deepEqual(launch.flags, ["app-server", "-c", 'model_reasoning_summary=detailed', "--enable", "foo", "-c", 'web_search="live"', ...questions]);
+  // Un perfil que apaga las preguntas en modo normal manda.
+  assert.deepEqual(codex.codexLaunch("--disable default_mode_request_user_input").flags, ["app-server", "--disable", "default_mode_request_user_input"]);
+  assert.deepEqual(codex.codexLaunch("--enable=default_mode_request_user_input").flags, ["app-server", ...questions]);
   assert.deepEqual(codex.codexLaunch("--yolo").thread, { sandbox: "danger-full-access", approvalPolicy: "never" });
   assert.deepEqual(codex.codexLaunch("--full-auto -a untrusted").thread, { sandbox: "workspace-write", approvalPolicy: "untrusted" });
   assert.equal(codex.codexLaunch("resume 01a12b9e-9814-76c3-a700-94397efd7727").resumeId, "01a12b9e-9814-76c3-a700-94397efd7727");
@@ -151,13 +155,62 @@ test("questions with options are answered by question id", () => {
   assert.equal(card.toolName, "AskUserQuestion");
   const questions = shared.questionsOf(card.input);
   assert.deepEqual([questions[0].id, questions[0].header, questions[0].options.length], ["readme_language", "Idioma", 2]);
+  assert.deepEqual([questions[0].options[0].title, questions[0].options[0].recommended, questions[0].other], ["Español", true, true]);
   assert.deepEqual(codex.answerResult(card, true, false, [{ question: questions[0].question, selected: ["Inglés"], other: " y algo de español " }]),
     { answers: { readme_language: { answers: ["Inglés", "y algo de español"] } } });
   assert.deepEqual(codex.answerResult(card, false, false, []), { answers: {} });
   const answered = codexReducer(state, { type: "answered", id: card.id, choices: [{ question: questions[0].question, selected: ["Inglés"], other: "" }] });
   assert.deepEqual(answered.items.map((item) => [item.kind, item.kind === "permission" ? item.state : item.name]), [["permission", "allowed"], ["tool", "AskUserQuestion"]]);
   assert.equal(answered.items[1].output, "¿En qué idioma quieres el README?\n→ Inglés");
+  assert.deepEqual(answered.items[1].input.answers, { "¿En qué idioma quieres el README?": "Inglés" });
   assert.equal(chatActivity(answered), "idle");
+});
+
+test("open, closed and secret questions keep what Codex asked for", () => {
+  const state = run([rpc("item/tool/requestUserInput", { threadId: "th", turnId: "tu", itemId: "call_2", isBlocking: false, autoResolutionMs: null, questions: [
+    { id: "token", header: "Token", question: "¿Cuál es tu token?", isOther: false, isSecret: true, options: null },
+    { id: "env", header: "Entorno", question: "¿Dónde despliego?", isOther: false, isSecret: false,
+      options: [{ label: "Staging", description: "" }, { label: "Producción", description: "" }] },
+  ] }, 9)]);
+  const card = state.items[0];
+  const [token, env] = shared.questionsOf(card.input);
+  assert.deepEqual([token.kind, token.secret, token.other, token.options.length], ["text", true, true, 0], "sin opciones se responde escribiendo");
+  assert.deepEqual([env.kind, env.other, env.secret], ["choice", false, false], "sin isOther solo valen las opciones");
+  const choices = [{ question: token.question, selected: [], other: "s3cr3t" }, { question: env.question, selected: [], other: "" }];
+  assert.deepEqual(codex.answerResult(card, true, false, choices), { answers: { token: { answers: ["s3cr3t"] } } });
+  const answered = codexReducer(state, { type: "answered", id: card.id, choices });
+  assert.deepEqual(answered.items[1].input.answers, { "¿Cuál es tu token?": "••••••" }, "la respuesta secreta no queda en el hilo");
+  assert.ok(!answered.items[1].output.includes("s3cr3t"));
+  // Omitida: queda en el hilo sin respuestas.
+  const skipped = codexReducer(state, { type: "answered", id: card.id, choices: [] });
+  assert.deepEqual(skipped.items[1].input.answers, {});
+});
+
+test("the warning about the questions feature is hidden but other features still warn", () => {
+  const warning = (message) => run([rpc("warning", { threadId: "th", message })]).items.map((item) => item.text);
+  assert.deepEqual(warning("Under-development features enabled: default_mode_request_user_input. Under-development features are incomplete and may behave unpredictably."), []);
+  assert.deepEqual(warning("Under-development features enabled: default_mode_request_user_input, code_mode. They may break."),
+    ["Under-development features enabled: code_mode. They may break."]);
+  assert.deepEqual(warning("Otra advertencia."), ["Otra advertencia."]);
+});
+
+test("the plan usage comes from the account rate limits and their updates", () => {
+  const read = { rateLimits: { limitId: "codex", primary: { usedPercent: 21, windowDurationMins: 10080, resetsAt: 1792472308 }, secondary: null,
+    credits: { hasCredits: false, unlimited: false, balance: "0" }, planType: "prolite", rateLimitReachedType: null },
+    rateLimitsByLimitId: { codex: { limitId: "codex", primary: { usedPercent: 21, windowDurationMins: 10080, resetsAt: 1792472308 }, secondary: null, planType: "prolite" } },
+    rateLimitResetCredits: { availableCount: 2, credits: [] } };
+  let state = codexReducer(initialChatState(), { type: "plan", data: read });
+  assert.equal(state.plan.plan, "Pro Lite");
+  assert.equal(state.plan.resetCredits, 2);
+  assert.deepEqual(state.plan.windows.map((window) => [window.label, window.percent, window.resetsAt, window.headline]), [["Semana", 21, 1792472308000, true]]);
+  // Las actualizaciones solo traen lo que cambió: lo demás se conserva.
+  state = run([rpc("account/rateLimits/updated", { rateLimits: { limitId: "codex", primary: { usedPercent: 24, windowDurationMins: 10080, resetsAt: 1792472308 },
+    secondary: { usedPercent: 80, windowDurationMins: 300, resetsAt: 1792000000 }, planType: null } })], state);
+  assert.deepEqual(state.plan.windows.map((window) => [window.label, window.percent, window.severity]), [["Semana", 24, "normal"], ["Sesión (5 h)", 80, "warning"]]);
+  assert.equal(state.plan.windows.find((window) => window.headline).label, "Sesión (5 h)");
+  assert.equal(state.plan.plan, "Pro Lite");
+  assert.equal(state.plan.resetCredits, 2);
+  assert.equal(state.items.length, 0, "sin llegar al límite no hay aviso");
 });
 
 test("an interruption closes running tools and failures are reported once", () => {

@@ -20,7 +20,7 @@ import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
 import { projectSections } from "../sidebarGroups";
-import { AlertIcon, FolderPlusIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
+import { AlertIcon, FolderPlusIcon, GaugeIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
 import { sessionLabel } from "../sessionTitle";
@@ -59,6 +59,8 @@ type Props = {
   onReveal: (projectId: string) => void;
   onCopyPath: (path: string) => void;
   onOpenSettings: () => void;
+  /** Uso del plan de todas las cuentas. */
+  onOpenUsage: () => void;
   onToggleTheme: () => void;
   onResize: (width: number) => void;
 };
@@ -89,6 +91,7 @@ export default function Sidebar({
   onReveal,
   onCopyPath,
   onOpenSettings,
+  onOpenUsage,
   onToggleTheme,
   onResize,
 }: Props) {
@@ -295,6 +298,15 @@ export default function Sidebar({
               <FolderPlusIcon size={19} />
             </button>
             <span className="sidebar-footer-spacer" />
+            <button
+              type="button"
+              className="icon-btn sidebar-footer-control tip"
+              data-tip="Uso de las cuentas"
+              aria-label="Uso de las cuentas"
+              onClick={onOpenUsage}
+            >
+              <GaugeIcon size={19} strokeWidth={1.7} />
+            </button>
             <button
               type="button"
               className="icon-btn sidebar-footer-control sidebar-theme tip"

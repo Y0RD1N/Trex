@@ -7,6 +7,7 @@
  * ambas conversaciones se pinten igual.
  */
 import type { AgentInfo, CommandInfo, SkillInfo } from "./chatCommands";
+import type { PlanUsage } from "./planUsage";
 import type { AgentActivity } from "./types";
 
 export type ToolStatus = "running" | "done" | "error";
@@ -14,8 +15,34 @@ export type DiffLine = { kind: "add" | "del" | "ctx" | "gap"; text: string };
 export type TodoItem = { content: string; status: "pending" | "in_progress" | "completed"; activeForm?: string };
 /** Imagen lista para enviar: base64 sin prefijo y su tipo. */
 export type OutgoingImage = { mediaType: string; data: string };
-export type Question = { id: string; question: string; header: string; options: { label: string; description: string }[]; multiSelect: boolean };
-/** Lo que eligió la persona en cada pregunta con opciones. */
+export type QuestionOption = {
+  /** Etiqueta tal como la escribió el asistente: es lo que se le responde. */
+  label: string;
+  /** Etiqueta para mostrar, sin la marca de recomendada. */
+  title: string;
+  description: string;
+  /** Contenido para comparar opciones (Claude Code): código, un boceto… */
+  preview: string;
+  recommended: boolean;
+};
+export type Question = {
+  id: string;
+  question: string;
+  header: string;
+  /** «choice» elige entre opciones; «text» y «number» piden un valor. */
+  kind: "choice" | "text" | "number";
+  options: QuestionOption[];
+  multiSelect: boolean;
+  /** Línea de ayuda bajo la pregunta. */
+  description: string;
+  placeholder: string;
+  /** Admite una respuesta propia además de las opciones. */
+  other: boolean;
+  /** La respuesta no debe verse (una contraseña que pide Codex). */
+  secret: boolean;
+  number: { min: number | null; max: number | null; step: number | null; initial: number | null; unit: string } | null;
+};
+/** Lo que eligió la persona en cada pregunta: opciones marcadas y texto propio. */
 export type QuestionChoice = { question: string; selected: string[]; other: string };
 export type Json = Record<string, unknown>;
 
@@ -75,6 +102,8 @@ export type ChatState = {
   skills: SkillInfo[];
   /** Contexto en uso y tamaño de la ventana, si se conocen. */
   usage: ContextUsage | null;
+  /** Uso del plan de la cuenta (sesión de 5 horas, semana…), si el asistente lo da. */
+  plan: PlanUsage | null;
   costUsd: number | null;
   /** Bloques del mensaje en curso: índice del bloque → id del elemento. */
   stream: { messageId: string | null; blocks: Record<number, string> };
@@ -106,7 +135,7 @@ export type BaseChatAction =
 export const initialChatState = (mode: string | null = null): ChatState => ({
   items: [], pendingTurns: 0, turnStartedAt: null, sessionId: null, turnId: null, model: null, models: [],
   modelChoice: null, effort: null, effortChoice: null, permissionMode: mode, modeChoice: mode,
-  commands: [], agents: [], skills: [], usage: null, costUsd: null,
+  commands: [], agents: [], skills: [], usage: null, plan: null, costUsd: null,
   stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null, historyCount: 0, process: "starting", exitCode: null, stderr: [],
 });
 
@@ -153,7 +182,7 @@ export function baseReducer(state: ChatState, action: BaseChatAction): ChatState
     case "reset":
       return { ...initialChatState(), process: state.process, models: state.models, model: state.model, modelChoice: state.modelChoice,
         effort: state.effort, effortChoice: state.effortChoice, permissionMode: state.permissionMode, modeChoice: state.modeChoice,
-        commands: state.commands, agents: state.agents, skills: state.skills };
+        commands: state.commands, agents: state.agents, skills: state.skills, plan: state.plan };
     case "spawned":
       return { ...state, process: "ready", exitCode: null, stderr: [] };
     case "spawnFailed":
@@ -245,21 +274,56 @@ export function todoItems(input: Json): TodoItem[] {
     }));
 }
 
-/** Preguntas con opciones (AskUserQuestion de Claude o las preguntas de Codex). */
+/** Marca con la que el asistente señala la opción que recomienda. */
+const RECOMMENDED = /\s*\((recommended|recomendad[oa])\)\s*$/i;
+const numberOrNull = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
+
+/**
+ * Preguntas de AskUserQuestion (Claude Code) o de request_user_input (Codex).
+ * Codex marca si admite otra respuesta (`isOther`) y si es secreta (`isSecret`).
+ */
 export function questionsOf(input: Json): Question[] {
   return list(input.questions).map(record).filter((question): question is Json => !!question && typeof question.question === "string")
-    .map((question, index) => ({
-      id: text(question.id) || String(index),
-      question: text(question.question),
-      header: text(question.header),
-      multiSelect: question.multiSelect === true,
-      options: list(question.options).map(record).filter((option): option is Json => !!option && typeof option.label === "string")
-        .map(option => ({ label: text(option.label), description: text(option.description) })),
-    }));
+    .map((question, index) => {
+      const options = list(question.options).map(record).filter((option): option is Json => !!option && typeof option.label === "string")
+        .map(option => {
+          const label = text(option.label);
+          return { label, title: label.replace(RECOMMENDED, "") || label, description: text(option.description),
+            preview: text(option.preview), recommended: RECOMMENDED.test(label) };
+        });
+      const kind = question.kind === "text" || question.kind === "number" ? question.kind : options.length ? "choice" : "text";
+      return {
+        id: text(question.id) || String(index),
+        question: text(question.question),
+        header: text(question.header),
+        kind,
+        options: kind === "choice" ? options : [],
+        multiSelect: kind === "choice" && question.multiSelect === true,
+        description: text(question.description),
+        placeholder: text(question.placeholder),
+        other: kind !== "choice" || question.isOther !== false,
+        secret: question.isSecret === true,
+        number: kind === "number" ? { min: numberOrNull(question.min), max: numberOrNull(question.max), step: numberOrNull(question.step),
+          initial: numberOrNull(question.defaultValue), unit: text(question.unit) } : null,
+      };
+    });
 }
+
+/** Encabezado opcional sobre las preguntas («Antes de preparar la presentación»). */
+export const questionsTitle = (input: Json): string => text(input.title);
 
 /** Respuesta elegida en una pregunta: opciones marcadas y texto libre. */
 export const choiceAnswers = (choice: QuestionChoice): string[] => [...choice.selected, choice.other.trim()].filter(Boolean);
+
+/** Respuestas que ya conoce el hilo: pregunta → respuesta (texto o lista). */
+export function answersOf(input: Json): Record<string, string> {
+  const answers: Record<string, string> = {};
+  for (const [question, answer] of Object.entries(record(input.answers) ?? {})) {
+    const value = Array.isArray(answer) ? answer.filter((part): part is string => typeof part === "string").join(", ") : text(answer);
+    if (value) answers[question] = value;
+  }
+  return answers;
+}
 
 // --- Datos derivados ----------------------------------------------------------
 

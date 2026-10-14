@@ -195,7 +195,11 @@ test("questions with options are answered in the format the CLI expects", () => 
   ] };
   const questions = chat.questionsOf(input);
   assert.equal(questions.length, 2);
-  assert.deepEqual(questions[0].options, [{ label: "Rojo", description: "Cálido" }, { label: "Azul", description: "" }]);
+  assert.deepEqual(questions[0].options, [
+    { label: "Rojo", title: "Rojo", description: "Cálido", preview: "", recommended: false },
+    { label: "Azul", title: "Azul", description: "", preview: "", recommended: false },
+  ]);
+  assert.deepEqual([questions[0].kind, questions[0].other, questions[0].secret], ["choice", true, false], "Claude siempre admite otra respuesta");
   assert.equal(questions[1].multiSelect, true);
   const answered = chat.answeredInput(input, [
     { question: "¿Qué color prefieres?", selected: ["Azul"], other: "" },
@@ -212,6 +216,60 @@ test("questions with options are answered in the format the CLI expects", () => 
       tool_use_result: { questions: input.questions, answers: { "¿Qué color prefieres?": "Azul" } } }),
   ]);
   assert.equal(state.items[1].output, "¿Qué color prefieres?\n→ Azul");
+  assert.deepEqual(chat.answersOf(state.items[1].input), { "¿Qué color prefieres?": "Azul" }, "las respuestas quedan junto a las preguntas");
+  // Omitir: sin respuestas, Claude sigue a su criterio.
+  assert.deepEqual(chat.answeredInput(input, []).answers, {});
+});
+
+test("extended questions bring their kind, limits, previews and the recommended option", () => {
+  const input = { title: "Antes de la presentación", questions: [
+    { question: "¿Cuántas diapositivas?", header: "Tamaño", kind: "number", min: 5, max: 30, step: 5, defaultValue: 10, unit: "diapositivas" },
+    { question: "¿Algo más?", kind: "text", placeholder: "Opcional", description: "Cuéntame lo que quieras" },
+    { question: "¿Qué diseño?", header: "Diseño", options: [
+      { label: "Oscuro (Recommended)", description: "Fondo negro", preview: "+-----+\n| ### |\n+-----+" },
+      { label: "Claro", preview: "```\nclaro\n```" },
+    ] },
+  ] };
+  const [count, extra, layout] = chat.questionsOf(input);
+  assert.equal(chat.questionsTitle(input), "Antes de la presentación");
+  assert.deepEqual(count.number, { min: 5, max: 30, step: 5, initial: 10, unit: "diapositivas" });
+  assert.deepEqual([count.kind, count.options.length], ["number", 0]);
+  assert.deepEqual([extra.kind, extra.placeholder, extra.description], ["text", "Opcional", "Cuéntame lo que quieras"]);
+  assert.deepEqual(layout.options.map((option) => [option.label, option.title, option.recommended, !!option.preview]),
+    [["Oscuro (Recommended)", "Oscuro", true, true], ["Claro", "Claro", false, true]]);
+  // Se responde con la etiqueta original, que es la que reconoce Claude.
+  assert.deepEqual(chat.answeredInput(input, [
+    { question: count.question, selected: [], other: "15" },
+    { question: extra.question, selected: [], other: "" },
+    { question: layout.question, selected: ["Oscuro (Recommended)"], other: "" },
+  ]).answers, { "¿Cuántas diapositivas?": "15", "¿Qué diseño?": "Oscuro (Recommended)" });
+});
+
+test("the plan usage comes from get_usage and each request's rate limit event", () => {
+  const usage = { subscription_type: "pro", rate_limits_available: true, rate_limits: {
+    five_hour: { utilization: 33, resets_at: "2026-10-14T05:29:59.868379+00:00" },
+    limits: [
+      { kind: "session", group: "session", percent: 33, resets_at: "2026-10-14T05:29:59.868379+00:00", severity: "normal", is_active: false, scope: null },
+      { kind: "weekly_all", group: "weekly", percent: 71, resets_at: "2026-10-16T22:59:59.868396+00:00", severity: "normal", is_active: true, scope: null },
+      { kind: "weekly_scoped", group: "weekly", percent: 92, resets_at: null, severity: "critical", is_active: false, scope: { label: "Opus" } },
+    ],
+    extra_usage: { is_enabled: true, monthly_limit: 2000, used_credits: 150, currency: "USD", decimal_places: 2 } } };
+  let state = run([{ type: "plan", data: usage }]);
+  assert.equal(state.plan.plan, "Pro");
+  assert.deepEqual(state.plan.windows.map((window) => [window.label, window.percent, window.severity, window.headline]),
+    [["Sesión (5 h)", 33, "normal", false], ["Semana", 71, "normal", true], ["Semana · Opus", 92, "critical", false]]);
+  assert.equal(state.plan.windows[0].resetsAt, Date.parse("2026-10-14T05:29:59.868Z"));
+  assert.deepEqual(state.plan.extra, { used: 1.5, limit: 20, currency: "USD" });
+  // Cada petición al modelo trae las ventanas al día.
+  state = run([line({ type: "rate_limit_event", rate_limit_info: { status: "allowed", unifiedWindows: {
+    five_hour: { utilization: 0.38, resetsAt: 1791955800 }, seven_day: { utilization: 0.715, resetsAt: 1792191600 } } } })], state);
+  assert.deepEqual(state.plan.windows.slice(0, 2).map((window) => [window.percent, window.resetsAt]), [[38, 1791955800000], [72, 1792191600000]]);
+  assert.equal(state.items.length, 0);
+  // Sin datos antes, el evento basta para mostrar algo.
+  const fresh = run([line({ type: "rate_limit_event", rate_limit_info: { status: "allowed", unifiedWindows: { five_hour: { utilization: 0.1, resetsAt: 1 } } } })]);
+  assert.deepEqual(fresh.plan.windows.map((window) => [window.label, window.percent, window.headline]), [["Sesión (5 h)", 10, true]]);
+  // Una cuenta con clave de API no tiene límites de plan.
+  assert.equal(run([{ type: "plan", data: { subscription_type: null, rate_limits_available: false, rate_limits: null } }]).plan, null);
 });
 
 test("images shrink to the sending size without being enlarged", () => {

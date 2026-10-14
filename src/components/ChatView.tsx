@@ -16,6 +16,7 @@ import {
   chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, formatDuration, formatTokens, modelName, pendingPermissions,
   shownUsage, supportedEfforts, type PermissionItem, type QuestionChoice,
 } from "../chatState";
+import { resetLabel } from "../planUsage";
 import { applySuggestion, buildSuggestions, findTrigger, localCommand, parseCommand, type Suggestion } from "../chatCommands";
 import type { AgentActivity, AgentNoticeKind, AgentProvider, Settings } from "../types";
 import { MIN_WORK_MS } from "../agentNotices";
@@ -25,9 +26,11 @@ import { useCodexChat } from "../hooks/useCodexChat";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
 import { AlertIcon, ArrowDownIcon, ArrowUpIcon, BranchIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon } from "./Icons";
-import { AssistantText, Notice, PermissionCard, QuestionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
+import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { EffortMenu, ModelMenu } from "./chat/ModelMenu";
 import ContextMeter from "./chat/ContextMeter";
+import PlanMeter from "./chat/PlanMeter";
+import QuestionPanel from "./chat/QuestionPanel";
 import Suggestions from "./chat/Suggestions";
 import "./ChatView.css";
 
@@ -45,6 +48,8 @@ export type ChatViewProps = ChatSessionOptions & {
   onMode: (tabId: string, provider: AgentProvider, mode: string) => void;
   /** Aviso pasajero (toast) para lo que no debe quedar en el hilo. */
   onMessage: (message: string) => void;
+  /** Abre el uso del plan de todas las cuentas. */
+  onOpenUsage: () => void;
 };
 
 const PROVIDERS: Record<AgentProvider, { name: string; product: string; defaultMode: string; modes: SelectOption[]; otherModes: Record<string, string> }> = {
@@ -258,6 +263,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       ...(state.effort ? [`Esfuerzo: ${effortLabel(state.effort)}`] : []),
       `Permisos: ${modeOptions.find(option => option.value === mode)?.label ?? mode}`,
       ...(usage ? [`Contexto: ${formatTokens(usage.used)} tokens${usage.window ? ` de ${formatTokens(usage.window)} (${Math.round(percent ?? 0)} %)` : ""}`] : []),
+      ...(state.plan?.windows ?? []).map(window => `${window.label}: ${window.percent} %${window.resetsAt !== null ? ` (${resetLabel(window.resetsAt, Date.now())})` : ""}`),
       ...(state.sessionId ? [`Conversación: ${state.sessionId}`] : []),
     ].join("\n");
   };
@@ -355,13 +361,19 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     });
   };
 
-  const answer = (item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
-    session.answer(item, allowed, remember, choices);
-    inputRef.current?.focus({ preventScroll: true });
-  };
-
   // Tras elegir en un selector, se sigue escribiendo en la caja.
   const backToInput = (): void => { requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true })); };
+
+  const answer = (item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
+    session.answer(item, allowed, remember, choices);
+    stickRef.current = true;
+    // La caja vuelve a la vista en el siguiente render (si era una pregunta, ocupaba su sitio).
+    backToInput();
+  };
+
+  /** Pregunta del asistente que espera respuesta: ocupa el sitio de la caja de mensaje. */
+  const question = state.items.find((item): item is PermissionItem =>
+    item.kind === "permission" && item.state === "pending" && item.toolName === "AskUserQuestion");
 
   // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
   const askingFor = new Set(state.items.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
@@ -413,8 +425,8 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             case "tool": return asked(item.id) ? null : <ToolRow key={item.id} item={item} cwd={cwd}
               expanded={item.id === latestTodos || item.id === latestPlan}
               onImplement={item.id === latestPlan && planReady ? implementPlan : undefined} />;
-            case "permission": return item.state !== "pending" ? null
-              : item.toolName === "AskUserQuestion" ? <QuestionCard key={item.id} item={item} agent={agent.name} onAnswer={answer} />
+            // Las preguntas se responden en el panel que sustituye a la caja de mensaje.
+            case "permission": return item.state !== "pending" || item.toolName === "AskUserQuestion" ? null
               : <PermissionCard key={item.id} item={item} cwd={cwd} agent={agent.name} onAnswer={answer} />;
             case "notice": return <Notice key={item.id} tone={item.tone} text={item.text} />;
             case "turn": return <div key={item.id} className="chat-turn">Listo en {formatDuration(item.durationMs)}</div>;
@@ -445,9 +457,11 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
     <div className="chat-composer-wrap" ref={composerRef}>
      <div className="chat-dock">
-      {showSuggestions && <Suggestions id={`${sessionId}-suggestions`} items={suggestions} active={active} loading={files === null}
+      {showSuggestions && !question && <Suggestions id={`${sessionId}-suggestions`} items={suggestions} active={active} loading={files === null}
         onPick={pick} onHover={setActive} />}
-      <form className="chat-composer" onSubmit={event => { event.preventDefault(); send(); }}>
+      {question && <QuestionPanel key={question.id} item={question} agent={agent.name} active={visible && focused} onAnswer={answer} />}
+      {/* Mientras hay una pregunta, la caja se oculta sin desmontarse: lo escrito sigue ahí al volver. */}
+      <form className="chat-composer" hidden={!!question} onSubmit={event => { event.preventDefault(); send(); }}>
         {(attachments.length > 0 || preparing > 0) && <div className="chat-attachments">
           {attachments.map(image => <div key={image.id} className="chat-attachment">
             <img src={image.preview} alt={image.name} />
@@ -534,6 +548,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             openSignal={menuSignal.effort} />
         </>}
         <span className="chat-composer-spacer" />
+        {state.plan && <PlanMeter usage={state.plan} product={agent.product} onOpenAll={() => callbacks.current.onOpenUsage()} />}
         {usage && <ContextMeter usage={usage} product={agent.product} busy={running || state.process !== "ready"}
           onCompact={() => {
             stickRef.current = true;

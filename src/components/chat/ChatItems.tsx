@@ -4,8 +4,8 @@
  */
 import { memo, useState, type ReactNode } from "react";
 import {
-  describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
-  type DiffLine, type PermissionItem, type QuestionChoice, type ToolItem, type ToolSummary,
+  answersOf, describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
+  type DiffLine, type PermissionItem, type ToolItem, type ToolSummary,
 } from "../../chatState";
 import { AlertIcon, CheckIcon, ChevronIcon, CloseIcon, FileIcon, GlobeIcon, ImageIcon, InfoIcon, ListIcon, MapIcon, PencilIcon,
   QuestionIcon, SearchIcon, ShieldIcon, SparkIcon, TerminalIcon, WrenchIcon } from "../Icons";
@@ -102,12 +102,35 @@ export function PlanCard({ plan, onImplement }: { plan: string; onImplement?: ()
   </div>;
 }
 
+/** Preguntas ya respondidas: cada una con lo que se eligió. */
+function AnsweredQuestions({ item }: { item: ToolItem }) {
+  const questions = questionsOf(item.input);
+  const answers = answersOf(item.input);
+  const response = typeof item.input.response === "string" ? item.input.response : "";
+  // Sin preguntas legibles (un historial antiguo), al menos el texto que recibió el asistente.
+  if (!questions.length) return item.output ? <pre className="chat-tool-output">{item.output}</pre> : <div className="chat-tool-empty">Sin respuesta</div>;
+  return <dl className="chat-answers">
+    {questions.map(question => <div key={question.id} className="chat-answers-row">
+      <dt>{question.header && <span className="chat-question-tag">{question.header}</span>}<span>{question.question}</span></dt>
+      <dd className={answers[question.question] ? "" : "empty"}>{answers[question.question] ?? "Sin respuesta"}</dd>
+    </div>)}
+    {response && <div className="chat-answers-row"><dt><span>Tu mensaje</span></dt><dd>{response}</dd></div>}
+  </dl>;
+}
+
+/** Resumen de lo respondido para la fila plegada: la respuesta, si es una, o cuántas. */
+function answerSummary(item: ToolItem): string | null {
+  if (item.name !== "AskUserQuestion" || item.status === "running") return null;
+  const values = Object.values(answersOf(item.input));
+  if (!values.length) return typeof item.input.response === "string" && item.input.response ? "Respondiste con un mensaje" : "Sin respuesta";
+  return values.length === 1 ? values[0] : `${values.length} respuestas`;
+}
+
 function toolDetail(item: ToolItem, cwd: string): ReactNode {
   const input = item.input;
   const diff = item.patch ?? inputDiff(item.name, input);
   if (item.name === "TodoWrite") return <TodoCard input={input} />;
-  if (item.name === "AskUserQuestion") return item.output
-    ? <pre className="chat-tool-output">{item.output}</pre> : <div className="chat-tool-empty">Sin respuesta</div>;
+  if (item.name === "AskUserQuestion") return <AnsweredQuestions item={item} />;
   if (diff) return <>
     {item.status === "error" && item.output && <pre className="chat-tool-output error">{item.output}</pre>}
     <DiffView lines={diff} />
@@ -133,11 +156,13 @@ export function ToolRow({ item, cwd, expanded = false, onImplement }: {
   const summary = describeTool(item.name, item.input, cwd, item.status === "running");
   const diff = item.patch ?? inputDiff(item.name, item.input);
   const description = item.name === "Bash" && typeof item.input.description === "string" ? item.input.description : undefined;
+  const answer = answerSummary(item);
   return <div className={`chat-tool${open ? " open" : ""}`} data-status={item.status}>
     <button type="button" className="chat-tool-row" aria-expanded={open} onClick={() => setOpen(!open)} title={description}>
       <span className="chat-tool-icon" aria-hidden="true">{TOOL_ICONS[summary.icon]}</span>
       <span className="chat-tool-verb">{summary.verb}</span>
       {summary.target && <span className={`chat-tool-target${summary.icon === "run" || summary.icon === "search" ? " mono" : ""}`}>{summary.target}</span>}
+      {answer && <span className={`chat-tool-answer${answer === "Sin respuesta" ? " empty" : ""}`}>{answer}</span>}
       <DiffCount lines={diff} />
       <StatusMark status={item.status} />
       <span className="chat-tool-chevron" aria-hidden="true"><ChevronIcon size={13} /></span>
@@ -206,65 +231,6 @@ export function PermissionCard({ item, cwd, agent, onAnswer }: {
       <button type="button" className="btn btn-ghost btn-small" onClick={() => onAnswer(item, false, false)}>
         {plan ? "Seguir planificando" : "Denegar"}
       </button>
-    </div>
-  </div>;
-}
-
-type Choice = QuestionChoice;
-
-/** Preguntas con opciones del asistente (AskUserQuestion en Claude, preguntas de Codex). */
-export function QuestionCard({ item, agent, onAnswer }: {
-  item: PermissionItem;
-  agent: string;
-  onAnswer: (item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]) => void;
-}) {
-  const questions = questionsOf(item.input);
-  const [choices, setChoices] = useState<Choice[]>(() => questions.map(question => ({ question: question.question, selected: [], other: "" })));
-  const update = (index: number, change: (choice: Choice) => Choice): void =>
-    setChoices(previous => previous.map((choice, position) => position === index ? change(choice) : choice));
-  const complete = choices.every(choice => choice.selected.length > 0 || choice.other.trim());
-  return <div className="chat-permission chat-question" role="group" aria-label={`${agent} te pregunta`}>
-    <div className="chat-permission-head">
-      <span className="chat-permission-icon" aria-hidden="true"><QuestionIcon size={16} /></span>
-      <div className="chat-permission-title">{questions.length === 1 ? `${agent} te pregunta` : `${agent} tiene ${questions.length} preguntas`}</div>
-    </div>
-    {questions.map((question, index) => {
-      const choice = choices[index];
-      return <fieldset key={index} className="chat-question-block">
-        <legend>
-          {question.header && <span className="chat-question-tag">{question.header}</span>}
-          <span>{question.question}</span>
-          {question.multiSelect && <small>Puedes elegir varias</small>}
-        </legend>
-        <div className="chat-question-options">
-          {question.options.map(option => {
-            const selected = choice.selected.includes(option.label);
-            return <button key={option.label} type="button" role={question.multiSelect ? "checkbox" : "radio"} aria-checked={selected}
-              className={`chat-question-option${selected ? " selected" : ""}${question.multiSelect ? " multi" : ""}`}
-              onClick={() => update(index, current => ({
-                ...current,
-                selected: question.multiSelect
-                  ? selected ? current.selected.filter(label => label !== option.label) : [...current.selected, option.label]
-                  : [option.label],
-                other: question.multiSelect ? current.other : "",
-              }))}>
-              <span className="chat-question-mark" aria-hidden="true">{selected && <CheckIcon size={11} strokeWidth={2.4} />}</span>
-              <span className="chat-question-text"><strong>{option.label}</strong>{option.description && <span>{option.description}</span>}</span>
-            </button>;
-          })}
-          <input className="input chat-question-other" value={choice.other} placeholder="Otra respuesta…" aria-label={`Otra respuesta para: ${question.question}`}
-            onChange={event => {
-              const other = event.target.value;
-              update(index, current => ({ ...current, other, selected: question.multiSelect || !other.trim() ? current.selected : [] }));
-            }}
-            onKeyDown={event => { if (event.key === "Enter" && complete) onAnswer(item, true, false, choices); }} />
-        </div>
-      </fieldset>;
-    })}
-    <div className="chat-permission-actions">
-      <button type="button" className="btn btn-primary btn-small" disabled={!complete}
-        onClick={() => onAnswer(item, true, false, choices)}>Responder</button>
-      <button type="button" className="btn btn-ghost btn-small" onClick={() => onAnswer(item, false, false)}>Omitir</button>
     </div>
   </div>;
 }

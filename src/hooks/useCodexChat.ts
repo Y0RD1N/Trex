@@ -163,6 +163,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     void Promise.all([request<{ data?: unknown }>("model/list", {}), codexContextWindows(env?.CODEX_HOME ?? "").catch(() => ({}))])
       .then(([result, windows]) => dispatch({ type: "models", data: result?.data, windows })).catch(() => undefined);
     void request<{ data?: unknown }>("skills/list", { cwds: [cwd] }).then(result => dispatch({ type: "skills", data: result?.data })).catch(() => undefined);
+    // Uso del plan de la cuenta; después, Codex avisa de cada cambio con `account/rateLimits/updated`.
+    void request("account/rateLimits/read", {}).then(data => dispatch({ type: "plan", data })).catch(() => undefined);
 
     const overrides: Json = { ...launch.thread };
     const resumeId = stateRef.current.sessionId ?? (freshRef.current ? null : callbacks.current.conversationId ?? launch.resumeId);
@@ -285,7 +287,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   };
 
   const answer = (item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
-    if (allowed && choices && item.toolName === "AskUserQuestion") dispatch({ type: "answered", id: item.id, choices });
+    // Las preguntas quedan en el hilo con lo respondido (o sin respuesta, si se omitieron).
+    if (item.toolName === "AskUserQuestion") dispatch({ type: "answered", id: item.id, choices: allowed ? choices ?? [] : [] });
     else dispatch({ type: "answer", id: item.id, allowed });
     if (item.request) writeOrReport(resultLine(item.request.id, answerResult(item, allowed, remember, choices)));
   };

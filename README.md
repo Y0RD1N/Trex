@@ -84,8 +84,22 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
 - **Imágenes**: pega una captura (`Ctrl+V` o tu atajo de pegado), arrástrala a
   la conversación o usa el clip. Se reducen a 1920 px y se comprimen antes de
   enviarlas; puedes quitar cualquiera antes de pulsar Enter.
-- **Preguntas**: cuando el asistente necesita que elijas, muestra las opciones
-  como botones con un campo para escribir otra respuesta.
+- **Preguntas**: cuando el asistente necesita que elijas (AskUserQuestion en
+  Claude, preguntas de Codex), la pregunta ocupa el sitio de la caja de
+  mensaje con sus opciones numeradas, la recomendada marcada y un campo para
+  escribir otra respuesta. Pulsa el número o la opción para responder; con
+  varias preguntas se avanza una a una y con **Atrás** se vuelve. Si Claude
+  adjunta vistas previas, se ven al lado al pasar por cada opción. **Omitir**
+  deja que el asistente siga a su criterio. Lo que respondiste queda en el
+  hilo. Codex pregunta así también fuera del modo Planificar (trex activa su
+  función `default_mode_request_user_input`; un perfil con
+  `--disable default_mode_request_user_input` la apaga).
+- **Uso del plan**: junto al contexto, la bandeja muestra cuánto llevas de tu
+  plan (la ventana de 5 horas o la semana, la que más importa ahora); al
+  pulsarlo ves cada ventana con su reinicio y el uso extra. **Uso de las
+  cuentas** (el medidor de la barra lateral o la paleta de comandos) muestra
+  a la vez el de todos tus perfiles, como `/usage` en cada asistente: trex
+  lanza el CLI un momento sin enviar mensajes, así que no gasta tokens.
 - **Menciones con `@`**: escribe `@` para buscar archivos y carpetas del
   proyecto (respeta el `.gitignore`); en Claude también aparecen sus
   subagentes (`@agent-Explore`). `Tab` entra en una carpeta.

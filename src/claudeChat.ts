@@ -12,6 +12,7 @@ import {
   type QuestionChoice,
 } from "./chatState";
 import { parseClaudeAgents, parseClaudeCommands } from "./chatCommands";
+import { claudeRateLimitUsage, parseClaudeUsage } from "./planUsage";
 
 export type ChatAction =
   | BaseChatAction
@@ -21,6 +22,8 @@ export type ChatAction =
   | { type: "applied"; model?: unknown; effort?: unknown }
   /** Respuesta a `get_context_usage`: lo mismo que muestra `/context`. */
   | { type: "context"; data: unknown }
+  /** Respuesta a `get_usage`: el uso del plan de la cuenta, como en `/usage`. */
+  | { type: "plan"; data: unknown }
   /** El CLI rechazó el modo elegido: se vuelve al anterior. */
   | { type: "modeRejected"; permissionMode: string | null; modeChoice: string | null; message: string };
 
@@ -88,7 +91,10 @@ export function patchLines(patch: unknown): DiffLine[] | null {
   return lines;
 }
 
-/** Respuestas en el formato que espera el CLI: pregunta → texto elegido. */
+/**
+ * Respuestas en el formato que espera el CLI: pregunta → texto elegido. Sin
+ * respuestas, Claude sabe que la persona no quiso contestar y sigue a su criterio.
+ */
 export function answeredInput(input: Json, choices: QuestionChoice[]): Json {
   const answers: Record<string, string> = {};
   for (const choice of choices) {
@@ -167,8 +173,11 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
       const current = items[index];
       if (current.kind !== "tool") continue;
       items = [...items];
+      // Las respuestas a las preguntas quedan junto a ellas para mostrarlas en el hilo.
       const answers = record(toolResult?.answers);
+      const response = text(toolResult?.response).trim();
       items[index] = { ...current, status: block.is_error === true ? "error" : "done",
+        input: answers ? { ...current.input, answers, ...(response ? { response } : {}) } : current.input,
         output: answers ? answerText(answers) : resultText(block.content),
         patch: patchLines(toolResult?.structuredPatch) ?? current.patch };
     } else if (block.type === "text") {
@@ -287,9 +296,10 @@ function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
     }
     case "rate_limit_event": {
       const info = record(event.rate_limit_info) ?? {};
-      if (info.status === "allowed" || info.status === "allowed_warning" || typeof info.status !== "string") return state;
+      const plan = claudeRateLimitUsage(state.plan, info);
+      if (info.status === "allowed" || info.status === "allowed_warning" || typeof info.status !== "string") return { ...state, plan };
       const reset = typeof info.resetsAt === "number" ? new Date(info.resetsAt * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
-      return { ...state, items: addNotice(state.items, "warn",
+      return { ...state, plan, items: addNotice(state.items, "warn",
         reset ? `Alcanzaste el límite de uso. Se restablece a las ${reset}.` : "Alcanzaste el límite de uso de tu cuenta.", "r") };
     }
     default:
@@ -325,6 +335,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, model: text(action.model) || state.model, effort: text(action.effort) || state.effort };
     case "context":
       return { ...state, usage: parseContextUsage(action.data) ?? state.usage };
+    case "plan":
+      return { ...state, plan: parseClaudeUsage(action.data) ?? state.plan };
     case "modeRejected":
       return { ...state, permissionMode: action.permissionMode, modeChoice: action.modeChoice, items: addNotice(state.items, "warn", action.message, "p") };
     default:
