@@ -8,7 +8,7 @@
  * vuelta. No toca la interfaz ni el backend, así que se prueba sin Tauri.
  */
 import {
-  addNotice, baseReducer, choiceAnswers, clip, finalize, list, questionsOf, record, speedHint, text, unifiedDiffLines,
+  addNotice, baseReducer, choiceAnswers, clip, diffStats, finalize, list, questionsOf, record, speedHint, text, unifiedDiffLines,
   type BaseChatAction, type ChatItem, type ChatState, type Json, type ModelInfo, type OutgoingImage,
   type PermissionItem, type QuestionChoice, type ToolItem, type ToolStatus,
 } from "./chatState";
@@ -196,7 +196,7 @@ export const errorLine = (id: string | number, message: string, code = -32601): 
 
 /** Notificaciones que el chat no usa: se piden apagadas para no recibirlas. */
 export const OPT_OUT_NOTIFICATIONS = [
-  "hook/started", "hook/completed", "mcpServer/startupStatus/updated", "remoteControl/status/changed", "skills/changed",
+  "hook/started", "hook/completed", "mcpServer/startupStatus/updated", "remoteControl/status/changed",
   "rawResponseItem/completed", "rawResponse/completed", "app/list/updated", "fs/changed", "deprecationNotice",
   "thread/started", "item/commandExecution/terminalInteraction",
 ];
@@ -349,12 +349,14 @@ function fileTools(item: Json): ToolItem[] {
   return changes.map((change, index) => {
     const kind = record(change.kind) ?? {};
     const destination = text(kind.move_path);
+    const fullDiff = unifiedDiffLines(text(change.diff), kind.type === "delete" ? "del" : "add", Number.MAX_SAFE_INTEGER);
     const name = kind.type === "add" ? "Write" : kind.type === "delete" ? "Delete" : destination ? "Move" : "Edit";
     return {
       kind: "tool", id: changes.length === 1 ? text(item.id) : `${text(item.id)}#${index}`, name,
-      input: { file_path: text(change.path), ...(destination ? { destination } : {}) }, status,
+      input: { file_path: text(change.path), changeKind: text(kind.type), ...(destination ? { destination } : {}) }, status,
       output: item.status === "declined" ? "Denegado." : null,
       patch: unifiedDiffLines(text(change.diff), kind.type === "delete" ? "del" : "add"),
+      changeStats: diffStats(fullDiff),
     };
   });
 }
@@ -506,6 +508,10 @@ function planTodos(items: ChatItem[], params: Json): ChatItem[] {
 }
 
 function completeTurn(state: ChatState, turn: Json, now: number): ChatState {
+  const turnId = text(turn.id);
+  const completedId = turnId ? `codex:${turnId}` : null;
+  if (completedId && state.completedTurnIds.includes(completedId)) return state;
+  if (turnId && state.turnId && state.turnId !== turnId) return state;
   const status = text(turn.status);
   const interrupted = status === "interrupted", failed = status === "failed";
   let items = finalize(state.items).map(item =>
@@ -518,9 +524,11 @@ function completeTurn(state: ChatState, turn: Json, now: number): ChatState {
     items = addNotice(items, "error", message, "e");
   } else if (state.turnStartedAt !== null || typeof turn.durationMs === "number") {
     const durationMs = typeof turn.durationMs === "number" ? turn.durationMs : now - (state.turnStartedAt ?? now);
-    items = [...items, { kind: "turn", id: `t-${text(turn.id) || items.length}`, durationMs }];
+    items = [...items, { kind: "turn", id: `t-${text(turn.id) || items.length}`, durationMs,
+      ...(state.turnDiff !== null ? { diff: state.turnDiff } : {}) }];
   }
-  return { ...state, items, pendingTurns: 0, turnStartedAt: null, turnId: null };
+  return { ...state, items, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null, turnDiff: null,
+    completedTurnIds: completedId ? [...state.completedTurnIds, completedId].slice(-64) : state.completedTurnIds };
 }
 
 /** Petición del servidor que necesita respuesta de la persona. */
@@ -575,10 +583,13 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
   switch (method) {
     case "turn/started": {
       const turn = record(params.turn) ?? {};
+      if (state.completedTurnIds.includes(`codex:${text(turn.id)}`)) return state;
       return { ...state, turnId: text(turn.id) || state.turnId, pendingTurns: Math.max(1, state.pendingTurns), turnStartedAt: state.turnStartedAt ?? now };
     }
     case "turn/completed":
       return completeTurn(state, record(params.turn) ?? {}, now);
+    case "turn/diff/updated":
+      return typeof params.diff === "string" ? { ...state, turnDiff: params.diff } : state;
     case "item/started": case "item/completed": {
       const item = record(params.item);
       return item ? { ...state, items: applyItem(state.items, item, method === "item/started" ? "started" : "completed") } : state;
@@ -700,7 +711,12 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
       for (const raw of action.turns) {
         const turn = record(raw);
         if (!turn) continue;
+        const start = items.length;
         for (const item of list(turn.items).map(record)) if (item) items = applyItem(items, item, "history");
+        items = items.map((item, index) => index >= start && item.kind === "user"
+          ? { ...item, providerTurnId: text(turn.id) } : item);
+        if (turn.status === "completed") items.push({ kind: "turn", id: `t-${text(turn.id) || items.length}`,
+          durationMs: typeof turn.durationMs === "number" ? turn.durationMs : 0 });
         if (turn.status === "interrupted") items = addNotice(items, "info", "Detenido.", "i");
       }
       items = finalize(items);
@@ -714,11 +730,11 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
     case "skills":
       return { ...state, skills: parseCodexSkills(action.data) };
     case "turnStarted":
-      return state.pendingTurns > 0 ? { ...state, turnId: action.turnId } : state;
+      return state.pendingTurns > 0 && !state.completedTurnIds.includes(`codex:${action.turnId}`) ? { ...state, turnId: action.turnId } : state;
     case "plan":
       return { ...state, plan: parseCodexUsage(action.data, state.plan) };
     case "turnFailed":
-      return { ...state, pendingTurns: 0, turnStartedAt: null, turnId: null, items: addNotice(state.items, "error", action.message, "e") };
+      return { ...state, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null, items: addNotice(state.items, "error", action.message, "e") };
     case "answered": {
       const index = state.items.findIndex(item => item.kind === "permission" && item.id === action.id);
       const question = state.items[index];

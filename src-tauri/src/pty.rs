@@ -839,6 +839,13 @@ fn read_cli_version(path: &str) -> Option<String> {
         c
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Estas comprobaciones no son terminales interactivas. También evita
+        // el parpadeo al ejecutar los lanzadores .cmd instalados con npm.
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
 
     let mut child = cmd.spawn().ok()?;
     let start = std::time::Instant::now();
@@ -867,6 +874,48 @@ fn read_cli_version(path: &str) -> Option<String> {
 #[cfg(test)]
 mod launcher_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn version_probe_child() {
+        let mode = std::env::var("TREX_VERSION_PROBE_CHILD");
+        if mode.as_deref() == Ok("console") {
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn GetConsoleWindow() -> *mut std::ffi::c_void;
+            }
+            assert!(unsafe { GetConsoleWindow() }.is_null(), "La comprobación abrió una consola");
+            return;
+        }
+        if mode.as_deref() != Ok("probe") { return; }
+        let dir = std::env::temp_dir().join(format!("trex-version-probe-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        }
+        let _cleanup = Cleanup(dir.clone());
+        let script = dir.join("version probe.cmd");
+        let test_exe = std::env::current_exe().unwrap();
+        std::fs::write(&script, format!(
+            "@echo off\r\nset TREX_VERSION_PROBE_CHILD=console\r\n\"{}\" --exact pty::launcher_tests::version_probe_child --quiet >nul 2>nul\r\nif errorlevel 1 (echo console-visible) else (echo test-cli 1.2.3)\r\n",
+            test_exe.display()
+        )).unwrap();
+        assert_eq!(read_cli_version(script.to_str().unwrap()).as_deref(), Some("test-cli 1.2.3"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cli_version_checks_do_not_open_console_windows() {
+        use std::os::windows::process::CommandExt;
+        // Simula una app de escritorio sin consola, aunque cargo tenga una.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "pty::launcher_tests::version_probe_child", "--nocapture"])
+            .env("TREX_VERSION_PROBE_CHILD", "probe")
+            .creation_flags(0x0000_0008) // DETACHED_PROCESS
+            .output().unwrap();
+        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
 
     fn request(command: &str, mode: &str) -> SpawnRequest {
         serde_json::from_value(serde_json::json!({

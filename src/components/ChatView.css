@@ -1421,6 +1421,8 @@ pre.chat-ask-preview-body {
   font-size: calc(var(--chat-font-size, 14px) + 0.5px);
   line-height: 1.45;
   resize: none;
+  overflow-x: hidden;
+  overflow-y: hidden;
 }
 .chat-input-row textarea::placeholder { color: var(--text-dim); }
 .chat-input-actions {

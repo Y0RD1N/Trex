@@ -14,12 +14,14 @@ const ICONS: Record<Suggestion["kind"], ReactNode> = {
   command: <TerminalIcon size={14} />, skill: <StarIcon size={13} />,
 };
 
-export default function Suggestions({ id, items, active, loading, onPick, onHover }: {
+export default function Suggestions({ id, items, active, loading, loadingLabel = "Buscando archivos…", emptyLabel = "Sin resultados", onPick, onHover }: {
   id: string;
   items: Suggestion[];
   active: number;
-  /** Aún se está leyendo la lista de archivos. */
+  /** Aún se está leyendo el catálogo del disparador actual. */
   loading: boolean;
+  loadingLabel?: string;
+  emptyLabel?: string;
   onPick: (item: Suggestion, drill: boolean) => void;
   onHover: (index: number) => void;
 }) {
@@ -30,7 +32,7 @@ export default function Suggestions({ id, items, active, loading, onPick, onHove
   const folders = items.some(item => item.kind === "folder");
   return <div className="chat-suggest">
     <div className="chat-suggest-list" ref={listRef} id={id} role="listbox" aria-label="Sugerencias">
-      {items.length === 0 && <div className="chat-suggest-empty">{loading ? "Buscando archivos…" : "Sin resultados"}</div>}
+      {items.length === 0 && <div className="chat-suggest-empty" role="status">{loading ? loadingLabel : emptyLabel}</div>}
       {items.map((item, index) => {
         const section = SECTIONS[item.kind];
         return <Fragment key={item.id}>

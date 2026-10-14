@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { codexContextWindows, formatError } from "../api";
 import {
-  allowsAll, autoAllowed, fastSpeed, initialChatState, type Json, type OutgoingImage, type PermissionItem, type QuestionChoice,
+  allowsAll, autoAllowed, fastSpeed, initialChatState, record, text, type Json, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import {
   INIT_PROMPT, OPT_OUT_NOTIFICATIONS, answerResult, autoApproval, codexLaunch, codexReducer, errorLine, notificationLine, requestLine,
@@ -39,12 +39,15 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const pendingRef = useRef(new Map<number, Pending>());
   /** Hilo listo para recibir turnos (se resuelve tras abrirlo o reanudarlo). */
   const threadRef = useRef<Promise<string> | null>(null);
+  const activeThreadRef = useRef<string | null>(null);
   const turnIdRef = useRef<string | null>(null);
+  const completedTurnsRef = useRef(new Set<string>());
   const stopRequestedRef = useRef(false);
   /** El hilo ya se abrió en esta pestaña: al reanudar no se vuelve a pintar su historial. */
   const historyLoadedRef = useRef(false);
   /** Tras empezar una conversación nueva, la de la pestaña ya no se reanuda. */
   const freshRef = useRef(false);
+  const editingRef = useRef(false);
   /** Modo, modelo, esfuerzo y velocidad elegidos: se leen al empezar cada turno, sin esperar al render. */
   const choicesRef = useRef<{ mode: string | null; model: string | null; effort: string | null; fast: boolean | null }>({
     mode: options.mode, model: null, effort: null, fast: null });
@@ -63,6 +66,14 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       reject(error instanceof Error ? error : new Error(formatError(error)));
     });
   }), []);
+  const readSkills = useCallback(async (forceReload = false): Promise<void> => {
+    const result = await request<{ data?: unknown }>("skills/list", { cwds: [cwd], forceReload });
+    dispatch({ type: "skills", data: result?.data });
+  }, [request, cwd]);
+  const refreshSkills = useCallback(async (): Promise<void> => {
+    if (threadRef.current) await threadRef.current;
+    await readSkills(true);
+  }, [readSkills]);
 
   const rejectPending = useCallback((reason: string) => {
     for (const pending of pendingRef.current.values()) pending.reject(new Error(reason));
@@ -78,6 +89,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   }, [request, notice]);
 
   const turnKnown = useCallback((turnId: string) => {
+    if (completedTurnsRef.current.has(turnId)) return;
     turnIdRef.current = turnId;
     dispatch({ type: "turnStarted", turnId });
     if (stopRequestedRef.current) void stopTurn();
@@ -88,6 +100,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     try { message = JSON.parse(line) as Json; } catch { return; /* ruido del shell antes del servidor */ }
     if (typeof message !== "object" || message === null) return;
     const id = message.id, method = typeof message.method === "string" ? message.method : null;
+    const eventThread = record(message.params)?.threadId;
+    if (method && typeof eventThread === "string" && activeThreadRef.current && eventThread !== activeThreadRef.current) return;
     // Respuesta a una petición propia.
     if (id !== undefined && id !== null && !method) {
       const pending = pendingRef.current.get(Number(id));
@@ -115,11 +129,19 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       const turnId = (message.params as { turn?: { id?: string } } | undefined)?.turn?.id;
       if (turnId) turnKnown(turnId);
     } else if (method === "turn/completed") {
-      turnIdRef.current = null;
-      stopRequestedRef.current = false;
+      const turnId = text(record(record(message.params)?.turn)?.id);
+      if (turnId) {
+        completedTurnsRef.current.add(turnId);
+        if (completedTurnsRef.current.size > 64) completedTurnsRef.current.delete(completedTurnsRef.current.values().next().value!);
+      }
+      if (!turnId || turnId === turnIdRef.current) {
+        turnIdRef.current = null;
+        stopRequestedRef.current = false;
+      }
     }
     dispatch({ type: "rpc", message, scope: procId, now: Date.now() });
-  }, [writeOrReport, notice, turnKnown]);
+    if (method === "skills/changed") void readSkills().catch(() => undefined);
+  }, [writeOrReport, notice, turnKnown, readSkills]);
 
   const agent = useAgentProcess(sessionId, {
     onLine: handleLine,
@@ -151,6 +173,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     dispatch({ type: "thread", response });
     const threadId = response?.thread?.id;
     if (!threadId) throw new Error("Codex no devolvió la conversación.");
+    activeThreadRef.current = threadId;
     return threadId;
   }, [request, cwd]);
 
@@ -164,7 +187,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     // Con la ventana de cada modelo, el contexto se ve antes del primer mensaje.
     void Promise.all([request<{ data?: unknown }>("model/list", {}), codexContextWindows(env?.CODEX_HOME ?? "").catch(() => ({}))])
       .then(([result, windows]) => dispatch({ type: "models", data: result?.data, windows })).catch(() => undefined);
-    void request<{ data?: unknown }>("skills/list", { cwds: [cwd] }).then(result => dispatch({ type: "skills", data: result?.data })).catch(() => undefined);
+    void readSkills(true).catch(() => undefined);
     // Uso del plan de la cuenta; después, Codex avisa de cada cambio con `account/rateLimits/updated`.
     void request("account/rateLimits/read", {}).then(data => dispatch({ type: "plan", data })).catch(() => undefined);
 
@@ -174,6 +197,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     if (resumeId) {
       try {
         const response = await request<Json>("thread/resume", { threadId: resumeId, excludeTurns: true, ...overrides });
+        activeThreadRef.current = resumeId;
         dispatch({ type: "thread", response });
         await loadHistory(resumeId, true);
         historyLoadedRef.current = true;
@@ -187,7 +211,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     const threadId = await newThread(overrides);
     historyLoadedRef.current = true;
     return threadId;
-  }, [request, notice, loadHistory, newThread, cwd, env]);
+  }, [request, notice, loadHistory, newThread, cwd, env, readSkills]);
 
   const start = useCallback(async (): Promise<void> => {
     rejectPending("Codex se reinició.");
@@ -221,7 +245,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
 
   const thread = (): Promise<string> => threadRef.current ?? Promise.reject(new Error("La conversación no está abierta."));
 
-  const deliver = async (text: string, images: OutgoingImage[]): Promise<void> => {
+  const deliver = async (text: string, images: OutgoingImage[], userId?: string): Promise<void> => {
     const threadId = await thread();
     const current = stateRef.current;
     const result = await request<{ turn?: { id?: string } }>("turn/start", {
@@ -229,19 +253,49 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       ...turnOverrides(choicesRef.current, { model: current.model, effort: current.effort,
         fastTier: fastSpeed(current.models, current.model, choicesRef.current.model ?? current.modelChoice)?.tier }),
     });
-    if (result?.turn?.id) turnKnown(result.turn.id);
+    if (result?.turn?.id) {
+      turnKnown(result.turn.id);
+      if (userId) dispatch({ type: "bindTurn", id: userId, turnId: result.turn.id });
+    }
   };
 
   /** Mensaje del usuario en el hilo y, cuando Codex esté listo, la petición que lo atiende. */
-  const submit = (display: string, previews: string[], work: () => Promise<void>, failure = "No se pudo enviar el mensaje"): void => {
-    dispatch({ type: "send", id: localId(), text: display, previews, now: Date.now() });
+  const submit = (display: string, previews: string[], work: (id: string) => Promise<void>, failure = "No se pudo enviar el mensaje"): void => {
+    const id = localId();
+    dispatch({ type: "send", id, text: display, previews, now: Date.now() });
     const failed = (error: unknown): void => dispatch({ type: "turnFailed", message: `${failure}: ${formatError(error)}` });
-    if (alive) void work().catch(failed);
-    else void start().then(work).catch(failed);
+    if (alive) void work(id).catch(failed);
+    else void start().then(() => work(id)).catch(failed);
   };
 
   const send = (text: string, images: OutgoingImage[], previews: string[], display?: string): void =>
-    submit(display ?? text, previews, () => deliver(text, images));
+    submit(display ?? text, previews, id => deliver(text, images, id));
+
+  const edit: ChatSession["edit"] = async (id, text, images, previews) => {
+    const current = stateRef.current;
+    if (current.pendingTurns > 0 || editingRef.current) throw new Error("Espera a que termine la respuesta para editar el mensaje.");
+    const original = current.items.find(item => item.kind === "user" && item.id === id);
+    if (original?.kind !== "user" || !original.providerTurnId) throw new Error("No se encontró el turno original de este mensaje.");
+    editingRef.current = true;
+    try {
+      if (!alive) await start();
+      const response = await request<{ thread?: { id?: string } }>("thread/fork", {
+        threadId: await thread(), beforeTurnId: original.providerTurnId, cwd, excludeTurns: true,
+        ...(codexLaunch(args) ?? codexLaunch(null)!).thread,
+      });
+      const newId = response.thread?.id;
+      if (!newId) throw new Error("Codex no devolvió la conversación regenerada.");
+      threadRef.current = Promise.resolve(newId);
+      activeThreadRef.current = newId;
+      freshRef.current = true;
+      historyLoadedRef.current = true;
+      dispatch({ type: "rewind", id, sessionId: newId });
+      dispatch({ type: "thread", response });
+      const messageId = localId();
+      dispatch({ type: "send", id: messageId, text, previews, now: Date.now() });
+      await deliver(text, images, messageId);
+    } finally { editingRef.current = false; }
+  };
 
   /** Comandos de la terminal de Codex que el servidor ofrece como peticiones. */
   const runCommand = (name: string, args: string): boolean => {
@@ -251,10 +305,13 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         submit(label, [], async () => { await request("thread/compact/start", { threadId: await thread() }); }, "No se pudo resumir la conversación");
         return true;
       case "review":
-        submit(label, [], async () => {
+        submit(label, [], async id => {
           const result = await request<{ turn?: { id?: string } }>("review/start", { threadId: await thread(), delivery: "inline",
             target: args ? { type: "custom", instructions: args } : { type: "uncommittedChanges" } });
-          if (result?.turn?.id) turnKnown(result.turn.id);
+          if (result?.turn?.id) {
+            turnKnown(result.turn.id);
+            dispatch({ type: "bindTurn", id, turnId: result.turn.id });
+          }
         }, "No se pudo empezar la revisión");
         return true;
       case "init":
@@ -302,8 +359,10 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     state,
     start,
     send,
+    edit,
     reset,
     runCommand,
+    refreshSkills,
     notice,
     interrupt: () => { if (state.pendingTurns > 0 && alive) void stopTurn(); },
     answer,

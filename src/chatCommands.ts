@@ -1,6 +1,6 @@
 /**
  * Sugerencias de la caja del chat: `@` para archivos, carpetas y subagentes,
- * `/` para los comandos del asistente y `$` para las skills de Codex.
+ * `/` para los comandos del asistente y `$` para las skills disponibles.
  *
  * Solo hay datos y texto: qué disparador hay bajo el cursor, qué sugerir y
  * cómo queda el mensaje al elegir. La interfaz y los protocolos van aparte.
@@ -80,6 +80,19 @@ export function parseClaudeAgents(raw: unknown): AgentInfo[] {
     .map(agent => ({ name: text(agent.name), description: text(agent.description) }));
 }
 
+/** Catálogo de `reload_skills`: incluye skills del proyecto, cuenta y plugins. */
+export function parseClaudeSkills(raw: unknown): SkillInfo[] {
+  const seen = new Set<string>();
+  return list(raw).map(record).filter((skill): skill is Json => {
+    const name = text(skill?.name).replace(/^\//, "");
+    if (!skill || !name || /\s/.test(name) || name.startsWith("__") || skill.enabled === false
+      || skill.userInvocable === false || seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  }).map(skill => ({ name: text(skill.name).replace(/^\//, ""), description: text(skill.description), path: text(skill.path) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** Skills de `skills/list` (una entrada por carpeta), sin repetir nombres. */
 export function parseCodexSkills(raw: unknown): SkillInfo[] {
   const seen = new Set<string>();
@@ -110,9 +123,63 @@ export function parseCommand(value: string): { name: string; args: string } | nu
   return match ? { name: match[1], args: (match[2] ?? "").trim() } : null;
 }
 
-/** Skills nombradas con `$nombre` en el mensaje, para adjuntarlas a Codex. */
+/** Fragmentos de código: una variable escrita como ejemplo no cita una skill. */
+function codeRanges(value: string): { start: number; end: number }[] {
+  const ranges: { start: number; end: number }[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+    if (char !== "`" && char !== "~") continue;
+    let escapes = 0;
+    for (let before = index - 1; before >= 0 && value[before] === "\\"; before--) escapes++;
+    if (escapes % 2) continue;
+    let length = 1;
+    while (value[index + length] === char) length++;
+    if (char === "~" && (length < 3 || !/^ {0,3}$/.test(value.slice(value.lastIndexOf("\n", index - 1) + 1, index)))) { index += length - 1; continue; }
+    const marker = char.repeat(length);
+    const close = value.indexOf(marker, index + length);
+    const end = close < 0 ? value.length : close + length;
+    ranges.push({ start: index, end });
+    index = end - 1;
+  }
+  return ranges;
+}
+
+type SkillMention = { skill: SkillInfo; start: number; end: number };
+
+/** Coincidencias completas, con prioridad para nombres con namespace y sin activar ejemplos de código. */
+function skillMentions(value: string, skills: SkillInfo[]): SkillMention[] {
+  const names = [...skills].sort((a, b) => b.name.length - a.name.length);
+  const ranges = codeRanges(value);
+  const mentions: SkillMention[] = [];
+  let range = 0;
+  for (let index = 0; index < value.length; index++) {
+    if (ranges[range] && index >= ranges[range].start) { index = ranges[range++].end - 1; continue; }
+    if (value[index] !== "$" || (index > 0 && !/\s/.test(value[index - 1]))) continue;
+    const skill = names.find(skill => value.startsWith(skill.name, index + 1)
+      && /^(?:$|[\s.,;!?)\]}]|:(?=$|\s))/.test(value.slice(index + skill.name.length + 1)));
+    if (!skill) continue;
+    const end = index + skill.name.length + 1;
+    mentions.push({ skill, start: index, end });
+    index = end - 1;
+  }
+  return mentions;
+}
+
+/** Skills citadas una sola vez, para adjuntarlas al protocolo de Codex. */
 export function mentionedSkills(value: string, skills: SkillInfo[]): SkillInfo[] {
-  return skills.filter(skill => new RegExp(`(^|\\s)\\$${skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[\\s.,;:!?)])`).test(value));
+  const names = new Set(skillMentions(value, skills).map(mention => mention.skill.name));
+  return skills.filter(skill => names.has(skill.name));
+}
+
+/** Claude entiende `/skill` tanto al principio como dentro de la petición. El chat conserva `$skill`. */
+export function claudeSkillText(value: string, skills: SkillInfo[]): string {
+  let result = value;
+  for (const mention of skillMentions(value, skills).reverse()) {
+    const after = result.slice(mention.end);
+    result = result.slice(0, mention.start) + `/${mention.skill.name}`
+      + (after && !/^\s/.test(after) ? " " : "") + after;
+  }
+  return result;
 }
 
 // --- Disparadores -------------------------------------------------------------
@@ -128,7 +195,9 @@ export function findTrigger(value: string, caret: number, chars: string): Trigge
   if (slash && chars.includes("/")) return { char: "/", query: slash[1], start: 0, end: caret + rest.length };
   const word = /(^|\s)([@$])([^\s]*)$/.exec(before);
   if (!word || !chars.includes(word[2])) return null;
-  return { char: word[2] as "@" | "$", query: word[3], start: caret - word[3].length - 1, end: caret + rest.length };
+  const start = caret - word[3].length - 1;
+  if (word[2] === "$" && codeRanges(value).some(range => start >= range.start && start < range.end)) return null;
+  return { char: word[2] as "@" | "$", query: word[3], start, end: caret + rest.length };
 }
 
 /** Mensaje tras elegir una sugerencia, con el cursor detrás de lo insertado. */

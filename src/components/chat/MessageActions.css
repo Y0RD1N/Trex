@@ -1,0 +1,141 @@
+/* Acciones discretas y resumen del turno: los mismos tokens en todas las paletas. */
+.chat-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 3px;
+  margin: -2px 2px 0 0;
+  border-radius: 9px;
+  opacity: 0.48;
+  transition: opacity var(--t), background var(--t);
+}
+.chat-user-group:hover .chat-user-actions,
+.chat-user-group:focus-within .chat-user-actions,
+.chat-user-group.is-editing .chat-user-actions { opacity: 1; background: var(--hover); }
+.chat-user-actions .chat-copy { width: 28px; height: 27px; border-radius: 7px; }
+.chat-copy:focus-visible,
+.chat-changes button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chat-copy:disabled { opacity: 0.35; cursor: default; }
+.chat-copy.copied { color: var(--ok-text); }
+.chat-user-group.is-editing .chat-user {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.chat-user-actions [aria-pressed="true"] { color: var(--accent); }
+.chat-edit-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0 12px;
+  margin-bottom: 9px;
+  border-bottom: 1px solid var(--dock-edge);
+  color: var(--accent);
+}
+.chat-edit-banner > span { flex: 1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; }
+.chat-edit-banner strong { font-size: 12px; font-weight: 550; }
+.chat-edit-banner small { color: var(--text-dim); font-size: 11px; }
+.chat-turn-complete { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
+.chat-turn-complete > svg { color: var(--ok-text); opacity: 0.7; }
+.chat-turn-separator { opacity: 0.5; }
+
+.chat-changes {
+  container-type: inline-size;
+  margin: 9px 0 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-elevated) 62%, var(--term-bg));
+  animation: chat-rise 180ms var(--ease-out) both;
+}
+.chat-changes-head { display: flex; align-items: center; gap: 6px; padding: 12px 14px 9px; }
+.chat-changes-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-changes-toggle strong { font-size: 12px; font-weight: 600; letter-spacing: -0.01em; }
+.chat-changes-toggle > svg { margin-left: auto; color: var(--text-dim); transform: rotate(-90deg); }
+.chat-changes-toggle[aria-expanded="true"] > svg { transform: rotate(0); }
+.chat-changes-check {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ok-text) 9%, transparent);
+  color: var(--ok-text);
+}
+.chat-changes-counts { display: inline-flex; flex: 0 0 auto; gap: 8px; font: 10.5px var(--font-mono); font-variant-numeric: tabular-nums; }
+.chat-changes-counts .add { color: var(--ok-text); }
+.chat-changes-counts .del { color: var(--danger); }
+.chat-changes-toggle .chat-changes-counts { margin-left: 3px; }
+.chat-changes-diff-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.chat-changes-diff-button:hover { background: var(--hover); color: var(--text); }
+.chat-changes-diff-button.active { background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--accent); }
+.chat-changes-tree, .chat-change-node > ul { list-style: none; padding: 0; margin: 0; }
+.chat-changes-tree { padding: 0 8px 9px; }
+.chat-change-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 33px;
+  padding: 5px 9px 5px calc(7px + var(--change-depth) * 17px);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-change-row:hover { color: var(--text); background: var(--hover); }
+.chat-change-chevron { display: grid; flex: 0 0 auto; width: 12px; color: var(--text-dim); transform: rotate(-90deg); }
+.chat-change-node.open > .chat-change-row .chat-change-chevron { transform: rotate(0); }
+.chat-change-icon { display: grid; flex: 0 0 auto; color: var(--text-dim); }
+.chat-change-icon.added { color: var(--ok-text); }
+.chat-change-icon.deleted { color: var(--danger); }
+.chat-change-icon.renamed { color: var(--accent); }
+.chat-change-name { overflow: hidden; min-width: 0; font: 11.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.chat-change-row .chat-changes-counts { margin-left: auto; }
+.chat-change-files { color: var(--text-dim); opacity: 0.6; font-size: 10px; }
+.chat-change-status { color: var(--text-dim); font-size: 9px; }
+.chat-change-status.added { color: var(--ok-text); }
+.chat-change-status.deleted { color: var(--danger); }
+.chat-change-status.renamed { color: var(--accent); }
+.chat-change-diff { margin: 3px 6px 8px calc(12px + var(--change-depth) * 17px); border-radius: 8px; overflow: hidden; }
+.chat-change-diff .chat-diff { margin: 0; max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.chat-change-no-diff { padding: 8px 10px; margin: 0; color: var(--text-dim); font-size: 11px; overflow-wrap: anywhere; }
+.chat-changes-footer { display: flex; justify-content: space-between; gap: 8px; padding: 9px 15px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 10px; }
+@container (max-width: 420px) {
+  .chat-change-status { display: none; }
+  .chat-changes-head { padding: 10px; }
+  .chat-changes-toggle { gap: 6px; }
+  .chat-changes-toggle strong { font-size: 11px; }
+  .chat-changes-check { width: 20px; height: 20px; }
+  .chat-changes-counts { font-size: 10px; gap: 5px; }
+}
+:root[data-motion="reduced"] .chat-changes { animation: none; }
+@media (prefers-reduced-motion: reduce) { .chat-changes { animation: none; } }
+@media (hover: none) { .chat-user-actions { opacity: 1; } }

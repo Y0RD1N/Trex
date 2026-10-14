@@ -47,10 +47,11 @@ export type QuestionChoice = { question: string; selected: string[]; other: stri
 export type Json = Record<string, unknown>;
 
 export type ChatItem =
-  | { kind: "user"; id: string; text: string; images: number; previews: string[] }
+  | { kind: "user"; id: string; text: string; images: number; previews: string[]; providerTurnId?: string }
   | { kind: "text"; id: string; messageId: string; text: string; final: boolean }
   | { kind: "thinking"; id: string; messageId: string; text: string; final: boolean }
-  | { kind: "tool"; id: string; name: string; input: Json; status: ToolStatus; output: string | null; patch: DiffLine[] | null }
+  | { kind: "tool"; id: string; name: string; input: Json; status: ToolStatus; output: string | null; patch: DiffLine[] | null;
+      changeStats?: { added: number; removed: number } }
   | { kind: "permission"; id: string; toolName: string; toolUseId: string | null; input: Json;
       description: string; suggestions: unknown[]; state: "pending" | "allowed" | "denied";
       /** Cambios que se van a aplicar, cuando el proveedor no los manda en `input`. */
@@ -58,10 +59,11 @@ export type ChatItem =
       /** Petición del proveedor a la que responde la tarjeta. */
       request?: { id: string | number; method: string } }
   | { kind: "notice"; id: string; tone: "info" | "warn" | "error"; text: string }
-  | { kind: "turn"; id: string; durationMs: number };
+  | { kind: "turn"; id: string; durationMs: number; diff?: string };
 
 export type PermissionItem = Extract<ChatItem, { kind: "permission" }>;
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
+export type UserItem = Extract<ChatItem, { kind: "user" }>;
 
 /** Una parte fija de lo que ocupa el contexto: instrucciones, herramientas, skills… */
 export type ContextPart = { name: string; tokens: number };
@@ -81,11 +83,18 @@ export type ChatState = {
   items: ChatItem[];
   /** Mensajes enviados cuya respuesta no ha terminado. */
   pendingTurns: number;
+  /** Mensajes aún no consumidos; Claude puede agrupar varios en un solo turno. */
+  pendingMessageIds: string[];
+  activeMessageIds: string[];
+  /** Terminales ya recibidos: una notificación tardía no vuelve a abrirlos. */
+  completedTurnIds: string[];
   turnStartedAt: number | null;
   /** Conversación del proveedor (sesión de Claude Code o hilo de Codex). */
   sessionId: string | null;
   /** Turno en curso, cuando el proveedor lo identifica (Codex). */
   turnId: string | null;
+  /** Diff neto del turno, cuando el proveedor lo informa. */
+  turnDiff: string | null;
   /** Modelo real en uso (id completo, por ejemplo claude-opus-5-5). */
   model: string | null;
   /** Modelos que ofrece el CLI, con su descripción y sus niveles de esfuerzo. */
@@ -110,8 +119,8 @@ export type ChatState = {
   costUsd: number | null;
   /** Bloques del mensaje en curso: índice del bloque → id del elemento. */
   stream: { messageId: string | null; blocks: Record<number, string> };
-  /** Tras una interrupción, cuántos mensajes siguen en cola. */
-  queuedAfterInterrupt: number | null;
+  /** Mensajes que el CLI confirmó que sobrevivían a una interrupción. */
+  queuedAfterInterrupt: string[] | null;
   /** Elementos del principio que vienen del historial guardado. */
   historyCount: number;
   process: "starting" | "ready" | "exited" | "failed";
@@ -122,6 +131,9 @@ export type ChatState = {
 /** Acciones que entienden todos los proveedores. */
 export type BaseChatAction =
   | { type: "send"; id: string; text: string; previews?: string[]; now: number }
+  | { type: "bindTurn"; id: string; turnId: string }
+  /** Conserva el prefijo anterior al mensaje reemplazado, en la conversación regenerada. */
+  | { type: "rewind"; id: string; sessionId: string }
   | { type: "answer"; id: string; allowed: boolean }
   | { type: "notice"; id: string; tone: "info" | "warn" | "error"; text: string }
   | { type: "model"; model: string }
@@ -137,7 +149,8 @@ export type BaseChatAction =
 
 /** Estado inicial; `mode` es el modo de permisos que la pestaña tenía elegido. */
 export const initialChatState = (mode: string | null = null): ChatState => ({
-  items: [], pendingTurns: 0, turnStartedAt: null, sessionId: null, turnId: null, model: null, models: [],
+  items: [], pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], completedTurnIds: [],
+  turnStartedAt: null, sessionId: null, turnId: null, turnDiff: null, model: null, models: [],
   modelChoice: null, effort: null, effortChoice: null, fast: false, fastChoice: null, permissionMode: mode, modeChoice: mode,
   commands: [], agents: [], skills: [], usage: null, plan: null, costUsd: null,
   stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null, historyCount: 0, process: "starting", exitCode: null, stderr: [],
@@ -164,13 +177,27 @@ export function addNotice(items: ChatItem[], tone: "info" | "warn" | "error", va
 export function baseReducer(state: ChatState, action: BaseChatAction): ChatState {
   switch (action.type) {
     case "send":
+      if (state.pendingMessageIds.includes(action.id)) return state;
       return {
         ...state,
         items: [...state.items, { kind: "user", id: action.id, text: action.text,
           images: action.previews?.length ?? 0, previews: action.previews ?? [] }],
         pendingTurns: state.pendingTurns + 1,
+        pendingMessageIds: [...state.pendingMessageIds, action.id],
+        queuedAfterInterrupt: state.queuedAfterInterrupt === null ? null : [...state.queuedAfterInterrupt, action.id],
         turnStartedAt: state.turnStartedAt ?? action.now,
       };
+    case "bindTurn":
+      return { ...state, items: state.items.map(item => item.kind === "user" && item.id === action.id
+        ? { ...item, providerTurnId: action.turnId } : item) };
+    case "rewind": {
+      const index = state.items.findIndex(item => item.kind === "user" && item.id === action.id);
+      if (index < 0) return state;
+      return { ...state, items: state.items.slice(0, index), historyCount: Math.min(state.historyCount, index),
+        sessionId: action.sessionId, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], completedTurnIds: [],
+        turnStartedAt: null, turnId: null, turnDiff: null,
+        usage: null, costUsd: null, stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null };
+    }
     case "answer":
       return { ...state, items: state.items.map(item => item.kind === "permission" && item.id === action.id
         ? { ...item, state: action.allowed ? "allowed" : "denied" } : item) };
@@ -192,7 +219,7 @@ export function baseReducer(state: ChatState, action: BaseChatAction): ChatState
     case "spawned":
       return { ...state, process: "ready", exitCode: null, stderr: [] };
     case "spawnFailed":
-      return { ...state, process: "failed", pendingTurns: 0, turnStartedAt: null, turnId: null,
+      return { ...state, process: "failed", pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null,
         items: [...state.items, { kind: "notice", id: `f-${state.items.length}`, tone: "error", text: action.message }] };
     case "stderr":
       return { ...state, stderr: [...state.stderr, action.line].slice(-40) };
@@ -201,7 +228,7 @@ export function baseReducer(state: ChatState, action: BaseChatAction): ChatState
       const items = finalize(state.items).map(item =>
         item.kind === "permission" && item.state === "pending" ? { ...item, state: "denied" as const }
           : item.kind === "tool" && item.status === "running" ? { ...item, status: "error" as const } : item);
-      return { ...state, items, process: "exited", exitCode: action.code, pendingTurns: 0, turnStartedAt: null, turnId: null,
+      return { ...state, items, process: "exited", exitCode: action.code, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null,
         queuedAfterInterrupt: null };
     }
   }

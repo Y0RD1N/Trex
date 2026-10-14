@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
-const stub = `data:text/javascript;base64,${Buffer.from('export const invoke = () => {throw new Error("Unexpected native call")}; export const listen = invoke; export const getCurrentWindow = invoke; export const isPermissionGranted = invoke; export const requestPermission = invoke;').toString("base64")}`;
+const stub = `data:text/javascript;base64,${Buffer.from('export const invoke = () => {throw new Error("Unexpected native call")}; export const isTauri = () => false; export const listen = invoke; export const getCurrentWindow = invoke; export const isPermissionGranted = invoke; export const requestPermission = invoke;').toString("base64")}`;
 const cache = new Map();
 async function compiled(url) {
   if (cache.has(url.href)) return cache.get(url.href);

@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
 
-const stub = `data:text/javascript;base64,${Buffer.from('export const invoke = () => { throw new Error("Unexpected native call"); };').toString("base64")}`;
+const stub = `data:text/javascript;base64,${Buffer.from('export const invoke = () => { throw new Error("Unexpected native call"); }; export const isTauri = () => false;').toString("base64")}`;
 const urls = new Map();
 
 async function moduleUrl(name) {

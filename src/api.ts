@@ -2,7 +2,7 @@
  * Capa de acceso al backend: envoltorios de `invoke`/`listen` y utilidades
  * compartidas (ids, valores por defecto, normalización y color de acento).
  */
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { initialProfiles, normalizeLaunch, normalizeProfiles } from "./profiles";
 import { DEFAULT_PASTE_SHORTCUT, parseShortcut, type ClipboardContent } from "./paste";
@@ -97,6 +97,10 @@ export const getAppInfo = (): Promise<AppInfo> => invoke<AppInfo>("app_info");
 export const detectClaude = (): Promise<ClaudeInfo> => invoke<ClaudeInfo>("detect_claude");
 export const detectCodex = (): Promise<ClaudeInfo> => invoke<ClaudeInfo>("detect_codex");
 export const readClipboard = (): Promise<ClipboardContent> => invoke<ClipboardContent>("read_clipboard");
+export const writeClipboard = (text: string): Promise<void> => isTauri()
+  ? invoke<void>("write_clipboard", { text }) : navigator.clipboard.writeText(text);
+export const claudeRewindPoint = (configDir: string, id: string, messageId: string): Promise<string | null> =>
+  invoke("claude_rewind_point", { configDir, id, messageId });
 
 export const ptySpawn = (request: SpawnRequest): Promise<SpawnResponse> =>
   invoke<SpawnResponse>("pty_spawn", { request });
@@ -134,11 +138,17 @@ export const agentWrite = (id: string, line: string): Promise<void> =>
 
 export const agentKill = (id: string): Promise<void> => invoke<void>("agent_kill", { id });
 
-/** Rama de git del proyecto (null si la carpeta no es un repositorio). */
 /** Archivos del proyecto (relativos a su carpeta) para las menciones con `@`. */
 export const listProjectFiles = (cwd: string): Promise<string[]> => invoke<string[]>("list_project_files", { cwd });
 
+/** Rama de git del proyecto (null si la carpeta no es un repositorio). */
 export const gitBranch = (cwd: string): Promise<string | null> => invoke<string | null>("git_branch", { cwd });
+
+export type GitBranchInfo = { name: string; reference: string; remote: boolean; current: boolean; upstream: string | null };
+export type GitBranches = { current: string | null; detached: boolean; branches: GitBranchInfo[] };
+export const listGitBranches = (cwd: string): Promise<GitBranches> => invoke("git_branches", { cwd });
+export const switchGitBranch = (cwd: string, reference: string): Promise<GitBranches> => invoke("git_switch_branch", { cwd, reference });
+export const createGitBranch = (cwd: string, name: string): Promise<GitBranches> => invoke("git_create_branch", { cwd, name });
 
 /** Ventana de contexto de cada modelo de Codex (de su caché local); vacío si no se sabe. */
 export const codexContextWindows = (configDir: string): Promise<Record<string, number>> =>

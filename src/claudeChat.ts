@@ -11,7 +11,7 @@ import {
   type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type DiffLine, type Json, type ModelInfo, type OutgoingImage,
   type QuestionChoice,
 } from "./chatState";
-import { parseClaudeAgents, parseClaudeCommands } from "./chatCommands";
+import { parseClaudeAgents, parseClaudeCommands, parseClaudeSkills } from "./chatCommands";
 import { claudeRateLimitUsage, parseClaudeUsage } from "./planUsage";
 import { FILE_SHARING_INSTRUCTIONS } from "./sharedFiles";
 
@@ -20,6 +20,8 @@ export type ChatAction =
   | { type: "line"; event: unknown; now: number }
   | { type: "history"; entries: unknown[] }
   | { type: "catalog"; models: unknown; permissionMode?: unknown; commands?: unknown; agents?: unknown; fastState?: unknown }
+  | { type: "skills"; data: unknown }
+  | { type: "sendFailed"; id: string; message: string }
   | { type: "applied"; model?: unknown; effort?: unknown }
   /** Respuesta a `get_context_usage`: lo mismo que muestra `/context`. */
   | { type: "context"; data: unknown }
@@ -55,12 +57,12 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
   return flags;
 }
 
-export function userMessageLine(text: string, images: OutgoingImage[] = []): string {
+export function userMessageLine(text: string, images: OutgoingImage[] = [], uuid?: string): string {
   const content = images.length
     ? [...images.map(image => ({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } })),
       ...(text ? [{ type: "text", text }] : [])]
     : text;
-  return JSON.stringify({ type: "user", message: { role: "user", content } });
+  return JSON.stringify({ type: "user", message: { role: "user", content }, ...(uuid ? { uuid } : {}) });
 }
 
 export const controlLine = (requestId: string, request: Json): string =>
@@ -180,7 +182,8 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
       const answers = record(toolResult?.answers);
       const response = text(toolResult?.response).trim();
       items[index] = { ...current, status: block.is_error === true ? "error" : "done",
-        input: answers ? { ...current.input, answers, ...(response ? { response } : {}) } : current.input,
+        input: answers ? { ...current.input, answers, ...(response ? { response } : {}) }
+          : toolResult?.type === "create" ? { ...current.input, changeKind: "add" } : current.input,
         output: answers ? answerText(answers) : resultText(block.content),
         patch: patchLines(toolResult?.structuredPatch) ?? current.patch };
     } else if (block.type === "text") {
@@ -197,19 +200,41 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
 }
 
 function applyResult(state: ChatState, event: Json, now: number): ChatState {
+  const resultId = text(event.uuid) ? `claude:${text(event.uuid)}` : null;
+  if (resultId && state.completedTurnIds.includes(resultId)) return state;
   const interrupted = event.subtype === "error_during_execution";
-  let items = finalize(state.items).map(item => item.kind === "tool" && item.status === "running" && interrupted ? { ...item, status: "error" as const } : item);
+  let items = finalize(state.items).map(item => item.kind === "tool" && item.status === "running"
+    ? { ...item, status: interrupted || event.is_error === true ? "error" as const : "done" as const }
+    : item.kind === "permission" && item.state === "pending" ? { ...item, state: "denied" as const } : item);
   const message = text(event.result) || list(event.errors).map(text).filter(Boolean).join("\n");
   if (event.is_error === true && !interrupted) {
     items = [...items, { kind: "notice", id: `e-${items.length}`, tone: "error", text: message || "Claude no pudo completar la respuesta." }];
   } else if (!interrupted && state.turnStartedAt !== null) {
     const durationMs = typeof event.duration_ms === "number" ? event.duration_ms : now - state.turnStartedAt;
-    items = [...items, { kind: "turn", id: `t-${items.length}`, durationMs }];
+    items = [...items, { kind: "turn", id: `t-${text(event.uuid) || items.length}`, durationMs }];
   }
-  const pendingTurns = state.queuedAfterInterrupt ?? Math.max(0, state.pendingTurns - 1);
+  let pendingMessageIds = state.pendingMessageIds;
+  if (interrupted && state.queuedAfterInterrupt !== null) {
+    pendingMessageIds = pendingMessageIds.filter(id => state.queuedAfterInterrupt!.includes(id));
+  } else if (Array.isArray(event.user_message_uuids) && event.user_message_uuids.length) {
+    const consumed = new Set(list(event.user_message_uuids).map(text));
+    pendingMessageIds = pendingMessageIds.filter(id => !consumed.has(id));
+  } else {
+    const echoed = text(event.user_message_uuid);
+    const consumed = echoed ? [echoed] : state.activeMessageIds;
+    // Productores anteriores solo identifican el último mensaje del lote.
+    const last = Math.max(-1, ...consumed.map(id => pendingMessageIds.indexOf(id)));
+    if (consumed.length) pendingMessageIds = pendingMessageIds.slice(last + 1);
+    else if (typeof event.queued_turn_count === "number" && Number.isInteger(event.queued_turn_count) && event.queued_turn_count >= 0) {
+      pendingMessageIds = event.queued_turn_count ? pendingMessageIds.slice(-event.queued_turn_count) : [];
+    } else pendingMessageIds = pendingMessageIds.slice(1);
+  }
+  const pendingTurns = pendingMessageIds.length;
   return {
-    ...state, items, pendingTurns, queuedAfterInterrupt: null,
+    ...state, items, pendingTurns, pendingMessageIds, activeMessageIds: [], queuedAfterInterrupt: null,
+    completedTurnIds: resultId ? [...state.completedTurnIds, resultId].slice(-64) : state.completedTurnIds,
     turnStartedAt: pendingTurns > 0 ? now : null,
+    stream: { messageId: null, blocks: {} },
     costUsd: typeof event.total_cost_usd === "number" ? event.total_cost_usd : state.costUsd,
     sessionId: text(event.session_id) || state.sessionId,
   };
@@ -285,6 +310,11 @@ function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
   if (!event) return state;
   // Los subagentes trabajan dentro de su herramienta Task: no se mezclan en el hilo.
   if (typeof event.parent_tool_use_id === "string") return state;
+  if (event.type === "stream_event" || event.type === "assistant") {
+    const consumed = [...list(event.user_message_uuids).map(text), text(event.user_message_uuid)]
+      .filter(id => id && state.pendingMessageIds.includes(id));
+    if (consumed.length) state = { ...state, activeMessageIds: [...new Set([...state.activeMessageIds, ...consumed])] };
+  }
   switch (event.type) {
     case "stream_event":
       return applyStream(state, record(event.event) ?? {});
@@ -295,6 +325,7 @@ function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
     case "result":
       return applyFastState(applyResult(state, event, now), event.fast_mode_state, event.fast_mode_disabled_reason);
     case "system": {
+      if (event.subtype === "commands_changed" && Array.isArray(event.commands)) return { ...state, commands: parseClaudeCommands(event.commands) };
       if (event.subtype === "init") {
         return applyFastState({ ...state, sessionId: text(event.session_id) || state.sessionId, model: text(event.model) || state.model,
           permissionMode: text(event.permissionMode) || state.permissionMode }, event.fast_mode_state, event.fast_mode_disabled_reason);
@@ -321,7 +352,7 @@ function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
     }
     case "control_response": {
       const response = record(record(event.response)?.response) ?? {};
-      if (Array.isArray(response.still_queued)) return { ...state, queuedAfterInterrupt: response.still_queued.length };
+      if (Array.isArray(response.still_queued)) return { ...state, queuedAfterInterrupt: list(response.still_queued).map(text).filter(Boolean) };
       const mode = text(response.mode);
       return mode && PERMISSION_MODES.has(mode) ? { ...state, permissionMode: mode } : state;
     }
@@ -340,14 +371,37 @@ function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
+    case "sendFailed": {
+      const pendingMessageIds = state.pendingMessageIds.filter(id => id !== action.id);
+      return { ...state, pendingMessageIds, pendingTurns: pendingMessageIds.length,
+        activeMessageIds: state.activeMessageIds.filter(id => id !== action.id),
+        turnStartedAt: pendingMessageIds.length ? state.turnStartedAt : null,
+        items: addNotice(state.items, "error", action.message, "e") };
+    }
     case "line":
       return applyEvent(state, action.event, action.now);
     case "history": {
       let replay: ChatState = { ...initialChatState(), process: state.process };
+      let startedAt: number | null = null;
       for (const raw of action.entries) {
         const entry = record(raw);
-        if (entry?.type === "assistant") replay = applyAssistant(replay, record(entry.message) ?? {});
-        else if (entry?.type === "user") replay = applyUser(replay, entry, true);
+        if (entry?.type === "assistant") {
+          const message = record(entry.message) ?? {};
+          replay = applyAssistant(replay, message);
+          if (message.stop_reason === "end_turn") {
+            const endedAt = Date.parse(text(entry.timestamp));
+            replay.items.push({ kind: "turn", id: `history-t-${text(entry.uuid) || replay.items.length}`,
+              durationMs: startedAt !== null && Number.isFinite(endedAt) ? Math.max(0, endedAt - startedAt) : 0 });
+            startedAt = null;
+          }
+        } else if (entry?.type === "user") {
+          const before = replay.items.length;
+          replay = applyUser(replay, entry, true);
+          if (replay.items.length > before && replay.items[replay.items.length - 1]?.kind === "user") {
+            const timestamp = Date.parse(text(entry.timestamp));
+            startedAt = Number.isFinite(timestamp) ? timestamp : null;
+          }
+        }
       }
       // Una herramienta sin resultado quedó cortada al cerrar la sesión anterior.
       const history = finalize(replay.items).map(item => item.kind === "tool" && item.status === "running" ? { ...item, status: "done" as const } : item);
@@ -362,6 +416,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         commands: commands.length ? commands : state.commands, agents: agents.length ? agents : state.agents,
         permissionMode: state.permissionMode ?? (PERMISSION_MODES.has(mode) ? mode : null) }, action.fastState, null);
     }
+    case "skills":
+      return { ...state, skills: parseClaudeSkills(action.data) };
     case "applied":
       return { ...state, model: text(action.model) || state.model, effort: text(action.effort) || state.effort };
     case "context":

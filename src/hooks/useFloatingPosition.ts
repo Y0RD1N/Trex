@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 export type AnchorRect = Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">;
 export type FloatingAnchor = { element: HTMLElement } | { rect: AnchorRect } | { x: number; y: number };
@@ -15,6 +15,7 @@ export function useFloatingPosition(
   { side = "bottom", align = "end", gap = 6, track = false, frozen = false }: Options = {},
 ): Position | null {
   const [measurement, setMeasurement] = useState<Measurement | null>(null);
+  const updateRef = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
     if (!anchor) { setMeasurement(null); return; }
@@ -65,6 +66,7 @@ export function useFloatingPosition(
         && previous.position.origin === next.origin && previous.position.side === next.side
         ? previous : { anchor, surface, position: next });
     };
+    updateRef.current = update;
     update();
     // Las confirmaciones siguen a su botón incluso durante una transición de layout.
     let frame = 0;
@@ -80,6 +82,7 @@ export function useFloatingPosition(
     window.visualViewport?.addEventListener("resize", update);
     window.visualViewport?.addEventListener("scroll", update);
     return () => {
+      updateRef.current = null;
       observer.disconnect();
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", update);
@@ -88,6 +91,11 @@ export function useFloatingPosition(
       window.visualViewport?.removeEventListener("scroll", update);
     };
   }, [anchor, surfaceRef, side, align, gap, track, frozen]);
+
+  // Recoloca el contenido de React antes de pintarlo (p. ej., al entrar en un
+  // formulario). ResizeObserver cubre los cambios externos de tamaño, pero su
+  // actualización de estado puede llegar después de un fotograma.
+  useLayoutEffect(() => { updateRef.current?.(); });
 
   // Una reapertura no debe pintar ni enfocar con las coordenadas de otra capa.
   return measurement?.anchor === anchor && measurement.surface === surfaceRef.current

@@ -307,18 +307,22 @@ fn claude_roots_in(home: &Path, first: PathBuf) -> Vec<PathBuf> {
 }
 
 /// Mensajes de una conversación de Claude Code para mostrarla en el chat.
-pub fn history(config_dir: &str, id: &str) -> Result<Vec<Value>, String> {
+fn claude_path(config_dir: &str, id: &str) -> Result<PathBuf, String> {
     if !valid_id(id) {
         return Err("La conversación necesita un identificador válido.".into());
     }
     let file_name = format!("{id}.jsonl");
-    let path = claude_roots(config_dir)
+    claude_roots(config_dir)
         .into_iter()
         .filter_map(|root| fs::read_dir(root.join("projects")).ok())
         .flat_map(|entries| entries.flatten())
         .map(|entry| entry.path().join(&file_name))
         .find(|path| path.is_file())
-        .ok_or_else(|| "No se encontró esta conversación en el equipo.".to_string())?;
+        .ok_or_else(|| "No se encontró esta conversación en el equipo.".to_string())
+}
+
+pub fn history(config_dir: &str, id: &str) -> Result<Vec<Value>, String> {
+    let path = claude_path(config_dir, id)?;
     let file = fs::File::open(&path).map_err(|e| format!("No se pudo abrir el historial: {e}"))?;
     let mut entries: Vec<Value> = BufReader::new(file.take(96 * 1024 * 1024))
         .lines()
@@ -330,6 +334,30 @@ pub fn history(config_dir: &str, id: &str) -> Result<Vec<Value>, String> {
         entries.drain(..entries.len() - HISTORY_ENTRIES);
     }
     Ok(entries)
+}
+
+/// Punto anterior al mensaje que se sustituye. Solo lee el historial; nunca lo modifica.
+fn rewind_point(path: &Path, message_id: &str) -> Result<Option<String>, String> {
+    if !valid_id(message_id) { return Err("El mensaje necesita un identificador válido.".into()); }
+    let file = fs::File::open(path).map_err(|e| format!("No se pudo abrir la conversación: {e}"))?;
+    for line in BufReader::new(file.take(96 * 1024 * 1024)).lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        let Ok(entry) = serde_json::from_str::<Value>(&line) else { continue };
+        if entry["uuid"].as_str() != Some(message_id) || entry["type"] != "user" { continue; }
+        if entry["isSidechain"] == true { continue; }
+        return match &entry["parentUuid"] {
+            Value::Null => Ok(None),
+            Value::String(parent) if valid_id(parent) => Ok(Some(parent.clone())),
+            _ => Err("El mensaje no tiene un punto de reanudación válido.".into()),
+        };
+    }
+    Err("No se encontró el mensaje original en la conversación. Intenta reabrirla.".into())
+}
+
+#[tauri::command]
+pub async fn claude_rewind_point(config_dir: String, id: String, message_id: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || rewind_point(&claude_path(&config_dir, &id)?, &message_id))
+        .await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -353,6 +381,25 @@ pub async fn list_conversations(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rewind_finds_the_previous_chain_entry_without_modifying_the_transcript() {
+        let first = "11111111-1111-4111-8111-111111111111";
+        let second = "22222222-2222-4222-8222-222222222222";
+        let parent = "33333333-3333-4333-8333-333333333333";
+        let missing = "44444444-4444-4444-8444-444444444444";
+        let path = std::env::temp_dir().join(format!("trex-rewind-{}.jsonl", std::process::id()));
+        let content = format!("{}\n{}\n{}\n", serde_json::json!({"type":"user","uuid":first,"parentUuid":null}),
+            serde_json::json!({"type":"user","uuid":second,"parentUuid":first,"isSidechain":true}),
+            serde_json::json!({"type":"user","uuid":second,"parentUuid":parent}));
+        fs::write(&path, &content).unwrap();
+        assert_eq!(rewind_point(&path, first).unwrap(), None);
+        assert_eq!(rewind_point(&path, second).unwrap().as_deref(), Some(parent));
+        assert!(rewind_point(&path, missing).is_err());
+        assert!(rewind_point(&path, "../../invalid").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), content);
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn ids_cannot_contain_shell_commands_or_paths() {
         assert!(valid_id("550e8400-e29b-41d4-a716-446655440000"));

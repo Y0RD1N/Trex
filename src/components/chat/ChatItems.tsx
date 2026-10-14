@@ -8,7 +8,7 @@ import {
   type DiffLine, type PermissionItem, type ToolItem, type ToolSummary,
 } from "../../chatState";
 import { AlertIcon, CheckIcon, ChevronIcon, CloseIcon, FileIcon, GlobeIcon, ImageIcon, InfoIcon, ListIcon, MapIcon, PencilIcon,
-  QuestionIcon, SearchIcon, ShieldIcon, SparkIcon, TerminalIcon, WrenchIcon } from "../Icons";
+  QuestionIcon, RotateIcon, SearchIcon, ShieldIcon, SparkIcon, TerminalIcon, WrenchIcon } from "../Icons";
 import Markdown, { CopyButton } from "./Markdown";
 import { SharedFilesContext } from "./SharedFiles";
 import { useImageViewer } from "../ImageViewer";
@@ -18,10 +18,15 @@ const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
   web: <GlobeIcon />, task: <SparkIcon />, todo: <ListIcon />, plan: <MapIcon />, question: <QuestionIcon />, tool: <WrenchIcon />,
 };
 
-export const UserMessage = memo(function UserMessage({ text, images, previews }: { text: string; images: number; previews: string[] }) {
+export const UserMessage = memo(function UserMessage({ id, text, images, previews, onEdit, onResend, disabled, editing, editable = true }: {
+  id: string; text: string; images: number; previews: string[]; onEdit: (id: string) => void; onResend: (id: string) => void;
+  disabled: boolean; editing: boolean; editable?: boolean;
+}) {
   const viewer = useImageViewer();
   const label = (index: number): string => previews.length > 1 ? `Imagen ${index + 1}` : "Imagen";
-  return <div className="chat-user-group">
+  const available = images === previews.length;
+  const editHint = !available ? "Las imágenes originales no están disponibles" : !editable ? "No se puede recuperar el punto original de este mensaje" : "Editar mensaje";
+  return <div className={`chat-user-group${editing ? " is-editing" : ""}`}>
     {previews.length > 0 && <div className="chat-user-gallery">
       {previews.map((preview, index) => <button key={index} type="button" className="chat-user-thumb" aria-label="Ver imagen"
         onClick={() => viewer.open(previews.map((src, position) => ({ src, name: label(position) })), index)}>
@@ -33,6 +38,13 @@ export const UserMessage = memo(function UserMessage({ text, images, previews }:
       {images > 0 && !previews.length && <div className="chat-user-images"><ImageIcon size={14} />
         {images === 1 ? "1 imagen adjunta" : `${images} imágenes adjuntas`}</div>}
     </div>}
+    <div className="chat-user-actions" role="group" aria-label="Acciones del mensaje">
+      <button type="button" className="chat-copy tip" aria-label="Editar mensaje" data-tip={editHint}
+        aria-pressed={editing} disabled={disabled || !available || !editable} onClick={() => onEdit(id)}><PencilIcon size={14} /></button>
+      <button type="button" className="chat-copy tip" aria-label="Reenviar mensaje" data-tip={available ? "Reenviar mensaje" : editHint}
+        disabled={disabled || !available} onClick={() => onResend(id)}><RotateIcon size={14} /></button>
+      <CopyButton text={text} label="Copiar mensaje" />
+    </div>
   </div>;
 });
 
@@ -59,14 +71,19 @@ function useStreamingText(text: string, streaming: boolean): string {
   return streaming ? shown : text;
 }
 
-export const AssistantText = memo(function AssistantText({ text, streaming, actions }: { text: string; streaming: boolean; actions: boolean }) {
+export const AssistantText = memo(function AssistantText({ text, streaming, actions, regenerateId, onRegenerate, disabled }: {
+  text: string; streaming: boolean; actions: boolean; regenerateId?: string; onRegenerate?: (id: string) => void; disabled?: boolean;
+}) {
   // Mientras la respuesta llega, un adjunto a medio escribir no se da por inexistente.
   const { cwd } = useContext(SharedFilesContext);
   const files = useMemo(() => ({ cwd, streaming }), [cwd, streaming]);
   const shown = useStreamingText(text, streaming);
   return <div className={`chat-assistant${streaming ? " streaming" : ""}`}>
     <SharedFilesContext.Provider value={files}><Markdown text={shown} /></SharedFilesContext.Provider>
-    {actions && <div className="chat-assistant-actions"><CopyButton text={text} label="Copiar respuesta" /></div>}
+    {actions && <div className="chat-assistant-actions"><CopyButton text={text} label="Copiar respuesta" />
+      {regenerateId && onRegenerate && <button type="button" className="chat-copy tip" aria-label="Regenerar respuesta" data-tip="Regenerar respuesta"
+        disabled={disabled} onClick={() => onRegenerate(regenerateId)}><RotateIcon size={14} /></button>}
+    </div>}
   </div>;
 });
 

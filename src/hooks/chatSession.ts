@@ -35,10 +35,14 @@ export type ChatSession = {
   start: () => Promise<void>;
   /** Envía un mensaje; `display` es lo que se ve en el hilo si no es el texto enviado. */
   send: (text: string, images: OutgoingImage[], previews: string[], display?: string) => void;
+  /** Reemplaza el mensaje y regenera desde ese punto en una rama del historial original. */
+  edit: (id: string, text: string, images: OutgoingImage[], previews: string[]) => Promise<void>;
   /** Empieza una conversación nueva en la misma pestaña. */
   reset: () => void;
   /** Ejecuta un comando local del proveedor; false si no lo conoce. */
   runCommand: (name: string, args: string) => boolean;
+  /** Vuelve a leer las skills disponibles en esta cuenta y proyecto. */
+  refreshSkills: () => Promise<void>;
   notice: (tone: "info" | "warn" | "error", text: string) => void;
   interrupt: () => void;
   answer: (item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]) => void;

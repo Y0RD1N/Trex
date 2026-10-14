@@ -65,6 +65,13 @@ fn image_fingerprint(width: u32, height: u32, rgba: &[u8]) -> String {
     rgba.hash(&mut hash);
     format!("{:016x}", hash.finish())
 }
+
+#[tauri::command]
+pub async fn write_clipboard(app: AppHandle, text: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || app.clipboard().write_text(text)
+        .map_err(|e| format!("No se pudo copiar el texto: {e}")))
+        .await.map_err(|e| e.to_string())?
+}
 /// Comprueba la misma imagen antes de enviar al CLI su tecla nativa de adjuntar.
 #[tauri::command]
 pub async fn paste_clipboard_image(

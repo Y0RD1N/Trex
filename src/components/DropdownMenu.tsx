@@ -13,6 +13,8 @@ type Props = {
   focusSelected?: boolean;
   /** Borde del botón con el que se alinea el menú (por defecto, el final). */
   align?: "start" | "end";
+  /** Un popover con búsqueda o formulario conserva Tab y los atajos del campo. */
+  role?: "menu" | "dialog";
   onClose: () => void;
   children: ReactNode;
 };
@@ -20,7 +22,7 @@ type Props = {
 const MENU_OPEN_EVENT = "trex:menu-open";
 
 /** Una sola política de posición, cierre y teclado para todos los menús. */
-export default function DropdownMenu({ anchor, triggerRef, label, className = "", id, style, focusSelected = false, align = "end", onClose, children }: Props) {
+export default function DropdownMenu({ anchor, triggerRef, label, className = "", id, style, focusSelected = false, align = "end", role = "menu", onClose, children }: Props) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -56,10 +58,11 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
     const surface = surfaceRef.current;
     const selected = focusSelected ? surface?.querySelector<HTMLElement>('[role^="menuitem"][aria-checked="true"]:not(:disabled)') : null;
     const first = surface?.querySelector<HTMLElement>('[role^="menuitem"]:not(:disabled)');
-    (selected ?? first)?.focus({ preventScroll: true });
+    const field = role === "dialog" ? surface?.querySelector<HTMLElement>('[data-menu-autofocus]') : null;
+    (field ?? selected ?? first)?.focus({ preventScroll: true });
     selected?.scrollIntoView({ block: "nearest" });
     focusedRef.current = true;
-  }, [anchor, position, focusSelected]);
+  }, [anchor, position, focusSelected, role]);
 
   useEffect(() => {
     if (!anchor) return;
@@ -81,9 +84,19 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
         event.stopPropagation();
         close(true);
       } else if (event.key === "Tab") {
+        if (role === "dialog") {
+          const fields = Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled):not([tabindex="-1"]), [tabindex="0"]') ?? [])
+            .filter(element => element.offsetParent !== null);
+          if (!fields.length) return;
+          const current = fields.indexOf(document.activeElement as HTMLElement);
+          const next = event.shiftKey ? (current <= 0 ? fields.length - 1 : current - 1) : (current + 1) % fields.length;
+          event.preventDefault();
+          fields[next].focus({ preventScroll: true });
+          return;
+        }
         // Deja que Tab continúe desde el botón, en el orden normal de la app.
         close(true);
-      } else if ((event.ctrlKey || event.metaKey || event.altKey) && !["Control", "Meta", "Alt", "Shift"].includes(event.key)) {
+      } else if (role === "menu" && (event.ctrlKey || event.metaKey || event.altKey) && !["Control", "Meta", "Alt", "Shift"].includes(event.key)) {
         close();
       }
     };
@@ -113,9 +126,10 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
       window.removeEventListener(MENU_OPEN_EVENT, onOtherMenu);
       window.removeEventListener("trex:dialog-open", onResize);
     };
-  }, [anchor !== null, triggerRef]);
+  }, [anchor !== null, triggerRef, role]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (role === "dialog") return;
     const items = Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)') ?? []);
     if (!items.length) return;
     const current = items.indexOf(document.activeElement as HTMLElement);
@@ -145,7 +159,7 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
     <div
       ref={surfaceRef}
       id={id}
-      role={presence.leaving ? undefined : "menu"}
+      role={presence.leaving ? undefined : role}
       aria-hidden={presence.leaving || undefined}
       inert={presence.leaving}
       aria-label={label}

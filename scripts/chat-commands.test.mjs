@@ -14,9 +14,60 @@ test("triggers: / only opens at the start, @ and $ at the start of a word", () =
   assert.deepEqual(commands.findTrigger("mira @src/co y dime", 12, "@/"), { char: "@", query: "src/co", start: 5, end: 12 });
   assert.deepEqual(commands.findTrigger("mira @src/coXX", 12, "@/"), { char: "@", query: "src/co", start: 5, end: 14 }, "sustituye la palabra entera");
   assert.equal(commands.findTrigger("correo a@b.com", 14, "@/"), null, "una arroba dentro de una palabra no abre nada");
-  assert.equal(commands.findTrigger("usa $pdf", 8, "@/"), null, "Claude no tiene skills con $");
+  assert.equal(commands.findTrigger("usa $pdf", 8, "@/"), null, "el disparador respeta los caracteres habilitados");
   assert.deepEqual(commands.findTrigger("usa $pd", 7, "@/$"), { char: "$", query: "pd", start: 4, end: 7 });
   assert.equal(commands.findTrigger("hola ", 5, "@/$"), null);
+});
+
+test("Claude lists its real skills, including bundled and namespaced ones, without duplicates", () => {
+  const skills = commands.parseClaudeSkills([
+    { name: "code-review", description: "Revisa el código", argumentHint: "", builtin: true },
+    { name: "plugin:pdf", description: "Lee PDF", argumentHint: "<archivo>" },
+    { name: "plugin:pdf", description: "duplicada" },
+    { name: "off", enabled: false }, { name: "private", userInvocable: false }, { name: "__internal" }, null,
+  ]);
+  assert.deepEqual(skills.map(skill => skill.name), ["code-review", "plugin:pdf"]);
+  assert.equal(skills[1].description, "Lee PDF");
+  const source = { provider: "claude", files: null, agents: [], commands: [], skills };
+  const choices = commands.buildSuggestions({ char: "$", query: "pd", start: 4, end: 7 }, source);
+  assert.equal(choices[0].label, "$plugin:pdf");
+  assert.equal(choices[0].run, undefined, "elegir una skill no envía ni ejecuta el mensaje");
+  const trigger = commands.findTrigger("usa $pd aquí", 7, "@/$");
+  assert.deepEqual(commands.applySuggestion("usa $pd aquí", trigger, choices[0].insert), { text: "usa $plugin:pdf aquí", caret: 16 });
+});
+
+test("Claude translates only real skill citations and preserves punctuation, newlines and unknown dollars", () => {
+  const skills = [{ name: "pdf", description: "PDF", path: "" }, { name: "plugin:pdf", description: "PDF", path: "" },
+    { name: "docx", description: "Word", path: "" }];
+  assert.equal(commands.claudeSkillText("$pdf revisa este archivo", skills), "/pdf revisa este archivo");
+  assert.equal(commands.claudeSkillText("Utiliza $plugin:pdf,\ny $docx. Conserva $pdfx y $100.", skills),
+    "Utiliza /plugin:pdf ,\ny /docx . Conserva $pdfx y $100.");
+  assert.equal(commands.claudeSkillText("usa $pdf y $pdf otra vez", skills), "usa /pdf y /pdf otra vez");
+  assert.deepEqual(commands.mentionedSkills("$plugin:pdf y $pdf", skills).map(skill => skill.name), ["pdf", "plugin:pdf"]);
+  assert.equal(commands.claudeSkillText("Sin skills: $pdf", []), "Sin skills: $pdf");
+});
+
+test("dollars in inline code, fenced code, escaped text and partial names are not skill citations", () => {
+  const skills = [{ name: "pdf", description: "PDF", path: "/s/pdf/SKILL.md" }];
+  const value = "Ejemplo: `echo $pdf`\n```bash\necho $pdf\n```\n~~~sh\necho $pdf\n~~~\nUsa \\$pdf y a$pdf, después $pdf.";
+  assert.equal(commands.mentionedSkills(value, skills).length, 1);
+  assert.equal(commands.claudeSkillText(value, skills), value.slice(0, -5) + "/pdf .");
+  assert.deepEqual(commands.mentionedSkills("`$pdf` ```\n$pdf\n```", skills), []);
+  assert.equal(commands.findTrigger("ejemplo `usa $pd", 15, "@/$"), null);
+  assert.equal(commands.findTrigger("```sh\n$pd", 9, "@/$"), null);
+  assert.equal(commands.findTrigger("usa \\$pd", 8, "@/$"), null);
+});
+
+test("Claude refresh replaces the skill catalog, clears removed skills and keeps skills on reset", async () => {
+  const { chatReducer } = await load("claudeChat");
+  let state = chatReducer(shared.initialChatState(), { type: "skills", data: [{ name: "pdf", description: "PDF" }] });
+  assert.equal(state.skills[0].name, "pdf");
+  state = chatReducer(state, { type: "reset" });
+  assert.equal(state.skills[0].name, "pdf");
+  state = chatReducer(state, { type: "skills", data: [] });
+  assert.deepEqual(state.skills, []);
+  state = chatReducer(state, { type: "line", now: 0, event: { type: "system", subtype: "commands_changed", commands: [{ name: "new-skill", description: "Nueva" }] } });
+  assert.equal(state.commands[0].name, "new-skill");
 });
 
 test("choosing a suggestion replaces the word and leaves the cursor after it", () => {

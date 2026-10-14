@@ -68,6 +68,61 @@ test("streamed text grows in place and the final message does not duplicate it",
   assert.equal(chatActivity(done), "idle");
 });
 
+test("a result closes every user message Claude merged into the turn", () => {
+  const state = run([
+    { type: "send", id: "u1", text: "primero", now: 0 },
+    { type: "send", id: "u2", text: "añade esto", now: 100 },
+    line({ type: "assistant", user_message_uuid: "u2", user_message_uuids: ["u1", "u2"], message: { id: "merged", content: [{ type: "text", text: "Listo" }] } }),
+    line({ type: "result", uuid: "merged-result", subtype: "success", user_message_uuid: "u2", user_message_uuids: ["u1", "u2"], queued_turn_count: 0, duration_ms: 18000 }, 18000),
+  ]);
+  assert.equal(state.pendingTurns, 0);
+  assert.equal(state.turnStartedAt, null);
+  assert.equal(chatActivity(state), "idle");
+});
+
+test("a merged result preserves a newer pending message and ignores a duplicate result", () => {
+  const result = { type: "result", uuid: "r1", subtype: "success", user_message_uuids: ["u1", "u2"], queued_turn_count: 0 };
+  const queued = run([
+    { type: "send", id: "u1", text: "primero", now: 0 },
+    { type: "send", id: "u2", text: "segundo", now: 100 },
+    { type: "send", id: "u3", text: "sigue después", now: 200 },
+    line(result, 1000), line(result, 1100),
+  ]);
+  assert.equal(queued.pendingTurns, 1);
+  assert.deepEqual(queued.pendingMessageIds, ["u3"]);
+  assert.equal(queued.turnStartedAt, 1000);
+  assert.equal(queued.items.filter(item => item.kind === "turn").length, 1);
+  const done = run([line({ type: "result", uuid: "r2", subtype: "success", user_message_uuid: "u3" }, 2000)], queued);
+  assert.equal(chatActivity(done), "idle");
+});
+
+test("stream acknowledgements and the server queue count close batched messages on older producers", () => {
+  const messages = [{ type: "send", id: "u1", text: "uno", now: 0 }, { type: "send", id: "u2", text: "dos", now: 1 }];
+  const acknowledged = run([...messages,
+    line({ type: "stream_event", user_message_uuids: ["u1", "u2"], event: { type: "message_start", message: { id: "m" } } }),
+    line({ type: "result", subtype: "success" }),
+  ]);
+  assert.equal(acknowledged.pendingTurns, 0);
+  assert.equal(run([...messages, line({ type: "result", subtype: "success", queued_turn_count: 0 })]).pendingTurns, 0);
+  assert.equal(run([...messages, line({ type: "result", subtype: "success", user_message_uuid: "u2" })]).pendingTurns, 0);
+  // Sin metadatos, conserva el contrato anterior de una respuesta por envío.
+  assert.equal(run([...messages, line({ type: "result", subtype: "success" })]).pendingTurns, 1);
+});
+
+test("late interrupt receipts do not keep a finished response working and failed sends settle", () => {
+  const queued = run([
+    { type: "send", id: "u1", text: "uno", now: 0 }, { type: "send", id: "u2", text: "dos", now: 1 },
+    line({ type: "result", uuid: "interrupt", subtype: "error_during_execution", user_message_uuid: "u1" }),
+    line({ type: "control_response", response: { response: { still_queued: ["u2"] } } }),
+    line({ type: "result", uuid: "done", subtype: "success", user_message_uuids: ["u2"] }),
+  ]);
+  assert.equal(chatActivity(queued), "idle");
+  const failed = run([{ type: "send", id: "failed", text: "hola", now: 0 }, { type: "sendFailed", id: "failed", message: "No se pudo enviar" }]);
+  assert.equal(failed.pendingTurns, 0);
+  assert.equal(failed.turnStartedAt, null);
+  assert.equal(failed.items.at(-1).tone, "error");
+});
+
 test("tools show their result and edits keep the structured diff", () => {
   const state = run([
     { type: "send", id: "u1", text: "edita", now: 0 },

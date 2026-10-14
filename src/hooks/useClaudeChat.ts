@@ -5,7 +5,9 @@
  * líneas JSON, y pide al CLI su catálogo de modelos y los ajustes en uso.
  */
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { formatError } from "../api";
+import { claudeRewindPoint, formatError } from "../api";
+import { withoutConversationArgs } from "../chatMessages";
+import { claudeSkillText, parseClaudeCommands } from "../chatCommands";
 import { readConversation } from "../conversations";
 import {
   allowsAll, autoAllowed, initialChatState, needsAnswer, record, type OutgoingImage, type PermissionItem, type QuestionChoice,
@@ -15,10 +17,14 @@ import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } f
 
 /** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
 const USAGE_INTERVAL_MS = 60_000;
+const commandSignature = (commands: unknown): string => JSON.stringify(parseClaudeCommands(commands)
+  .sort((a, b) => a.name.localeCompare(b.name) || a.description.localeCompare(b.description)));
 
 /** Peticiones propias cuya respuesta hay que atender: datos que guardar o un cambio que deshacer. */
 type Control =
-  | { kind: "initialize" | "settings" | "context" | "usage" }
+  | { kind: "initialize"; ready?: (error?: string) => void }
+  | { kind: "settings" | "context" | "usage" }
+  | { kind: "skills"; done: (error?: string) => void }
   | { kind: "mode"; permissionMode: string | null; modeChoice: string | null };
 
 export function useClaudeChat(options: ChatSessionOptions): ChatSession {
@@ -31,6 +37,10 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const pendingControlsRef = useRef(new Map<string, Control>());
   /** Tras empezar una conversación nueva, la de la pestaña ya no se reanuda. */
   const freshRef = useRef(false);
+  const conversationOverrideRef = useRef(false);
+  const editingRef = useRef(false);
+  const skillsRequestRef = useRef<Promise<void> | null>(null);
+  const commandsSignatureRef = useRef("");
 
   const writeRef = useRef<(line: string) => Promise<void>>(() => Promise.resolve());
   const writeOrReport = useCallback((line: string) => {
@@ -46,6 +56,22 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const refreshSettings = useCallback(() => control({ subtype: "get_settings" }, { kind: "settings" }), [control]);
   /** Lo mismo que mide `/context`; el CLI lo calcula al momento, sin llamar al modelo. */
   const refreshContext = useCallback(() => control({ subtype: "get_context_usage" }, { kind: "context" }), [control]);
+  const refreshSkills = useCallback((): Promise<void> => {
+    if (skillsRequestRef.current) return skillsRequestRef.current;
+    const request = new Promise<void>((resolve, reject) => {
+      const id = localId();
+      const timer = window.setTimeout(() => done("Claude no respondió al cargar las skills."), 10_000);
+      const done = (error?: string): void => {
+        window.clearTimeout(timer);
+        pendingControlsRef.current.delete(id);
+        if (error) reject(new Error(error)); else resolve();
+      };
+      pendingControlsRef.current.set(id, { kind: "skills", done });
+      void writeRef.current(controlLine(id, { subtype: "reload_skills" })).catch(error => done(formatError(error)));
+    }).finally(() => { if (skillsRequestRef.current === request) skillsRequestRef.current = null; });
+    skillsRequestRef.current = request;
+    return request;
+  }, []);
   /** Lo mismo que `/usage`: sesión de 5 horas, semana y uso extra de la cuenta. */
   const usageAtRef = useRef(0);
   const refreshUsage = useCallback((force = false) => {
@@ -66,11 +92,16 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       pendingControlsRef.current.delete(reply.request_id);
       const data = reply.subtype === "success" ? reply.response ?? {} : {};
       if (pending.kind === "initialize") {
+        commandsSignatureRef.current = commandSignature(data.commands);
         dispatch({ type: "catalog", models: data.models, permissionMode: data.current_permission_mode, commands: data.commands, agents: data.agents,
           fastState: data.fast_mode_state });
+        pending.ready?.(reply.subtype === "success" ? undefined : reply.error ?? "Claude rechazó la reanudación.");
       } else if (pending.kind === "settings") {
         const applied = (data.applied ?? {}) as Record<string, unknown>;
         dispatch({ type: "applied", model: applied.model, effort: applied.effort });
+      } else if (pending.kind === "skills") {
+        if (reply.subtype === "success") dispatch({ type: "skills", data: data.skills });
+        pending.done(reply.subtype === "success" ? undefined : reply.error ?? "No se pudieron cargar las skills de Claude.");
       } else if (pending.kind === "context") {
         dispatch({ type: "context", data });
       } else if (pending.kind === "usage") {
@@ -96,17 +127,30 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       return;
     }
     dispatch({ type: "line", event, now: Date.now() });
+    if (message?.type === "system" && message.subtype === "commands_changed") {
+      const signature = commandSignature(record(event)?.commands);
+      if (signature !== commandsSignatureRef.current) {
+        commandsSignatureRef.current = signature;
+        void refreshSkills().catch(() => undefined);
+      }
+    }
     // Al terminar cada respuesta se vuelve a medir el contexto, con el desglose por partes, y el uso del plan.
     if (message?.type === "result" && typeof message.parent_tool_use_id !== "string") {
       refreshContext();
       refreshUsage();
     }
-  }, [writeOrReport, refreshContext, refreshUsage]);
+  }, [writeOrReport, refreshContext, refreshUsage, refreshSkills]);
 
   const agent = useAgentProcess(sessionId, {
     onLine: handleLine,
     onStderr: line => dispatch({ type: "stderr", line }),
     onExit: code => {
+      for (const pending of pendingControlsRef.current.values()) {
+        if (pending.kind === "initialize") pending.ready?.("Claude se cerró antes de reanudar la conversación.");
+        else if (pending.kind === "skills") pending.done("La sesión de Claude se cerró.");
+      }
+      pendingControlsRef.current.clear();
+      skillsRequestRef.current = null;
       dispatch({ type: "exit", code });
       callbacks.current.onExit(sessionId, code);
     },
@@ -116,11 +160,14 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const start = useCallback(async (fresh = false): Promise<void> => {
     const current = stateRef.current;
     const resumeId = fresh ? null : current.sessionId ?? (freshRef.current ? null : callbacks.current.conversationId);
+    const profileArgs = conversationOverrideRef.current ? withoutConversationArgs(args) : args;
+    for (const pending of pendingControlsRef.current.values()) if (pending.kind === "skills") pending.done("La sesión de Claude se está reiniciando.");
     pendingControlsRef.current.clear();
+    skillsRequestRef.current = null;
     try {
       const procId = await agent.spawn({
-        cwd, command: command?.trim() || "claude", profileArgs: args, shell, env,
-        flags: claudeChatFlags(args, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: current.modeChoice }),
+        cwd, command: command?.trim() || "claude", profileArgs, shell, env,
+        flags: claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: current.modeChoice }),
       });
       if (!procId) return;
       dispatch({ type: "spawned" });
@@ -132,10 +179,11 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       refreshSettings();
       refreshContext();
       refreshUsage(true);
+      void refreshSkills().catch(() => undefined);
     } catch (error) {
       dispatch({ type: "spawnFailed", message: `No se pudo iniciar Claude Code: ${formatError(error)}` });
     }
-  }, [agent, sessionId, cwd, command, args, shell, env, control, refreshSettings, refreshContext, refreshUsage]);
+  }, [agent, sessionId, cwd, command, args, shell, env, control, refreshSettings, refreshContext, refreshUsage, refreshSkills]);
 
   // Arranque: historial guardado (si se recupera una conversación) y proceso.
   useEffect(() => {
@@ -154,10 +202,62 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const alive = state.process === "ready" || state.process === "starting";
 
   const send = (text: string, images: OutgoingImage[], previews: string[], display?: string): void => {
-    dispatch({ type: "send", id: localId(), text: display ?? text, previews, now: Date.now() });
-    const deliver = (): void => writeOrReport(userMessageLine(text, images));
+    const id = crypto.randomUUID();
+    dispatch({ type: "send", id, text: display ?? text, previews, now: Date.now() });
+    const deliver = (): void => {
+      void agent.write(userMessageLine(claudeSkillText(text, stateRef.current.skills), images, id))
+        .catch(error => dispatch({ type: "sendFailed", id, message: `No se pudo enviar el mensaje: ${formatError(error)}` }));
+    };
     if (alive) deliver();
     else void start().then(deliver);
+  };
+
+  const edit: ChatSession["edit"] = async (id, text, images, previews) => {
+    const current = stateRef.current;
+    if (current.pendingTurns > 0 || editingRef.current) throw new Error("Espera a que termine la respuesta para editar el mensaje.");
+    if (!current.sessionId || !current.items.some(item => item.kind === "user" && item.id === id)) throw new Error("No se encontró el mensaje en esta conversación.");
+    editingRef.current = true;
+    try {
+      const point = await claudeRewindPoint(env?.CLAUDE_CONFIG_DIR ?? "", current.sessionId, id);
+      const newSessionId = crypto.randomUUID();
+      const profileArgs = withoutConversationArgs(args);
+      const flags = claudeChatFlags(profileArgs, point ? current.sessionId : null,
+        { model: current.modelChoice, effort: current.effortChoice, mode: current.modeChoice });
+      if (point) flags.push("--resume-session-at", point, "--fork-session");
+      flags.push("--session-id", newSessionId);
+      for (const pending of pendingControlsRef.current.values()) if (pending.kind === "skills") pending.done("La sesión de Claude se está reiniciando.");
+      pendingControlsRef.current.clear();
+      skillsRequestRef.current = null;
+      const procId = await agent.spawn({ cwd, command: command?.trim() || "claude", profileArgs, flags, shell, env });
+      if (!procId) throw new Error("La sesión se cerró mientras se preparaba la edición.");
+      // El prefijo solo se sustituye cuando el CLI confirma que aceptó la reanudación.
+      await new Promise<void>((resolve, reject) => {
+        const requestId = localId();
+        const timer = window.setTimeout(() => {
+          pendingControlsRef.current.delete(requestId);
+          reject(new Error("Claude no confirmó la reanudación. Puedes volver a intentarlo."));
+        }, 15_000);
+        const ready = (error?: string): void => {
+          window.clearTimeout(timer);
+          pendingControlsRef.current.delete(requestId);
+          if (error) reject(new Error(error)); else resolve();
+        };
+        pendingControlsRef.current.set(requestId, { kind: "initialize", ready });
+        void agent.write(controlLine(requestId, { subtype: "initialize" })).catch(error => ready(formatError(error)));
+      });
+      conversationOverrideRef.current = true;
+      freshRef.current = true;
+      dispatch({ type: "rewind", id, sessionId: newSessionId });
+      dispatch({ type: "spawned" });
+      callbacks.current.onRunning(sessionId);
+      if (current.fastChoice !== null) control({ subtype: "apply_flag_settings", settings: { fastMode: current.fastChoice } });
+      refreshSettings();
+      refreshUsage(true);
+      const messageId = crypto.randomUUID();
+      dispatch({ type: "send", id: messageId, text, previews, now: Date.now() });
+      try { await agent.write(userMessageLine(claudeSkillText(text, current.skills), images, messageId)); }
+      catch (error) { dispatch({ type: "sendFailed", id: messageId, message: `No se pudo enviar la edición: ${formatError(error)}` }); throw error; }
+    } finally { editingRef.current = false; }
   };
 
   const interrupt = (): void => {
@@ -182,14 +282,17 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     state,
     start: () => start(),
     send,
+    edit,
     // El CLI no cambia de sesión en mitad del proceso: se lanza otro sin reanudar nada.
     reset: () => {
       freshRef.current = true;
+      conversationOverrideRef.current = true;
       dispatch({ type: "reset" });
       void start(true);
     },
     // Los comandos de Claude Code los resuelve el propio CLI al recibirlos como mensaje.
     runCommand: () => false,
+    refreshSkills,
     notice,
     interrupt,
     answer,

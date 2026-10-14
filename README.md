@@ -51,6 +51,29 @@ carpeta, con el asistente y el perfil que elijas.
 
 ## Claude Code y Codex como chat
 
+Pulsa el nombre de la **rama de Git** junto a la caja del chat para buscar entre
+las ramas locales y las remotas conocidas, cambiar de rama o **Crear y cambiar**
+a una nueva desde la actual. La rama activa queda marcada y el indicador se
+actualiza en los otros chats del proyecto. Si Git detecta que el cambio
+sobrescribiría archivos pendientes, muestra su error y conserva los cambios.
+Mientras el agente de ese chat trabaja puedes consultar las ramas; el cambio y la creación
+se habilitan al terminar la tarea.
+
+Los mensajes ofrecen tres iconos: **Editar**, **Reenviar** y **Copiar**. Editar
+carga el texto y sus imágenes en la caja; al guardar, sustituye ese mensaje y
+regenera las respuestas desde ese punto. `Esc` cancela y recupera tu borrador.
+La conversación original queda conservada en el historial del asistente; los
+archivos que ya se modificaron permanecen en el proyecto. Reenviar envía una
+copia nueva del mensaje. Las respuestas también ofrecen copiar y regenerar.
+
+Al completar cada tarea aparece un **resumen de cambios** con los archivos
+editados, agrupados por carpetas, y las líneas añadidas y eliminadas. Despliega
+una carpeta o un archivo para revisar sus diferencias, o usa el icono de diff
+para abrirlas todas. El resumen se obtiene de las ediciones que informa el
+asistente, utiliza el diff neto de Codex cuando está disponible y se conserva
+al recuperar el historial. Los comandos de shell que no informan de sus
+ediciones pueden no aparecer en la tarjeta.
+
 Las sesiones de Claude Code y de Codex se abren como una conversación, igual
 que en una app de chat: escribes abajo (`Enter` envía, `Shift+Enter` añade una
 línea) y la respuesta aparece con formato, bloques de código y tablas. Por
@@ -106,7 +129,12 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
 - **Comandos con `/`**: al principio del mensaje, `/` lista los comandos. En
   Claude son los de tu Claude Code (`/context`, `/compact`, tus skills…). En
   Codex, trex ofrece los suyos: `/new`, `/compact`, `/review`, `/init`,
-  `/status` y `/mcp`, y `$` para usar una skill. En los dos, `/model`,
+  `/status` y `/mcp`. En ambos chats, **`$` abre las skills** de la sesión:
+  escribe parte de su nombre, elige con las flechas y pulsa `Enter` o `Tab`
+  para insertar `$nombre` dentro de tu mensaje. Puedes citar varias skills;
+  elegirlas conserva el borrador y no envía el mensaje. `Esc` cierra la lista.
+  El catálogo respeta el proyecto, la cuenta y los plugins del perfil y se
+  vuelve a consultar al abrirlo. En los dos, `/model`,
   `/effort` y `/permissions` abren los selectores y `/clear` (o `/new`) empieza
   una conversación nueva.
 - **Detener**: `Esc` o el botón cuadrado interrumpen la respuesta en curso. En

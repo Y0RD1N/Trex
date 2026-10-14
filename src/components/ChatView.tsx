@@ -16,6 +16,8 @@ import {
   chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, formatTokens, modelName, pendingPermissions,
   shownUsage, supportedEfforts, type PermissionItem, type QuestionChoice,
 } from "../chatState";
+import { messageAttachments } from "../chatMessages";
+import { completedWork, type SummaryCache } from "../workSummary";
 import { resetLabel } from "../planUsage";
 import { applySuggestion, buildSuggestions, findTrigger, localCommand, parseCommand, type Suggestion } from "../chatCommands";
 import type { AgentActivity, AgentNoticeKind, AgentProvider, Settings } from "../types";
@@ -25,7 +27,7 @@ import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowUpIcon, BranchIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon } from "./Icons";
+import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { EffortMenu, ModelMenu } from "./chat/ModelMenu";
 import { SharedFilesContext } from "./chat/SharedFiles";
@@ -35,7 +37,10 @@ import ContextMeter from "./chat/ContextMeter";
 import PlanMeter from "./chat/PlanMeter";
 import QuestionPanel from "./chat/QuestionPanel";
 import Suggestions from "./chat/Suggestions";
+import WorkSummary from "./chat/WorkSummary";
+import BranchMenu, { GIT_BRANCH_CHANGED } from "./chat/BranchMenu";
 import "./ChatView.css";
+import "./chat/MessageActions.css";
 
 export type ChatViewProps = ChatSessionOptions & {
   provider: AgentProvider;
@@ -83,8 +88,9 @@ const NATIVE_PASTE = ["Ctrl+V", "Meta+V", "Shift+Insert"];
 const hasFiles = (transfer: DataTransfer | null): boolean => !!transfer && Array.from(transfer.types).includes("Files");
 /** Los archivos del proyecto se vuelven a leer si la lista tiene más de esto. */
 const FILES_TTL_MS = 20_000;
+const SKILLS_TTL_MS = 20_000;
 
-function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
+export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const { session, sessionId, cwd, projectName, conversationId, settings, visible, focused } = props;
   const { state, provider } = session;
   const agent = PROVIDERS[provider];
@@ -95,12 +101,20 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const [preparing, setPreparing] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ id: string; draft: string; attachments: ChatAttachment[] } | null>(null);
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+  const editSendingRef = useRef(false);
+  const summaryCacheRef = useRef<SummaryCache>(new Map());
   // Sugerencias de `@`, `/` y `$`: posición del cursor, opción resaltada y menú descartado con Esc.
   const [caret, setCaret] = useState(0);
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [files, setFiles] = useState<string[] | null>(null);
   const filesAtRef = useRef(0);
+  const filesRequestRef = useRef(0);
+  const skillsAtRef = useRef(0);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
   /** Abre un menú de la bandeja desde un comando (`/model`, `/effort`, `/permissions`). */
   const [menuSignal, setMenuSignal] = useState({ model: 0, effort: 0, mode: 0 });
 
@@ -192,22 +206,119 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     return () => observer.disconnect();
   }, []);
 
-  // La caja crece con el texto hasta un tope.
+  // Deja un píxel para el redondeo de fuentes y del escalado de Windows.
+  const resizeInput = useStableCallback((): void => {
+    const input = inputRef.current;
+    if (!input || !input.clientWidth) return;
+    input.style.overflowY = "hidden";
+    input.style.height = "auto";
+    const naturalHeight = Math.ceil(input.scrollHeight) + 1;
+    const maxHeight = Math.max(38, Math.floor(window.innerHeight * 0.4));
+    input.style.height = `${Math.min(naturalHeight, maxHeight)}px`;
+    input.style.overflowY = naturalHeight > maxHeight ? "auto" : "hidden";
+  });
+  useLayoutEffect(() => { if (visible) resizeInput(); }, [draft, visible, settings.fontSize, resizeInput]);
+  // Las pestañas se montan ocultas; se mide al mostrarlas, al cambiar el ancho
+  // del panel y cuando terminan de cargar las fuentes.
   useLayoutEffect(() => {
     const input = inputRef.current;
-    if (!input) return;
-    input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
-  }, [draft]);
+    if (!input || !visible) return;
+    let disposed = false;
+    const resize = (): void => { if (!disposed) resizeInput(); };
+    const observer = new ResizeObserver(resize);
+    observer.observe(input);
+    window.addEventListener("resize", resize);
+    void document.fonts.ready.then(resize);
+    return () => { disposed = true; observer.disconnect(); window.removeEventListener("resize", resize); };
+  }, [visible, resizeInput]);
 
   const running = state.pendingTurns > 0;
+  const summaries = useMemo(() => completedWork(state.items, cwd, state.historyCount, summaryCacheRef.current), [state.items, cwd, state.historyCount]);
+  const responseOrigins = useMemo(() => {
+    const origins = new Map<string, Extract<typeof state.items[number], { kind: "user" }>>();
+    let user: Extract<typeof state.items[number], { kind: "user" }> | null = null;
+    for (const item of state.items) {
+      if (item.kind === "user") user = item;
+      else if (item.kind === "text" && user) origins.set(item.id, user);
+    }
+    return origins;
+  }, [state.items]);
+  const canEdit = (item: Extract<typeof state.items[number], { kind: "user" }>): boolean =>
+    provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id);
+  const cancelEdit = (): void => {
+    if (!editing || editSendingRef.current) return;
+    setDraft(editing.draft);
+    setAttachments(editing.attachments);
+    setEditing(null);
+    backToInput();
+  };
+  const beginEdit = useStableCallback((id: string): void => {
+    if (running || editSendingRef.current || preparing) return;
+    const item = state.items.find(item => item.kind === "user" && item.id === id);
+    if (item?.kind !== "user") return;
+    try {
+      const images = messageAttachments(item);
+      setEditing(previous => ({ id, draft: previous?.draft ?? draft, attachments: previous?.attachments ?? attachments }));
+      setDraft(item.text);
+      setAttachments(images);
+      setDismissed(null);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus({ preventScroll: true });
+        inputRef.current?.setSelectionRange(item.text.length, item.text.length);
+      });
+    } catch (error) { callbacks.current.onMessage(formatError(error)); }
+  });
+  const resendMessage = useStableCallback((id: string): void => {
+    if (running || editSendingRef.current || preparing) return;
+    const item = state.items.find(item => item.kind === "user" && item.id === id);
+    if (item?.kind !== "user") return;
+    try {
+      const images = messageAttachments(item);
+      if (editing) cancelEdit();
+      stickRef.current = true;
+      session.send(item.text, images, images.map(image => image.preview));
+      backToInput();
+    } catch (error) { callbacks.current.onMessage(formatError(error)); }
+  });
+  const regenerateMessage = useStableCallback((id: string): void => {
+    if (running || editSendingRef.current || preparing) return;
+    const item = state.items.find(item => item.kind === "user" && item.id === id);
+    if (item?.kind !== "user") return;
+    editSendingRef.current = true;
+    setSubmittingEdit(true);
+    try {
+      const images = messageAttachments(item);
+      stickRef.current = true;
+      void session.edit(id, item.text, images, images.map(image => image.preview))
+        .catch(error => callbacks.current.onMessage(formatError(error)))
+        .finally(() => { editSendingRef.current = false; setSubmittingEdit(false); });
+    } catch (error) {
+      editSendingRef.current = false;
+      setSubmittingEdit(false);
+      callbacks.current.onMessage(formatError(error));
+    }
+  });
 
   // Rama de git: al mostrar la sesión y al terminar cada respuesta (el asistente puede cambiarla).
   useEffect(() => {
-    if (!visible || running) return;
     let cancelled = false;
-    void gitBranch(cwd).then(name => { if (!cancelled) setBranch(name); }).catch(() => undefined);
-    return () => { cancelled = true; };
+    let request = 0;
+    const refresh = (): void => {
+      if (!visible || running) return;
+      const next = ++request;
+      void gitBranch(cwd).then(name => { if (!cancelled && next === request) setBranch(name); }).catch(() => undefined);
+    };
+    const changed = (event: Event): void => {
+      if ((event as CustomEvent<{ cwd: string }>).detail?.cwd !== cwd) return;
+      setFiles(null);
+      filesAtRef.current = 0;
+      filesRequestRef.current++;
+      refresh();
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    window.addEventListener(GIT_BRANCH_CHANGED, changed);
+    return () => { cancelled = true; window.removeEventListener("focus", refresh); window.removeEventListener(GIT_BRANCH_CHANGED, changed); };
   }, [cwd, visible, running]);
 
   /** Prepara y añade imágenes a la caja (capturas, archivos o arrastradas). */
@@ -327,7 +438,22 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   const send = (override?: string): void => {
     const text = (override ?? draft).trim();
-    if ((!text && !attachments.length) || preparing > 0) return;
+    if ((!text && !attachments.length) || preparing > 0 || editSendingRef.current) return;
+    if (editing) {
+      if (running) return;
+      editSendingRef.current = true;
+      setSubmittingEdit(true);
+      stickRef.current = true;
+      void session.edit(editing.id, text, attachments, attachments.map(image => image.preview)).then(() => {
+        setDraft(editing.draft);
+        setAttachments(editing.attachments);
+        setEditing(null);
+      }).catch(error => {
+        callbacks.current.onMessage(formatError(error));
+        if (!callbacks.current.session.state.items.some(item => item.kind === "user" && item.id === editing.id)) setEditing(null);
+      }).finally(() => { editSendingRef.current = false; setSubmittingEdit(false); });
+      return;
+    }
     const command = attachments.length ? null : parseCommand(text);
     setDismissed(null);
     if (command && runLocal(command.name, command.args)) {
@@ -347,15 +473,18 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   };
 
   // --- Sugerencias ------------------------------------------------------------
-  const trigger = findTrigger(draft, caret, provider === "codex" ? "@/$" : "@/");
+  const trigger = findTrigger(draft, caret, "@/$");
   const triggerKey = trigger ? `${trigger.char}:${trigger.start}` : null;
   const suggesting = trigger !== null && triggerKey !== dismissed;
   const wantsFiles = suggesting && trigger?.char === "@";
+  const wantsSkills = suggesting && trigger?.char === "$";
   const suggestions = useMemo(() => suggesting && trigger
     ? buildSuggestions(trigger, { provider, files, agents: state.agents, commands: state.commands, skills: state.skills }) : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [suggesting, trigger?.char, trigger?.query, provider, files, state.agents, state.commands, state.skills]);
-  const showSuggestions = suggesting && (suggestions.length > 0 || (wantsFiles && files === null));
+  const showSuggestions = suggesting && (suggestions.length > 0 || (wantsFiles && files === null) || wantsSkills);
+  const selectedSuggestion = suggestions[active] ? active : 0;
+  const loadingSuggestions = wantsSkills ? skillsLoading || state.process === "starting" : wantsFiles && files === null;
 
   useEffect(() => { setActive(0); }, [trigger?.char, trigger?.query]);
 
@@ -363,8 +492,24 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   useEffect(() => {
     if (!wantsFiles || Date.now() - filesAtRef.current < FILES_TTL_MS) return;
     filesAtRef.current = Date.now();
-    void listProjectFiles(cwd).then(setFiles).catch(() => setFiles(previous => previous ?? []));
-  }, [wantsFiles, cwd]);
+    const request = ++filesRequestRef.current;
+    void listProjectFiles(cwd).then(next => { if (request === filesRequestRef.current) setFiles(next); })
+      .catch(() => { if (request === filesRequestRef.current) setFiles(previous => previous ?? []); });
+  }, [wantsFiles, cwd, files]);
+
+  // Catálogo de la propia sesión: respeta el proyecto, la cuenta y los plugins del perfil.
+  useEffect(() => {
+    if (!wantsSkills || !visible || state.process !== "ready" || Date.now() - skillsAtRef.current < SKILLS_TTL_MS) return;
+    skillsAtRef.current = Date.now();
+    setSkillsLoading(true);
+    setSkillsError(null);
+    let cancelled = false;
+    void session.refreshSkills().catch(error => {
+      skillsAtRef.current = 0;
+      if (!cancelled) setSkillsError(`No se pudieron cargar las skills: ${formatError(error)}`);
+    }).finally(() => { if (rootRef.current) setSkillsLoading(false); });
+    return () => { cancelled = true; };
+  }, [wantsSkills, triggerKey, visible, state.process, session.refreshSkills]);
 
   /** Pone la sugerencia en el mensaje; una carpeta con Tab sigue abierta para entrar en ella. */
   const pick = (item: Suggestion, drill: boolean): void => {
@@ -444,8 +589,13 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         {state.items.map((item, index) => {
           const next = state.items[index + 1];
           switch (item.kind) {
-            case "user": return <UserMessage key={item.id} text={item.text} images={item.images} previews={item.previews} />;
+            case "user": return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews}
+              onEdit={beginEdit} onResend={resendMessage} editing={editing?.id === item.id} editable={canEdit(item)}
+              disabled={running || submittingEdit || preparing > 0} />;
             case "text": return item.text.trim() ? <AssistantText key={item.id} text={item.text} streaming={!item.final}
+              regenerateId={(() => { const user = responseOrigins.get(item.id);
+                return user?.kind === "user" && canEdit(user) && user.images === user.previews.length ? user.id : undefined; })()}
+              onRegenerate={regenerateMessage} disabled={running || submittingEdit || !!editing}
               actions={item.final && (next ? next.kind === "turn" || next.kind === "user" : !running)} /> : null;
             case "thinking": return <Thinking key={item.id} text={item.text} />;
             case "tool": return asked(item.id) ? null : <ToolRow key={item.id} item={item} cwd={cwd}
@@ -455,7 +605,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             case "permission": return item.state !== "pending" || item.toolName === "AskUserQuestion" ? null
               : <PermissionCard key={item.id} item={item} cwd={cwd} agent={agent.name} onAnswer={answer} />;
             case "notice": return <Notice key={item.id} tone={item.tone} text={item.text} />;
-            case "turn": return <div key={item.id} className="chat-turn">Listo en {formatDuration(item.durationMs)}</div>;
+            case "turn": return <WorkSummary key={item.id} summary={summaries.get(item.id)!} durationMs={item.durationMs} />;
           }
         })}
         {running && permissions === 0 && <div className="chat-working" role="status">
@@ -484,11 +634,18 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
     <div className="chat-composer-wrap" ref={composerRef}>
      <div className="chat-dock">
-      {showSuggestions && !question && <Suggestions id={`${sessionId}-suggestions`} items={suggestions} active={active} loading={files === null}
+      {showSuggestions && !question && <Suggestions id={`${sessionId}-suggestions`} items={suggestions} active={selectedSuggestion} loading={loadingSuggestions}
+        loadingLabel={wantsSkills ? "Cargando skills…" : "Buscando archivos…"}
+        emptyLabel={wantsSkills ? skillsError ?? (state.skills.length ? "No hay skills que coincidan con tu búsqueda." : "No hay skills disponibles en esta sesión.") : undefined}
         onPick={pick} onHover={setActive} />}
       {question && <QuestionPanel key={question.id} item={question} agent={agent.name} active={visible && focused} onAnswer={answer} />}
       {/* Mientras hay una pregunta, la caja se oculta sin desmontarse: lo escrito sigue ahí al volver. */}
       <form className="chat-composer" hidden={!!question} onSubmit={event => { event.preventDefault(); send(); }}>
+        {editing && <div className="chat-edit-banner" role="status">
+          <PencilIcon size={14} /><span><strong>Editar mensaje</strong><small>Regenera las respuestas desde este punto</small></span>
+          <button type="button" className="chat-copy tip" aria-label="Cancelar edición" data-tip="Cancelar edición (Esc)"
+            disabled={submittingEdit} onClick={cancelEdit}><CloseIcon size={14} /></button>
+        </div>}
         {(attachments.length > 0 || preparing > 0) && <div className="chat-attachments">
           {attachments.map((image, index) => <div key={image.id} className="chat-attachment">
             <button type="button" className="chat-attachment-view" aria-label={`Ver ${image.name}`}
@@ -503,12 +660,12 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           </div>)}
         </div>}
         <div className="chat-input-row">
-        <textarea ref={inputRef} rows={1} value={draft} aria-label={`Mensaje para ${agent.name}`}
+        <textarea ref={inputRef} rows={1} value={draft} readOnly={submittingEdit} aria-label={`Mensaje para ${agent.name}`}
           aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? `${sessionId}-suggestions` : undefined}
-          aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${active}` : undefined}
+          aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${selectedSuggestion}` : undefined}
           placeholder={running
             ? provider === "codex" ? "Añade algo más a la respuesta en curso…" : "Añade algo más; se enviará al terminar…"
-            : `Pide cambios · @ archivos${provider === "claude" ? " y subagentes" : ""} · / comandos${provider === "codex" ? " · $ skills" : ""}`}
+            : `Pide cambios · @ archivos${provider === "claude" ? " y subagentes" : ""} · / comandos · $ skills`}
           onChange={event => { setDraft(event.target.value); setCaret(event.target.selectionStart); if (!event.target.value) setDismissed(null); }}
           onSelect={event => setCaret(event.currentTarget.selectionStart)}
           onPaste={event => {
@@ -533,11 +690,12 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
                 setActive(index => (index + (event.key === "ArrowDown" ? 1 : -1) + count) % count);
                 return;
               }
-              if (((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") && suggestions[active]) {
+              if (((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") && suggestions[selectedSuggestion]) {
                 event.preventDefault();
-                pick(suggestions[active], event.key === "Tab");
+                pick(suggestions[selectedSuggestion], event.key === "Tab");
                 return;
               }
+              if (event.key === "Enter" && !event.shiftKey && wantsSkills) { event.preventDefault(); return; }
               if (event.key === "Escape") {
                 event.preventDefault();
                 setDismissed(triggerKey);
@@ -550,6 +708,9 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               send();
+            } else if (event.key === "Escape" && editing) {
+              event.preventDefault();
+              cancelEdit();
             } else if (event.key === "Escape" && running) {
               event.preventDefault();
               session.interrupt();
@@ -557,10 +718,14 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           }} />
         <div className="chat-input-actions">
           <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes" aria-label="Adjuntar imágenes"
+            disabled={submittingEdit}
             onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
           {running && !draft.trim() && !attachments.length
             ? <button type="button" className="chat-send stop tip" aria-label="Detener" data-tip="Detener (Esc)" onClick={session.interrupt}><StopIcon /></button>
-            : <button type="submit" className="chat-send" aria-label="Enviar" disabled={(!draft.trim() && !attachments.length) || preparing > 0}><ArrowUpIcon /></button>}
+            : <button type="submit" className="chat-send tip" aria-label={editing ? "Guardar y regenerar" : "Enviar"}
+              data-tip={editing ? "Guardar y regenerar" : "Enviar"}
+              disabled={(!draft.trim() && !attachments.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
+                {submittingEdit ? <span className="chat-spinner" /> : <ArrowUpIcon />}</button>}
         </div>
         </div>
       </form>
@@ -587,7 +752,8 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             if (!runLocal("compact", "")) session.send("/compact", [], []);
             backToInput();
           }} />}
-        {branch && <span className="chat-tray-info" title={`Rama de git: ${branch}`}><BranchIcon /> <span>{branch}</span></span>}
+        {branch && <BranchMenu cwd={cwd} branch={branch} busy={running || submittingEdit} visible={visible}
+          onChange={setBranch} onMessage={message => callbacks.current.onMessage(message)} />}
       </div>
      </div>
     </div>

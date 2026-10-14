@@ -8,7 +8,7 @@
  * compartidos (ver `SharedFiles`). Los bloques de código llevan colores de
  * sintaxis y los avisos `> [!NOTE]` (como en GitHub) se pintan destacados.
  */
-import { memo, useContext, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -20,20 +20,24 @@ import { nodeText, rehypeCallouts, type HastNode } from "../../chatMarkdown";
 import { attachmentsOf, localFilePath } from "../../sharedFiles";
 import { FileCards, FileLink, SharedFilesContext } from "./SharedFiles";
 import { AlertIcon, CheckIcon, CopyIcon, InfoIcon, SparkIcon } from "../Icons";
+import { writeClipboard } from "../../api";
 
 const safeUrl = (href: string | undefined): string | null =>
   href && /^(https?:|mailto:)/i.test(href) ? href : null;
 
 export function CopyButton({ text, label = "Copiar" }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
-  return <button type="button" className="chat-copy" aria-label={label} data-tip={copied ? "Copiado" : label}
+  const [status, setStatus] = useState<"idle" | "copied" | "error">("idle");
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const hint = status === "copied" ? "Copiado" : status === "error" ? "No se pudo copiar" : label;
+  return <button type="button" className={`chat-copy tip${status === "copied" ? " copied" : ""}`} aria-label={hint} data-tip={hint} disabled={!text}
     onClick={() => {
-      void navigator.clipboard.writeText(text).then(() => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1400);
+      void writeClipboard(text).then(() => setStatus("copied"), () => setStatus("error")).finally(() => {
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => setStatus("idle"), 1600);
       });
     }}>
-    {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+    {status === "copied" ? <CheckIcon size={14} /> : status === "error" ? <AlertIcon size={14} /> : <CopyIcon size={14} />}
   </button>;
 }
 

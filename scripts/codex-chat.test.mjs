@@ -12,6 +12,33 @@ const rpc = (method, params, id) => ({ type: "rpc", message: id === undefined ? 
 const started = (item) => rpc("item/started", { item, threadId: "th", turnId: "tu" });
 const completed = (item) => rpc("item/completed", { item, threadId: "th", turnId: "tu" });
 const turnDone = (status, extra = {}) => rpc("turn/completed", { threadId: "th", turn: { id: "tu", items: [], status, error: null, durationMs: 5316, ...extra } });
+
+test("late turn-start notifications cannot restart a completed turn", () => {
+  const state = run([
+    { type: "send", id: "u1", text: "hola", now: 0 },
+    rpc("turn/started", { threadId: "th", turn: { id: "tu" } }),
+    turnDone("completed"),
+    rpc("turn/started", { threadId: "th", turn: { id: "tu" } }),
+  ]);
+  assert.equal(state.pendingTurns, 0);
+  assert.equal(state.turnStartedAt, null);
+  assert.equal(chatActivity(state), "idle");
+});
+
+test("a duplicate completion or an old acknowledgement cannot finish or replace the next turn", () => {
+  const finished = run([{ type: "send", id: "u1", text: "hola", now: 0 }, turnDone("completed")]);
+  const next = run([
+    { type: "send", id: "u2", text: "sigue", now: 20000 },
+    rpc("turn/started", { threadId: "th", turn: { id: "next" } }),
+    turnDone("completed"),
+    { type: "turnStarted", turnId: "tu" },
+  ], finished);
+  assert.equal(next.pendingTurns, 1);
+  assert.equal(next.turnId, "next");
+  assert.equal(next.items.filter(item => item.kind === "turn").length, 1);
+  const done = run([rpc("turn/completed", { turn: { id: "next", status: "completed" } })], next);
+  assert.equal(done.pendingTurns, 0);
+});
 const kinds = (state) => state.items.map((item) => item.kind);
 
 test("profile arguments become server options or keep the terminal when the chat cannot honour them", () => {
@@ -242,13 +269,13 @@ test("history shows saved turns with their images and is not duplicated", () => 
   ] }, { id: "t2", status: "interrupted", items: [{ type: "userMessage", id: "u2", content: [{ type: "text", text: "sigue" }] }] }];
   const live = run([{ type: "send", id: "new", text: "otra", now: 0 }]);
   const state = codexReducer(live, { type: "history", turns });
-  assert.deepEqual(kinds(state), ["user", "thinking", "text", "tool", "user", "notice", "user"]);
-  assert.deepEqual(state.items[0], { kind: "user", id: "u1", text: "¿De qué color es?", images: 1, previews: ["data:image/png;base64,AAAA"] });
+  assert.deepEqual(kinds(state), ["user", "thinking", "text", "tool", "turn", "user", "notice", "user"]);
+  assert.deepEqual(state.items[0], { kind: "user", id: "u1", text: "¿De qué color es?", images: 1, previews: ["data:image/png;base64,AAAA"], providerTurnId: "t1" });
   assert.equal(state.items[1].text, "Miro la imagen");
   assert.equal(state.items[3].status, "done", "una herramienta cortada en el historial no queda girando");
   assert.equal(state.items.at(-1).id, "new");
   const again = codexReducer(state, { type: "history", turns: turns.slice(0, 1) });
-  assert.deepEqual(again.items.map((item) => item.id), ["u1", "r1", "m1", "c1", "new"]);
+  assert.deepEqual(again.items.map((item) => item.id), ["u1", "r1", "m1", "c1", "t-t1", "new"]);
 });
 
 test("models, effort and mode come from Codex and the next turn carries the choices", () => {
