@@ -28,19 +28,26 @@ export function useFloatingPosition(
       const rightEdge = leftEdge + (viewport?.width ?? window.innerWidth) - margin * 2;
       const bottomEdge = topEdge + (viewport?.height ?? window.innerHeight) - margin * 2;
       surface.style.setProperty("--floating-max-width", `${Math.max(1, rightEdge - leftEdge)}px`);
-      surface.style.setProperty("--floating-max-height", `${Math.max(1, bottomEdge - topEdge)}px`);
       const rect = "element" in anchor
         ? anchor.element.getBoundingClientRect()
         : "rect" in anchor ? anchor.rect
         : { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y };
-      // offsetWidth/Height no incluyen la escala de la animación de entrada.
+      // offsetWidth no incluye la escala de la animación de entrada. La altura es
+      // la del contenido completo (sin el recorte de una altura máxima anterior).
       const width = surface.offsetWidth;
-      const height = surface.offsetHeight;
+      const natural = surface.scrollHeight + surface.offsetHeight - surface.clientHeight;
       const roomAbove = rect.top - topEdge - gap;
       const roomBelow = bottomEdge - rect.bottom - gap;
       const resolvedSide = side === "bottom"
-        ? roomBelow < height && roomAbove > roomBelow ? "top" : "bottom"
-        : roomAbove < height && roomBelow > roomAbove ? "bottom" : "top";
+        ? roomBelow < natural && roomAbove > roomBelow ? "top" : "bottom"
+        : roomAbove < natural && roomBelow > roomAbove ? "bottom" : "top";
+      // Junto a un botón, la capa crece hasta el espacio de su lado: solo se
+      // desplaza por dentro si de verdad no cabe. Junto a un punto (menú
+      // contextual) puede ocupar toda la ventana y montarse sobre él.
+      const room = "x" in anchor ? bottomEdge - topEdge : resolvedSide === "top" ? roomAbove : roomBelow;
+      const maxHeight = Math.max(1, Math.floor(room));
+      surface.style.setProperty("--floating-max-height", `${maxHeight}px`);
+      const height = Math.min(natural, maxHeight);
       const preferredLeft = align === "start" ? rect.left
         : align === "end" ? rect.right - width : (rect.left + rect.right - width) / 2;
       const preferredTop = resolvedSide === "top" ? rect.top - height - gap : rect.bottom + gap;
