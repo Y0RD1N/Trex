@@ -8,7 +8,7 @@
  * vuelta. No toca la interfaz ni el backend, así que se prueba sin Tauri.
  */
 import {
-  addNotice, baseReducer, choiceAnswers, clip, finalize, list, questionsOf, record, text, unifiedDiffLines,
+  addNotice, baseReducer, choiceAnswers, clip, finalize, list, questionsOf, record, speedHint, text, unifiedDiffLines,
   type BaseChatAction, type ChatItem, type ChatState, type Json, type ModelInfo, type OutgoingImage,
   type PermissionItem, type QuestionChoice, type ToolItem, type ToolStatus,
 } from "./chatState";
@@ -230,10 +230,13 @@ const SANDBOX_POLICIES: Record<string, Json> = {
  * Ajustes del siguiente turno según lo elegido en el chat. Los modos son los
  * preajustes de Codex: solo lectura, automático, acceso total y planificar.
  */
-export function turnOverrides(choices: { mode: string | null; model: string | null; effort: string | null }, current: { model: string | null; effort: string | null }): Json {
+export function turnOverrides(choices: { mode: string | null; model: string | null; effort: string | null; fast?: boolean | null },
+  current: { model: string | null; effort: string | null; fastTier?: string | null }): Json {
   const overrides: Json = {};
   if (choices.model) overrides.model = choices.model;
   if (choices.effort) overrides.effort = choices.effort;
+  // El nivel de servicio queda en el hilo; «default» es la velocidad estándar.
+  if (typeof choices.fast === "boolean") overrides.serviceTier = choices.fast && current.fastTier ? current.fastTier : "default";
   if (choices.mode) {
     const sandbox = choices.mode === "read-only" ? "read-only" : choices.mode === "full" ? "danger-full-access" : "workspace-write";
     overrides.sandboxPolicy = SANDBOX_POLICIES[sandbox];
@@ -247,6 +250,9 @@ export function turnOverrides(choices: { mode: string | null; model: string | nu
   }
   return overrides;
 }
+
+/** Velocidad del hilo según su nivel de servicio: cualquiera distinto del estándar es la rápida. */
+const isFastTier = (tier: unknown): boolean => typeof tier === "string" && tier !== "" && tier !== "default";
 
 /** Modo que corresponde a los ajustes reales del hilo. */
 function modeOf(settings: Json): string | null {
@@ -600,6 +606,7 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
       const settings = record(params.threadSettings) ?? {};
       // Lo elegido en el chat se aplica en el siguiente turno: hasta entonces el hilo puede traer el modo anterior.
       return { ...state, model: text(settings.model) || state.model, effort: text(settings.effort) || state.effort,
+        fast: state.fastChoice ?? (settings.serviceTier === undefined ? state.fast : isFastTier(settings.serviceTier)),
         permissionMode: state.modeChoice ?? modeOf(settings) ?? state.permissionMode };
     }
     case "thread/tokenUsage/updated": {
@@ -656,7 +663,15 @@ export function parseCodexModels(raw: unknown, windows: Record<string, number> =
       featured: true,
       defaultEffort: text(model.defaultReasoningEffort) || undefined,
       contextWindow: windows[text(model.model) || text(model.id)] || undefined,
+      fast: fastSpeedOf(model),
     }));
+}
+
+/** Nivel de servicio rápido del modelo (`serviceTiers`; antes, `additionalSpeedTiers`). */
+function fastSpeedOf(model: Json): ModelInfo["fast"] {
+  const tier = list(model.serviceTiers).map(record).find(entry => isFastTier(entry?.id));
+  if (tier) return { tier: text(tier.id), hint: speedHint(text(tier.description)) };
+  return list(model.additionalSpeedTiers).includes("fast") ? { tier: "fast", hint: speedHint("") } : undefined;
 }
 
 // --- Reductor -----------------------------------------------------------------
@@ -677,6 +692,7 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
       return { ...state, sessionId: text(thread.id) || state.sessionId,
         model: (state.modelChoice ? state.model : text(response.model)) || state.model,
         effort: state.effortChoice ?? (text(response.reasoningEffort) || state.effort),
+        fast: state.fastChoice ?? isFastTier(response.serviceTier),
         permissionMode: state.modeChoice ?? modeOf(response) ?? state.permissionMode };
     }
     case "history": {

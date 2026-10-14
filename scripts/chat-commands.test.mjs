@@ -63,7 +63,7 @@ test("/ shows the chat commands first and the CLI ones after, without duplicates
   ]);
   assert.deepEqual(cli.map((command) => command.name), ["compact", "clear", "context"]);
   const list = commands.buildSuggestions({ char: "/", query: "", start: 0, end: 1 }, { provider: "claude", files: null, agents: [], commands: cli, skills: [] });
-  assert.deepEqual(list.map((item) => item.label), ["/clear", "/model", "/effort", "/permissions", "/compact", "/context"]);
+  assert.deepEqual(list.map((item) => item.label), ["/clear", "/model", "/effort", "/fast", "/permissions", "/compact", "/context"]);
   assert.equal(list.find((item) => item.label === "/compact").run, false, "con argumentos se inserta para escribirlos");
   assert.equal(list.find((item) => item.label === "/context").run, true);
   const codexList = commands.buildSuggestions({ char: "/", query: "re", start: 0, end: 3 }, { provider: "codex", files: null, agents: [], commands: [],

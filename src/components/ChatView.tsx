@@ -13,7 +13,7 @@ import { formatError, gitBranch, listProjectFiles, readClipboard } from "../api"
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
 import { matchesPasteShortcut } from "../paste";
 import {
-  chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, formatDuration, formatTokens, modelName, pendingPermissions,
+  chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, formatTokens, modelName, pendingPermissions,
   shownUsage, supportedEfforts, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { resetLabel } from "../planUsage";
@@ -252,6 +252,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const modeOptions = agent.modes.some(option => option.value === mode) ? agent.modes
     : [...agent.modes, { value: mode, label: agent.otherModes[mode] ?? mode, icon: <ShieldIcon size={13} /> }];
   const efforts = supportedEfforts(state.models, state.model, state.modelChoice);
+  const speed = fastSpeed(state.models, state.model, state.modelChoice);
   const usage = shownUsage(state);
 
   const statusText = (): string => {
@@ -261,6 +262,7 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       `Estado de ${agent.product}`,
       `Modelo: ${model ? modelName(model) : state.model ?? "sin datos"}`,
       ...(state.effort ? [`Esfuerzo: ${effortLabel(state.effort)}`] : []),
+      ...(speed ? [`Velocidad: ${state.fast ? "rápida" : "estándar"}`] : []),
       `Permisos: ${modeOptions.find(option => option.value === mode)?.label ?? mode}`,
       ...(usage ? [`Contexto: ${formatTokens(usage.used)} tokens${usage.window ? ` de ${formatTokens(usage.window)} (${Math.round(percent ?? 0)} %)` : ""}`] : []),
       ...(state.plan?.windows ?? []).map(window => `${window.label}: ${window.percent} %${window.resetsAt !== null ? ` (${resetLabel(window.resetsAt, Date.now())})` : ""}`),
@@ -287,9 +289,16 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       }
       case "effort":
         if (efforts.includes(wanted)) session.setEffort(wanted);
-        else if (efforts.length) setMenuSignal(signal => ({ ...signal, effort: signal.effort + 1 }));
+        else if (efforts.length || speed) setMenuSignal(signal => ({ ...signal, effort: signal.effort + 1 }));
         else session.notice("info", "El modelo elegido no tiene niveles de esfuerzo.");
         return true;
+      case "fast": {
+        if (!speed) { session.notice("info", "El modelo elegido no tiene velocidad rápida."); return true; }
+        const fast = ["on", "si", "sí"].includes(wanted) ? true : wanted === "off" || wanted === "no" ? false : !state.fast;
+        if (fast !== state.fast) session.setFast(fast);
+        session.notice("info", fast ? `Velocidad rápida activada: ${speed.hint}` : "Velocidad estándar.");
+        return true;
+      }
       case "permissions":
         setMenuSignal(signal => ({ ...signal, mode: signal.mode + 1 }));
         return true;
@@ -542,9 +551,10 @@ function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         <span className="chat-tray-sep" aria-hidden="true" />
         <ModelMenu provider={provider} models={state.models} model={state.model} choice={state.modelChoice}
           onModel={model => { session.setModel(model); backToInput(); }} openSignal={menuSignal.model} />
-        {efforts.length > 0 && <>
+        {(efforts.length > 0 || speed) && <>
           <span className="chat-tray-sep" aria-hidden="true" />
           <EffortMenu levels={efforts} effort={state.effort} onEffort={effort => { session.setEffort(effort); backToInput(); }}
+            speed={speed} fast={state.fast} onFast={fast => { session.setFast(fast); backToInput(); }}
             openSignal={menuSignal.effort} />
         </>}
         <span className="chat-composer-spacer" />

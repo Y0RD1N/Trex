@@ -367,3 +367,29 @@ test("context usage: the /context measure, live updates while answering and the 
   assert.equal(run([{ type: "reset" }], state).usage, null);
   assert.deepEqual([chat.formatTokens(950), chat.formatTokens(21966), chat.formatTokens(258400), chat.formatTokens(1000000)], ["950", "22 k", "258 k", "1 M"]);
 });
+
+test("fast mode is offered on the models that support it and follows what the CLI reports", () => {
+  const models = [
+    { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", supportsFastMode: true },
+    { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5" },
+  ];
+  // Antes de elegir nada, el SDK informa «off» (pide activarlo en la sesión) y no se avisa de nada.
+  let state = run([{ type: "catalog", models, fastState: "off" }]);
+  assert.equal(chat.fastSpeed(state.models, "claude-opus-5-5", null).tier, "fast");
+  assert.equal(chat.fastSpeed(state.models, "claude-sonnet-5-5", null), null);
+  assert.equal(state.fast, false);
+
+  state = run([{ type: "fast", fast: true }], state);
+  assert.deepEqual([state.fast, state.fastChoice], [true, true]);
+  // Con un modelo sin velocidad rápida el CLI la apaga sin motivo: vuelve sola al cambiar de modelo.
+  state = run([line({ type: "result", subtype: "success", fast_mode_state: "off" })], state);
+  assert.deepEqual([state.fast, kinds(state).includes("notice")], [true, false]);
+  state = run([line({ type: "result", subtype: "success", fast_mode_state: "cooldown" })], state);
+  assert.match(state.items.at(-1).text, /en pausa/);
+  // Si la cuenta no puede usarla, se explica y se vuelve a la estándar.
+  state = run([line({ type: "result", subtype: "success", fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" })], state);
+  assert.deepEqual([state.fast, state.fastChoice, state.items.at(-1).tone], [false, false, "warn"]);
+  assert.match(state.items.at(-1).text, /uso extra/);
+  // Lo elegido sobrevive a una conversación nueva.
+  assert.equal(run([{ type: "fast", fast: true }, { type: "reset" }], state).fastChoice, true);
+});

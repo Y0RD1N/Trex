@@ -37,6 +37,7 @@ export const LOCAL_COMMANDS: Record<AgentProvider, CommandInfo[]> = {
     { name: "clear", description: "Empieza una conversación nueva", hint: "" },
     { name: "model", description: "Elige el modelo", hint: "" },
     { name: "effort", description: "Elige el nivel de esfuerzo", hint: "" },
+    { name: "fast", description: "Activa o desactiva la velocidad rápida", hint: "" },
     { name: "permissions", description: "Cambia lo que Claude puede hacer sin preguntar", hint: "" },
   ],
   codex: [
@@ -46,8 +47,9 @@ export const LOCAL_COMMANDS: Record<AgentProvider, CommandInfo[]> = {
     { name: "init", description: "Crea un AGENTS.md con las instrucciones del proyecto", hint: "" },
     { name: "model", description: "Elige el modelo", hint: "" },
     { name: "effort", description: "Elige el nivel de esfuerzo", hint: "" },
+    { name: "fast", description: "Activa o desactiva la velocidad rápida", hint: "" },
     { name: "permissions", description: "Cambia lo que Codex puede hacer sin preguntar", hint: "" },
-    { name: "status", description: "Modelo, esfuerzo, modo y contexto usado", hint: "" },
+    { name: "status", description: "Modelo, esfuerzo, velocidad, modo y contexto usado", hint: "" },
     { name: "mcp", description: "Servidores MCP y sus herramientas", hint: "" },
   ],
 };

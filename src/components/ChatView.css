@@ -1771,6 +1771,23 @@ pre.chat-ask-preview-body {
 .chat-effort-bars i:nth-child(4) { height: 9px; }
 .chat-effort-bars i:nth-child(5) { height: 11px; }
 .chat-effort-bars i.on { background: var(--accent); }
+/* Velocidad: rayo apagado (estándar) o con el acento (rápida), del mismo ancho que las barras. */
+.chat-speed-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 19px;
+  color: var(--text-dim);
+}
+.chat-speed-icon.fast { color: var(--accent); }
+.chat-glass-menu .context-sep { margin: 4px 6px; background: var(--glass-menu-hover); }
+.chat-fast-badge {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  margin-left: -2px;
+  color: var(--accent);
+}
 /* Ultra: todas las barras y un brillo, por encima de Máximo. */
 .chat-effort-bars.ultra i.on {
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 55%, #fff), var(--accent));

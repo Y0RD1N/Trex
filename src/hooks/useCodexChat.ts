@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { codexContextWindows, formatError } from "../api";
 import {
-  allowsAll, autoAllowed, initialChatState, type Json, type OutgoingImage, type PermissionItem, type QuestionChoice,
+  allowsAll, autoAllowed, fastSpeed, initialChatState, type Json, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import {
   INIT_PROMPT, OPT_OUT_NOTIFICATIONS, answerResult, autoApproval, codexLaunch, codexReducer, errorLine, notificationLine, requestLine,
@@ -44,8 +44,9 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const historyLoadedRef = useRef(false);
   /** Tras empezar una conversación nueva, la de la pestaña ya no se reanuda. */
   const freshRef = useRef(false);
-  /** Modo, modelo y esfuerzo elegidos: se leen al empezar cada turno, sin esperar al render. */
-  const choicesRef = useRef<{ mode: string | null; model: string | null; effort: string | null }>({ mode: options.mode, model: null, effort: null });
+  /** Modo, modelo, esfuerzo y velocidad elegidos: se leen al empezar cada turno, sin esperar al render. */
+  const choicesRef = useRef<{ mode: string | null; model: string | null; effort: string | null; fast: boolean | null }>({
+    mode: options.mode, model: null, effort: null, fast: null });
   const writeRef = useRef<(line: string) => Promise<void>>(() => Promise.resolve());
 
   const notice = useCallback((tone: "info" | "warn" | "error", text: string) => dispatch({ type: "notice", id: localId(), tone, text }), []);
@@ -223,7 +224,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     const current = stateRef.current;
     const result = await request<{ turn?: { id?: string } }>("turn/start", {
       threadId, input: userInput(text, images, mentionedSkills(text, current.skills)),
-      ...turnOverrides(choicesRef.current, { model: current.model, effort: current.effort }),
+      ...turnOverrides(choicesRef.current, { model: current.model, effort: current.effort,
+        fastTier: fastSpeed(current.models, current.model, choicesRef.current.model ?? current.modelChoice)?.tier }),
     });
     if (result?.turn?.id) turnKnown(result.turn.id);
   };
@@ -303,7 +305,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     notice,
     interrupt: () => { if (state.pendingTurns > 0 && alive) void stopTurn(); },
     answer,
-    // Codex aplica el modo, el modelo y el esfuerzo a partir del siguiente turno.
+    // Codex aplica el modo, el modelo, el esfuerzo y la velocidad a partir del siguiente turno.
     setMode: mode => {
       choicesRef.current = { ...choicesRef.current, mode };
       dispatch({ type: "mode", mode });
@@ -324,6 +326,10 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     setEffort: effort => {
       choicesRef.current = { ...choicesRef.current, effort };
       dispatch({ type: "effort", effort });
+    },
+    setFast: fast => {
+      choicesRef.current = { ...choicesRef.current, fast };
+      dispatch({ type: "fast", fast });
     },
   };
 }

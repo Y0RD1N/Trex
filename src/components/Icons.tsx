@@ -347,6 +347,11 @@ export function BranchIcon({ size = 13, strokeWidth = 1.7 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><circle cx="6.5" cy="5.5" r="2" /><circle cx="6.5" cy="18.5" r="2" /><circle cx="17.5" cy="7.5" r="2" /><path d="M6.5 7.5v9M17.5 9.5c0 4-5 3.5-9.6 7.3" /></svg>;
 }
 
+/** Velocidad rápida: un rayo. */
+export function BoltIcon({ size = 14, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M13.2 3.5 5.5 13.4h6l-1 7.1 8-10.2h-6.1Z" /></svg>;
+}
+
 /** Indicador de uso: un medidor con la aguja a dos tercios. */
 export function GaugeIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><path d="M4.2 17.5a8.5 8.5 0 1 1 15.6 0" /><path d="m12 14 4.2-4.6" /><circle cx="12" cy="14" r="1.4" /></svg>;

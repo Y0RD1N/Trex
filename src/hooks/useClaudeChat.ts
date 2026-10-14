@@ -66,7 +66,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       pendingControlsRef.current.delete(reply.request_id);
       const data = reply.subtype === "success" ? reply.response ?? {} : {};
       if (pending.kind === "initialize") {
-        dispatch({ type: "catalog", models: data.models, permissionMode: data.current_permission_mode, commands: data.commands, agents: data.agents });
+        dispatch({ type: "catalog", models: data.models, permissionMode: data.current_permission_mode, commands: data.commands, agents: data.agents,
+          fastState: data.fast_mode_state });
       } else if (pending.kind === "settings") {
         const applied = (data.applied ?? {}) as Record<string, unknown>;
         dispatch({ type: "applied", model: applied.model, effort: applied.effort });
@@ -126,6 +127,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       callbacks.current.onRunning(sessionId);
       // Modelos disponibles, modelo/esfuerzo en uso y contexto (el de la conversación reanudada), antes del primer mensaje.
       control({ subtype: "initialize" }, { kind: "initialize" });
+      // La velocidad elegida no tiene opción de lanzamiento propia: se aplica igual que al cambiarla.
+      if (current.fastChoice !== null) control({ subtype: "apply_flag_settings", settings: { fastMode: current.fastChoice } });
       refreshSettings();
       refreshContext();
       refreshUsage(true);
@@ -207,6 +210,12 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       dispatch({ type: "effort", effort });
       control({ subtype: "apply_flag_settings", settings: { effortLevel: effort } });
       refreshSettings();
+    },
+    // En modo SDK, Claude Code solo usa la velocidad rápida si se pide en los ajustes de la sesión.
+    // Si no está disponible para la cuenta, el resultado de la siguiente respuesta lo dice.
+    setFast: fast => {
+      dispatch({ type: "fast", fast });
+      control({ subtype: "apply_flag_settings", settings: { fastMode: fast } });
     },
   };
 }

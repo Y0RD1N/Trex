@@ -45,6 +45,8 @@ export type ChatSession = {
   setMode: (mode: string) => void;
   setModel: (model: string) => void;
   setEffort: (effort: string) => void;
+  /** Velocidad rápida o estándar, si el modelo en uso la admite. */
+  setFast: (fast: boolean) => void;
 };
 
 let counter = 0;

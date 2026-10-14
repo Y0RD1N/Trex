@@ -18,7 +18,7 @@ export type ChatAction =
   | BaseChatAction
   | { type: "line"; event: unknown; now: number }
   | { type: "history"; entries: unknown[] }
-  | { type: "catalog"; models: unknown; permissionMode?: unknown; commands?: unknown; agents?: unknown }
+  | { type: "catalog"; models: unknown; permissionMode?: unknown; commands?: unknown; agents?: unknown; fastState?: unknown }
   | { type: "applied"; model?: unknown; effort?: unknown }
   /** Respuesta a `get_context_usage`: lo mismo que muestra `/context`. */
   | { type: "context"; data: unknown }
@@ -247,6 +247,34 @@ function applyStream(state: ChatState, event: Json): ChatState {
   return state;
 }
 
+/** Por qué Claude Code no puede usar la velocidad rápida (`fast_mode_disabled_reason`). */
+const FAST_UNAVAILABLE: Record<string, string> = {
+  free: "La velocidad rápida requiere una suscripción de pago.",
+  preference: "Tu organización desactivó la velocidad rápida.",
+  extra_usage_disabled: "La velocidad rápida se cobra como uso extra: actívalo en la configuración de tu cuenta de Claude.",
+  network_error: "No se pudo comprobar la velocidad rápida por un problema de conexión.",
+  not_first_party: "La velocidad rápida solo está disponible con la API de Anthropic.",
+  disabled_by_env: "La velocidad rápida está desactivada en este equipo.",
+  model_not_allowed: "Tu organización no permite este modelo con velocidad rápida.",
+  unknown: "La velocidad rápida no está disponible ahora mismo.",
+};
+
+/**
+ * Velocidad que informa el CLI (`fast_mode_state`). Si se pidió la rápida y no
+ * puede usarse, se explica por qué y se vuelve a la estándar; sin motivo, es
+ * que el modelo en uso no la admite y vuelve sola al elegir uno que sí.
+ */
+function applyFastState(state: ChatState, raw: unknown, rawReason: unknown): ChatState {
+  if (raw !== "on" && raw !== "off" && raw !== "cooldown") return state;
+  if (state.fastChoice === null) return { ...state, fast: raw !== "off" };
+  if (!state.fastChoice || raw === "on") return state;
+  if (raw === "cooldown") {
+    return { ...state, items: addNotice(state.items, "info", "Velocidad rápida en pausa por el límite de uso: mientras tanto se responde a la velocidad estándar.", "s") };
+  }
+  const reason = FAST_UNAVAILABLE[text(rawReason)];
+  return reason ? { ...state, fast: false, fastChoice: false, items: addNotice(state.items, "warn", reason, "s") } : state;
+}
+
 const PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto", "manual"]);
 
 function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
@@ -262,11 +290,11 @@ function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
     case "user":
       return applyUser(state, event, false);
     case "result":
-      return applyResult(state, event, now);
+      return applyFastState(applyResult(state, event, now), event.fast_mode_state, event.fast_mode_disabled_reason);
     case "system": {
       if (event.subtype === "init") {
-        return { ...state, sessionId: text(event.session_id) || state.sessionId, model: text(event.model) || state.model,
-          permissionMode: text(event.permissionMode) || state.permissionMode };
+        return applyFastState({ ...state, sessionId: text(event.session_id) || state.sessionId, model: text(event.model) || state.model,
+          permissionMode: text(event.permissionMode) || state.permissionMode }, event.fast_mode_state, event.fast_mode_disabled_reason);
       }
       if (event.subtype === "status" && typeof event.permissionMode === "string" && PERMISSION_MODES.has(event.permissionMode)) {
         // El CLI cambia de modo por su cuenta (por ejemplo, al aprobar un plan): lo elegido pasa a ser ese modo.
@@ -327,9 +355,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const models = parseModels(action.models);
       const mode = text(action.permissionMode);
       const commands = parseClaudeCommands(action.commands), agents = parseClaudeAgents(action.agents);
-      return { ...state, models: models.length ? models : state.models,
+      return applyFastState({ ...state, models: models.length ? models : state.models,
         commands: commands.length ? commands : state.commands, agents: agents.length ? agents : state.agents,
-        permissionMode: state.permissionMode ?? (PERMISSION_MODES.has(mode) ? mode : null) };
+        permissionMode: state.permissionMode ?? (PERMISSION_MODES.has(mode) ? mode : null) }, action.fastState, null);
     }
     case "applied":
       return { ...state, model: text(action.model) || state.model, effort: text(action.effort) || state.effort };
@@ -392,5 +420,6 @@ export function parseModels(raw: unknown): ModelInfo[] {
       description: text(model.description),
       efforts: model.supportsEffort === false ? [] : list(model.supportedEffortLevels).filter((level): level is string => typeof level === "string"),
       featured: MAIN_MODELS.includes(text(model.value)),
+      fast: model.supportsFastMode === true ? { tier: "fast", hint: "Mismo modelo, respuestas más rápidas; se cobra como uso extra." } : undefined,
     }));
 }

@@ -1,14 +1,15 @@
 /**
- * Selectores de modelo y de nivel de esfuerzo de la bandeja del chat.
+ * Selectores de modelo y de nivel de esfuerzo (y velocidad) de la bandeja del chat.
  *
  * Usan el catálogo que devuelve el propio CLI (`initialize` en Claude Code,
  * `model/list` en Codex), así que muestran los modelos disponibles para la
- * cuenta con su versión exacta y solo los niveles de esfuerzo que admite cada uno.
+ * cuenta con su versión exacta, solo los niveles de esfuerzo que admite cada
+ * uno y la velocidad rápida cuando el modelo la ofrece.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import DropdownMenu from "../DropdownMenu";
 import AgentIcon from "../AgentIcon";
-import { CheckIcon, ChevronIcon } from "../Icons";
+import { BoltIcon, CheckIcon, ChevronIcon } from "../Icons";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import {
   EFFORT_LEVELS, currentModel, effortLabel, modelDescription, modelLabel, modelName, splitModels, type ModelInfo,
@@ -24,8 +25,10 @@ export function EffortBars({ effort }: { effort: string | null }) {
 }
 
 /** Píldora de la bandeja que abre un menú propio. */
-function TrayMenu({ label, icon, text, menuLabel, className = "", openSignal = 0, children }: {
+function TrayMenu({ label, icon, text, badge, menuLabel, className = "", openSignal = 0, children }: {
   label: string; icon: ReactNode; text: string; menuLabel: string; className?: string;
+  /** Marca tras el texto (por ejemplo, el rayo de la velocidad rápida). */
+  badge?: ReactNode;
   /** Al cambiar, el menú se abre (por ejemplo, con `/model`). */
   openSignal?: number;
   children: (close: () => void) => ReactNode;
@@ -42,6 +45,7 @@ function TrayMenu({ label, icon, text, menuLabel, className = "", openSignal = 0
       }}>
       <span className="chat-tray-icon" aria-hidden="true">{icon}</span>
       <span className="chat-tray-text">{text}</span>
+      {badge}
       <ChevronIcon size={12} />
     </button>
     <DropdownMenu anchor={anchor} triggerRef={triggerRef} label={menuLabel} className={`chat-tray-menu chat-glass-menu ${className}`} focusSelected
@@ -87,14 +91,28 @@ export function ModelMenu({ provider, models, model, choice, onModel, openSignal
   </TrayMenu>;
 }
 
-export function EffortMenu({ levels, effort, onEffort, openSignal }: {
-  levels: string[]; effort: string | null; onEffort: (level: string) => void; openSignal?: number;
+/**
+ * Esfuerzo y, si el modelo la admite, velocidad. Sin niveles de esfuerzo, el
+ * menú queda solo con la velocidad.
+ */
+export function EffortMenu({ levels, effort, onEffort, speed, fast, onFast, openSignal }: {
+  levels: string[]; effort: string | null; onEffort: (level: string) => void;
+  /** Velocidad rápida del modelo en uso; null si no la tiene. */
+  speed: ModelInfo["fast"] | null; fast: boolean; onFast: (fast: boolean) => void;
+  openSignal?: number;
 }) {
   const known = levels.filter(level => EFFORT_LEVELS[level]);
-  return <TrayMenu label={`Esfuerzo: ${effortLabel(effort) || "predeterminado"}`} icon={<EffortBars effort={effort} />}
-    text={effortLabel(effort) || "Esfuerzo"} menuLabel="Nivel de esfuerzo" className="chat-effort-menu" openSignal={openSignal}>
+  const isFast = !!speed && fast;
+  const speedName = isFast ? "Rápida" : "Estándar";
+  const label = [known.length ? `Esfuerzo: ${effortLabel(effort) || "predeterminado"}` : "", speed ? `velocidad ${speedName.toLowerCase()}` : ""]
+    .filter(Boolean).join(", ");
+  return <TrayMenu label={label.charAt(0).toUpperCase() + label.slice(1)}
+    icon={known.length ? <EffortBars effort={effort} /> : <BoltIcon size={13} />}
+    text={known.length ? effortLabel(effort) || "Esfuerzo" : speedName}
+    badge={known.length && isFast ? <span className="chat-fast-badge" aria-hidden="true"><BoltIcon size={12} /></span> : undefined}
+    menuLabel={known.length ? (speed ? "Esfuerzo y velocidad" : "Nivel de esfuerzo") : "Velocidad"} className="chat-effort-menu" openSignal={openSignal}>
     {close => <>
-      <div className="chat-menu-label">Esfuerzo</div>
+      {known.length > 0 && <div className="chat-menu-label">Esfuerzo</div>}
       {known.map(level => {
         const selected = effort === level;
         return <button key={level} type="button" role="menuitemradio" aria-checked={selected} tabIndex={-1}
@@ -107,6 +125,22 @@ export function EffortMenu({ levels, effort, onEffort, openSignal }: {
           <span className="select-check" aria-hidden="true">{selected && <CheckIcon size={15} />}</span>
         </button>;
       })}
+      {speed && <>
+        {known.length > 0 && <div className="context-sep" role="separator" />}
+        <div className="chat-menu-label">Velocidad</div>
+        {[false, true].map(option => {
+          const selected = isFast === option;
+          return <button key={String(option)} type="button" role="menuitemradio" aria-checked={selected} tabIndex={-1}
+            className="context-item chat-menu-option" onClick={() => { close(); if (!selected) onFast(option); }}>
+            <span className={`chat-speed-icon${option ? " fast" : ""}`} aria-hidden="true"><BoltIcon size={14} /></span>
+            <span className="chat-menu-option-text">
+              <span>{option ? "Rápida" : "Estándar"}</span>
+              <small>{option ? speed.hint : "Velocidad normal del modelo."}</small>
+            </span>
+            <span className="select-check" aria-hidden="true">{selected && <CheckIcon size={15} />}</span>
+          </button>;
+        })}
+      </>}
     </>}
   </TrayMenu>;
 }

@@ -387,3 +387,33 @@ test("the context shows from the start with the window of the chosen model", () 
   assert.equal(shared.shownUsage(measured).used, 9000, "lo medido manda");
   assert.equal(shared.shownUsage(run([{ type: "models", data: list }])), null, "sin ventana conocida no se inventa nada");
 });
+
+test("the fast service tier comes from the catalog and is sent with each turn", () => {
+  const data = [
+    { id: "gpt-6.1-sol", model: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", serviceTiers: [{ id: "priority", name: "Fast", description: "2x speed, increased usage" }] },
+    { id: "gpt-6-sol", model: "gpt-6-sol", displayName: "GPT-6-Sol", serviceTiers: [{ id: "priority", name: "Fast", description: "1.5x speed" }] },
+    { id: "old", model: "old", displayName: "Old", additionalSpeedTiers: ["fast"] },
+    { id: "plain", model: "plain", displayName: "Plain" },
+  ];
+  let state = run([{ type: "models", data }]);
+  assert.deepEqual(state.models.map((model) => model.fast), [
+    { tier: "priority", hint: "2× más rápido; gasta más uso del plan." },
+    { tier: "priority", hint: "1,5× más rápido." },
+    { tier: "fast", hint: "Respuestas más rápidas." },
+    undefined,
+  ]);
+  // El hilo dice su nivel de servicio; lo elegido en el chat manda hasta el siguiente turno.
+  state = run([{ type: "thread", response: { thread: { id: "th" }, model: "gpt-6.1-sol", serviceTier: "priority" } }], state);
+  assert.equal(state.fast, true);
+  state = run([rpc("thread/settings/updated", { threadId: "th", threadSettings: { model: "gpt-6.1-sol", serviceTier: "default" } })], state);
+  assert.equal(state.fast, false);
+  state = run([{ type: "fast", fast: true }, rpc("thread/settings/updated", { threadId: "th", threadSettings: { model: "gpt-6.1-sol", serviceTier: null } })], state);
+  assert.equal(state.fast, true);
+
+  const choices = { mode: null, model: null, effort: null };
+  assert.equal(codex.turnOverrides(choices, { model: null, effort: null, fastTier: "priority" }).serviceTier, undefined, "sin elegir, se hereda");
+  assert.equal(codex.turnOverrides({ ...choices, fast: true }, { model: null, effort: null, fastTier: "priority" }).serviceTier, "priority");
+  assert.equal(codex.turnOverrides({ ...choices, fast: false }, { model: null, effort: null, fastTier: "priority" }).serviceTier, "default");
+  assert.equal(codex.turnOverrides({ ...choices, fast: true }, { model: null, effort: null, fastTier: null }).serviceTier, "default",
+    "un modelo sin velocidad rápida va a la estándar");
+});

@@ -94,6 +94,9 @@ export type ChatState = {
   modelChoice: string | null;
   effort: string | null;
   effortChoice: string | null;
+  /** Velocidad rápida: Fast mode en Claude Code, nivel de servicio prioritario en Codex. */
+  fast: boolean;
+  fastChoice: boolean | null;
   permissionMode: string | null;
   modeChoice: string | null;
   /** Comandos `/`, subagentes y skills que ofrece el asistente. */
@@ -123,6 +126,7 @@ export type BaseChatAction =
   | { type: "notice"; id: string; tone: "info" | "warn" | "error"; text: string }
   | { type: "model"; model: string }
   | { type: "effort"; effort: string }
+  | { type: "fast"; fast: boolean }
   | { type: "mode"; mode: string }
   /** Conversación nueva: vacía el hilo y conserva modelo, modo y catálogos. */
   | { type: "reset" }
@@ -134,7 +138,7 @@ export type BaseChatAction =
 /** Estado inicial; `mode` es el modo de permisos que la pestaña tenía elegido. */
 export const initialChatState = (mode: string | null = null): ChatState => ({
   items: [], pendingTurns: 0, turnStartedAt: null, sessionId: null, turnId: null, model: null, models: [],
-  modelChoice: null, effort: null, effortChoice: null, permissionMode: mode, modeChoice: mode,
+  modelChoice: null, effort: null, effortChoice: null, fast: false, fastChoice: null, permissionMode: mode, modeChoice: mode,
   commands: [], agents: [], skills: [], usage: null, plan: null, costUsd: null,
   stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null, historyCount: 0, process: "starting", exitCode: null, stderr: [],
 });
@@ -177,11 +181,13 @@ export function baseReducer(state: ChatState, action: BaseChatAction): ChatState
         model: state.models.find(model => model.value === action.model)?.resolvedModel ?? state.model };
     case "effort":
       return { ...state, effort: action.effort, effortChoice: action.effort };
+    case "fast":
+      return { ...state, fast: action.fast, fastChoice: action.fast };
     case "mode":
       return { ...state, permissionMode: action.mode, modeChoice: action.mode };
     case "reset":
       return { ...initialChatState(), process: state.process, models: state.models, model: state.model, modelChoice: state.modelChoice,
-        effort: state.effort, effortChoice: state.effortChoice, permissionMode: state.permissionMode, modeChoice: state.modeChoice,
+        effort: state.effort, effortChoice: state.effortChoice, fast: state.fast, fastChoice: state.fastChoice, permissionMode: state.permissionMode, modeChoice: state.modeChoice,
         commands: state.commands, agents: state.agents, skills: state.skills, plan: state.plan };
     case "spawned":
       return { ...state, process: "ready", exitCode: null, stderr: [] };
@@ -426,6 +432,8 @@ export type ModelInfo = {
   defaultEffort?: string;
   /** Tokens que caben en su ventana de contexto, si se conocen antes de usarlo. */
   contextWindow?: number;
+  /** Velocidad rápida, si el modelo la admite: el nivel que la activa y qué supone. */
+  fast?: { tier: string; hint: string };
 };
 
 const FAMILY_DESCRIPTIONS: Record<string, string> = {
@@ -476,6 +484,18 @@ export const effortLabel = (effort: string | null): string => (effort && EFFORT_
 /** Niveles de esfuerzo que admite el modelo en uso. */
 export const supportedEfforts = (models: ModelInfo[], model: string | null, choice: string | null): string[] =>
   (currentModel(models, model, choice)?.efforts ?? []).filter(level => EFFORT_LEVELS[level]);
+
+/** Velocidad rápida del modelo en uso, o null si no la admite. */
+export const fastSpeed = (models: ModelInfo[], model: string | null, choice: string | null): ModelInfo["fast"] | null =>
+  currentModel(models, model, choice)?.fast ?? null;
+
+/** Descripción de la velocidad rápida en español: «2x speed, increased usage» → «2× más rápido; gasta más uso del plan.». */
+export function speedHint(description: string): string {
+  const factor = /(\d+(?:\.\d+)?)\s*x\s+speed/i.exec(description)?.[1];
+  if (!factor) return "Respuestas más rápidas.";
+  const costly = /increased usage|more usage|higher (cost|usage)/i.test(description);
+  return `${factor.replace(".", ",")}× más rápido${costly ? "; gasta más uso del plan" : ""}.`;
+}
 
 export const formatDuration = (ms: number): string => {
   const seconds = Math.max(0, Math.round(ms / 1000));
