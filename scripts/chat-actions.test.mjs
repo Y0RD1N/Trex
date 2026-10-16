@@ -39,7 +39,7 @@ test("reenviar conserva exactamente las imágenes y rechaza un historial incompl
   assert.throws(() => messageAttachments(user("u1", "", ["https://example.com/image.png"])), /recuperar/);
   const wire = JSON.parse(userMessageLine("corregido", images, "11111111-1111-4111-8111-111111111111"));
   assert.equal(wire.uuid, "11111111-1111-4111-8111-111111111111");
-  assert.equal(wire.message.content[0].source.data, "AAAA");
+  assert.equal(wire.message.content.find(part => part.type === "image").source.data, "AAAA");
 });
 
 test("la regeneración reemplaza la selección de conversación sin perder modelo o rutas", () => {

@@ -14,6 +14,7 @@ import {
 } from "./chatState";
 import { parseCodexSkills } from "./chatCommands";
 import { parseCodexUsage } from "./planUsage";
+import { imageReference, withoutImageLabels } from "./imageReferences";
 
 export type CodexAction =
   | BaseChatAction
@@ -203,7 +204,10 @@ export const OPT_OUT_NOTIFICATIONS = [
 
 export function userInput(value: string, images: OutgoingImage[] = [], skills: { name: string; path: string }[] = []): Json[] {
   return [
-    ...images.map(image => ({ type: "image", url: `data:${image.mediaType};base64,${image.data}` })),
+    ...images.flatMap((image, index) => [
+      { type: "text", text: imageReference(index), text_elements: [] },
+      { type: "image", url: `data:${image.mediaType};base64,${image.data}` },
+    ]),
     ...(value ? [{ type: "text", text: value, text_elements: [] }] : []),
     // Las skills nombradas con `$nombre` se adjuntan para que Codex cargue sus instrucciones.
     ...skills.map(skill => ({ type: "skill", name: skill.name, path: skill.path })),
@@ -417,7 +421,7 @@ const reasoningText = (item: Json): string =>
 
 /** Contenido de un mensaje del usuario guardado en el hilo. */
 function userItem(item: Json): ChatItem | null {
-  const content = list(item.content).map(record).filter((part): part is Json => !!part);
+  const content = withoutImageLabels(list(item.content).map(record).filter((part): part is Json => !!part));
   const typed = content.filter(part => part.type === "text").map(part => text(part.text)).join("\n\n").trim();
   const images = content.filter(part => part.type === "image" || part.type === "localImage");
   const previews = images.map(part => text(part.url)).filter(url => url.startsWith("data:image/"));

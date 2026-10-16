@@ -14,6 +14,7 @@ import {
 import { parseClaudeAgents, parseClaudeCommands, parseClaudeSkills } from "./chatCommands";
 import { claudeRateLimitUsage, parseClaudeUsage } from "./planUsage";
 import { FILE_SHARING_INSTRUCTIONS } from "./sharedFiles";
+import { imageReference, withoutImageLabels } from "./imageReferences";
 
 export type ChatAction =
   | BaseChatAction
@@ -59,7 +60,10 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
 
 export function userMessageLine(text: string, images: OutgoingImage[] = [], uuid?: string): string {
   const content = images.length
-    ? [...images.map(image => ({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } })),
+    ? [...images.flatMap((image, index) => [
+      { type: "text", text: imageReference(index) },
+      { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
+    ]),
       ...(text ? [{ type: "text", text }] : [])]
     : text;
   return JSON.stringify({ type: "user", message: { role: "user", content }, ...(uuid ? { uuid } : {}) });
@@ -165,7 +169,8 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
   const message = record(event.message) ?? {};
   const toolResult = record(event.tool_use_result) ?? record(event.toolUseResult);
   let items = state.items;
-  const content = typeof message.content === "string" ? [{ type: "text", text: message.content }] : list(message.content);
+  const content = withoutImageLabels(typeof message.content === "string" ? [{ type: "text", text: message.content }]
+    : list(message.content).map(record).filter((block): block is Json => !!block));
   const typed: string[] = [];
   let images = 0;
   for (const raw of content) {

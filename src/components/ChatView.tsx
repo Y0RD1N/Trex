@@ -17,6 +17,7 @@ import {
   shownUsage, supportedEfforts, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
+import { imageReference, insertImageReferences, moveSelection, removeImageReference, type TextSelection } from "../imageReferences";
 import { completedWork, type SummaryCache } from "../workSummary";
 import { resetLabel } from "../planUsage";
 import { applySuggestion, buildSuggestions, findTrigger, localCommand, parseCommand, type Suggestion } from "../chatCommands";
@@ -94,11 +95,24 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const { session, sessionId, cwd, projectName, conversationId, settings, visible, focused } = props;
   const { state, provider } = session;
   const agent = PROVIDERS[provider];
-  const [draft, setDraft] = useState("");
+  // Reserva el texto y los adjuntos al momento: dos pegados en el mismo render
+  // no deben reutilizar un número ni sobrescribir las imágenes del otro.
+  const [draft, updateDraft] = useState("");
+  const draftRef = useRef(draft);
+  const setDraft = (value: string | ((previous: string) => string)): void => {
+    draftRef.current = typeof value === "function" ? value(draftRef.current) : value;
+    updateDraft(draftRef.current);
+  };
   const [now, setNow] = useState(() => Date.now());
   const [atBottom, setAtBottom] = useState(true);
-  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
-  const [preparing, setPreparing] = useState(0);
+  const [attachments, updateAttachments] = useState<ChatAttachment[]>([]);
+  const attachmentsRef = useRef(attachments);
+  const setAttachments = (value: ChatAttachment[] | ((previous: ChatAttachment[]) => ChatAttachment[])): void => {
+    attachmentsRef.current = typeof value === "function" ? value(attachmentsRef.current) : value;
+    updateAttachments(attachmentsRef.current);
+  };
+  const preparing = attachments.filter(image => image.preparing).length;
+  const nextSelectionRef = useRef<TextSelection | null>(null);
   const [dragging, setDragging] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: string; draft: string; attachments: ChatAttachment[] } | null>(null);
@@ -127,6 +141,14 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const selection = nextSelectionRef.current;
+    if (!selection) return;
+    nextSelectionRef.current = null;
+    inputRef.current?.setSelectionRange(selection.start, selection.end);
+    setCaret(selection.start);
+  }, [draft, attachments]);
 
   // Estado hacia la app: actividad, avisos, conversación y título.
   const activity = chatActivity(state);
@@ -321,30 +343,55 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     return () => { cancelled = true; window.removeEventListener("focus", refresh); window.removeEventListener(GIT_BRANCH_CHANGED, changed); };
   }, [cwd, visible, running]);
 
-  /** Prepara y añade imágenes a la caja (capturas, archivos o arrastradas). */
-  const addImages = async (sources: (Blob | { mediaType: string; data: string; name: string })[]): Promise<void> => {
-    const room = MAX_IMAGES - attachments.length;
+  const insertionPoint = () => ({ text: draftRef.current, start: inputRef.current?.selectionStart ?? draftRef.current.length,
+    end: inputRef.current?.selectionEnd ?? draftRef.current.length });
+  const removeImage = (id: string): void => {
+    const current = attachmentsRef.current;
+    const index = current.findIndex(image => image.id === id);
+    if (index < 0) return;
+    const next = removeImageReference(draftRef.current, insertionPoint(), index, current.length);
+    nextSelectionRef.current = next.selection;
+    setDraft(next.text);
+    setAttachments(current.filter(image => image.id !== id));
+  };
+
+  /** Reserva las citas antes de comprimir: los pegados rápidos conservan su lugar y su orden. */
+  const addImages = async (sources: (Blob | { mediaType: string; data: string; name: string })[], point = insertionPoint()): Promise<void> => {
+    if (editSendingRef.current || !sources.length) return;
+    const current = attachmentsRef.current;
+    const room = MAX_IMAGES - current.length;
     if (room <= 0) {
       callbacks.current.onMessage(`Puedes adjuntar hasta ${MAX_IMAGES} imágenes por mensaje.`);
       return;
     }
-    setPreparing(count => count + Math.min(room, sources.length));
-    for (const source of sources.slice(0, room)) {
+    const accepted = sources.slice(0, room);
+    const placeholders = accepted.map(source => ({ id: crypto.randomUUID(), preparing: true, data: "", mediaType: "", preview: "",
+      name: source instanceof Blob ? source instanceof File && source.name || "Imagen pegada" : source.name }));
+    const selection = moveSelection(point.text, draftRef.current, point);
+    const next = insertImageReferences(draftRef.current, selection, current.length, placeholders.length);
+    nextSelectionRef.current = next.selection;
+    setDraft(next.text);
+    setAttachments([...current, ...placeholders]);
+    inputRef.current?.focus({ preventScroll: true });
+    for (const [index, source] of accepted.entries()) {
+      const id = placeholders[index].id;
+      if (!attachmentsRef.current.some(image => image.id === id)) continue;
       try {
         const image = await prepareImage(source);
-        setAttachments(previous => previous.length < MAX_IMAGES ? [...previous, image] : previous);
+        setAttachments(previous => previous.map(item => item.id === id ? { ...image, id } : item));
       } catch (error) {
-        callbacks.current.onMessage(formatError(error));
-      } finally {
-        setPreparing(count => Math.max(0, count - 1));
+        if (attachmentsRef.current.some(image => image.id === id)) {
+          removeImage(id);
+          callbacks.current.onMessage(formatError(error));
+        }
       }
     }
-    inputRef.current?.focus({ preventScroll: true });
   };
 
   const pasteFromClipboard = async (): Promise<void> => {
+    const point = insertionPoint();
     const image = await readClipboardImage().catch(() => null);
-    if (image) return addImages([image]);
+    if (image) return addImages([image], point);
     const content = await readClipboard().catch(() => null);
     const input = inputRef.current;
     if (content?.kind !== "text" || !content.text || !input) return;
@@ -354,6 +401,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   };
 
   const attachFiles = async (): Promise<void> => {
+    const point = insertionPoint();
     const selected = await open({ multiple: true, title: "Adjuntar imágenes",
       filters: [{ name: "Imágenes", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }] }).catch(() => null);
     const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
@@ -362,7 +410,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       try { files.push(await readImageFile(path)); }
       catch (error) { callbacks.current.onMessage(formatError(error)); }
     }
-    if (files.length) await addImages(files);
+    if (files.length) await addImages(files, point);
   };
 
   const mode = state.permissionMode === "manual" ? "default" : state.permissionMode ?? agent.defaultMode;
@@ -437,14 +485,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   };
 
   const send = (override?: string): void => {
-    const text = (override ?? draft).trim();
-    if ((!text && !attachments.length) || preparing > 0 || editSendingRef.current) return;
+    const text = (override ?? draftRef.current).trim();
+    const images = attachmentsRef.current;
+    if ((!text && !images.length) || images.some(image => image.preparing) || editSendingRef.current) return;
     if (editing) {
       if (running) return;
       editSendingRef.current = true;
       setSubmittingEdit(true);
       stickRef.current = true;
-      void session.edit(editing.id, text, attachments, attachments.map(image => image.preview)).then(() => {
+      void session.edit(editing.id, text, images, images.map(image => image.preview)).then(() => {
         setDraft(editing.draft);
         setAttachments(editing.attachments);
         setEditing(null);
@@ -454,13 +503,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       }).finally(() => { editSendingRef.current = false; setSubmittingEdit(false); });
       return;
     }
-    const command = attachments.length ? null : parseCommand(text);
+    const command = images.length ? null : parseCommand(text);
     setDismissed(null);
     if (command && runLocal(command.name, command.args)) {
       setDraft("");
       return;
     }
-    const images = attachments;
     setDraft("");
     setAttachments([]);
     stickRef.current = true;
@@ -646,17 +694,19 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <button type="button" className="chat-copy tip" aria-label="Cancelar edición" data-tip="Cancelar edición (Esc)"
             disabled={submittingEdit} onClick={cancelEdit}><CloseIcon size={14} /></button>
         </div>}
-        {(attachments.length > 0 || preparing > 0) && <div className="chat-attachments">
-          {attachments.map((image, index) => <div key={image.id} className="chat-attachment">
-            <button type="button" className="chat-attachment-view" aria-label={`Ver ${image.name}`}
-              onClick={() => viewer.open(attachments.map(item => ({ src: item.preview, name: item.name })), index)}>
-              <img src={image.preview} alt={image.name} />
+        {attachments.length > 0 && <div className="chat-attachments">
+          {attachments.map((image, index) => <div key={image.id} className={`chat-attachment${image.preparing ? " loading" : ""}`}>
+            <button type="button" className="chat-attachment-view" aria-label={`Ver imagen ${index + 1}: ${image.name}`}
+              title={`${imageReference(index)} · ${image.name}`} disabled={image.preparing}
+              onClick={() => {
+                const ready = attachments.filter(item => !item.preparing);
+                viewer.open(ready.map(item => ({ src: item.preview, name: `${imageReference(attachments.indexOf(item))} · ${item.name}` })), ready.indexOf(image));
+              }}>
+              {image.preparing ? <span className="chat-spinner" aria-label="Preparando imagen" /> : <img src={image.preview} alt={image.name} />}
+              <span className="chat-image-number" aria-hidden="true">{index + 1}</span>
             </button>
-            <button type="button" className="chat-attachment-remove" aria-label={`Quitar ${image.name}`}
-              onClick={() => setAttachments(previous => previous.filter(item => item.id !== image.id))}><CloseIcon size={11} strokeWidth={2.2} /></button>
-          </div>)}
-          {Array.from({ length: preparing }, (_, index) => <div key={`loading-${index}`} className="chat-attachment loading" aria-label="Preparando imagen">
-            <span className="chat-spinner" />
+            <button type="button" className="chat-attachment-remove" aria-label={`Quitar imagen ${index + 1}: ${image.name}`}
+              disabled={submittingEdit} onClick={() => removeImage(image.id)}><CloseIcon size={11} strokeWidth={2.2} /></button>
           </div>)}
         </div>}
         <div className="chat-input-row">

@@ -69,10 +69,13 @@ test("outgoing messages are JSON-RPC lines with images as data URLs", () => {
   assert.deepEqual(JSON.parse(codex.resultLine(0, { decision: "accept" })), { id: 0, result: { decision: "accept" } });
   assert.equal(JSON.parse(codex.errorLine(7, "no")).error.message, "no");
   assert.deepEqual(codex.userInput("¿de qué color es?", [{ mediaType: "image/png", data: "AAAA" }]), [
+    { type: "text", text: "[Imagen 1]", text_elements: [] },
     { type: "image", url: "data:image/png;base64,AAAA" },
     { type: "text", text: "¿de qué color es?", text_elements: [] },
   ]);
-  assert.deepEqual(codex.userInput("", [{ mediaType: "image/jpeg", data: "BB" }]), [{ type: "image", url: "data:image/jpeg;base64,BB" }]);
+  assert.deepEqual(codex.userInput("", [{ mediaType: "image/jpeg", data: "BB" }]), [
+    { type: "text", text: "[Imagen 1]", text_elements: [] }, { type: "image", url: "data:image/jpeg;base64,BB" },
+  ]);
 });
 
 test("streamed agent messages grow in place and the turn closes with its duration", () => {

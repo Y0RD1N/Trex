@@ -1061,6 +1061,26 @@
   display: grid;
   place-items: center;
 }
+.chat-attachment.loading .chat-attachment-view { display: grid; place-items: center; cursor: wait; }
+.chat-user-thumb { position: relative; }
+.chat-image-number {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 6px;
+  background: rgb(16 16 18 / 85%);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  pointer-events: none;
+}
 .chat-attachment-remove {
   position: absolute;
   top: -6px;

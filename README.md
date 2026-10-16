@@ -51,6 +51,11 @@ carpeta, con el asistente y el perfil que elijas.
 
 ## Claude Code y Codex como chat
 
+Al pegar o adjuntar imágenes, la caja inserta citas como **[Imagen 1]** en el
+cursor y numera las miniaturas. Ambos asistentes reciben esas mismas etiquetas
+junto a cada imagen. Al quitar un adjunto se eliminan sus citas y se renumeran
+las restantes; editar o reenviar un mensaje conserva la correspondencia.
+
 Pulsa el nombre de la **rama de Git** junto a la caja del chat para buscar entre
 las ramas locales y las remotas conocidas, cambiar de rama o **Crear y cambiar**
 a una nueva desde la actual. La rama activa queda marcada y el indicador se

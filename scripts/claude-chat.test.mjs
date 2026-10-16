@@ -30,11 +30,12 @@ test("outgoing messages are single JSON lines in the shape the CLI accepts", () 
   assert.deepEqual(JSON.parse(chat.userMessageLine("hola\nmundo")), { type: "user", message: { role: "user", content: "hola\nmundo" } });
   assert.ok(!chat.userMessageLine("a\nb").includes("\n"));
   assert.deepEqual(JSON.parse(chat.userMessageLine("¿qué ves?", [{ mediaType: "image/png", data: "AAAA" }])).message.content, [
+    { type: "text", text: "[Imagen 1]" },
     { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
     { type: "text", text: "¿qué ves?" },
   ]);
   assert.deepEqual(JSON.parse(chat.userMessageLine("", [{ mediaType: "image/jpeg", data: "BBBB" }])).message.content,
-    [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "BBBB" } }]);
+    [{ type: "text", text: "[Imagen 1]" }, { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "BBBB" } }]);
   assert.deepEqual(JSON.parse(chat.controlLine("r1", { subtype: "interrupt" })), { type: "control_request", request_id: "r1", request: { subtype: "interrupt" } });
   const allow = JSON.parse(chat.permissionLine("p1", true, { file_path: "/a" }, [{ type: "setMode", mode: "acceptEdits" }]));
   assert.deepEqual(allow.response, { subtype: "success", request_id: "p1",

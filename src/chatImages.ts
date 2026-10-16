@@ -14,7 +14,7 @@ export const MAX_IMAGE_BYTES = 3_700_000;
 export const MAX_IMAGES = 10;
 const SENDABLE = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
-export type ChatAttachment = OutgoingImage & { id: string; name: string; preview: string };
+export type ChatAttachment = OutgoingImage & { id: string; name: string; preview: string; preparing?: boolean };
 type ImageData = { mediaType: string; data: string; name: string };
 
 export const readImageFile = (path: string): Promise<ImageData> => invoke("read_image_file", { path });

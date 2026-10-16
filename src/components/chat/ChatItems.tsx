@@ -23,14 +23,16 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
   disabled: boolean; editing: boolean; editable?: boolean;
 }) {
   const viewer = useImageViewer();
-  const label = (index: number): string => previews.length > 1 ? `Imagen ${index + 1}` : "Imagen";
+  const label = (index: number): string => `Imagen ${index + 1}`;
   const available = images === previews.length;
   const editHint = !available ? "Las imágenes originales no están disponibles" : !editable ? "No se puede recuperar el punto original de este mensaje" : "Editar mensaje";
   return <div className={`chat-user-group${editing ? " is-editing" : ""}`}>
     {previews.length > 0 && <div className="chat-user-gallery">
-      {previews.map((preview, index) => <button key={index} type="button" className="chat-user-thumb" aria-label="Ver imagen"
+      {previews.map((preview, index) => <button key={index} type="button" className="chat-user-thumb" aria-label={`Ver imagen ${index + 1}`}
+        title={`Imagen ${index + 1}`}
         onClick={() => viewer.open(previews.map((src, position) => ({ src, name: label(position) })), index)}>
         <img src={preview} alt={`Imagen adjunta ${index + 1}`} />
+        <span className="chat-image-number" aria-hidden="true">{index + 1}</span>
       </button>)}
     </div>}
     {(text || (images > 0 && !previews.length)) && <div className="chat-user">
