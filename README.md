@@ -54,7 +54,15 @@ carpeta, con el asistente y el perfil que elijas.
 Al pegar o adjuntar imágenes, la caja inserta citas como **[Imagen 1]** en el
 cursor y numera las miniaturas. Ambos asistentes reciben esas mismas etiquetas
 junto a cada imagen. Al quitar un adjunto se eliminan sus citas y se renumeran
-las restantes; editar o reenviar un mensaje conserva la correspondencia.
+las restantes; editar o reenviar un mensaje conserva la correspondencia. Las
+citas se resaltan mientras escribes y, ya enviadas, se ven como etiquetas con
+la miniatura de la imagen o el nombre del archivo.
+
+También puedes adjuntar **archivos de cualquier tipo** (PDF, hojas de cálculo,
+código, documentos…) con el clip, arrastrándolos o pegándolos. Se citan como
+**[Archivo 1]** y el mensaje lleva su ruta para que el asistente los lea con sus
+herramientas; los que llegan sin ruta (arrastrados o pegados) se guardan antes
+en la carpeta de datos de TREX.
 
 Pulsa el nombre de la **rama de Git** junto a la caja del chat para buscar entre
 las ramas locales y las remotas conocidas, cambiar de rama o **Crear y cambiar**

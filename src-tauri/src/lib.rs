@@ -331,6 +331,7 @@ pub fn run() {
             conversations::claude_rewind_point,
             attachments::read_image_file,
             attachments::read_clipboard_image,
+            attachments::save_attachment,
             shared_files::file_info,
             shared_files::open_file,
             shared_files::reveal_file,

@@ -10,7 +10,10 @@ import {
 import { AlertIcon, CheckIcon, ChevronIcon, CloseIcon, FileIcon, GlobeIcon, ImageIcon, InfoIcon, ListIcon, MapIcon, PencilIcon,
   QuestionIcon, RotateIcon, SearchIcon, ShieldIcon, SparkIcon, TerminalIcon, WrenchIcon } from "../Icons";
 import Markdown, { CopyButton } from "./Markdown";
-import { SharedFilesContext } from "./SharedFiles";
+import { FileBadge, SharedFilesContext } from "./SharedFiles";
+import { referenceParts, splitAttachedFiles } from "../../imageReferences";
+import { pathName } from "../../chatFiles";
+import { KIND_LABELS, fileKind, openFile } from "../../sharedFiles";
 import { useImageViewer } from "../ImageViewer";
 
 const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
@@ -26,17 +29,44 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
   const label = (index: number): string => `Imagen ${index + 1}`;
   const available = images === previews.length;
   const editHint = !available ? "Las imágenes originales no están disponibles" : !editable ? "No se puede recuperar el punto original de este mensaje" : "Editar mensaje";
+  // Los archivos viajan como rutas al final del mensaje: se muestran como tarjetas, no como texto.
+  const { text: body, files } = useMemo(() => splitAttachedFiles(text), [text]);
+  const showImage = (index: number): void => viewer.open(previews.map((src, position) => ({ src, name: label(position) })), index);
+  const open = (path: string): void => { void openFile(path).catch(() => undefined); };
+  const parts = useMemo(() => referenceParts(body, { Imagen: images, Archivo: files.length }), [body, images, files.length]);
   return <div className={`chat-user-group${editing ? " is-editing" : ""}`}>
     {previews.length > 0 && <div className="chat-user-gallery">
       {previews.map((preview, index) => <button key={index} type="button" className="chat-user-thumb" aria-label={`Ver imagen ${index + 1}`}
-        title={`Imagen ${index + 1}`}
-        onClick={() => viewer.open(previews.map((src, position) => ({ src, name: label(position) })), index)}>
+        title={`Imagen ${index + 1}`} onClick={() => showImage(index)}>
         <img src={preview} alt={`Imagen adjunta ${index + 1}`} />
         <span className="chat-image-number" aria-hidden="true">{index + 1}</span>
       </button>)}
     </div>}
-    {(text || (images > 0 && !previews.length)) && <div className="chat-user">
-      {text && <div className="chat-user-text">{text}</div>}
+    {files.length > 0 && <div className="chat-user-files">
+      {files.map((path, index) => <button key={index} type="button" className="chat-user-file" title={`Archivo ${index + 1} · ${path}`}
+        aria-label={`Abrir archivo ${index + 1}: ${pathName(path)}`} onClick={() => open(path)}>
+        <span className="chat-attachment-icon"><FileBadge name={path} dir={false} />
+          <span className="chat-image-number" aria-hidden="true">{index + 1}</span></span>
+        <span className="chat-attachment-text">
+          <span className="chat-attachment-name">{pathName(path)}</span>
+          <span className="chat-attachment-detail">{KIND_LABELS[fileKind(path)]}</span>
+        </span>
+      </button>)}
+    </div>}
+    {(body || (images > 0 && !previews.length)) && <div className="chat-user">
+      {body && <div className="chat-user-text">{parts.map((part, index) => {
+        if (!("kind" in part)) return part.text;
+        if (part.kind === "Archivo") {
+          const path = files[part.index];
+          return <button key={index} type="button" className="chat-ref-chip" data-kind="Archivo" title={path}
+            onClick={() => open(path)}><FileIcon size={12} />{pathName(path)}</button>;
+        }
+        const preview = previews[part.index];
+        return preview
+          ? <button key={index} type="button" className="chat-ref-chip" data-kind="Imagen" title={label(part.index)}
+            onClick={() => showImage(part.index)}><img src={preview} alt="" />{label(part.index)}</button>
+          : <span key={index} className="chat-ref-chip" data-kind="Imagen"><ImageIcon size={12} />{label(part.index)}</span>;
+      })}</div>}
       {images > 0 && !previews.length && <div className="chat-user-images"><ImageIcon size={14} />
         {images === 1 ? "1 imagen adjunta" : `${images} imágenes adjuntas`}</div>}
     </div>}
@@ -45,7 +75,7 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
         aria-pressed={editing} disabled={disabled || !available || !editable} onClick={() => onEdit(id)}><PencilIcon size={14} /></button>
       <button type="button" className="chat-copy tip" aria-label="Reenviar mensaje" data-tip={available ? "Reenviar mensaje" : editHint}
         disabled={disabled || !available} onClick={() => onResend(id)}><RotateIcon size={14} /></button>
-      <CopyButton text={text} label="Copiar mensaje" />
+      <CopyButton text={body} label="Copiar mensaje" />
     </div>
   </div>;
 });

@@ -71,7 +71,7 @@ function useImage(path: string, enabled: boolean): { src: string | null; failed:
 const extension = (name: string): string => /\.([a-z0-9]{1,5})$/i.exec(name)?.[1]?.toUpperCase() ?? "";
 
 /** Icono del archivo: su extensión sobre el color de su tipo. */
-function FileBadge({ name, dir }: { name: string; dir: boolean }) {
+export function FileBadge({ name, dir }: { name: string; dir: boolean }) {
   const kind = dir ? "folder" : fileKind(name);
   const ext = extension(name);
   return <span className="chat-file-badge" data-kind={kind} aria-hidden="true">

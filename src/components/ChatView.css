@@ -7,17 +7,18 @@
 
 .chat {
   --chat-width: 780px;
-  /* Cristal negro de la caja de mensaje: tinte translúcido + desenfoque de lo que pasa por detrás. */
-  --dock-glass: rgba(8, 8, 10, 0.58);
-  --dock-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 60%);
-  --dock-blur: 12px;
-  --dock-saturate: 125%;
+  /* Cristal de la caja de mensaje: el mismo color del fondo del chat, translúcido
+     y con desenfoque, para que la caja parezca hecha del propio fondo. */
+  --dock-glass: color-mix(in srgb, var(--term-bg) 80%, transparent);
+  --dock-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008) 45%, rgba(255, 255, 255, 0) 70%);
+  --dock-blur: 18px;
+  --dock-saturate: 140%;
   /* Bordes apenas visibles: el cristal se separa por la sombra, no por la línea. */
-  --dock-edge: rgba(255, 255, 255, 0.06);
+  --dock-edge: color-mix(in srgb, var(--text) 8%, transparent);
   /* La repisa, un punto más transparente que la tarjeta para separarse de ella. */
-  --dock-tray: rgba(10, 10, 12, 0.46);
-  --dock-highlight: rgba(255, 255, 255, 0.04);
-  --dock-shadow: 0 28px 60px -24px rgba(0, 0, 0, 0.8), 0 10px 26px -14px rgba(0, 0, 0, 0.55);
+  --dock-tray: color-mix(in srgb, var(--term-bg) 66%, transparent);
+  --dock-highlight: rgba(255, 255, 255, 0.05);
+  --dock-shadow: 0 22px 48px -26px rgba(0, 0, 0, 0.7), 0 8px 20px -14px rgba(0, 0, 0, 0.45);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1103,6 +1104,119 @@
 .chat-attachment-remove:focus-visible { opacity: 1; }
 .chat-attachment-remove:hover { color: var(--text); }
 
+/* Archivos: una tarjeta con el icono de su tipo, el nombre y su tamaño. */
+.chat-attachment.chat-attachment-file {
+  width: auto;
+  max-width: 230px;
+  transition: border-color var(--t);
+}
+.chat-attachment.chat-attachment-file:hover { border-color: var(--border-strong); }
+.chat-attachment.chat-attachment-file .chat-attachment-view {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 0 12px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-attachment.chat-attachment-file.loading { display: block; }
+.chat-attachment.chat-attachment-file.loading .chat-attachment-view { display: flex; cursor: wait; }
+.chat-attachment-icon {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+}
+.chat-attachment-icon .chat-image-number {
+  right: -6px;
+  bottom: -5px;
+  left: auto;
+  min-width: 16px;
+  height: 16px;
+  font-size: 9.5px;
+}
+.chat-attachment-text { display: grid; gap: 2px; min-width: 0; }
+.chat-attachment-name,
+.chat-attachment-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-attachment-name { color: var(--text); font-size: 12.5px; font-weight: 500; }
+.chat-attachment-detail { color: var(--text-dim); font-size: 11px; }
+
+/* Archivos de un mensaje enviado: las mismas tarjetas, alineadas con el mensaje. */
+.chat-user-files {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: min(82%, 620px);
+}
+.chat-user-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 260px;
+  height: 56px;
+  padding: 0 14px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t);
+  animation: chat-rise 180ms var(--ease-out) both;
+}
+.chat-user-file:hover { border-color: var(--border-strong); }
+
+/* Citas dentro del mensaje: una etiqueta con la miniatura o el nombre del archivo. */
+.chat-ref-chip {
+  --ref-color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 240px;
+  height: 1.6em;
+  margin: 0 1px;
+  padding: 0 7px 0 3px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ref-color) 26%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ref-color) 12%, transparent);
+  color: color-mix(in srgb, var(--ref-color) 70%, var(--text));
+  font: inherit;
+  font-size: 0.86em;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  transform: translateY(-1px);
+  transition: background-color var(--t), border-color var(--t);
+}
+.chat-ref-chip[data-kind="Archivo"] { --ref-color: #8ab4ff; }
+.chat-ref-chip:has(> svg) { padding-left: 6px; }
+button.chat-ref-chip { cursor: pointer; }
+button.chat-ref-chip:hover {
+  border-color: color-mix(in srgb, var(--ref-color) 45%, transparent);
+  background: color-mix(in srgb, var(--ref-color) 20%, transparent);
+}
+.chat-ref-chip img {
+  flex: 0 0 auto;
+  width: 1.25em;
+  height: 1.25em;
+  border-radius: 4px;
+  object-fit: cover;
+}
+.chat-ref-chip svg { flex: 0 0 auto; }
+
 /* Al arrastrar imágenes encima, la caja de mensaje invita a soltarlas. */
 .chat.is-dragging .chat-dock {
   border-color: var(--accent);
@@ -1400,6 +1514,19 @@ pre.chat-ask-preview-body {
   padding: 0 24px 16px;
   pointer-events: none;
 }
+/* El hilo se desvanece en el fondo antes de pasar por debajo de la caja: el
+   cristal queda sobre el color del chat y no sobre texto cortado. */
+.chat-composer-wrap::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -40px 0 0;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--term-bg) 0%, transparent) 0,
+    color-mix(in srgb, var(--term-bg) 72%, transparent) 40px,
+    color-mix(in srgb, var(--term-bg) 94%, transparent) 75%);
+  pointer-events: none;
+}
 /* Tarjeta para escribir y, debajo, la bandeja de selectores: dos piezas de cristal que flotan juntas. */
 .chat-dock {
   position: relative;
@@ -1428,23 +1555,71 @@ pre.chat-ask-preview-body {
   align-items: flex-end;
   gap: 6px;
 }
-.chat-input-row textarea {
+/* La caja de texto es transparente: lo que se ve es su copia de detrás, que
+   resalta las citas. Ambas comparten letra, márgenes y forma de partir líneas,
+   y las citas solo cambian colores (nunca el ancho) para no descuadrarse. */
+.chat-input-field {
+  position: relative;
+  display: flex;
   flex: 1;
   min-width: 0;
-  min-height: 38px;
+}
+.chat-input-row textarea,
+.chat-input-mirror {
+  margin: 0;
   padding: 9px 4px 9px 0;
   border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--text);
   font: inherit;
   font-size: calc(var(--chat-font-size, 14px) + 0.5px);
   line-height: 1.45;
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 4;
+}
+.chat-input-row textarea {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
   resize: none;
   overflow-x: hidden;
   overflow-y: hidden;
 }
 .chat-input-row textarea::placeholder { color: var(--text-dim); }
+.chat-input-row textarea::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: transparent;
+}
+.chat-input-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--text);
+  pointer-events: none;
+  user-select: none;
+}
+/* Ocupa el mismo hueco de barra que la caja para partir igual, pero no se ve. */
+.chat-input-mirror::-webkit-scrollbar-thumb,
+.chat-input-mirror::-webkit-scrollbar-track { background: transparent; }
+.chat-ref {
+  --ref-color: var(--accent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ref-color) 17%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ref-color) 17%, transparent);
+  color: color-mix(in srgb, var(--ref-color) 72%, var(--text));
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.chat-ref[data-kind="Archivo"] { --ref-color: #8ab4ff; }
+.chat-ref > span { opacity: 0.4; }
 .chat-input-actions {
   display: flex;
   align-items: center;
@@ -1958,8 +2133,11 @@ pre.chat-ask-preview-body {
   box-shadow: 0 0 4px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
+:root[data-theme="light"] .chat-ref[data-kind="Archivo"],
+:root[data-theme="light"] .chat-ref-chip[data-kind="Archivo"] { --ref-color: #2f6fd6; }
+
 :root[data-theme="light"] .chat {
-  --dock-glass: rgba(255, 255, 255, 0.34);
+  --dock-glass: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
   --dock-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.12) 60%, rgba(255, 255, 255, 0));
   --dock-edge: rgba(15, 23, 42, 0.07);
   --dock-tray: rgba(244, 243, 239, 0.42);

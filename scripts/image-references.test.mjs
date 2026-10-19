@@ -64,3 +64,22 @@ test("recuperar el historial no duplica las etiquetas ni cambia el orden de los 
   const legacy = [{ type: "image", url: "old" }, { type: "text", text: "[Imagen 1]" }];
   assert.deepEqual(withoutImageLabels(legacy), legacy);
 });
+
+test("los archivos adjuntos viajan como rutas al final y se recuperan del historial", async () => {
+  const { withAttachedFiles, splitAttachedFiles, referenceParts, insertImageReferences, removeImageReference } = await load("imageReferences");
+  const paths = ["C:\Users\Ana\informe final.pdf", "/home/ana/datos.csv"];
+  const text = withAttachedFiles("Resume [Archivo 1] con [Archivo 2]", paths);
+  assert.equal(text, "Resume [Archivo 1] con [Archivo 2]\n\nArchivos adjuntos:\n[Archivo 1]: C:\Users\Ana\informe final.pdf\n[Archivo 2]: /home/ana/datos.csv");
+  assert.deepEqual(splitAttachedFiles(text), { text: "Resume [Archivo 1] con [Archivo 2]", files: paths });
+  assert.deepEqual(splitAttachedFiles(withAttachedFiles("", paths.slice(1))), { text: "", files: paths.slice(1) });
+  assert.deepEqual(splitAttachedFiles("Sin adjuntos"), { text: "Sin adjuntos", files: [] });
+  assert.equal(withAttachedFiles("Hola", []), "Hola");
+
+  assert.equal(insertImageReferences("Lee", selection(3), 1, 1, "Archivo").text, "Lee [Archivo 2] ");
+  assert.equal(removeImageReference("[Imagen 1] [Archivo 1] [Archivo 2]", selection(0), 0, 2, "Archivo").text, "[Imagen 1] [Archivo 1]");
+
+  assert.deepEqual(referenceParts("Mira [Imagen 1] y [Archivo 3]", { Imagen: 1, Archivo: 2 }), [
+    { text: "Mira " }, { kind: "Imagen", index: 0, text: "[Imagen 1]" }, { text: " y [Archivo 3]" },
+  ]);
+  assert.deepEqual(referenceParts(""), [{ text: "" }]);
+});

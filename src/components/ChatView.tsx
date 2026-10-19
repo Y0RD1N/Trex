@@ -11,13 +11,18 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSPr
 import { open } from "@tauri-apps/plugin-dialog";
 import { formatError, gitBranch, listProjectFiles, readClipboard } from "../api";
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
+import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from "../chatFiles";
+import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
 import { matchesPasteShortcut } from "../paste";
 import {
   chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, formatTokens, modelName, pendingPermissions,
   shownUsage, supportedEfforts, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
-import { imageReference, insertImageReferences, moveSelection, removeImageReference, type TextSelection } from "../imageReferences";
+import {
+  fileReference, imageReference, insertImageReferences, moveSelection, referenceParts, removeImageReference, splitAttachedFiles,
+  withAttachedFiles, type TextSelection,
+} from "../imageReferences";
 import { completedWork, type SummaryCache } from "../workSummary";
 import { resetLabel } from "../planUsage";
 import { applySuggestion, buildSuggestions, findTrigger, localCommand, parseCommand, type Suggestion } from "../chatCommands";
@@ -31,7 +36,7 @@ import Select, { type SelectOption } from "./Select";
 import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { EffortMenu, ModelMenu } from "./chat/ModelMenu";
-import { SharedFilesContext } from "./chat/SharedFiles";
+import { FileBadge, SharedFilesContext } from "./chat/SharedFiles";
 import { useImageViewer } from "./ImageViewer";
 import { useStableCallback } from "../hooks/useStableCallback";
 import ContextMeter from "./chat/ContextMeter";
@@ -86,6 +91,8 @@ const PROVIDERS: Record<AgentProvider, { name: string; product: string; defaultM
 
 /** Atajos que ya pegan de forma nativa en una caja de texto. */
 const NATIVE_PASTE = ["Ctrl+V", "Meta+V", "Shift+Insert"];
+/** Imágenes que se ven en el chat; cualquier otro archivo se adjunta por su ruta. */
+const SENDABLE_IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const hasFiles = (transfer: DataTransfer | null): boolean => !!transfer && Array.from(transfer.types).includes("Files");
 /** Los archivos del proyecto se vuelven a leer si la lista tiene más de esto. */
 const FILES_TTL_MS = 20_000;
@@ -111,11 +118,17 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     attachmentsRef.current = typeof value === "function" ? value(attachmentsRef.current) : value;
     updateAttachments(attachmentsRef.current);
   };
-  const preparing = attachments.filter(image => image.preparing).length;
+  const [docs, updateDocs] = useState<ChatFile[]>([]);
+  const docsRef = useRef(docs);
+  const setDocs = (value: ChatFile[] | ((previous: ChatFile[]) => ChatFile[])): void => {
+    docsRef.current = typeof value === "function" ? value(docsRef.current) : value;
+    updateDocs(docsRef.current);
+  };
+  const preparing = attachments.filter(image => image.preparing).length + docs.filter(file => file.preparing).length;
   const nextSelectionRef = useRef<TextSelection | null>(null);
   const [dragging, setDragging] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ id: string; draft: string; attachments: ChatAttachment[] } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; draft: string; attachments: ChatAttachment[]; docs: ChatFile[] } | null>(null);
   const [submittingEdit, setSubmittingEdit] = useState(false);
   const editSendingRef = useRef(false);
   const summaryCacheRef = useRef<SummaryCache>(new Map());
@@ -139,6 +152,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const mirrorRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
 
@@ -148,7 +162,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     nextSelectionRef.current = null;
     inputRef.current?.setSelectionRange(selection.start, selection.end);
     setCaret(selection.start);
-  }, [draft, attachments]);
+  }, [draft, attachments, docs]);
 
   // Estado hacia la app: actividad, avisos, conversación y título.
   const activity = chatActivity(state);
@@ -238,6 +252,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     const maxHeight = Math.max(38, Math.floor(window.innerHeight * 0.4));
     input.style.height = `${Math.min(naturalHeight, maxHeight)}px`;
     input.style.overflowY = naturalHeight > maxHeight ? "auto" : "hidden";
+    // El texto visible (con las citas resaltadas) va detrás y debe partir las líneas igual.
+    const mirror = mirrorRef.current;
+    if (mirror) { mirror.style.overflowY = input.style.overflowY; mirror.scrollTop = input.scrollTop; }
   });
   useLayoutEffect(() => { if (visible) resizeInput(); }, [draft, visible, settings.fontSize, resizeInput]);
   // Las pestañas se montan ocultas; se mide al mostrarlas, al cambiar el ancho
@@ -271,6 +288,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     if (!editing || editSendingRef.current) return;
     setDraft(editing.draft);
     setAttachments(editing.attachments);
+    setDocs(editing.docs);
     setEditing(null);
     backToInput();
   };
@@ -280,13 +298,16 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     if (item?.kind !== "user") return;
     try {
       const images = messageAttachments(item);
-      setEditing(previous => ({ id, draft: previous?.draft ?? draft, attachments: previous?.attachments ?? attachments }));
-      setDraft(item.text);
+      const message = splitAttachedFiles(item.text);
+      setEditing(previous => ({ id, draft: previous?.draft ?? draft, attachments: previous?.attachments ?? attachments,
+        docs: previous?.docs ?? docsRef.current }));
+      setDraft(message.text);
       setAttachments(images);
+      setDocs(message.files.map((path, index) => ({ id: `${id}-file-${index}`, name: pathName(path), path, size: -1 })));
       setDismissed(null);
       requestAnimationFrame(() => {
         inputRef.current?.focus({ preventScroll: true });
-        inputRef.current?.setSelectionRange(item.text.length, item.text.length);
+        inputRef.current?.setSelectionRange(message.text.length, message.text.length);
       });
     } catch (error) { callbacks.current.onMessage(formatError(error)); }
   });
@@ -343,8 +364,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     return () => { cancelled = true; window.removeEventListener("focus", refresh); window.removeEventListener(GIT_BRANCH_CHANGED, changed); };
   }, [cwd, visible, running]);
 
-  const insertionPoint = () => ({ text: draftRef.current, start: inputRef.current?.selectionStart ?? draftRef.current.length,
-    end: inputRef.current?.selectionEnd ?? draftRef.current.length });
+  // Si aún no se ha pintado la selección de una inserción anterior, se sigue desde ella.
+  const insertionPoint = () => ({ text: draftRef.current,
+    start: nextSelectionRef.current?.start ?? inputRef.current?.selectionStart ?? draftRef.current.length,
+    end: nextSelectionRef.current?.end ?? inputRef.current?.selectionEnd ?? draftRef.current.length });
   const removeImage = (id: string): void => {
     const current = attachmentsRef.current;
     const index = current.findIndex(image => image.id === id);
@@ -388,6 +411,62 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     }
   };
 
+  const removeDoc = (id: string): void => {
+    const current = docsRef.current;
+    const index = current.findIndex(file => file.id === id);
+    if (index < 0) return;
+    const next = removeImageReference(draftRef.current, insertionPoint(), index, current.length, "Archivo");
+    nextSelectionRef.current = next.selection;
+    setDraft(next.text);
+    setDocs(current.filter(file => file.id !== id));
+  };
+
+  /** Archivos de cualquier tipo: rutas elegidas en el diálogo o archivos sin ruta (arrastrados o pegados). */
+  const addDocs = async (sources: (File | string)[], point = insertionPoint()): Promise<void> => {
+    if (editSendingRef.current || !sources.length) return;
+    const current = docsRef.current;
+    const fresh = sources.filter(source => typeof source !== "string" || !current.some(file => file.path === source));
+    const room = MAX_FILES - current.length;
+    if (fresh.length > room) callbacks.current.onMessage(`Puedes adjuntar hasta ${MAX_FILES} archivos por mensaje.`);
+    const accepted = fresh.slice(0, Math.max(0, room));
+    if (!accepted.length) return;
+    const placeholders: ChatFile[] = accepted.map(source => typeof source === "string"
+      ? { id: crypto.randomUUID(), name: pathName(source), path: source, size: -1 }
+      : { id: crypto.randomUUID(), name: source.name || "archivo", path: "", size: source.size, preparing: true });
+    const selection = moveSelection(point.text, draftRef.current, point);
+    const next = insertImageReferences(draftRef.current, selection, current.length, placeholders.length, "Archivo");
+    nextSelectionRef.current = next.selection;
+    setDraft(next.text);
+    setDocs([...current, ...placeholders]);
+    inputRef.current?.focus({ preventScroll: true });
+    await Promise.all(accepted.map(async (source, index) => {
+      const id = placeholders[index].id;
+      try {
+        if (typeof source === "string") {
+          const info = await fileInfo(source);
+          if (!info?.exists || info.isDir) throw new Error(`«${pathName(source)}» no es un archivo que se pueda adjuntar.`);
+          setDocs(previous => previous.map(file => file.id === id ? { ...file, size: info.size } : file));
+        } else {
+          const path = await saveAttachment(source);
+          setDocs(previous => previous.map(file => file.id === id ? { ...file, path, preparing: false } : file));
+        }
+      } catch (error) {
+        if (docsRef.current.some(file => file.id === id)) {
+          removeDoc(id);
+          callbacks.current.onMessage(formatError(error));
+        }
+      }
+    }));
+  };
+
+  /** Lo que llega arrastrado o pegado: las imágenes se ven en el chat; el resto va como archivo. */
+  const addDropped = (files: File[]): void => {
+    const images = files.filter(file => SENDABLE_IMAGES.includes(file.type));
+    const others = files.filter(file => !images.includes(file));
+    if (images.length) void addImages(images);
+    if (others.length) void addDocs(others);
+  };
+
   const pasteFromClipboard = async (): Promise<void> => {
     const point = insertionPoint();
     const image = await readClipboardImage().catch(() => null);
@@ -402,15 +481,18 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   const attachFiles = async (): Promise<void> => {
     const point = insertionPoint();
-    const selected = await open({ multiple: true, title: "Adjuntar imágenes",
-      filters: [{ name: "Imágenes", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }] }).catch(() => null);
+    const selected = await open({ multiple: true, title: "Adjuntar imágenes o archivos" }).catch(() => null);
     const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
-    const files = [];
+    const images = [], others: string[] = [];
     for (const path of paths) {
-      try { files.push(await readImageFile(path)); }
-      catch (error) { callbacks.current.onMessage(formatError(error)); }
+      // Una imagen que no se puede mostrar (muy grande o dañada) se adjunta como archivo.
+      if (isImagePath(path)) {
+        try { images.push(await readImageFile(path)); continue; } catch { /* va como archivo */ }
+      }
+      others.push(path);
     }
-    if (files.length) await addImages(files, point);
+    if (images.length) void addImages(images, point);
+    if (others.length) await addDocs(others, images.length ? insertionPoint() : point);
   };
 
   const mode = state.permissionMode === "manual" ? "default" : state.permissionMode ?? agent.defaultMode;
@@ -487,15 +569,19 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const send = (override?: string): void => {
     const text = (override ?? draftRef.current).trim();
     const images = attachmentsRef.current;
-    if ((!text && !images.length) || images.some(image => image.preparing) || editSendingRef.current) return;
+    const attached = docsRef.current;
+    if ((!text && !images.length && !attached.length) || images.some(image => image.preparing)
+      || attached.some(file => file.preparing) || editSendingRef.current) return;
+    const message = withAttachedFiles(text, attached.map(file => file.path));
     if (editing) {
       if (running) return;
       editSendingRef.current = true;
       setSubmittingEdit(true);
       stickRef.current = true;
-      void session.edit(editing.id, text, images, images.map(image => image.preview)).then(() => {
+      void session.edit(editing.id, message, images, images.map(image => image.preview)).then(() => {
         setDraft(editing.draft);
         setAttachments(editing.attachments);
+        setDocs(editing.docs);
         setEditing(null);
       }).catch(error => {
         callbacks.current.onMessage(formatError(error));
@@ -503,7 +589,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       }).finally(() => { editSendingRef.current = false; setSubmittingEdit(false); });
       return;
     }
-    const command = images.length ? null : parseCommand(text);
+    const command = images.length || attached.length ? null : parseCommand(text);
     setDismissed(null);
     if (command && runLocal(command.name, command.args)) {
       setDraft("");
@@ -511,13 +597,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     }
     setDraft("");
     setAttachments([]);
+    setDocs([]);
     stickRef.current = true;
     // Un comando no da título a la conversación: lo dará el primer mensaje de verdad.
     if (!titledRef.current && !command) {
       titledRef.current = true;
-      callbacks.current.onTitle(sessionId, conversationTitle(text || (images.length === 1 ? "Imagen" : "Imágenes")));
+      callbacks.current.onTitle(sessionId, conversationTitle(text || (attached.length === 1 && !images.length ? attached[0].name
+        : attached.length ? "Archivos adjuntos" : images.length === 1 ? "Imagen" : "Imágenes")));
     }
-    session.send(text, images.map(({ mediaType, data }) => ({ mediaType, data })), images.map(image => image.preview));
+    session.send(message, images.map(({ mediaType, data }) => ({ mediaType, data })), images.map(image => image.preview));
   };
 
   // --- Sugerencias ------------------------------------------------------------
@@ -621,10 +709,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       if (!hasFiles(event.dataTransfer)) return;
       event.preventDefault();
       setDragging(false);
-      const files = Array.from(event.dataTransfer.files);
-      const images = files.filter(file => file.type.startsWith("image/"));
-      if (images.length < files.length) callbacks.current.onMessage("Solo se pueden adjuntar imágenes.");
-      if (images.length) void addImages(images);
+      addDropped(Array.from(event.dataTransfer.files));
     }}>
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
       <SharedFilesContext.Provider value={filesContext}>
@@ -694,7 +779,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <button type="button" className="chat-copy tip" aria-label="Cancelar edición" data-tip="Cancelar edición (Esc)"
             disabled={submittingEdit} onClick={cancelEdit}><CloseIcon size={14} /></button>
         </div>}
-        {attachments.length > 0 && <div className="chat-attachments">
+        {(attachments.length > 0 || docs.length > 0) && <div className="chat-attachments">
           {attachments.map((image, index) => <div key={image.id} className={`chat-attachment${image.preparing ? " loading" : ""}`}>
             <button type="button" className="chat-attachment-view" aria-label={`Ver imagen ${index + 1}: ${image.name}`}
               title={`${imageReference(index)} · ${image.name}`} disabled={image.preparing}
@@ -708,8 +793,33 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             <button type="button" className="chat-attachment-remove" aria-label={`Quitar imagen ${index + 1}: ${image.name}`}
               disabled={submittingEdit} onClick={() => removeImage(image.id)}><CloseIcon size={11} strokeWidth={2.2} /></button>
           </div>)}
+          {docs.map((file, index) => <div key={file.id} className={`chat-attachment chat-attachment-file${file.preparing ? " loading" : ""}`}>
+            <button type="button" className="chat-attachment-view" aria-label={`Abrir archivo ${index + 1}: ${file.name}`}
+              title={`${fileReference(index)} · ${file.path || file.name}`} disabled={file.preparing}
+              onClick={() => void openFile(file.path).catch(error => callbacks.current.onMessage(formatError(error)))}>
+              <span className="chat-attachment-icon">
+                {file.preparing ? <span className="chat-spinner" aria-label="Preparando archivo" /> : <FileBadge name={file.name} dir={false} />}
+                <span className="chat-image-number" aria-hidden="true">{index + 1}</span>
+              </span>
+              <span className="chat-attachment-text">
+                <span className="chat-attachment-name">{file.name}</span>
+                <span className="chat-attachment-detail">{file.preparing ? "Preparando…"
+                  : [KIND_LABELS[fileKind(file.name)], file.size >= 0 ? formatBytes(file.size) : ""].filter(Boolean).join(" · ")}</span>
+              </span>
+            </button>
+            <button type="button" className="chat-attachment-remove" aria-label={`Quitar archivo ${index + 1}: ${file.name}`}
+              disabled={submittingEdit} onClick={() => removeDoc(file.id)}><CloseIcon size={11} strokeWidth={2.2} /></button>
+          </div>)}
         </div>}
         <div className="chat-input-row">
+        <div className="chat-input-field">
+        {/* Detrás de la caja, el mismo texto con las citas de imágenes y archivos resaltadas. */}
+        <div ref={mirrorRef} className="chat-input-mirror" aria-hidden="true">
+          {referenceParts(draft, { Imagen: attachments.length, Archivo: docs.length }).map((part, index) => "kind" in part
+            ? <mark key={index} className="chat-ref" data-kind={part.kind}><span>[</span>{part.text.slice(1, -1)}<span>]</span></mark>
+            : part.text)}
+          {draft.endsWith("\n") ? "​" : ""}
+        </div>
         <textarea ref={inputRef} rows={1} value={draft} readOnly={submittingEdit} aria-label={`Mensaje para ${agent.name}`}
           aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? `${sessionId}-suggestions` : undefined}
           aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${selectedSuggestion}` : undefined}
@@ -718,13 +828,14 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             : `Pide cambios · @ archivos${provider === "claude" ? " y subagentes" : ""} · / comandos · $ skills`}
           onChange={event => { setDraft(event.target.value); setCaret(event.target.selectionStart); if (!event.target.value) setDismissed(null); }}
           onSelect={event => setCaret(event.currentTarget.selectionStart)}
+          onScroll={event => { if (mirrorRef.current) mirrorRef.current.scrollTop = event.currentTarget.scrollTop; }}
           onPaste={event => {
             const files = Array.from(event.clipboardData.items)
-              .filter(item => item.kind === "file" && item.type.startsWith("image/"))
+              .filter(item => item.kind === "file")
               .map(item => item.getAsFile()).filter((file): file is File => !!file);
             if (files.length) {
               event.preventDefault();
-              void addImages(files);
+              addDropped(files);
             } else if (!event.clipboardData.getData("text/plain")) {
               // WebKitGTK no siempre entrega las capturas al evento: se leen del portapapeles nativo.
               event.preventDefault();
@@ -766,15 +877,16 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
               session.interrupt();
             }
           }} />
+        </div>
         <div className="chat-input-actions">
-          <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes" aria-label="Adjuntar imágenes"
+          <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
             disabled={submittingEdit}
             onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
-          {running && !draft.trim() && !attachments.length
+          {running && !draft.trim() && !attachments.length && !docs.length
             ? <button type="button" className="chat-send stop tip" aria-label="Detener" data-tip="Detener (Esc)" onClick={session.interrupt}><StopIcon /></button>
             : <button type="submit" className="chat-send tip" aria-label={editing ? "Guardar y regenerar" : "Enviar"}
               data-tip={editing ? "Guardar y regenerar" : "Enviar"}
-              disabled={(!draft.trim() && !attachments.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
+              disabled={(!draft.trim() && !attachments.length && !docs.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
                 {submittingEdit ? <span className="chat-spinner" /> : <ArrowUpIcon />}</button>}
         </div>
         </div>

@@ -1,12 +1,16 @@
-//! Imágenes adjuntas al chat: desde el portapapeles o desde un archivo.
+//! Adjuntos del chat: imágenes desde el portapapeles o un archivo, y archivos
+//! arrastrados o pegados, que se guardan para que el asistente los lea.
 //!
-//! Se devuelven en base64 para enviarlas al CLI como bloques de imagen. El
+//! Las imágenes se devuelven en base64 para enviarlas al CLI como bloques de imagen. El
 //! frontend las ajusta al tamaño final; aquí solo se limita lo que cruza la IPC.
 use base64::Engine;
 use serde::Serialize;
 use std::io::Read;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+
+/// Tamaño máximo de un archivo arrastrado o pegado que se guarda para el asistente.
+const SAVED_MAX_BYTES: usize = 100 * 1024 * 1024;
 
 /// Lado más largo de una captura antes de enviarla a la ventana.
 const CLIPBOARD_MAX_EDGE: u32 = 1920;
@@ -92,6 +96,73 @@ pub async fn read_clipboard_image(app: AppHandle) -> Result<Option<ImageData>, S
     .map_err(|e| e.to_string())?
 }
 
+/// Nombre seguro para guardar: solo el último componente y sin caracteres reservados.
+pub(crate) fn safe_name(name: &str) -> String {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let clean: String = last
+        .chars()
+        .map(|c| if c.is_control() || "<>:\"|?*".contains(c) { '_' } else { c })
+        .collect();
+    let clean = clean.trim().trim_matches('.').to_string();
+    if clean.is_empty() { "archivo".into() } else { clean }
+}
+
+/// La ventana manda el nombre en una cabecera, codificado con `encodeURIComponent`.
+pub(crate) fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Un archivo arrastrado o pegado llega sin ruta: se guarda en la carpeta de la
+/// app para que el asistente lo lea desde ahí y el historial lo siga encontrando.
+#[tauri::command]
+pub async fn save_attachment(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("El archivo no llegó completo.".into());
+    };
+    if bytes.len() > SAVED_MAX_BYTES {
+        return Err("El archivo pesa más de 100 MB.".into());
+    }
+    let bytes = bytes.clone();
+    let name = request
+        .headers()
+        .get("x-file-name")
+        .and_then(|value| value.to_str().ok())
+        .map(percent_decode)
+        .unwrap_or_default();
+    let root = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("No se encontró la carpeta de la app: {e}"))?
+        .join("attachments");
+    tauri::async_runtime::spawn_blocking(move || {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|time| time.as_nanos())
+            .unwrap_or_default();
+        let dir = root.join(format!("{stamp:x}"));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;
+        let path = dir.join(safe_name(&name));
+        std::fs::write(&path, bytes).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +175,18 @@ mod tests {
         assert_eq!(image_type(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
         assert_eq!(image_type(b"<svg xmlns"), None);
         assert_eq!(image_type(b""), None);
+    }
+
+    #[test]
+    fn saved_names_stay_inside_their_folder() {
+        assert_eq!(safe_name("informe.pdf"), "informe.pdf");
+        assert_eq!(safe_name("../../secreto.txt"), "secreto.txt");
+        assert_eq!(safe_name("C:\\Windows\\win.ini"), "win.ini");
+        assert_eq!(safe_name("a<b>:c?.txt"), "a_b__c_.txt");
+        assert_eq!(safe_name(".."), "archivo");
+        assert_eq!(safe_name(""), "archivo");
+        assert_eq!(percent_decode("informe%20final%C3%B1.pdf"), "informe finalñ.pdf");
+        assert_eq!(percent_decode("100%"), "100%");
     }
 
     #[test]
