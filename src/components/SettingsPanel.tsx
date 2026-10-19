@@ -15,6 +15,9 @@ import { parseShortcut } from "../paste";
 import { bindingError } from "../shortcuts";
 import ShortcutSettings from "./ShortcutSettings";
 import NotificationsSettings from "./NotificationsSettings";
+import AgentIcon from "./AgentIcon";
+import type { CliUpdates } from "../hooks/useCliUpdates";
+import type { CliId } from "../cliUpdates";
 import "./SettingsPanel.css";
 
 type Props = {
@@ -28,6 +31,8 @@ type Props = {
   onSave: (settings: Settings) => void;
   onClose: () => void;
   onRedetect: () => void;
+  cliUpdates: CliUpdates;
+  onUpdateCli: (id: CliId) => void;
 };
 
 const SECTIONS = [
@@ -42,7 +47,7 @@ const SECTIONS = [
 ] as const;
 type SectionId = typeof SECTIONS[number]["id"];
 
-export default function SettingsPanel({ entering, leaving, settings, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect }: Props) {
+export default function SettingsPanel({ entering, leaving, settings, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect, cliUpdates, onUpdateCli }: Props) {
   const dialog = useDialog();
   const id = useId();
   const [draft, setDraft] = useState<Settings>(settings);
@@ -301,14 +306,35 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
                     <button type="button" className="icon-btn" aria-label={copied ? "Ruta copiada" : "Copiar ruta de configuración"} title={copied ? "Copiado" : "Copiar ruta"} disabled={!appInfo?.configPath} onClick={copyPath}>{copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />}</button>
                   </div>
                 </div>
-                {claudeInfo?.found && <div className="settings-block">
-                  <h4>Instalación de Claude Code</h4>
-                  <dl className="settings-details">
-                    <div><dt>Versión</dt><dd>{claudeInfo.version ?? "No disponible"}</dd></div>
-                    <div><dt>Ejecutable</dt><dd className="settings-mono">{claudeInfo.path ?? "No disponible"}</dd></div>
-                    {claudeInfo.source && <div><dt>Detectado en</dt><dd>{claudeInfo.source}</dd></div>}
-                  </dl>
-                </div>}
+                <div className="settings-block">
+                  <div className="settings-block-head">
+                    <h4>Claude Code y Codex</h4>
+                    <button type="button" className="btn btn-small btn-ghost" disabled={cliUpdates.checking} onClick={() => void cliUpdates.check()}>
+                      {cliUpdates.checking ? "Buscando…" : "Buscar actualizaciones"}
+                    </button>
+                  </div>
+                  <div className="cli-versions">
+                    {[cliUpdates.status.claude, cliUpdates.status.codex].map(cli => {
+                      const info = cli.id === "claude" ? claudeInfo : codexInfo;
+                      return <div key={cli.id} className="cli-version">
+                        <AgentIcon kind={cli.id} size={16} />
+                        <div className="cli-version-text">
+                          <strong>{cli.name}</strong>
+                          <span>{!info ? "Comprobando…" : !info.found ? "No instalado"
+                            : `Versión ${cli.installed ?? info.version ?? "desconocida"}${info.source ? ` · ${info.source}` : ""}`}</span>
+                          {info?.path && <code className="settings-mono">{info.path}</code>}
+                        </div>
+                        {cli.available
+                          ? <button type="button" className="btn btn-small btn-primary" disabled={cli.updating} onClick={() => onUpdateCli(cli.id)}>
+                            {cli.updating ? "Actualizando…" : `Actualizar a ${cli.latest}`}</button>
+                          : <span className="cli-version-state">{info?.found && cli.latest ? "Al día" : ""}</span>}
+                      </div>;
+                    })}
+                  </div>
+                  <p className="settings-hint">{cliUpdates.checkedAt
+                    ? `Última comprobación: ${new Date(cliUpdates.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · trex vuelve a mirar cada pocas horas.`
+                    : "trex busca versiones nuevas poco después de abrirse y cada pocas horas."}</p>
+                </div>
               </>}
             </section>)}
           </div>

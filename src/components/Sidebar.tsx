@@ -20,7 +20,10 @@ import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
 import { projectSections } from "../sidebarGroups";
-import { AlertIcon, FolderPlusIcon, GaugeIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
+import type { CliStatus } from "../hooks/useCliUpdates";
+import type { CliId } from "../cliUpdates";
+import AgentIcon from "./AgentIcon";
+import { AlertIcon, CloseIcon, FolderPlusIcon, GaugeIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
 import { sessionLabel } from "../sessionTitle";
@@ -63,6 +66,10 @@ type Props = {
   onOpenUsage: () => void;
   onToggleTheme: () => void;
   onResize: (width: number) => void;
+  /** Versiones nuevas de Claude Code o Codex pendientes de instalar. */
+  updates: CliStatus[];
+  onUpdateCli: (id: CliId) => void;
+  onDismissUpdate: (id: CliId) => void;
 };
 
 export default function Sidebar({
@@ -94,9 +101,14 @@ export default function Sidebar({
   onOpenUsage,
   onToggleTheme,
   onResize,
+  updates,
+  onUpdateCli,
+  onDismissUpdate,
 }: Props) {
   const [dragging, setDragging] = useState(false);
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  // Al abrir la app todas las carpetas empiezan contraídas.
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const restoredTab = useRef(false);
   const onResizeRef = useRef(onResize);
   onResizeRef.current = onResize;
   // Escribir en el buscador o renombrar una sesión mantiene la capa abierta.
@@ -110,19 +122,20 @@ export default function Sidebar({
   });
   const peek = sidebarCollapsed && reveal.revealed;
 
-  // Los atajos pueden activar sesiones de carpetas que el usuario contrajo.
+  const expandProject = (projectId: string): void => {
+    setExpandedProjects((previous) => previous.has(projectId) ? previous : new Set(previous).add(projectId));
+  };
+
+  // Los atajos pueden activar sesiones de carpetas contraídas; la sesión que se
+  // restaura al abrir la app no despliega su carpeta.
   useEffect(() => {
     if (!activeTabId || !activeProjectId) return;
-    setCollapsedProjects((previous) => {
-      if (!previous.has(activeProjectId)) return previous;
-      const next = new Set(previous);
-      next.delete(activeProjectId);
-      return next;
-    });
+    if (!restoredTab.current) { restoredTab.current = true; return; }
+    expandProject(activeProjectId);
   }, [activeTabId, activeProjectId]);
 
   const toggleProject = (projectId: string): void => {
-    setCollapsedProjects((previous) => {
+    setExpandedProjects((previous) => {
       const next = new Set(previous);
       if (next.has(projectId)) next.delete(projectId);
       else next.add(projectId);
@@ -211,7 +224,7 @@ export default function Sidebar({
           <div className="sidebar-section-label"><span>{section.label}</span><span>{section.projects.length}</span></div>
           {section.projects.map((project) => {
             const sessions = tabs.filter((tab) => tab.projectId === project.id);
-            const expanded = query.length > 0 || !collapsedProjects.has(project.id);
+            const expanded = query.length > 0 || expandedProjects.has(project.id);
             const needle = normalizeText(query);
             const matchesProject = normalizeText(project.name).includes(needle) || normalizeText(project.path).includes(needle);
             const visibleSessions = matchesProject ? sessions : sessions.filter((tab) => normalizeText(sessionLabel(tab)).includes(needle));
@@ -227,6 +240,7 @@ export default function Sidebar({
                   profiles={profiles}
                   onQuickOpen={profileId => {
                     onQuickOpen(project.id, profileId);
+                    expandProject(project.id);
                     if (peek) reveal.hide();
                   }}
                   onReveal={() => onReveal(project.id)}
@@ -275,6 +289,28 @@ export default function Sidebar({
         </nav>
 
         <footer className="sidebar-footer">
+          {updates.map(update => (
+            <div key={update.id} className={`cli-update${update.error ? " has-error" : ""}`} role="status"
+              title={update.error ?? `Tienes la ${update.installed}; ya está disponible la ${update.latest}.`}>
+              <span className="cli-update-icon" aria-hidden="true"><AgentIcon kind={update.id} size={14} /></span>
+              <div className="cli-update-body">
+                <div className="cli-update-head">
+                  <strong>{update.name}</strong>
+                  {!update.updating && <button type="button" className="cli-update-close tip" data-tip="Ahora no"
+                    aria-label={`No actualizar ${update.name} ahora`} onClick={() => onDismissUpdate(update.id)}>
+                    <CloseIcon size={12} />
+                  </button>}
+                </div>
+                <div className="cli-update-row">
+                  <small>{update.updating ? "Actualizando…" : update.error ? "No se pudo actualizar" : `Nueva: ${update.latest}`}</small>
+                  <button type="button" className="cli-update-action" disabled={update.updating}
+                    aria-label={`Actualizar ${update.name} a la ${update.latest}`} onClick={() => onUpdateCli(update.id)}>
+                    {update.updating ? <span className="cli-update-spinner" aria-hidden="true" /> : update.error ? "Reintentar" : "Actualizar"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
           {claudeMissing && (
             <div
               className="claude-warn"

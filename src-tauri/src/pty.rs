@@ -233,7 +233,7 @@ pub(crate) fn expand_config_dir(value: &str) -> String {
     value.to_string()
 }
 
-fn home_dir() -> Option<String> {
+pub(crate) fn home_dir() -> Option<String> {
     if is_windows() {
         std::env::var_os("USERPROFILE")
             .map(|v| v.to_string_lossy().to_string())

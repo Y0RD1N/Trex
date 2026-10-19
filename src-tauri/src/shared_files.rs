@@ -46,19 +46,29 @@ pub async fn file_info(paths: Vec<String>) -> Vec<FileInfo> {
         .unwrap_or_default()
 }
 
+// Un comando síncrono corre en el hilo de la ventana: abrir con el sistema
+// puede tardar, así que estos van aparte.
 #[tauri::command]
-pub fn open_file(path: String) -> Result<(), String> {
-    let path = expand(&path);
-    if !path.exists() {
-        return Err(format!("«{}» ya no existe.", path.display()));
-    }
-    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| format!("No se pudo abrir «{}»: {e}", path.display()))
+pub async fn open_file(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = expand(&path);
+        if !path.exists() {
+            return Err(format!("«{}» ya no existe.", path.display()));
+        }
+        tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| format!("No se pudo abrir «{}»: {e}", path.display()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn reveal_file(path: String) -> Result<(), String> {
-    let path = expand(&path);
-    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| format!("No se pudo mostrar «{}»: {e}", path.display()))
+pub async fn reveal_file(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = expand(&path);
+        tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| format!("No se pudo mostrar «{}»: {e}", path.display()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub(crate) fn copy_to(from: &Path, to: &Path) -> Result<(), String> {

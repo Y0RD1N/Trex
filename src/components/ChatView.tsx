@@ -16,7 +16,7 @@ import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../share
 import { matchesPasteShortcut } from "../paste";
 import {
   chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, formatTokens, modelName, pendingPermissions,
-  shownUsage, supportedEfforts, type PermissionItem, type QuestionChoice,
+  shownUsage, supportedEfforts, type ChatItem, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
 import {
@@ -97,6 +97,22 @@ const hasFiles = (transfer: DataTransfer | null): boolean => !!transfer && Array
 /** Los archivos del proyecto se vuelven a leer si la lista tiene más de esto. */
 const FILES_TTL_MS = 20_000;
 const SKILLS_TTL_MS = 20_000;
+/** Filas del hilo que se pintan al abrir una conversación; las anteriores se cargan al subir. */
+const THREAD_WINDOW = 60;
+const THREAD_STEP = 80;
+const NO_ITEMS: ChatItem[] = [];
+
+/** Tiempo del turno en curso: solo este texto se repinta cada segundo. */
+function WorkingTime({ since, live }: { since: number; live: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!live) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [since, live]);
+  return <span className="chat-working-time">{formatDuration(now - since)}</span>;
+}
 
 export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const { session, sessionId, cwd, projectName, conversationId, settings, visible, focused } = props;
@@ -110,7 +126,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     draftRef.current = typeof value === "function" ? value(draftRef.current) : value;
     updateDraft(draftRef.current);
   };
-  const [now, setNow] = useState(() => Date.now());
   const [atBottom, setAtBottom] = useState(true);
   const [attachments, updateAttachments] = useState<ChatAttachment[]>([]);
   const attachmentsRef = useRef(attachments);
@@ -156,6 +171,31 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
 
+  // Una pestaña oculta no repinta su hilo: conserva lo último que se vio y se
+  // pone al día al mostrarse. Las que nunca se abrieron no pintan su historial.
+  const shownItemsRef = useRef<ChatItem[] | null>(null);
+  if (visible) shownItemsRef.current = state.items;
+  const threadItems = shownItemsRef.current ?? NO_ITEMS;
+  // Solo se pintan las filas recientes; `anchorId` fija la primera mientras se lee más arriba.
+  const [anchorId, setAnchorId] = useState<string | null>(null);
+  const anchorIndex = anchorId === null ? -1 : threadItems.findIndex(item => item.id === anchorId);
+  const threadStart = anchorIndex >= 0 ? anchorIndex : Math.max(0, threadItems.length - THREAD_WINDOW);
+  const earlierRef = useRef<{ height: number; top: number } | null>(null);
+  const showEarlier = (): void => {
+    const element = scrollRef.current;
+    if (!element || threadStart === 0 || earlierRef.current) return;
+    earlierRef.current = { height: element.scrollHeight, top: element.scrollTop };
+    setAnchorId(threadItems[Math.max(0, threadStart - THREAD_STEP)].id);
+  };
+  // Las filas nuevas entran por arriba sin mover lo que se estaba leyendo.
+  useLayoutEffect(() => {
+    const element = scrollRef.current, before = earlierRef.current;
+    earlierRef.current = null;
+    if (!element || !before) return;
+    const top = before.top + element.scrollHeight - before.height;
+    if (Math.abs(element.scrollTop - top) > 1) element.scrollTop = top;
+  }, [threadStart]);
+
   useLayoutEffect(() => {
     const selection = nextSelectionRef.current;
     if (!selection) return;
@@ -186,14 +226,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     if (state.sessionId && hasMessages && state.sessionId !== callbacks.current.conversationId) callbacks.current.onConversation(sessionId, state.sessionId);
   }, [state.sessionId, hasMessages, sessionId]);
 
-  // Reloj para el tiempo de trabajo del turno en curso.
-  useEffect(() => {
-    if (state.turnStartedAt === null) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [state.turnStartedAt]);
-
   // Desplazamiento: sigue el final mientras la persona no haya subido a leer.
   useLayoutEffect(() => {
     const element = scrollRef.current;
@@ -206,6 +238,11 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     stickRef.current = bottom;
     setAtBottom(bottom);
+    // Mientras se lee más arriba, las filas pintadas no cambian; al volver al final
+    // se vuelve a pintar solo lo reciente.
+    if (bottom) setAnchorId(null);
+    else if (anchorId === null && threadItems[threadStart]) setAnchorId(threadItems[threadStart].id);
+    if (!bottom && element.scrollTop < 400 && threadStart > 0) showEarlier();
   };
   const scrollToBottom = (): void => {
     stickRef.current = true;
@@ -272,18 +309,16 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   }, [visible, resizeInput]);
 
   const running = state.pendingTurns > 0;
-  const summaries = useMemo(() => completedWork(state.items, cwd, state.historyCount, summaryCacheRef.current), [state.items, cwd, state.historyCount]);
+  const summaries = useMemo(() => completedWork(threadItems, cwd, state.historyCount, summaryCacheRef.current), [threadItems, cwd, state.historyCount]);
   const responseOrigins = useMemo(() => {
-    const origins = new Map<string, Extract<typeof state.items[number], { kind: "user" }>>();
-    let user: Extract<typeof state.items[number], { kind: "user" }> | null = null;
-    for (const item of state.items) {
+    const origins = new Map<string, Extract<ChatItem, { kind: "user" }>>();
+    let user: Extract<ChatItem, { kind: "user" }> | null = null;
+    for (const item of threadItems) {
       if (item.kind === "user") user = item;
       else if (item.kind === "text" && user) origins.set(item.id, user);
     }
     return origins;
-  }, [state.items]);
-  const canEdit = (item: Extract<typeof state.items[number], { kind: "user" }>): boolean =>
-    provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id);
+  }, [threadItems]);
   const cancelEdit = (): void => {
     if (!editing || editSendingRef.current) return;
     setDraft(editing.draft);
@@ -681,24 +716,65 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const question = state.items.find((item): item is PermissionItem =>
     item.kind === "permission" && item.state === "pending" && item.toolName === "AskUserQuestion");
 
-  // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
-  const askingFor = new Set(state.items.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
-  const asked = (id: string): boolean => askingFor.has(id) || askingFor.has(id.split("#")[0]);
   const lastItem = state.items[state.items.length - 1];
   const thinking = !lastItem || lastItem.kind === "user" || lastItem.kind === "thinking";
   const empty = state.items.length === 0;
   // Solo la lista de tareas y el plan más recientes se muestran enteros; los anteriores quedan plegados.
-  const latest = (name: string): string | undefined => [...state.items].reverse().find(item => item.kind === "tool" && item.name === name)?.id;
-  const latestTodos = latest("TodoWrite");
-  const latestPlan = provider === "codex" ? latest("ExitPlanMode") : undefined;
+  const { latestTodos, latestPlan, planIndex } = useMemo(() => {
+    let todos: string | undefined, plan: string | undefined, index = -1;
+    for (let at = threadItems.length - 1; at >= 0 && (!todos || !plan); at--) {
+      const item = threadItems[at];
+      if (item.kind !== "tool") continue;
+      if (!todos && item.name === "TodoWrite") todos = item.id;
+      if (!plan && item.name === "ExitPlanMode") { plan = item.id; index = at; }
+    }
+    return { latestTodos: todos, latestPlan: provider === "codex" ? plan : undefined, planIndex: index };
+  }, [threadItems, provider]);
   // El plan se puede poner en marcha cuando es lo último que propuso Codex.
   const planReady = !running && mode === "plan" && latestPlan !== undefined
-    && !state.items.slice(state.items.findIndex(item => item.id === latestPlan) + 1).some(item => item.kind === "user");
+    && !threadItems.slice(planIndex + 1).some(item => item.kind === "user");
   const implementPlan = useStableCallback((): void => {
     session.setMode(workModeRef.current);
     stickRef.current = true;
     session.send("Implementa el plan.", [], []);
   });
+
+  // Filas del hilo: se rehacen solo cuando cambia algo que muestran, no con cada tecla en la caja.
+  const editingId = editing?.id ?? null;
+  const busy = preparing > 0;
+  const rows = useMemo(() => {
+    // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
+    const askingFor = new Set(threadItems.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
+    const asked = (id: string): boolean => askingFor.has(id) || askingFor.has(id.split("#")[0]);
+    const canEdit = (item: Extract<ChatItem, { kind: "user" }>): boolean =>
+      provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id);
+    return threadItems.slice(threadStart).map((item, offset) => {
+      const next = threadItems[threadStart + offset + 1];
+      switch (item.kind) {
+        case "user": return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews}
+          onEdit={beginEdit} onResend={resendMessage} editing={editingId === item.id} editable={canEdit(item)}
+          disabled={running || submittingEdit || busy} />;
+        case "text": {
+          if (!item.text.trim()) return null;
+          const user = responseOrigins.get(item.id);
+          return <AssistantText key={item.id} text={item.text} streaming={!item.final}
+            regenerateId={user && canEdit(user) && user.images === user.previews.length ? user.id : undefined}
+            onRegenerate={regenerateMessage} disabled={running || submittingEdit || editingId !== null}
+            actions={item.final && (next ? next.kind === "turn" || next.kind === "user" : !running)} />;
+        }
+        case "thinking": return <Thinking key={item.id} text={item.text} />;
+        case "tool": return asked(item.id) ? null : <ToolRow key={item.id} item={item} cwd={cwd}
+          expanded={item.id === latestTodos || item.id === latestPlan}
+          onImplement={item.id === latestPlan && planReady ? implementPlan : undefined} />;
+        // Las preguntas se responden en el panel que sustituye a la caja de mensaje.
+        case "permission": return item.state !== "pending" || item.toolName === "AskUserQuestion" ? null
+          : <PermissionCard key={item.id} item={item} cwd={cwd} agent={agent.name} onAnswer={answer} />;
+        case "notice": return <Notice key={item.id} tone={item.tone} text={item.text} />;
+        case "turn": return <WorkSummary key={item.id} summary={summaries.get(item.id)!} durationMs={item.durationMs} />;
+      }
+    });
+  }, [threadItems, threadStart, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
+    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer]);
   const stderrTail = state.stderr.slice(-6).join("\n");
 
   return <div ref={rootRef} className={`chat${empty ? " is-empty" : ""}${dragging ? " is-dragging" : ""}`}
@@ -719,32 +795,14 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <h2>¿En qué trabajamos en {projectName}?</h2>
           <p>{cwd}</p>
         </div>}
-        {state.items.map((item, index) => {
-          const next = state.items[index + 1];
-          switch (item.kind) {
-            case "user": return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews}
-              onEdit={beginEdit} onResend={resendMessage} editing={editing?.id === item.id} editable={canEdit(item)}
-              disabled={running || submittingEdit || preparing > 0} />;
-            case "text": return item.text.trim() ? <AssistantText key={item.id} text={item.text} streaming={!item.final}
-              regenerateId={(() => { const user = responseOrigins.get(item.id);
-                return user?.kind === "user" && canEdit(user) && user.images === user.previews.length ? user.id : undefined; })()}
-              onRegenerate={regenerateMessage} disabled={running || submittingEdit || !!editing}
-              actions={item.final && (next ? next.kind === "turn" || next.kind === "user" : !running)} /> : null;
-            case "thinking": return <Thinking key={item.id} text={item.text} />;
-            case "tool": return asked(item.id) ? null : <ToolRow key={item.id} item={item} cwd={cwd}
-              expanded={item.id === latestTodos || item.id === latestPlan}
-              onImplement={item.id === latestPlan && planReady ? implementPlan : undefined} />;
-            // Las preguntas se responden en el panel que sustituye a la caja de mensaje.
-            case "permission": return item.state !== "pending" || item.toolName === "AskUserQuestion" ? null
-              : <PermissionCard key={item.id} item={item} cwd={cwd} agent={agent.name} onAnswer={answer} />;
-            case "notice": return <Notice key={item.id} tone={item.tone} text={item.text} />;
-            case "turn": return <WorkSummary key={item.id} summary={summaries.get(item.id)!} durationMs={item.durationMs} />;
-          }
-        })}
+        {threadStart > 0 && <button type="button" className="chat-earlier" onClick={showEarlier}>
+          Mostrar mensajes anteriores
+        </button>}
+        {rows}
         {running && permissions === 0 && <div className="chat-working" role="status">
           <span className="chat-working-dot" aria-hidden="true" />
           <span className="chat-working-label">{thinking ? "Pensando…" : "Trabajando…"}</span>
-          {state.turnStartedAt !== null && <span className="chat-working-time">{formatDuration(now - state.turnStartedAt)}</span>}
+          {state.turnStartedAt !== null && <WorkingTime since={state.turnStartedAt} live={visible} />}
           <span className="chat-working-hint">Esc para detener</span>
         </div>}
         {(state.process === "exited" || state.process === "failed") && <div className="chat-ended">

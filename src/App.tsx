@@ -80,6 +80,8 @@ import UsageDialog from "./components/UsageDialog";
 import FeatureDialog from "./components/FeatureDialog";
 import type { PaletteCommand } from "./commandPalette";
 import { useNotificationSound } from "./hooks/useNotificationSound";
+import { useCliUpdates } from "./hooks/useCliUpdates";
+import type { CliId } from "./cliUpdates";
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
 const CLAUDE_INFO_FALLBACK: ClaudeInfo = {
@@ -250,6 +252,20 @@ function AppShell() {
       }
     })();
   }, []);
+
+  // Comprobación silenciosa (sin vaciar lo mostrado) para saber la versión instalada.
+  const refreshCliInfo = useCallback(async () => {
+    const [claude, codex] = await Promise.all([detectClaudeCode().catch(() => null), detectCodex().catch(() => null)]);
+    if (claude) setClaudeInfo(claude);
+    if (codex) setCodexInfo(codex);
+  }, []);
+  const cliUpdates = useCliUpdates({ claude: claudeInfo, codex: codexInfo }, refreshCliInfo);
+  const { update: runCliUpdate, dismiss: dismissCliUpdate } = cliUpdates;
+  const updateCli = useCallback((id: CliId) => {
+    void runCliUpdate(id).then(showToast, (error: unknown) => showToast(formatError(error)));
+  }, [runCliUpdate, showToast]);
+  const pendingUpdates = [cliUpdates.status.claude, cliUpdates.status.codex]
+    .filter(status => status.updating || (status.available && !status.dismissed));
 
   const openSettings = useCallback(() => { setSettingsInitialSection("appearance"); setSettingsOpen(true); }, []);
   const openProfiles = useCallback(() => { setSettingsInitialSection("profiles"); setSettingsOpen(true); }, []);
@@ -1007,6 +1023,9 @@ function AppShell() {
         onOpenUsage={openUsage}
         onToggleTheme={toggleTheme}
         onResize={setSidebarWidth}
+        updates={pendingUpdates}
+        onUpdateCli={updateCli}
+        onDismissUpdate={dismissCliUpdate}
       />
 
       <main className="main">
@@ -1177,6 +1196,8 @@ function AppShell() {
           claudeInfo={claudeInfo}
           codexInfo={codexInfo}
           initialSection={settingsInitialSection}
+          cliUpdates={cliUpdates}
+          onUpdateCli={updateCli}
           onSave={updateSettings}
           onClose={() => setSettingsOpen(false)}
           onRedetect={redetectClaude}

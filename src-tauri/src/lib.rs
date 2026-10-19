@@ -8,11 +8,13 @@ mod attachments;
 mod config;
 mod pty;
 mod output_flow;
+mod cli_updates;
 mod clipboard;
 mod conversations;
 mod codex_models;
 mod files;
 mod git;
+mod project_icon;
 mod shared_files;
 mod terminal_env;
 
@@ -184,6 +186,14 @@ fn shell_options() -> (String, Vec<ShellOption>) {
 }
 
 // --- Comandos ---------------------------------------------------------------
+//
+// Abrir o cerrar un PTY, lanzar un proceso o leer la versión de un CLI bloquea
+// el hilo. Esas tareas van a `blocking` para no frenar las demás llamadas de
+// la ventana (escritura en terminales, mensajes del chat…).
+
+async fn blocking<T: Send + 'static>(task: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(task).await.map_err(|e| e.to_string())?
+}
 
 #[tauri::command]
 async fn pty_spawn(
@@ -191,7 +201,8 @@ async fn pty_spawn(
     state: State<'_, PtyState>,
     request: SpawnRequest,
 ) -> Result<SpawnResponse, String> {
-    state.spawn(app, request)
+    let state = state.inner().clone();
+    blocking(move || state.spawn(app, request)).await
 }
 
 #[tauri::command]
@@ -216,7 +227,8 @@ async fn pty_resize(
 
 #[tauri::command]
 async fn pty_kill(state: State<'_, PtyState>, id: String) -> Result<Option<i64>, String> {
-    state.kill(&id)
+    let state = state.inner().clone();
+    blocking(move || state.kill(&id)).await
 }
 
 #[tauri::command]
@@ -226,8 +238,8 @@ async fn pty_list(state: State<'_, PtyState>) -> Result<Vec<SessionInfo>, String
 
 #[tauri::command]
 async fn pty_kill_all(state: State<'_, PtyState>) -> Result<(), String> {
-    state.kill_all();
-    Ok(())
+    let state = state.inner().clone();
+    blocking(move || { state.kill_all(); Ok(()) }).await
 }
 
 #[tauri::command]
@@ -237,7 +249,8 @@ async fn agent_spawn(
     request: AgentSpawnRequest,
 ) -> Result<AgentSpawnResponse, String> {
     let emit = agent::tauri_emitter(app, request.id.clone());
-    state.spawn(request, emit)
+    let state = state.inner().clone();
+    blocking(move || state.spawn(request, emit)).await
 }
 
 #[tauri::command]
@@ -247,17 +260,18 @@ async fn agent_write(state: State<'_, AgentState>, id: String, line: String) -> 
 
 #[tauri::command]
 async fn agent_kill(state: State<'_, AgentState>, id: String) -> Result<(), String> {
-    state.kill(&id)
+    let state = state.inner().clone();
+    blocking(move || state.kill(&id)).await
 }
 
 #[tauri::command]
 async fn detect_claude() -> Result<ClaudeInfo, String> {
-    Ok(pty::detect_claude())
+    blocking(|| Ok(pty::detect_claude())).await
 }
 
 #[tauri::command]
 async fn detect_codex() -> Result<ClaudeInfo, String> {
-    Ok(pty::detect_codex())
+    blocking(|| Ok(pty::detect_codex())).await
 }
 
 #[tauri::command]
@@ -281,13 +295,16 @@ async fn app_info(app: AppHandle) -> Result<AppInfo, String> {
 
 #[tauri::command]
 async fn load_config(app: AppHandle) -> Result<AppConfig, String> {
-    Ok(config::load(&app))
+    blocking(move || Ok(config::load(&app))).await
 }
 
 #[tauri::command]
 async fn save_config(app: AppHandle, config: AppConfig) -> Result<AppConfig, String> {
-    config::save(&app, &config)?;
-    Ok(config)
+    blocking(move || {
+        config::save(&app, &config)?;
+        Ok(config)
+    })
+    .await
 }
 
 // --- Arranque ---------------------------------------------------------------
@@ -337,6 +354,9 @@ pub fn run() {
             shared_files::reveal_file,
             shared_files::save_file_copy,
             shared_files::save_file_data,
+            project_icon::project_icon,
+            cli_updates::claude_update_channel,
+            cli_updates::update_cli,
             git::git_branch,
             git::git_branches,
             git::git_switch_branch,

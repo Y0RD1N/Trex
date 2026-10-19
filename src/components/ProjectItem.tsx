@@ -10,6 +10,7 @@ import type { LauncherProfile, Project } from "../types";
 import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, PencilIcon, StarIcon, TrashIcon } from "./Icons";
 import DropdownMenu from "./DropdownMenu";
 import ProfileMenuItems from "./ProfileMenuItems";
+import { useProjectIcon } from "../projectIcons";
 
 type Props = {
   project: Project;
@@ -46,6 +47,8 @@ export default function ProjectItem({
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(project.name);
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const logo = useProjectIcon(project.path);
+  const [brokenLogo, setBrokenLogo] = useState<string | null>(null);
 
   useEffect(() => {
     setDraftName(project.name);
@@ -89,8 +92,10 @@ export default function ProjectItem({
           <ChevronIcon size={11} />
         </button>
       ) : <span className="project-disclosure-placeholder" />}
-      <span className="project-icon" aria-hidden="true">
-        <FolderIcon size={16} />
+      <span className={`project-icon${logo && logo !== brokenLogo ? " has-logo" : ""}`} aria-hidden="true">
+        {logo && logo !== brokenLogo
+          ? <img src={logo} alt="" draggable={false} onError={() => setBrokenLogo(logo)} />
+          : <FolderIcon size={16} />}
       </span>
 
       <div className="project-info">

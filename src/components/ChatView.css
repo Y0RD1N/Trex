@@ -899,6 +899,22 @@
   font-size: 11.5px;
 }
 
+/* Conversaciones largas: lo anterior se carga al subir o con este botón. */
+.chat-earlier {
+  align-self: center;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--t), background var(--t), border-color var(--t);
+}
+.chat-earlier:hover { color: var(--text); background: var(--hover); }
+.chat-earlier:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .chat-working {
   display: flex;
   align-items: center;

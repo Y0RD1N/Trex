@@ -185,19 +185,26 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     }
   }, [agent, sessionId, cwd, command, args, shell, env, control, refreshSettings, refreshContext, refreshUsage, refreshSkills]);
 
-  // Arranque: historial guardado (si se recupera una conversación) y proceso.
+  // Arranque al mostrarse por primera vez: historial guardado (si se recupera una conversación) y proceso.
+  const startedRef = useRef(false);
+  const mountedRef = useRef(true);
   useEffect(() => {
-    let disposed = false;
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  useEffect(() => {
+    if (startedRef.current || !options.visible) return;
+    startedRef.current = true;
+    // El historial llega aunque la pestaña se oculte mientras se lee.
     if (conversationId) {
       void readConversation(env?.CLAUDE_CONFIG_DIR ?? "", conversationId)
-        .then(entries => { if (!disposed) dispatch({ type: "history", entries }); })
+        .then(entries => { if (mountedRef.current) dispatch({ type: "history", entries }); })
         .catch(error => dispatch({ type: "notice", id: localId(), tone: "warn", text: `No se pudo mostrar el historial: ${formatError(error)}` }));
     }
     void start();
-    return () => { disposed = true; };
-    // Solo al montar: el resto de cambios llegan por refs.
+    // Solo la primera vez que se ve: el resto de cambios llegan por refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [options.visible]);
 
   const alive = state.process === "ready" || state.process === "starting";
 

@@ -47,9 +47,26 @@ carpeta, con el asistente y el perfil que elijas.
 - **Claude en pantalla completa**: usa su interfaz fullscreen dentro del terminal
   en Windows y Linux, también con aliases y cuentas separadas. La rejilla y el PTY
   se redimensionan juntos para evitar separadores duplicados al cambiar de pestaña.
-- **Restauración de sesión**: al reabrir, recupera tus pestañas.
+- **Restauración de sesión**: al reabrir, recupera tus pestañas. Cada sesión
+  restaurada arranca su proceso (shell, Claude Code o Codex) la primera vez que
+  la abres, así que las que no usas no gastan memoria ni CPU.
+- **Logo de cada proyecto**: la barra lateral muestra el icono de la app (el que
+  enlaza `index.html`, los iconos de Tauri o archivos como `logo.svg` y
+  `favicon.svg`); si no hay ninguno, la carpeta. Al abrir trex, las carpetas
+  empiezan contraídas.
+- **Actualizaciones de Claude Code y Codex**: trex compara la versión instalada
+  con la última publicada en npm (respeta el canal `stable` de Claude Code) poco
+  después de abrirse y cada pocas horas. Si hay una nueva, aparece en la barra
+  lateral y en **Ajustes → Acerca de trex**; **Actualizar** ejecuta
+  `claude update` o `codex update`. Las sesiones abiertas siguen con la versión
+  anterior hasta reiniciarlas.
 
 ## Claude Code y Codex como chat
+
+Las conversaciones largas muestran sus mensajes más recientes y cargan los
+anteriores al subir (o con **Mostrar mensajes anteriores**), sin mover lo que
+estás leyendo. Una pestaña oculta no repinta su conversación mientras el
+asistente trabaja: se pone al día al volver a ella.
 
 Al pegar o adjuntar imágenes, la caja inserta citas como **[Imagen 1]** en el
 cursor y numera las miniaturas. Ambos asistentes reciben esas mismas etiquetas

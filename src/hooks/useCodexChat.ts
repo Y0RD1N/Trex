@@ -235,11 +235,15 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     }
   }, [agent, rejectPending, args, cwd, command, shell, env, sessionId, notice, openThread]);
 
+  // Arranca la primera vez que se ve la pestaña.
+  const startedRef = useRef(false);
   useEffect(() => {
+    if (startedRef.current || !options.visible) return;
+    startedRef.current = true;
     void start();
-    // Solo al montar: el resto de cambios llegan por refs.
+    // Solo la primera vez que se ve: el resto de cambios llegan por refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [options.visible]);
 
   const alive = state.process === "ready" || state.process === "starting";
 

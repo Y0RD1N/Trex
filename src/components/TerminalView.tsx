@@ -128,6 +128,9 @@ function TerminalView({
   onMessageRef.current = onMessage;
   const pasteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const focusedRef = useRef(focused); focusedRef.current = focused;
+  // El proceso arranca la primera vez que se ve la pestaña, ya con su tamaño real.
+  const visibleRef = useRef(visible); visibleRef.current = visible;
+  const startedRef = useRef(false);
   const previewRef = useRef(onImagePreview); previewRef.current = onImagePreview;
 
   const [status, setStatus] = useState<Status>("spawning");
@@ -601,6 +604,8 @@ function TerminalView({
 
     // Primer ajuste y arranque del PTY con las dimensiones reales
     const initialRaf = requestAnimationFrame(() => {
+      if (!visibleRef.current || startedRef.current) return;
+      startedRef.current = true;
       safeFit();
       void startPty();
     });
@@ -723,12 +728,16 @@ function TerminalView({
     if (!visible) return;
     const raf = requestAnimationFrame(() => {
       safeFit();
+      if (!startedRef.current && termRef.current) {
+        startedRef.current = true;
+        void startPty();
+      }
       // Cambiar de proyecto desde un menú no debe quitarle el foco al menú.
       const control = document.activeElement instanceof HTMLElement && document.activeElement.closest(".split-pane-header");
       if (focusedRef.current && !control && !document.querySelector('[role="menu"], [role="dialog"], [role="alertdialog"]')) termRef.current?.focus();
     });
     return () => cancelAnimationFrame(raf);
-  }, [visible, focused, safeFit]);
+  }, [visible, focused, safeFit, startPty]);
 
   // --- Barra de búsqueda ------------------------------------------------------
 

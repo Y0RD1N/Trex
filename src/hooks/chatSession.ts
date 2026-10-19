@@ -24,6 +24,11 @@ export type ChatSessionOptions = {
   conversationId: string | null;
   /** Modo de permisos con el que empieza la sesión (el que la pestaña tenía elegido). */
   mode: string | null;
+  /**
+   * La pestaña se ve. El proceso arranca la primera vez que se muestra: las
+   * sesiones restauradas que no se abren no gastan memoria ni CPU.
+   */
+  visible: boolean;
   onExit: (tabId: string, code: number | null) => void;
   onRunning: (tabId: string) => void;
 };

@@ -2201,6 +2201,19 @@ body.dragging-sidebar .sidebar {
   background: none;
 }
 .project-item.active .project-icon { color: var(--text-muted); }
+/* El logo del proyecto ocupa el sitio de la carpeta y se aviva al pasar o al activarse. */
+.project-icon.has-logo img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 4px;
+  opacity: .82;
+  filter: saturate(.85);
+  transition: opacity var(--t), filter var(--t);
+  user-select: none;
+}
+.project-item:hover .project-icon.has-logo img,
+.project-item.active .project-icon.has-logo img { opacity: 1; filter: none; }
 .project-name { font-size: 12px; font-weight: 500; color: var(--text-muted); gap: 6px; }
 .project-select {
   width: 100%;
@@ -2954,3 +2967,95 @@ body.dragging-sidebar .sidebar {
   --bg-sidebar: color-mix(in srgb, var(--sheet-base-sidebar) 55%, transparent);
   --bg-surface: color-mix(in srgb, var(--sheet-base-surface) 60%, transparent);
 }
+
+/* --- Actualizaciones de Claude Code y Codex -------------------------------
+   Tarjeta discreta en el pie de la barra lateral: versión nueva, botón para
+   instalarla y «Ahora no» (oculta esa versión hasta que salga otra). */
+.cli-update {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-strong) 28%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-strong) 9%, transparent);
+  animation: cli-update-in var(--dur) var(--ease-out) both;
+}
+.cli-update.has-error {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+.cli-update-icon { flex: 0 0 auto; display: flex; padding-top: 2px; color: var(--accent-strong); }
+.cli-update-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.cli-update-head, .cli-update-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.cli-update-head strong, .cli-update-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cli-update-head strong { font-size: 12px; font-weight: 500; color: var(--text); line-height: 18px; }
+.cli-update-row small { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.cli-update.has-error small { color: var(--warn-text); }
+.cli-update-action {
+  flex: 0 0 auto;
+  min-width: 64px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--accent-strong);
+  color: var(--accent-contrast, #fff);
+  font: 500 11px var(--font-ui);
+  cursor: pointer;
+  transition: filter var(--t), opacity var(--t);
+}
+.cli-update-action:hover:not(:disabled) { filter: brightness(1.08); }
+.cli-update-action:disabled { cursor: default; opacity: .85; }
+.cli-update-action:focus-visible, .cli-update-close:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.cli-update-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.6px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: trex-spin .8s linear infinite;
+}
+.cli-update-close {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: -1px -2px 0 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+.cli-update-close:hover { color: var(--text); background: var(--hover); }
+@keyframes cli-update-in {
+  from { opacity: 0; transform: translateY(4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cli-update { animation: none; }
+}
+
+/* Ajustes › Acerca de: versión de cada asistente. */
+.settings-block-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cli-versions { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.cli-version { display: flex; align-items: center; gap: 12px; padding: 11px 13px; min-width: 0; }
+.cli-version + .cli-version { border-top: 1px solid var(--border); }
+.cli-version > .agent-icon { flex: 0 0 auto; color: var(--text-muted); }
+.cli-version-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cli-version-text strong { font-size: 12px; font-weight: 500; color: var(--text); }
+.cli-version-text span { font-size: 11px; color: var(--text-muted); }
+.cli-version-text code { font-size: 10.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cli-version-state { flex: 0 0 auto; font-size: 11px; color: var(--text-dim); }
+.settings-hint { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
