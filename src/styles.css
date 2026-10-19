@@ -2900,3 +2900,57 @@ body.dragging-sidebar .sidebar {
   font-size: 12.5px;
   transform: translateX(-50%);
 }
+
+/* --- Ventanas de cristal (ajustes, uso de las cuentas y demás diálogos) ------
+   La app se ve detrás, velada y desenfocada; la ventana es una lámina del
+   mismo color del fondo, translúcida, con un brillo arriba y un borde fino.
+   Las tarjetas de dentro son tintes sobre el cristal, no superficies opacas. */
+:root {
+  --sheet-veil: color-mix(in srgb, var(--bg-app) 34%, transparent);
+  --sheet-veil-blur: 16px;
+  --sheet-glass: color-mix(in srgb, var(--bg-app) 66%, transparent);
+  --sheet-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 30%, rgba(255, 255, 255, 0) 60%);
+  --sheet-edge: color-mix(in srgb, var(--text) 10%, transparent);
+  --sheet-divider: color-mix(in srgb, var(--text) 7%, transparent);
+  --sheet-highlight: rgba(255, 255, 255, 0.07);
+  --sheet-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.7), 0 12px 32px -16px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="light"] {
+  --sheet-veil: color-mix(in srgb, var(--bg-app) 30%, transparent);
+  --sheet-glass: color-mix(in srgb, #fff 64%, transparent);
+  --sheet-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.2) 35%, rgba(255, 255, 255, 0) 65%);
+  --sheet-edge: rgba(15, 23, 42, 0.09);
+  --sheet-divider: rgba(15, 23, 42, 0.07);
+  --sheet-highlight: rgba(255, 255, 255, 0.9);
+  --sheet-shadow: 0 36px 80px -30px rgba(16, 24, 40, 0.32), 0 10px 28px -16px rgba(16, 24, 40, 0.18);
+}
+
+.modal-backdrop,
+.dialog-overlay,
+.settings-backdrop {
+  /* Bases opacas del tema, para que dentro de la ventana se puedan aclarar. */
+  --sheet-base-sidebar: var(--bg-sidebar);
+  --sheet-base-surface: var(--bg-surface);
+  --sheet-base-elevated: var(--bg-elevated);
+  background: var(--sheet-veil);
+  -webkit-backdrop-filter: blur(var(--sheet-veil-blur)) saturate(140%);
+  backdrop-filter: blur(var(--sheet-veil-blur)) saturate(140%);
+}
+.modal,
+.modal.settings-modal,
+.dialog-card {
+  --bg-sidebar: color-mix(in srgb, var(--sheet-base-sidebar) 42%, transparent);
+  --bg-surface: color-mix(in srgb, var(--sheet-base-surface) 46%, transparent);
+  --border: var(--sheet-divider);
+  border: 1px solid var(--sheet-edge);
+  background: var(--sheet-sheen), var(--sheet-glass);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+  box-shadow: var(--sheet-shadow), inset 0 1px 0 var(--sheet-highlight);
+}
+.dialog-card { --bg-elevated: color-mix(in srgb, var(--sheet-base-elevated) 46%, transparent); }
+:root[data-theme="light"] .modal,
+:root[data-theme="light"] .dialog-card {
+  --bg-sidebar: color-mix(in srgb, var(--sheet-base-sidebar) 55%, transparent);
+  --bg-surface: color-mix(in srgb, var(--sheet-base-surface) 60%, transparent);
+}
