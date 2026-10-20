@@ -1778,8 +1778,8 @@ pre.chat-ask-preview-body {
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 14px;
   background: rgba(8, 8, 10, 0.8);
-  -webkit-backdrop-filter: blur(22px) saturate(125%);
-  backdrop-filter: blur(22px) saturate(125%);
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+  backdrop-filter: blur(10px) saturate(115%);
   box-shadow: 0 24px 56px -14px rgba(0, 0, 0, 0.72), 0 8px 20px -8px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.03);
   animation: chat-suggest-in 120ms var(--ease-out);
 }
@@ -1866,11 +1866,36 @@ pre.chat-ask-preview-body {
    Cristal negro: tinte negro translúcido y desenfoque, sin brillos blancos. */
 .context-menu.chat-glass-menu {
   --glass-menu-hover: rgba(255, 255, 255, 0.055);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(8, 8, 10, 0.72);
-  -webkit-backdrop-filter: blur(22px) saturate(125%);
-  backdrop-filter: blur(22px) saturate(125%);
-  box-shadow: 0 24px 56px -14px rgba(0, 0, 0, 0.72), 0 8px 20px -8px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --glass-menu-edge: rgb(255 255 255 / 0.06);
+  --glass-menu-tint: #08080a;
+  --glass-menu-shadow: 0 0 0;
+  --glass-menu-shadow-a1: 0.72;
+  --glass-menu-shadow-a2: 0.5;
+  --glass-menu-shine: 0.03;
+  /* Tinte, desenfoque, borde y sombra siguen a --sheet-fade (ver «Ventanas de
+     cristal» en styles.css): el menú se desvanece sin dejar un panel de cristal
+     vacío ni cambiar de golpe el desenfoque. */
+  border: 1px solid color-mix(in srgb, var(--glass-menu-edge) calc(100% * var(--sheet-fade)), transparent);
+  background: color-mix(in srgb, var(--glass-menu-tint) calc(82% * var(--sheet-fade)), transparent);
+  -webkit-backdrop-filter: blur(calc(10px * var(--sheet-fade))) saturate(115%);
+  backdrop-filter: blur(calc(10px * var(--sheet-fade))) saturate(115%);
+  box-shadow: 0 24px 56px -14px rgb(var(--glass-menu-shadow) / calc(var(--glass-menu-shadow-a1) * var(--sheet-fade))),
+    0 8px 20px -8px rgb(var(--glass-menu-shadow) / calc(var(--glass-menu-shadow-a2) * var(--sheet-fade))),
+    inset 0 1px 0 rgb(255 255 255 / calc(var(--glass-menu-shine) * var(--sheet-fade)));
+}
+.context-menu.chat-glass-menu.motion-popover {
+  opacity: 1;
+  transition: --sheet-fade 160ms cubic-bezier(.2, .65, .3, 1), transform 180ms cubic-bezier(.2, .65, .3, 1);
+}
+.context-menu.chat-glass-menu.motion-popover > * { opacity: var(--sheet-fade); }
+.context-menu.chat-glass-menu.motion-popover.entering,
+.context-menu.chat-glass-menu.motion-popover.leaving {
+  opacity: 1;
+  --sheet-fade: 0;
+}
+.context-menu.chat-glass-menu.motion-popover.leaving {
+  animation: none;
+  transition: --sheet-fade 140ms cubic-bezier(.4, 0, 1, 1), transform 140ms cubic-bezier(.4, 0, 1, 1);
 }
 .chat-glass-menu .context-item:hover,
 .chat-glass-menu .context-item:focus-visible {
@@ -2206,9 +2231,12 @@ pre.chat-ask-preview-body {
 /* Menús en claro: cristal blanco con el mismo desenfoque. */
 :root[data-theme="light"] .context-menu.chat-glass-menu {
   --glass-menu-hover: rgba(15, 23, 42, 0.05);
-  border-color: rgba(15, 23, 42, 0.08);
-  background: color-mix(in srgb, var(--bg-elevated) 74%, transparent);
-  box-shadow: 0 22px 48px -16px rgba(16, 24, 40, 0.26), 0 6px 16px -8px rgba(16, 24, 40, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --glass-menu-edge: rgb(15 23 42 / 0.08);
+  --glass-menu-tint: var(--bg-elevated);
+  --glass-menu-shadow: 16 24 40;
+  --glass-menu-shadow-a1: 0.26;
+  --glass-menu-shadow-a2: 0.14;
+  --glass-menu-shine: 0.7;
 }
 
 :root[data-theme="light"] .chat-suggest {

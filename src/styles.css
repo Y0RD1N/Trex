@@ -540,8 +540,8 @@ input[type="checkbox"] {
   padding: 5px 9px;
   border-radius: 8px;
   background: var(--glass-strong);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+  backdrop-filter: blur(10px) saturate(115%);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-md);
   color: var(--text);
@@ -1744,10 +1744,7 @@ body.dragging-sidebar .sidebar {
   justify-content: center;
   padding: var(--sp-6);
   background: var(--overlay);
-  -webkit-backdrop-filter: blur(10px) saturate(1.4);
-  backdrop-filter: blur(10px) saturate(1.4);
-  opacity: 1;
-  transition: opacity var(--dur) var(--ease-out);
+  transition: background-color var(--dur) var(--ease-out);
 }
 .modal {
   width: 100%;
@@ -1762,18 +1759,32 @@ body.dragging-sidebar .sidebar {
   border-radius: var(--r-modal);
   box-shadow: var(--shadow-pop);
   overflow: hidden;
-  opacity: 1;
   transform: none;
-  transition: opacity var(--dur) var(--ease-out), transform var(--dur-slow) var(--ease-out),
-    background-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
+  /* Sin transición de fondo ni de borde: siguen a --sheet-fade fotograma a fotograma. */
+  transition: --sheet-fade var(--dur) var(--ease-out), transform var(--dur-slow) var(--ease-out),
+    color var(--dur) var(--ease-out);
 }
-.modal-backdrop.entering, .modal-backdrop.leaving { opacity: 0; }
+/* Con opacidad < 1 en la lámina o en su padre, WebKitGTK deja de aplicar el
+   desenfoque del cristal y lo pinta de golpe al terminar: un parpadeo. Por eso
+   el velo anima su color, la lámina anima el tinte de su fondo y su contenido
+   (--sheet-fade, una propiedad registrada que corre en el hilo principal), y el
+   desenfoque está activo desde el primer fotograma. */
+@property --sheet-fade {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+.modal > *, .dialog-card > * { opacity: var(--sheet-fade); }
+.modal-backdrop.entering, .modal-backdrop.leaving { background-color: transparent; }
 .modal-backdrop.entering .modal, .modal-backdrop.leaving .modal {
-  opacity: 0;
+  --sheet-fade: 0;
   transform: translateY(6px) scale(.985);
 }
 .modal-backdrop.leaving, .modal-backdrop.leaving .modal {
   transition-duration: var(--dur-exit);
+  /* Curva de aceleración: la lámina se mantiene sólida al principio y se
+     desvanece al final, sin un panel de cristal vacío a medias. */
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
   pointer-events: none;
 }
 .modal-header {
@@ -1811,29 +1822,17 @@ body.dragging-sidebar .sidebar {
   justify-content: center;
   padding: var(--sp-6);
   background: var(--dialog-overlay);
-  -webkit-backdrop-filter: blur(10px) saturate(1.4);
-  backdrop-filter: blur(10px) saturate(1.4);
   animation: trex-overlay-in 200ms var(--ease-out) both;
 }
 @keyframes trex-overlay-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+  from { background-color: transparent; }
 }
 .dialog-overlay.leaving {
   pointer-events: none;
   animation: trex-overlay-out 160ms var(--ease-out) both;
 }
 @keyframes trex-overlay-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
+  to { background-color: transparent; }
 }
 .dialog-card {
   position: relative;
@@ -1848,16 +1847,16 @@ body.dragging-sidebar .sidebar {
 }
 @keyframes trex-dialog-in {
   from {
-    opacity: 0;
+    --sheet-fade: 0;
     transform: translateY(6px) scale(0.985);
   }
   to {
-    opacity: 1;
+    --sheet-fade: 1;
     transform: none;
   }
 }
 .dialog-overlay.leaving .dialog-card {
-  animation: trex-dialog-out 160ms var(--ease-out) both;
+  animation: trex-dialog-out 160ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 .dialog-overlay.anchored {
   display: block;
@@ -1904,11 +1903,11 @@ body.dragging-sidebar .sidebar {
 }
 @keyframes trex-dialog-out {
   from {
-    opacity: 1;
+    --sheet-fade: 1;
     transform: none;
   }
   to {
-    opacity: 0;
+    --sheet-fade: 0;
     transform: translateY(3px) scale(0.99);
   }
 }
@@ -2026,8 +2025,8 @@ body.dragging-sidebar .sidebar {
   padding: 8px 14px 8px 10px;
   border-radius: var(--r-pill);
   background: var(--glass-strong);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+  backdrop-filter: blur(10px) saturate(115%);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-md);
   color: var(--text);
@@ -2920,22 +2919,33 @@ body.dragging-sidebar .sidebar {
    Las tarjetas de dentro son tintes sobre el cristal, no superficies opacas. */
 :root {
   --sheet-veil: color-mix(in srgb, var(--bg-app) 34%, transparent);
-  --sheet-veil-blur: 16px;
-  --sheet-glass: color-mix(in srgb, var(--bg-app) 66%, transparent);
+  --sheet-blur: 8px;
+  --sheet-saturate: 115%;
+  --sheet-tint: var(--bg-app);
+  --sheet-tint-alpha: 78%;
   --sheet-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 30%, rgba(255, 255, 255, 0) 60%);
   --sheet-edge: color-mix(in srgb, var(--text) 10%, transparent);
+  --sheet-shadow-color: 0 0 0;
+  --sheet-shadow-1: 0 40px 90px -30px;
+  --sheet-shadow-2: 0 12px 32px -16px;
+  --sheet-shadow-a1: 0.7;
+  --sheet-shadow-a2: 0.5;
   --sheet-divider: color-mix(in srgb, var(--text) 7%, transparent);
   --sheet-highlight: rgba(255, 255, 255, 0.07);
-  --sheet-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.7), 0 12px 32px -16px rgba(0, 0, 0, 0.5);
 }
 :root[data-theme="light"] {
   --sheet-veil: color-mix(in srgb, var(--bg-app) 30%, transparent);
-  --sheet-glass: color-mix(in srgb, #fff 64%, transparent);
+  --sheet-tint: #fff;
+  --sheet-tint-alpha: 76%;
   --sheet-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.2) 35%, rgba(255, 255, 255, 0) 65%);
   --sheet-edge: rgba(15, 23, 42, 0.09);
   --sheet-divider: rgba(15, 23, 42, 0.07);
   --sheet-highlight: rgba(255, 255, 255, 0.9);
-  --sheet-shadow: 0 36px 80px -30px rgba(16, 24, 40, 0.32), 0 10px 28px -16px rgba(16, 24, 40, 0.18);
+  --sheet-shadow-color: 16 24 40;
+  --sheet-shadow-1: 0 36px 80px -30px;
+  --sheet-shadow-2: 0 10px 28px -16px;
+  --sheet-shadow-a1: 0.32;
+  --sheet-shadow-a2: 0.18;
 }
 
 .modal-backdrop,
@@ -2946,8 +2956,11 @@ body.dragging-sidebar .sidebar {
   --sheet-base-surface: var(--bg-surface);
   --sheet-base-elevated: var(--bg-elevated);
   background: var(--sheet-veil);
-  -webkit-backdrop-filter: blur(var(--sheet-veil-blur)) saturate(140%);
-  backdrop-filter: blur(var(--sheet-veil-blur)) saturate(140%);
+  /* Sin desenfoque en el velo: un backdrop-filter en el padre anula el del hijo
+     en WebKitGTK, y el fondo de la app debe quedar nítido. El desenfoque va solo
+     en la lámina de cristal. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 .modal,
 .modal.settings-modal,
@@ -2955,11 +2968,16 @@ body.dragging-sidebar .sidebar {
   --bg-sidebar: color-mix(in srgb, var(--sheet-base-sidebar) 42%, transparent);
   --bg-surface: color-mix(in srgb, var(--sheet-base-surface) 46%, transparent);
   --border: var(--sheet-divider);
-  border: 1px solid var(--sheet-edge);
-  background: var(--sheet-sheen), var(--sheet-glass);
-  -webkit-backdrop-filter: blur(28px) saturate(160%);
-  backdrop-filter: blur(28px) saturate(160%);
-  box-shadow: var(--sheet-shadow), inset 0 1px 0 var(--sheet-highlight);
+  /* Todo lo que forma la lámina (tinte, desenfoque, borde, sombra) sigue a
+     --sheet-fade: al cerrar no queda un panel de cristal vacío antes de
+     desmontarse. */
+  border: 1px solid color-mix(in srgb, var(--sheet-edge) calc(100% * var(--sheet-fade)), transparent);
+  background: var(--sheet-sheen), color-mix(in srgb, var(--sheet-tint) calc(var(--sheet-tint-alpha) * var(--sheet-fade)), transparent);
+  -webkit-backdrop-filter: blur(calc(var(--sheet-blur) * var(--sheet-fade))) saturate(var(--sheet-saturate));
+  backdrop-filter: blur(calc(var(--sheet-blur) * var(--sheet-fade))) saturate(var(--sheet-saturate));
+  box-shadow: var(--sheet-shadow-1) rgb(var(--sheet-shadow-color) / calc(var(--sheet-shadow-a1) * var(--sheet-fade))),
+    var(--sheet-shadow-2) rgb(var(--sheet-shadow-color) / calc(var(--sheet-shadow-a2) * var(--sheet-fade))),
+    inset 0 1px 0 color-mix(in srgb, var(--sheet-highlight) calc(100% * var(--sheet-fade)), transparent);
 }
 .dialog-card { --bg-elevated: color-mix(in srgb, var(--sheet-base-elevated) 46%, transparent); }
 :root[data-theme="light"] .modal,

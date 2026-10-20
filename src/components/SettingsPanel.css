@@ -45,14 +45,13 @@
 .settings-nav-item.active > span { color: var(--text); }
 .settings-nav-item:last-child { margin-top: 12px; }
 .settings-sidebar-version { margin-top: auto; padding: 0 10px; color: var(--text-dim); font-size: 10px; }
-.settings-content { flex: 1; min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
+.settings-content { flex: 1; min-width: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .settings-page {
   min-width: 0;
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 24px;
-  animation: settings-page-in var(--dur) var(--ease-out) both;
 }
 .settings-page[hidden] { display: none; }
 .settings-terminal-page { gap: 16px; }
@@ -243,7 +242,6 @@
 .settings-footer .btn-primary:disabled { background: var(--bg-surface); border-color: var(--border); color: var(--text-dim); opacity: 1; cursor: default; }
 .settings-error-link { padding: 0; border: 0; border-radius: 2px; background: none; color: var(--danger); font: inherit; text-align: left; cursor: pointer; }
 .settings-error-link:hover { text-decoration: underline; }
-@keyframes settings-page-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 @media (max-width: 820px) {
   .settings-page { padding: 24px; }
   .setting-field:not(.stacked) { grid-template-columns: minmax(0, 1fr) minmax(100px, 160px); gap: 12px; }
