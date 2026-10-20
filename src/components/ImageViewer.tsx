@@ -60,7 +60,8 @@ function dataParts(src: string): { data: string; extension: string } | null {
 }
 
 function Viewer({ session, onIndex, onClose }: { session: Session | null; onIndex: (index: number) => void; onClose: () => void }) {
-  const presence = usePresence(session, 180);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const presence = usePresence(session, 180, surfaceRef);
   const shown = presence.value;
   const stageRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -189,8 +190,9 @@ function Viewer({ session, onIndex, onClose }: { session: Session | null; onInde
 
   const percent = Math.round(scale * 100);
   return createPortal(
-    <div className={`image-viewer${presence.entering ? " entering" : ""}${presence.leaving ? " leaving" : ""}`}
-      role="dialog" aria-modal="true" aria-label={`Imagen: ${image.name}`}>
+    <div ref={surfaceRef} className={`image-viewer${presence.entering ? " entering" : ""}${presence.leaving ? " leaving" : ""}`}
+      inert={presence.leaving} aria-hidden={presence.leaving || undefined}
+      role={presence.leaving ? undefined : "dialog"} aria-modal="true" aria-label={`Imagen: ${image.name}`}>
       <div className="image-viewer-bar">
         <div className="image-viewer-title">
           <span className="image-viewer-name" title={image.path ?? image.name}>{image.name}</span>

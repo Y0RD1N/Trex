@@ -15,16 +15,18 @@ import { referenceParts, splitAttachedFiles } from "../../imageReferences";
 import { pathName } from "../../chatFiles";
 import { KIND_LABELS, fileKind, openFile } from "../../sharedFiles";
 import { useImageViewer } from "../ImageViewer";
+import { useMessageEntry } from "./useMessageEntry";
 
 const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
   read: <FileIcon />, edit: <PencilIcon size={15} />, run: <TerminalIcon size={15} />, search: <SearchIcon size={15} />,
   web: <GlobeIcon />, task: <SparkIcon />, todo: <ListIcon />, plan: <MapIcon />, question: <QuestionIcon />, tool: <WrenchIcon />,
 };
 
-export const UserMessage = memo(function UserMessage({ id, text, images, previews, onEdit, onResend, disabled, editing, editable = true }: {
+export const UserMessage = memo(function UserMessage({ id, text, images, previews, onEdit, onResend, disabled, editing, editable = true, animate = false }: {
   id: string; text: string; images: number; previews: string[]; onEdit: (id: string) => void; onResend: (id: string) => void;
-  disabled: boolean; editing: boolean; editable?: boolean;
+  disabled: boolean; editing: boolean; editable?: boolean; animate?: boolean;
 }) {
+  const entry = useMessageEntry(animate);
   const viewer = useImageViewer();
   const label = (index: number): string => `Imagen ${index + 1}`;
   const available = images === previews.length;
@@ -34,7 +36,7 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
   const showImage = (index: number): void => viewer.open(previews.map((src, position) => ({ src, name: label(position) })), index);
   const open = (path: string): void => { void openFile(path).catch(() => undefined); };
   const parts = useMemo(() => referenceParts(body, { Imagen: images, Archivo: files.length }), [body, images, files.length]);
-  return <div className={`chat-user-group${editing ? " is-editing" : ""}`}>
+  return <div ref={entry.ref} className={`chat-user-group${editing ? " is-editing" : ""}${entry.entering ? " chat-enter" : ""}`}>
     {previews.length > 0 && <div className="chat-user-gallery">
       {previews.map((preview, index) => <button key={index} type="button" className="chat-user-thumb" aria-label={`Ver imagen ${index + 1}`}
         title={`Imagen ${index + 1}`} onClick={() => showImage(index)}>
@@ -103,14 +105,15 @@ function useStreamingText(text: string, streaming: boolean): string {
   return streaming ? shown : text;
 }
 
-export const AssistantText = memo(function AssistantText({ text, streaming, actions, regenerateId, onRegenerate, disabled }: {
-  text: string; streaming: boolean; actions: boolean; regenerateId?: string; onRegenerate?: (id: string) => void; disabled?: boolean;
+export const AssistantText = memo(function AssistantText({ text, streaming, actions, regenerateId, onRegenerate, disabled, animate = false }: {
+  text: string; streaming: boolean; actions: boolean; regenerateId?: string; onRegenerate?: (id: string) => void; disabled?: boolean; animate?: boolean;
 }) {
+  const entry = useMessageEntry(animate);
   // Mientras la respuesta llega, un adjunto a medio escribir no se da por inexistente.
   const { cwd } = useContext(SharedFilesContext);
   const files = useMemo(() => ({ cwd, streaming }), [cwd, streaming]);
   const shown = useStreamingText(text, streaming);
-  return <div className={`chat-assistant${streaming ? " streaming" : ""}`}>
+  return <div ref={entry.ref} className={`chat-assistant${streaming ? " streaming" : ""}${entry.entering ? " chat-enter" : ""}`}>
     <SharedFilesContext.Provider value={files}><Markdown text={shown} /></SharedFilesContext.Provider>
     {actions && <div className="chat-assistant-actions"><CopyButton text={text} label="Copiar respuesta" />
       {regenerateId && onRegenerate && <button type="button" className="chat-copy tip" aria-label="Regenerar respuesta" data-tip="Regenerar respuesta"

@@ -28,6 +28,7 @@ import { resetLabel } from "../planUsage";
 import { applySuggestion, buildSuggestions, findTrigger, localCommand, parseCommand, type Suggestion } from "../chatCommands";
 import type { AgentActivity, AgentNoticeKind, AgentProvider, Settings } from "../types";
 import { MIN_WORK_MS } from "../agentNotices";
+import { reducedMotion } from "../visualDesign";
 import type { ChatSession, ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
@@ -176,6 +177,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const shownItemsRef = useRef<ChatItem[] | null>(null);
   if (visible) shownItemsRef.current = state.items;
   const threadItems = shownItemsRef.current ?? NO_ITEMS;
+  // Solo entran con movimiento las filas que acaban de llegar a la vista.
+  // Cargar historial, volver a la pestaña o subir a leer no vuelve a animarlas.
+  const previousThreadRef = useRef({ items: threadItems, visible });
+  const enterFrom = visible && previousThreadRef.current.visible && atBottom
+    ? Math.max(previousThreadRef.current.items.length, state.historyCount) : Infinity;
+  useLayoutEffect(() => { previousThreadRef.current = { items: threadItems, visible }; });
   // Solo se pintan las filas recientes; `anchorId` fija la primera mientras se lee más arriba.
   const [anchorId, setAnchorId] = useState<string | null>(null);
   const anchorIndex = anchorId === null ? -1 : threadItems.findIndex(item => item.id === anchorId);
@@ -247,7 +254,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const scrollToBottom = (): void => {
     stickRef.current = true;
     setAtBottom(true);
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    const reduce = reducedMotion(settings.motion, window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: reduce ? "instant" : "smooth" });
   };
 
   // Foco en la caja de texto al activar la sesión.
@@ -749,15 +757,16 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     const canEdit = (item: Extract<ChatItem, { kind: "user" }>): boolean =>
       provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id);
     return threadItems.slice(threadStart).map((item, offset) => {
+      const animate = threadStart + offset >= enterFrom;
       const next = threadItems[threadStart + offset + 1];
       switch (item.kind) {
         case "user": return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews}
           onEdit={beginEdit} onResend={resendMessage} editing={editingId === item.id} editable={canEdit(item)}
-          disabled={running || submittingEdit || busy} />;
+          disabled={running || submittingEdit || busy} animate={animate} />;
         case "text": {
           if (!item.text.trim()) return null;
           const user = responseOrigins.get(item.id);
-          return <AssistantText key={item.id} text={item.text} streaming={!item.final}
+          return <AssistantText key={item.id} text={item.text} streaming={!item.final} animate={animate}
             regenerateId={user && canEdit(user) && user.images === user.previews.length ? user.id : undefined}
             onRegenerate={regenerateMessage} disabled={running || submittingEdit || editingId !== null}
             actions={item.final && (next ? next.kind === "turn" || next.kind === "user" : !running)} />;
@@ -770,10 +779,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         case "permission": return item.state !== "pending" || item.toolName === "AskUserQuestion" ? null
           : <PermissionCard key={item.id} item={item} cwd={cwd} agent={agent.name} onAnswer={answer} />;
         case "notice": return <Notice key={item.id} tone={item.tone} text={item.text} />;
-        case "turn": return <WorkSummary key={item.id} summary={summaries.get(item.id)!} durationMs={item.durationMs} />;
+        case "turn": return <WorkSummary key={item.id} summary={summaries.get(item.id)!} durationMs={item.durationMs} animate={animate} />;
       }
     });
-  }, [threadItems, threadStart, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
+  }, [threadItems, threadStart, enterFrom, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
     planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer]);
   const stderrTail = state.stderr.slice(-6).join("\n");
 

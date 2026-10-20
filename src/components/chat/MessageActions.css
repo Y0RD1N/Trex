@@ -7,7 +7,7 @@
   margin: -2px 2px 0 0;
   border-radius: 9px;
   opacity: 0.48;
-  transition: opacity var(--t), background var(--t);
+  transition: opacity var(--dur-fast) var(--ease-out), background-color var(--t);
 }
 .chat-user-group:hover .chat-user-actions,
 .chat-user-group:focus-within .chat-user-actions,
@@ -30,6 +30,7 @@
   margin-bottom: 9px;
   border-bottom: 1px solid var(--dock-edge);
   color: var(--accent);
+  animation: chat-reveal var(--dur) var(--ease-out) backwards;
 }
 .chat-edit-banner > span { flex: 1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; }
 .chat-edit-banner strong { font-size: 12px; font-weight: 550; }
@@ -45,7 +46,6 @@
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 14px;
   background: color-mix(in srgb, var(--bg-elevated) 62%, var(--term-bg));
-  animation: chat-rise 180ms var(--ease-out) both;
 }
 .chat-changes-head { display: flex; align-items: center; gap: 6px; padding: 12px 14px 9px; }
 .chat-changes-toggle {
@@ -63,7 +63,7 @@
   cursor: pointer;
 }
 .chat-changes-toggle strong { font-size: 12px; font-weight: 600; letter-spacing: -0.01em; }
-.chat-changes-toggle > svg { margin-left: auto; color: var(--text-dim); transform: rotate(-90deg); }
+.chat-changes-toggle > svg { margin-left: auto; color: var(--text-dim); transform: rotate(-90deg); transition: transform var(--dur) var(--ease-spring); }
 .chat-changes-toggle[aria-expanded="true"] > svg { transform: rotate(0); }
 .chat-changes-check {
   display: grid;
@@ -91,8 +91,10 @@
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-spring), background-color var(--t), color var(--t);
 }
 .chat-changes-diff-button:hover { background: var(--hover); color: var(--text); }
+.chat-changes-diff-button:active { transform: scale(0.92); }
 .chat-changes-diff-button.active { background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--accent); }
 .chat-changes-tree, .chat-change-node > ul { list-style: none; padding: 0; margin: 0; }
 .chat-changes-tree { padding: 0 8px 9px; }
@@ -109,9 +111,10 @@
   color: var(--text-muted);
   text-align: left;
   cursor: pointer;
+  transition: background-color var(--t), color var(--t);
 }
 .chat-change-row:hover { color: var(--text); background: var(--hover); }
-.chat-change-chevron { display: grid; flex: 0 0 auto; width: 12px; color: var(--text-dim); transform: rotate(-90deg); }
+.chat-change-chevron { display: grid; flex: 0 0 auto; width: 12px; color: var(--text-dim); transform: rotate(-90deg); transition: transform var(--dur) var(--ease-spring); }
 .chat-change-node.open > .chat-change-row .chat-change-chevron { transform: rotate(0); }
 .chat-change-icon { display: grid; flex: 0 0 auto; color: var(--text-dim); }
 .chat-change-icon.added { color: var(--ok-text); }
@@ -124,7 +127,7 @@
 .chat-change-status.added { color: var(--ok-text); }
 .chat-change-status.deleted { color: var(--danger); }
 .chat-change-status.renamed { color: var(--accent); }
-.chat-change-diff { margin: 3px 6px 8px calc(12px + var(--change-depth) * 17px); border-radius: 8px; overflow: hidden; }
+.chat-change-diff { margin: 3px 6px 8px calc(12px + var(--change-depth) * 17px); border-radius: 8px; overflow: hidden; animation: chat-reveal var(--dur) var(--ease-out) backwards; }
 .chat-change-diff .chat-diff { margin: 0; max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
 .chat-change-no-diff { padding: 8px 10px; margin: 0; color: var(--text-dim); font-size: 11px; overflow-wrap: anywhere; }
 .chat-changes-footer { display: flex; justify-content: space-between; gap: 8px; padding: 9px 15px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 10px; }
@@ -137,5 +140,9 @@
   .chat-changes-counts { font-size: 10px; gap: 5px; }
 }
 :root[data-motion="reduced"] .chat-changes { animation: none; }
-@media (prefers-reduced-motion: reduce) { .chat-changes { animation: none; } }
+:root[data-motion="reduced"] .chat-changes-diff-button:active { transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-changes { animation: none; }
+  .chat-changes-diff-button:active { transform: none; }
+}
 @media (hover: none) { .chat-user-actions { opacity: 1; } }

@@ -137,9 +137,11 @@ function TerminalView({
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [overlayDismissed, setOverlayDismissed] = useState(false);
-  const overlayPresence = usePresence(status !== "running" && !overlayDismissed ? status : null);
+  const overlaySurfaceRef = useRef<HTMLDivElement>(null);
+  const overlayPresence = usePresence(status !== "running" && !overlayDismissed ? status : null, 160, overlaySurfaceRef);
   const [searchOpen, setSearchOpen] = useState(false);
-  const searchPresence = usePresence(searchOpen ? true : null);
+  const searchSurfaceRef = useRef<HTMLDivElement>(null);
+  const searchPresence = usePresence(searchOpen ? true : null, 160, searchSurfaceRef);
   const [searchTerm, setSearchTerm] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -769,7 +771,7 @@ function TerminalView({
       </div>
 
       {searchPresence.value && (
-        <div className={`term-search motion-popover${searchPresence.entering ? " entering" : ""}${searchPresence.leaving ? " leaving" : ""}`}
+        <div ref={searchSurfaceRef} className={`term-search motion-popover${searchPresence.entering ? " entering" : ""}${searchPresence.leaving ? " leaving" : ""}`}
           inert={searchPresence.leaving} aria-hidden={searchPresence.leaving || undefined}
           onMouseDown={(event) => event.stopPropagation()}>
           <input
@@ -836,7 +838,7 @@ function TerminalView({
       )}
 
       {overlayPresence.value && (
-        <div className={`term-overlay${overlayPresence.entering ? " entering" : ""}${overlayPresence.leaving ? " leaving" : ""}`}
+        <div ref={overlaySurfaceRef} className={`term-overlay${overlayPresence.entering ? " entering" : ""}${overlayPresence.leaving ? " leaving" : ""}`}
           inert={overlayPresence.leaving} aria-hidden={overlayPresence.leaving || undefined}>
           <div key={overlayPresence.value}
             className={`term-overlay-card${overlayPresence.value === "error" ? " term-overlay-error" : ""}`}>

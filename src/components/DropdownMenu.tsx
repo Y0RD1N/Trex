@@ -28,7 +28,7 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
   closeRef.current = onClose;
   const searchRef = useRef({ text: "", time: 0 });
   const focusedRef = useRef(false);
-  const presence = usePresence(anchor);
+  const presence = usePresence(anchor, 160, surfaceRef);
   const retainedAnchor = presence.value;
   const position = useFloatingPosition(retainedAnchor, surfaceRef, {
     align: retainedAnchor && "element" in retainedAnchor ? align : "start",

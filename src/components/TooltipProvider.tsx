@@ -10,11 +10,12 @@ export default function TooltipProvider() {
   const [tip, setTip] = useState<Tip | null>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const id = useId();
-  const presence = usePresence(tip, 100);
+  const presence = usePresence(tip, 100, surfaceRef);
   const retainedTip = presence.value;
   const anchor = useMemo(() => retainedTip ? { element: retainedTip.element } : null, [retainedTip]);
   const position = useFloatingPosition(anchor, surfaceRef, {
     side: retainedTip?.element.classList.contains("tip-below") ? "bottom" : "top", align: "center", gap: 8,
+    frozen: presence.leaving,
   });
 
   useEffect(() => {

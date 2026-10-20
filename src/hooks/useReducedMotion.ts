@@ -8,4 +8,4 @@ const subscribe = (callback: () => void): (() => void) => {
   media.addEventListener("change", callback);
   return () => { window.removeEventListener("trex:motion-change", callback); media.removeEventListener("change", callback); };
 };
-export const useReducedMotion = (): boolean => useSyncExternalStore(subscribe, snapshot);
+export const useReducedMotion = (): boolean => useSyncExternalStore(subscribe, snapshot, () => false);

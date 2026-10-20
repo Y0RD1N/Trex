@@ -73,9 +73,6 @@ type Entry = {
   resolve: (value: boolean) => void;
 };
 
-/** Duración de la animación de salida (debe coincidir con el CSS). */
-const EXIT_MS = 160;
-
 export default function DialogProvider({ children }: { children: ReactNode }) {
   const [entry, setEntry] = useState<Entry | null>(null);
   const [leaving, setLeaving] = useState(false);
@@ -83,7 +80,7 @@ export default function DialogProvider({ children }: { children: ReactNode }) {
   const entryRef = useRef<Entry | null>(null);
   const queueRef = useRef<Entry[]>([]);
   const leavingRef = useRef(false);
-  const timerRef = useRef<number | null>(null);
+  const resultRef = useRef(false);
   const nextIdRef = useRef(0);
 
   const enqueue = useCallback(
@@ -129,17 +126,20 @@ export default function DialogProvider({ children }: { children: ReactNode }) {
     const current = entryRef.current;
     if (!current || leavingRef.current) return;
     leavingRef.current = true;
+    resultRef.current = value;
     setLeaving(true);
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      leavingRef.current = false;
-      setLeaving(false);
-      const next = queueRef.current.shift() ?? null;
-      entryRef.current = next;
-      setEntry(next);
-      current.resolve(value);
-    }, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : EXIT_MS);
+  }, []);
+
+  // La tarjeta avisa al terminar su salida real; la cola no depende de un timer.
+  const advance = useCallback(() => {
+    const current = entryRef.current;
+    if (!current || !leavingRef.current) return;
+    leavingRef.current = false;
+    setLeaving(false);
+    const next = queueRef.current.shift() ?? null;
+    entryRef.current = next;
+    setEntry(next);
+    current.resolve(resultRef.current);
   }, []);
 
   // Si la app se desmonta con diálogos pendientes, se resuelven para no colgar
@@ -147,7 +147,6 @@ export default function DialogProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const queue = queueRef.current;
     return () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
       queueRef.current = [];
       queue.forEach((item) => item.resolve(false));
       entryRef.current?.resolve(false);
@@ -179,6 +178,7 @@ export default function DialogProvider({ children }: { children: ReactNode }) {
           cancelLabel={entry.cancelLabel}
           tone={entry.tone}
           leaving={leaving}
+          onExited={advance}
           onConfirm={() => finish(true)}
           onCancel={() => finish(false)}
         />

@@ -9,7 +9,7 @@ import { formatError } from "../api";
 import type { PlanUsage } from "../planUsage";
 import type { LauncherProfile, Settings } from "../types";
 import AgentIcon from "./AgentIcon";
-import FeatureDialog from "./FeatureDialog";
+import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
 import { PlanWindows } from "./chat/PlanMeter";
 import { RefreshIcon } from "./Icons";
 
@@ -20,12 +20,12 @@ const recent = new Map<string, Reading>();
 const profileKey = (profile: LauncherProfile): string =>
   [profile.provider, profile.command, profile.args, profile.configDir, profile.shell].join("\u0000");
 
-export default function UsageDialog({ settings, cwd, onClose }: {
+export default function UsageDialog({ settings, cwd, onClose, ...motion }: {
   settings: Settings;
   /** Carpeta donde se lanzan los CLI un momento (la carpeta personal). */
   cwd: string;
   onClose: () => void;
-}) {
+} & FeatureDialogMotionProps) {
   const profiles = settings.profiles;
   const [readings, setReadings] = useState<Record<string, Reading>>(() =>
     Object.fromEntries(profiles.map(profile => [profile.id, recent.get(profileKey(profile)) ?? { status: "loading" }])));
@@ -66,7 +66,7 @@ export default function UsageDialog({ settings, cwd, onClose }: {
   }, []);
 
 
-  return <FeatureDialog title="Uso de las cuentas" onClose={onClose} className="usage-dialog"
+  return <FeatureDialog {...motion} title="Uso de las cuentas" onClose={onClose} className="usage-dialog"
     footer={<>
       <span className="feature-hint">Lo mismo que muestra /usage en cada asistente; no gasta tokens.</span>
       <button className="btn btn-ghost" disabled={pending > 0} onClick={refresh}>

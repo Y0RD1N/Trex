@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon } from "./Icons";
+import { usePresence } from "../hooks/usePresence";
 
 type Props = {
   message: string;
@@ -13,32 +14,31 @@ type Props = {
 };
 
 export default function Toast({ message, duration = 3200, onDismiss }: Props) {
-  const [leaving, setLeaving] = useState(false);
+  const [visible, setVisible] = useState(true);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const presence = usePresence(visible ? message : null, 180, surfaceRef);
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
 
   // Cada mensaje reinicia la cuenta atrás (el padre lo remonta con otra key).
   useEffect(() => {
-    setLeaving(false);
-    const timer = window.setTimeout(() => setLeaving(true), duration);
+    setVisible(true);
+    const timer = window.setTimeout(() => setVisible(false), duration);
     return () => window.clearTimeout(timer);
   }, [message, duration]);
 
   // Al terminar el fundido de salida, se retira del árbol.
   useEffect(() => {
-    if (!leaving) return;
-    const timer = window.setTimeout(() => dismissRef.current(),
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 180);
-    return () => window.clearTimeout(timer);
-  }, [leaving]);
+    if (presence.value === null) dismissRef.current();
+  }, [presence.value]);
 
   return (
     <div className="toast-host" aria-live="polite" role="status">
-      <div className={`toast${leaving ? " leaving" : ""}`}>
+      <div ref={surfaceRef} className={`toast${presence.entering ? " entering" : ""}${presence.leaving ? " leaving" : ""}`}>
         <span className="toast-icon" aria-hidden="true">
           <CheckIcon size={14} />
         </span>
-        <span className="toast-text">{message}</span>
+        <span className="toast-text">{presence.value}</span>
       </div>
     </div>
   );

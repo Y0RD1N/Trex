@@ -166,14 +166,17 @@
   /* Alias histórico: el resto de la hoja habilita `--font-ui`. */
   --font-ui: var(--font-sans);
 
-  --dur-fast: 120ms;
-  --dur: 180ms;
-  --dur-slow: 320ms;
-  --dur-layout: 260ms;
+  --dur-fast: 140ms;
+  --dur: 220ms;
+  --dur-slow: 360ms;
+  --dur-layout: 320ms;
+  --dur-popover: 220ms;
   --dur-exit: 160ms;
-  --ease-layout: cubic-bezier(0.22, 0.8, 0.25, 1);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-layout: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.2, 0.9, 0.25, 1.05);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --t: var(--dur-fast) var(--ease-out);
 
   --sp-1: 4px;
@@ -479,7 +482,7 @@ h3 {
 }
 .select-trigger { display:flex; align-items:center; gap:8px; min-width:0; cursor:pointer; text-align:left; }
 .select-value { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.select-trigger > svg { flex:0 0 auto; transform:rotate(90deg); color:var(--text-dim); transition:transform var(--dur-fast); }
+.select-trigger > svg { flex:0 0 auto; transform:rotate(90deg); color:var(--text-dim); transition:transform var(--dur) var(--ease-out); }
 .select-trigger[aria-expanded="true"] > svg { transform:rotate(-90deg); }
 .select-icon { width:16px; height:16px; flex:0 0 16px; display:grid; place-items:center; color:var(--text-muted); }
 .context-menu.select-menu { width:max(240px,var(--select-width)); min-width:0; max-height:min(380px,var(--floating-max-height,calc(100dvh - 16px))); border-radius:12px; gap:2px; }
@@ -1310,27 +1313,32 @@ body.dragging-sidebar .sidebar {
 .motion-popover {
   opacity: 1;
   transform: none;
-  transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur) var(--ease-out),
+  transition: opacity var(--dur-fast) var(--ease-in-out), transform var(--dur-popover) var(--ease-out),
     background-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
 }
 .motion-popover.entering, .motion-popover.leaving {
   opacity: 0;
-  transform: scale(.985);
+  transform: translateY(-4px);
 }
 .motion-popover.leaving { transition-duration: var(--dur-exit); pointer-events: none; }
 /* La opción bajo el cursor o con el foco conserva su resaltado mientras el menú se desvanece. */
 .context-menu.leaving .context-item[data-held] { background: var(--hover); }
-/* El texto mantiene su tamaño y su capa durante toda la apertura en WebKit. */
+/* El texto mantiene su tamaño y su capa durante toda la apertura en WebKit.
+   La misma propiedad anima en ambos sentidos: cerrar y reabrir rápidamente
+   continúa desde el fotograma actual, sin volver al principio de un keyframe. */
 .context-menu.motion-popover {
+  --menu-fade: 1;
+  opacity: var(--menu-fade);
   transform: translateY(0);
-  transition: opacity 160ms cubic-bezier(.2,.65,.3,1),
-    transform 180ms cubic-bezier(.2,.65,.3,1),
+  transition: --menu-fade var(--dur) var(--ease-in-out),
+    transform var(--dur-popover) var(--ease-out),
     background-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
 }
 .context-menu.motion-popover.entering, .context-menu.motion-popover.leaving {
-  transform: translateY(var(--menu-shift, -4px));
+  --menu-fade: 0;
+  transform: translateY(var(--menu-shift, -6px));
 }
-/* Salida con curva de aceleración (ease-in) y sin desplazamiento. Con la curva de
+/* Salida breve con curva de aceleración (ease-in). Con la curva de
    entrada (ease-out) la opacidad caía casi del todo en el primer fotograma y el
    terminal asomaba a través del panel de golpe: se veía como un parpadeo. Así el
    panel se mantiene sólido al principio y se desvanece al final.
@@ -1346,14 +1354,9 @@ body.dragging-sidebar .sidebar {
   initial-value: 1;
 }
 .context-menu.motion-popover.leaving {
-  transform: translateY(0);
-  opacity: var(--menu-fade);
-  transition: none;
-  animation: trex-menu-out 140ms cubic-bezier(0.4, 0, 1, 1) forwards;
-}
-@keyframes trex-menu-out {
-  from { --menu-fade: 1; }
-  to { --menu-fade: 0; }
+  transform: translateY(calc(var(--menu-shift, -6px) * .5));
+  transition-duration: var(--dur-exit);
+  transition-timing-function: var(--ease-exit);
 }
 .term-search-input {
   width: 190px;
@@ -1744,7 +1747,7 @@ body.dragging-sidebar .sidebar {
   justify-content: center;
   padding: var(--sp-6);
   background: var(--overlay);
-  transition: background-color var(--dur) var(--ease-out);
+  transition: background-color var(--dur) var(--ease-in-out);
 }
 .modal {
   width: 100%;
@@ -1761,7 +1764,7 @@ body.dragging-sidebar .sidebar {
   overflow: hidden;
   transform: none;
   /* Sin transición de fondo ni de borde: siguen a --sheet-fade fotograma a fotograma. */
-  transition: --sheet-fade var(--dur) var(--ease-out), transform var(--dur-slow) var(--ease-out),
+  transition: --sheet-fade var(--dur) var(--ease-in-out), transform var(--dur-slow) var(--ease-out),
     color var(--dur) var(--ease-out);
 }
 /* Con opacidad < 1 en la lámina o en su padre, WebKitGTK deja de aplicar el
@@ -1776,15 +1779,19 @@ body.dragging-sidebar .sidebar {
 }
 .modal > *, .dialog-card > * { opacity: var(--sheet-fade); }
 .modal-backdrop.entering, .modal-backdrop.leaving { background-color: transparent; }
-.modal-backdrop.entering .modal, .modal-backdrop.leaving .modal {
+.modal-backdrop.entering .modal {
   --sheet-fade: 0;
-  transform: translateY(6px) scale(.985);
+  transform: translateY(12px) scale(.985);
+}
+.modal-backdrop.leaving .modal {
+  --sheet-fade: 0;
+  transform: translateY(6px) scale(.992);
 }
 .modal-backdrop.leaving, .modal-backdrop.leaving .modal {
   transition-duration: var(--dur-exit);
   /* Curva de aceleración: la lámina se mantiene sólida al principio y se
      desvanece al final, sin un panel de cristal vacío a medias. */
-  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  transition-timing-function: var(--ease-exit);
   pointer-events: none;
 }
 .modal-header {
@@ -1822,17 +1829,14 @@ body.dragging-sidebar .sidebar {
   justify-content: center;
   padding: var(--sp-6);
   background: var(--dialog-overlay);
-  animation: trex-overlay-in 200ms var(--ease-out) both;
+  transition: background-color var(--dur) var(--ease-in-out);
 }
-@keyframes trex-overlay-in {
-  from { background-color: transparent; }
-}
+.dialog-overlay.entering { background-color: transparent; }
 .dialog-overlay.leaving {
   pointer-events: none;
-  animation: trex-overlay-out 160ms var(--ease-out) both;
-}
-@keyframes trex-overlay-out {
-  to { background-color: transparent; }
+  background-color: transparent;
+  transition-duration: var(--dur-exit);
+  transition-timing-function: var(--ease-exit);
 }
 .dialog-card {
   position: relative;
@@ -1843,20 +1847,19 @@ body.dragging-sidebar .sidebar {
   border-radius: var(--r-modal);
   box-shadow: var(--shadow-pop);
   overflow: hidden;
-  animation: trex-dialog-in 260ms var(--ease-spring) both;
+  --sheet-fade: 1;
+  transform: none;
+  transition: --sheet-fade var(--dur) var(--ease-in-out), transform var(--dur-slow) var(--ease-out);
 }
-@keyframes trex-dialog-in {
-  from {
-    --sheet-fade: 0;
-    transform: translateY(6px) scale(0.985);
-  }
-  to {
-    --sheet-fade: 1;
-    transform: none;
-  }
+.dialog-overlay.entering .dialog-card {
+  --sheet-fade: 0;
+  transform: translateY(12px) scale(.985);
 }
 .dialog-overlay.leaving .dialog-card {
-  animation: trex-dialog-out 160ms cubic-bezier(0.4, 0, 1, 1) both;
+  --sheet-fade: 0;
+  transform: translateY(6px) scale(.992);
+  transition-duration: var(--dur-exit);
+  transition-timing-function: var(--ease-exit);
 }
 .dialog-overlay.anchored {
   display: block;
@@ -1873,7 +1876,7 @@ body.dragging-sidebar .sidebar {
   display: flex;
   flex-direction: column;
   border-radius: 12px;
-  animation: trex-confirm-in 220ms var(--ease-out) both;
+  transition: --sheet-fade var(--dur) var(--ease-in-out), transform var(--dur-popover) var(--ease-out);
 }
 .dialog-overlay.anchored .dialog-body {
   padding: 16px 16px 14px;
@@ -1890,26 +1893,13 @@ body.dragging-sidebar .sidebar {
 }
 .dialog-text { overflow-wrap: anywhere; }
 .dialog-overlay.anchored.leaving .dialog-card {
-  animation: trex-confirm-out 160ms var(--ease-out) both;
+  transform: translateY(calc(var(--dialog-travel) * .5));
+  transition-duration: var(--dur-exit);
+  transition-timing-function: var(--ease-exit);
 }
 .session-close[data-dialog-anchor] { opacity: 1; background: var(--active); }
-@keyframes trex-confirm-in {
-  from { opacity: 0; transform: translateY(var(--dialog-travel)) scale(.96); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes trex-confirm-out {
-  from { opacity: 1; transform: none; }
-  to { opacity: 0; transform: translateY(var(--dialog-travel)) scale(.98); }
-}
-@keyframes trex-dialog-out {
-  from {
-    --sheet-fade: 1;
-    transform: none;
-  }
-  to {
-    --sheet-fade: 0;
-    transform: translateY(3px) scale(0.99);
-  }
+.dialog-overlay.anchored.entering .dialog-card {
+  transform: translateY(var(--dialog-travel));
 }
 .dialog-body {
   display: flex;
@@ -2024,39 +2014,27 @@ body.dragging-sidebar .sidebar {
   max-width: min(560px, 70vw);
   padding: 8px 14px 8px 10px;
   border-radius: var(--r-pill);
-  background: var(--glass-strong);
-  -webkit-backdrop-filter: blur(10px) saturate(115%);
-  backdrop-filter: blur(10px) saturate(115%);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-md);
+  --sheet-fade: 1;
+  background: color-mix(in srgb, var(--glass-strong) calc(100% * var(--sheet-fade)), transparent);
+  -webkit-backdrop-filter: blur(calc(10px * var(--sheet-fade))) saturate(115%);
+  backdrop-filter: blur(calc(10px * var(--sheet-fade))) saturate(115%);
+  border: 1px solid color-mix(in srgb, var(--border) calc(100% * var(--sheet-fade)), transparent);
+  box-shadow: 0 6px 18px rgb(var(--sheet-shadow-color) / calc(.24 * var(--sheet-fade)));
   color: var(--text);
   font-size: 13px;
   line-height: 1.35;
   pointer-events: auto;
-  animation: trex-toast-in var(--dur-slow) var(--ease-spring) both;
+  transform: none;
+  transition: --sheet-fade var(--dur) var(--ease-in-out), transform var(--dur-slow) var(--ease-out);
 }
+.toast > * { opacity: var(--sheet-fade); }
+.toast.entering { --sheet-fade: 0; transform: translateY(12px) scale(.98); }
 .toast.leaving {
-  animation: trex-toast-out 180ms var(--ease-out) both;
-}
-@keyframes trex-toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.99);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes trex-toast-out {
-  from {
-    opacity: 1;
-    transform: none;
-  }
-  to {
-    opacity: 0;
-    transform: translateY(4px) scale(0.99);
-  }
+  --sheet-fade: 0;
+  transform: translateY(6px) scale(.99);
+  pointer-events: none;
+  transition-duration: 180ms;
+  transition-timing-function: var(--ease-exit);
 }
 .toast-icon {
   flex: 0 0 auto;
@@ -2262,7 +2240,7 @@ body.dragging-sidebar .sidebar {
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
-  transition: grid-template-rows var(--dur-layout) var(--ease-layout), opacity 220ms cubic-bezier(0.45, 0, 0.55, 1);
+  transition: grid-template-rows var(--dur-layout) var(--ease-layout), opacity var(--dur) var(--ease-in-out);
 }
 .project-sessions.expanded { grid-template-rows: 1fr; opacity: 1; }
 .project-sessions-clip { min-height: 0; overflow: hidden; }
@@ -2274,8 +2252,8 @@ body.dragging-sidebar .sidebar {
   height: 29px;
   border-radius: 6px;
   color: var(--text-dim);
-  animation: trex-session-in 160ms var(--ease-out) both;
-  transition: background-color var(--t), color var(--t);
+  animation: trex-session-in var(--dur) var(--ease-out) both;
+  transition: background-color var(--dur) var(--ease-in-out), color var(--t);
 }
 .session-row:hover { background: var(--hover); color: var(--text-muted); }
 .session-row.active { background: var(--session-selected); color: var(--text); }
@@ -2427,7 +2405,7 @@ body.dragging-sidebar .sidebar {
   border: 1px solid var(--terminal-border-color, var(--border));
   border-radius: var(--terminal-radius);
   box-shadow: var(--terminal-shadow, var(--shadow-sm));
-  animation: terminal-reveal 140ms var(--ease-out);
+  animation: trex-session-reveal var(--dur) var(--ease-in-out);
 }
 .terminal-view {
   border-radius: max(0px, calc(var(--terminal-radius) - 1px));
@@ -2457,7 +2435,6 @@ body.dragging-sidebar .sidebar {
   border: 1px solid var(--terminal-border-color, var(--border));
   border-radius: var(--terminal-radius);
   box-shadow: var(--terminal-shadow, var(--shadow-sm));
-  animation: terminal-reveal var(--dur) var(--ease-out);
   overflow: auto;
   display: flex;
   align-items: center;
@@ -2518,9 +2495,12 @@ body.dragging-sidebar .sidebar {
   box-shadow: none;
   border-radius: 6px;
 }
-.btn:active, .sq-btn:active, .icon-btn:active, .window-btn:active,
-.project-menu-btn:active, .term-tool-btn:active, .copy-btn:active,
-.dialog-btn:active, .context-item:active, .chip:active, .swatch:active { transform: none; }
+/* Respuesta breve al pulsar; la geometría del layout permanece intacta. */
+:is(.btn, .sq-btn, .icon-btn, .window-btn, .project-menu-btn, .term-tool-btn,
+  .copy-btn, .dialog-btn, .chip, .swatch):where(:not(:disabled)):active {
+  transform: scale(.96);
+  transition-duration: 80ms;
+}
 .btn-primary { box-shadow: none; }
 .icon-btn:disabled { opacity: .35; cursor: default; }
 :where(button, [role="button"], a):focus-visible {
@@ -2531,7 +2511,8 @@ body.dragging-sidebar .sidebar {
   from { opacity: 0; transform: translateY(-3px); }
   to { opacity: 1; transform: none; }
 }
-.terminal-host { animation: trex-fade-in var(--dur-fast) var(--ease-out) both; }
+.terminal-host { animation: trex-session-reveal var(--dur) var(--ease-in-out); }
+@keyframes trex-session-reveal { from { opacity: .72; } to { opacity: 1; } }
 
 /* Paneles y acciones rápidas: mantienen la rejilla de cada PTY independiente. */
 .split-pane { display:flex !important; flex-direction:column; }
@@ -2589,7 +2570,6 @@ body.dragging-sidebar .sidebar {
   .workspace-project { display: none; }
   .tabs-bar { padding-left: 12px; }
 }
-@keyframes terminal-reveal { from { opacity: .45; } to { opacity: 1; } }
 .search-field, .project-item, .session-row, .session-select { border-radius: 9px; }
 .tooltip { white-space: pre-line; overflow-wrap: anywhere; }
 .agent-icon {
@@ -2801,6 +2781,7 @@ body.dragging-sidebar .sidebar {
   initial-value: 1;
 }
 .image-viewer {
+  --viewer-fade: 1;
   position: fixed;
   inset: 0;
   z-index: 300;
@@ -2810,14 +2791,15 @@ body.dragging-sidebar .sidebar {
   -webkit-backdrop-filter: blur(14px) saturate(1.2);
   backdrop-filter: blur(14px) saturate(1.2);
   opacity: var(--viewer-fade);
-  animation: trex-viewer-in 200ms var(--ease-out) both;
+  transition: --viewer-fade var(--dur) var(--ease-in-out);
 }
+.image-viewer.entering { --viewer-fade: 0; }
 .image-viewer.leaving {
+  --viewer-fade: 0;
   pointer-events: none;
-  animation: trex-viewer-out 160ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  transition-duration: var(--dur-exit);
+  transition-timing-function: var(--ease-exit);
 }
-@keyframes trex-viewer-in { from { --viewer-fade: 0; } to { --viewer-fade: 1; } }
-@keyframes trex-viewer-out { from { --viewer-fade: 1; } to { --viewer-fade: 0; } }
 .image-viewer-bar {
   display: flex;
   flex: 0 0 auto;

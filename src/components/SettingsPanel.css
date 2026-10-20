@@ -23,6 +23,7 @@
 }
 .settings-nav { display: flex; flex-direction: column; gap: 4px; }
 .settings-nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -38,6 +39,20 @@
   cursor: pointer;
   transition: color var(--t), background-color var(--t);
 }
+.settings-nav-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent-strong);
+  opacity: 0;
+  transform: scaleY(.35);
+  transition: opacity var(--dur) var(--ease-in-out), transform var(--dur) var(--ease-out);
+}
+.settings-nav-item.active::before { opacity: 1; transform: none; }
 .settings-nav-item > span { width: 16px; height: 16px; flex: 0 0 16px; display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
 .settings-nav-item svg { display: block; width: 16px; height: 16px; stroke-width: 1.6; }
 .settings-nav-item:hover { background: var(--hover); color: var(--text); }
@@ -54,6 +69,11 @@
   gap: 24px;
 }
 .settings-page[hidden] { display: none; }
+.settings-page:not([hidden]) { animation: settings-page-in var(--dur) var(--ease-out) both; }
+@keyframes settings-page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 .settings-terminal-page { gap: 16px; }
 .settings-page:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: -3px; }
 .settings-page-heading { display: flex; flex-direction: column; gap: 6px; margin-bottom: 2px; }

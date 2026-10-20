@@ -33,6 +33,7 @@ import {
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useWindowFrame } from "./hooks/useWindowFrame";
 import { usePresence } from "./hooks/usePresence";
+import { waitForMotion } from "./motion";
 import { applyTheme, getThemeMode, onThemeChange, type ThemeMode } from "./theme";
 import type {
   AppConfig,
@@ -147,7 +148,17 @@ function AppShell() {
   }),[]);
   const dismissImage = useCallback((paste:boolean) => { imagePreviewRef.current?.resolve(paste); imagePreviewRef.current = null; setImagePreview(null); },[]);
   useEffect(() => () => { imagePreviewRef.current?.resolve(false); },[]);
-  const settingsPresence = usePresence(settingsOpen ? true : null);
+  const settingsSurfaceRef = useRef<HTMLDivElement>(null);
+  const paletteSurfaceRef = useRef<HTMLDivElement>(null);
+  const usageSurfaceRef = useRef<HTMLDivElement>(null);
+  const recoverySurfaceRef = useRef<HTMLDivElement>(null);
+  const imagePreviewSurfaceRef = useRef<HTMLDivElement>(null);
+  const settingsPresence = usePresence(settingsOpen ? true : null, 160, settingsSurfaceRef);
+  const palettePresence = usePresence(paletteOpen ? true : null, 160, paletteSurfaceRef);
+  const usagePresence = usePresence(usageOpen ? true : null, 160, usageSurfaceRef);
+  const recoveryPresence = usePresence(recoveryOpen ? true : null, 160, recoverySurfaceRef);
+  const imagePreviewPresence = usePresence(imagePreview, 160, imagePreviewSurfaceRef);
+  const shownImagePreview = imagePreviewPresence.value;
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null);
   /** Modo realmente pintado (resuelve "system" con la preferencia del equipo). */
@@ -942,7 +953,9 @@ function AppShell() {
       decreaseFont: () => changeFontSize(-1),
       resetFont: resetFontSize,
     },
-    { enabled: config !== null, settingsOpen, modalOpen: paletteOpen || recoveryOpen || imagePreview !== null, bindings:config?.settings.shortcuts },
+    { enabled: config !== null, settingsOpen: settingsPresence.value !== null,
+      modalOpen: palettePresence.value !== null || usagePresence.value !== null || recoveryPresence.value !== null || imagePreviewPresence.value !== null,
+      bindings:config?.settings.shortcuts },
   );
 
   // --- Datos derivados para la interfaz ---------------------------------------------
@@ -1189,6 +1202,7 @@ function AppShell() {
 
       {settingsPresence.value && (
         <SettingsPanel
+          surfaceRef={settingsSurfaceRef}
           entering={settingsPresence.entering}
           leaving={settingsPresence.leaving}
           settings={config.settings}
@@ -1207,15 +1221,26 @@ function AppShell() {
       {toast && (
         <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />
       )}
-      {paletteOpen && <CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)} />}
-      {usageOpen && <UsageDialog settings={config.settings} cwd={appInfo?.homeDir || activeProject?.path || "/"} onClose={()=>setUsageOpen(false)} />}
-      {recoveryOpen && activeProject && <RecoverConversations project={activeProject} settings={config.settings} onClose={()=>setRecoveryOpen(false)} onResume={(profile,conversation)=>{
-        setRecoveryOpen(false); const existing=tabs.find(tab=>!tab.exited && tab.profileId===profile.id && tab.conversationId===conversation.id);
-        if(existing) setActiveTabId(existing.id); else { try { openTab(activeProject.id,profile.id,conversation); } catch(error) { showToast(formatError(error)); } }
+      {palettePresence.value && <CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)}
+        surfaceRef={paletteSurfaceRef} entering={palettePresence.entering} leaving={palettePresence.leaving} />}
+      {usagePresence.value && <UsageDialog settings={config.settings} cwd={appInfo?.homeDir || activeProject?.path || "/"} onClose={()=>setUsageOpen(false)}
+        surfaceRef={usageSurfaceRef} entering={usagePresence.entering} leaving={usagePresence.leaving} />}
+      {recoveryPresence.value && activeProject && <RecoverConversations project={activeProject} settings={config.settings} onClose={()=>setRecoveryOpen(false)}
+        surfaceRef={recoverySurfaceRef} entering={recoveryPresence.entering} leaving={recoveryPresence.leaving} onResume={(profile,conversation)=>{
+        const surface = recoverySurfaceRef.current;
+        setRecoveryOpen(false);
+        // La sesión recibe el foco cuando la ventana de recuperación ya ha
+        // liberado el fondo, también si el proceso arranca inmediatamente.
+        requestAnimationFrame(() => waitForMotion(surface, () => requestAnimationFrame(() => {
+          const existing=tabsRef.current.find(tab=>!tab.exited && tab.profileId===profile.id && tab.conversationId===conversation.id);
+          if(existing) setActiveTabId(existing.id); else { try { openTab(activeProject.id,profile.id,conversation); } catch(error) { showToast(formatError(error)); } }
+        })));
       }} />}
-      {imagePreview && <FeatureDialog title="Vista previa de la captura" onClose={()=>dismissImage(false)} footer={<><button className="btn btn-ghost" onClick={()=>dismissImage(false)}>Cancelar</button><button className="btn btn-primary" onClick={()=>dismissImage(true)}>Pegar imagen</button></>}>
-        {imagePreview.image.preview ? <img className="clipboard-preview" src={imagePreview.image.preview} alt="Captura que se adjuntará al asistente" /> : <p>No se pudo mostrar la vista previa.</p>}
-        <p className="feature-hint">{imagePreview.image.width} × {imagePreview.image.height} px · {sessionLabel(tabs.find(tab=>tab.id===imagePreview.tabId) ?? {subtitle:"Sesión",oscTitle:null,kind:"shell"})}</p><p className="feature-hint">Se adjunta a la sesión. El mensaje se envía cuando pulses Enter en el asistente.</p>
+      {shownImagePreview && <FeatureDialog title="Vista previa de la captura" onClose={()=>dismissImage(false)}
+        surfaceRef={imagePreviewSurfaceRef} entering={imagePreviewPresence.entering} leaving={imagePreviewPresence.leaving}
+        footer={<><button className="btn btn-ghost" onClick={()=>dismissImage(false)}>Cancelar</button><button className="btn btn-primary" onClick={()=>dismissImage(true)}>Pegar imagen</button></>}>
+        {shownImagePreview.image.preview ? <img className="clipboard-preview" src={shownImagePreview.image.preview} alt="Captura que se adjuntará al asistente" /> : <p>No se pudo mostrar la vista previa.</p>}
+        <p className="feature-hint">{shownImagePreview.image.width} × {shownImagePreview.image.height} px · {sessionLabel(tabs.find(tab=>tab.id===shownImagePreview.tabId) ?? {subtitle:"Sesión",oscTitle:null,kind:"shell"})}</p><p className="feature-hint">Se adjunta a la sesión. El mensaje se envía cuando pulses Enter en el asistente.</p>
       </FeatureDialog>}
     </div>
   );

@@ -8,7 +8,7 @@ import type {
   Project,
   Settings,
 } from "../types";
-import FeatureDialog from "./FeatureDialog";
+import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
 import AgentIcon from "./AgentIcon";
 import Select from "./Select";
 import { ArrowRightIcon } from "./Icons";
@@ -17,12 +17,13 @@ export default function RecoverConversations({
   settings,
   onResume,
   onClose,
+  ...motion
 }: {
   project: Project;
   settings: Settings;
   onResume: (profile: LauncherProfile, conversation: Conversation) => void;
   onClose: () => void;
-}) {
+} & FeatureDialogMotionProps) {
   const [profileId, setProfileId] = useState(settings.defaultProfileId),
     [items, setItems] = useState<Conversation[]>([]),
     [query, setQuery] = useState(""),
@@ -84,6 +85,7 @@ export default function RecoverConversations({
   );
   return (
     <FeatureDialog
+      {...motion}
       title="Recuperar conversación"
       onClose={onClose}
       footer={

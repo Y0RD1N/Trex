@@ -1,5 +1,5 @@
 /** Ajustes por tema, con cambios en borrador y opciones técnicas desplegables. */
-import { cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { ACCENT_PRESETS, DEFAULT_FONT_FAMILY, clamp } from "../api";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
@@ -23,6 +23,7 @@ import "./SettingsPanel.css";
 type Props = {
   entering: boolean;
   leaving: boolean;
+  surfaceRef?: RefObject<HTMLDivElement | null>;
   settings: Settings;
   appInfo: AppInfo | null;
   claudeInfo: ClaudeInfo | null;
@@ -47,7 +48,7 @@ const SECTIONS = [
 ] as const;
 type SectionId = typeof SECTIONS[number]["id"];
 
-export default function SettingsPanel({ entering, leaving, settings, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect, cliUpdates, onUpdateCli }: Props) {
+export default function SettingsPanel({ entering, leaving, surfaceRef, settings, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect, cliUpdates, onUpdateCli }: Props) {
   const dialog = useDialog();
   const id = useId();
   const [draft, setDraft] = useState<Settings>(settings);
@@ -190,10 +191,10 @@ export default function SettingsPanel({ entering, leaving, settings, appInfo, cl
 
 
   return (
-    <div className={`modal-backdrop settings-backdrop${entering ? " entering" : ""}${leaving ? " leaving" : ""}`}
+    <div ref={surfaceRef} className={`modal-backdrop settings-backdrop${entering ? " entering" : ""}${leaving ? " leaving" : ""}`}
       inert={leaving} aria-hidden={leaving || undefined}
       onMouseDown={event => { if (event.target === event.currentTarget) requestClose(); }}>
-      <div ref={modalRef} className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onKeyDown={trapFocus}>
+      <div ref={modalRef} data-motion-surface className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onKeyDown={trapFocus}>
         <header className="modal-header">
           <div className="modal-heading">
             <h2 className="modal-title" id={`${id}-title`}>Ajustes</h2>

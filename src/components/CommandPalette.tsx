@@ -1,15 +1,21 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { filterCommands, type PaletteCommand } from "../commandPalette";
 import { shortcutLabel } from "../shortcuts";
-import FeatureDialog from "./FeatureDialog";
+import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
+import { waitForMotion } from "../motion";
 import { SearchIcon } from "./Icons";
 export default function CommandPalette({
   commands,
   onClose,
+  surfaceRef,
+  ...motion
 }: {
   commands: PaletteCommand[];
   onClose: () => void;
-}) {
+} & FeatureDialogMotionProps) {
+  const localSurfaceRef = useRef<HTMLDivElement>(null);
+  const dialogRef = surfaceRef ?? localSurfaceRef;
+  const executingRef = useRef(false);
   const [query, setQuery] = useState(""),
     [selected, setSelected] = useState(0),
     id = useId();
@@ -25,11 +31,20 @@ export default function CommandPalette({
       ?.scrollIntoView({ block: "nearest" });
   }, [id, index]);
   const execute = (command: PaletteCommand): void => {
+    if (executingRef.current) return;
+    executingRef.current = true;
+    const surface = dialogRef.current;
     onClose();
-    requestAnimationFrame(command.run);
+    // La siguiente acción puede abrir otra ventana: se ejecuta cuando esta
+    // lámina ya ha liberado el fondo y devuelto el foco.
+    requestAnimationFrame(() => {
+      waitForMotion(surface, () => requestAnimationFrame(command.run));
+    });
   };
   return (
     <FeatureDialog
+      {...motion}
+      surfaceRef={dialogRef}
       title="Paleta de comandos"
       onClose={onClose}
       className="command-dialog"

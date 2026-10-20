@@ -8,6 +8,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { useFloatingPosition, type FloatingAnchor } from "../hooks/useFloatingPosition";
+import { usePresence } from "../hooks/usePresence";
 import { AlertIcon, InfoIcon } from "./Icons";
 
 export type DialogTone = "default" | "danger";
@@ -24,6 +25,7 @@ export type DialogProps = {
   tone: DialogTone;
   /** El diálogo se está cerrando: dispara la animación de salida. */
   leaving: boolean;
+  onExited: () => void;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -42,6 +44,7 @@ export default function Dialog({
   cancelLabel,
   tone,
   leaving,
+  onExited,
   onConfirm,
   onCancel,
 }: DialogProps) {
@@ -50,10 +53,15 @@ export default function Dialog({
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const baseId = useId();
   const overlayRef = useRef<HTMLDivElement>(null);
-  const position = useFloatingPosition(anchor, cardRef, { gap: 9, track: !leaving });
+  const presence = usePresence(leaving ? null : true, 160, overlayRef);
+  const position = useFloatingPosition(anchor, cardRef, { gap: 9, track: !leaving, frozen: leaving });
   const cancelCallback = useRef(onCancel);
   const focusedRef = useRef(false);
   cancelCallback.current = onCancel;
+
+  useLayoutEffect(() => {
+    if (leaving && presence.value === null) onExited();
+  }, [leaving, presence.value, onExited]);
 
   // El foco entra en la tarjeta al abrir y vuelve al elemento anterior al cerrar.
   // En un diálogo destructivo empieza en Cancelar; si no es destructivo, en la acción.
@@ -134,7 +142,7 @@ export default function Dialog({
   return createPortal(
     <div
       ref={overlayRef}
-      className={`dialog-overlay${anchor ? " anchored" : ""}${leaving ? " leaving" : ""}`}
+      className={`dialog-overlay${anchor ? " anchored" : ""}${presence.entering ? " entering" : ""}${leaving ? " leaving" : ""}`}
       inert={leaving}
       aria-hidden={leaving || undefined}
       onMouseDown={(event) => {
@@ -143,6 +151,7 @@ export default function Dialog({
     >
       <div
         ref={cardRef}
+        data-motion-surface
         className={`dialog-card${anchor ? " floating-surface" : ""}${tone === "danger" ? " danger" : ""}`}
         style={anchor ? { left: position?.left ?? 8, top: position?.top ?? 8,
           visibility: position ? "visible" : "hidden", transformOrigin: position?.origin,

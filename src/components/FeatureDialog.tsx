@@ -4,8 +4,16 @@ import {
   useRef,
   type ReactNode,
   type KeyboardEvent,
+  type RefObject,
 } from "react";
 import { CloseIcon } from "./Icons";
+
+export type FeatureDialogMotionProps = {
+  entering?: boolean;
+  leaving?: boolean;
+  surfaceRef?: RefObject<HTMLDivElement | null>;
+};
+
 /** Mantiene el foco dentro de las acciones rápidas y vuelve a la terminal al salir. */
 export default function FeatureDialog({
   title,
@@ -13,13 +21,16 @@ export default function FeatureDialog({
   children,
   footer,
   className = "",
+  entering = false,
+  leaving = false,
+  surfaceRef,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
   className?: string;
-}) {
+} & FeatureDialogMotionProps) {
   const id = useId(),
     ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -43,11 +54,14 @@ export default function FeatureDialog({
       background.forEach((element, index) => {
         element.inert = inert[index];
       });
-      if (previous?.isConnected && !previous.closest("[inert]"))
+      const anotherDialog = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]'))
+        .some(element => element !== ref.current && !element.closest('[inert], [aria-hidden="true"]'));
+      if (!anotherDialog && previous?.isConnected && !previous.closest("[inert]"))
         previous.focus({ preventScroll: true });
     };
   }, []);
   const keys = (event: KeyboardEvent): void => {
+    if (leaving) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -70,15 +84,19 @@ export default function FeatureDialog({
   };
   return (
     <div
-      className="modal-backdrop feature-backdrop"
+      ref={surfaceRef}
+      className={`modal-backdrop feature-backdrop${entering ? " entering" : ""}${leaving ? " leaving" : ""}`}
+      inert={leaving}
+      aria-hidden={leaving || undefined}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (!leaving && event.target === event.currentTarget) onClose();
       }}
     >
       <div
         ref={ref}
+        data-motion-surface
         className={`modal feature-dialog ${className}`}
-        role="dialog"
+        role={leaving ? undefined : "dialog"}
         aria-modal="true"
         aria-labelledby={id}
         onKeyDown={keys}
