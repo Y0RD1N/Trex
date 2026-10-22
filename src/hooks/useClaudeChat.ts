@@ -14,6 +14,9 @@ import {
 } from "../chatState";
 import { answeredInput, chatReducer, claudeChatFlags, controlErrorLine, controlLine, permissionLine, userMessageLine } from "../claudeChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
+import { useMessageQueue } from "./useMessageQueue";
+import { InboxRequests, INBOX_SERVER } from "../messageQueue";
+import { CLAUDE_INBOX_TOOL, claudeInboxInitialize, claudeInboxReply } from "../inboxProtocol";
 
 /** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
 const USAGE_INTERVAL_MS = 60_000;
@@ -34,6 +37,9 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   stateRef.current = state;
   const callbacks = useRef(options);
   callbacks.current = options;
+  const queue = useMessageQueue(sessionId);
+  const inboxRequests = useRef(new InboxRequests());
+  const isCurrentRef = useRef<(id: string) => boolean>(() => false);
   const pendingControlsRef = useRef(new Map<string, Control>());
   /** Tras empezar una conversación nueva, la de la pestaña ya no se reanuda. */
   const freshRef = useRef(false);
@@ -80,7 +86,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     control({ subtype: "get_usage" }, { kind: "usage" });
   }, [control]);
 
-  const handleLine = useCallback((line: string) => {
+  const handleLine = useCallback((line: string, procId: string) => {
     let event: unknown;
     try { event = JSON.parse(line); } catch { return; /* ruido del shell antes del CLI */ }
     const message = event as { type?: string; subtype?: string; parent_tool_use_id?: unknown; request_id?: string;
@@ -115,6 +121,26 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       }
       return;
     }
+    const request = record(record(event)?.request);
+    if (message.type === "control_request" && message.request_id && request?.subtype === "mcp_message" && request.server_name === INBOX_SERVER) {
+      void (async () => {
+        const reply = await claudeInboxReply(message.request_id!, request,
+          () => inboxRequests.current.read(`${procId}:${message.request_id}`, queue.client.read));
+        if (!reply || !isCurrentRef.current(procId)) return;
+        await writeRef.current(reply.line);
+        if (!isCurrentRef.current(procId)) return;
+        if (reply.receipt) {
+          dispatch({ type: "queuedRead", messages: reply.receipt.messages });
+          await queue.client.ack(reply.receipt.id, () => isCurrentRef.current(procId));
+        }
+      })().catch(error => dispatch({ type: "notice", id: localId(), tone: "error", text: `La entrega de la cola quedó pendiente: ${formatError(error)}` }));
+      return;
+    }
+    // Reading trex's own inbox needs no permission to execute external tools.
+    if (message.type === "control_request" && message.request?.subtype === "can_use_tool" && message.request_id && message.request.tool_name === CLAUDE_INBOX_TOOL) {
+      writeOrReport(permissionLine(message.request_id, true, record(message.request.input) ?? {}));
+      return;
+    }
     // Con «Permitir todo», lo que el CLI aún consulte se acepta sin mostrar la tarjeta.
     if (message?.type === "control_request" && message.request?.subtype === "can_use_tool" && message.request_id
       && allowsAll(stateRef.current.permissionMode) && !needsAnswer(String(message.request.tool_name ?? ""))) {
@@ -139,7 +165,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       refreshContext();
       refreshUsage();
     }
-  }, [writeOrReport, refreshContext, refreshUsage, refreshSkills]);
+  }, [writeOrReport, refreshContext, refreshUsage, refreshSkills, queue.client]);
 
   const agent = useAgentProcess(sessionId, {
     onLine: handleLine,
@@ -156,8 +182,10 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     },
   });
   writeRef.current = agent.write;
+  isCurrentRef.current = agent.isCurrent;
 
   const start = useCallback(async (fresh = false): Promise<void> => {
+    inboxRequests.current.clear();
     const current = stateRef.current;
     const resumeId = fresh ? null : current.sessionId ?? (freshRef.current ? null : callbacks.current.conversationId);
     const profileArgs = conversationOverrideRef.current ? withoutConversationArgs(args) : args;
@@ -173,7 +201,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       dispatch({ type: "spawned" });
       callbacks.current.onRunning(sessionId);
       // Modelos disponibles, modelo/esfuerzo en uso y contexto (el de la conversación reanudada), antes del primer mensaje.
-      control({ subtype: "initialize" }, { kind: "initialize" });
+      control(claudeInboxInitialize, { kind: "initialize" });
       // La velocidad elegida no tiene opción de lanzamiento propia: se aplica igual que al cambiarla.
       if (current.fastChoice !== null) control({ subtype: "apply_flag_settings", settings: { fastMode: current.fastChoice } });
       refreshSettings();
@@ -252,7 +280,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
           if (error) reject(new Error(error)); else resolve();
         };
         pendingControlsRef.current.set(requestId, { kind: "initialize", ready });
-        void agent.write(controlLine(requestId, { subtype: "initialize" })).catch(error => ready(formatError(error)));
+        void agent.write(controlLine(requestId, claudeInboxInitialize)).catch(error => ready(formatError(error)));
       });
       conversationOverrideRef.current = true;
       freshRef.current = true;
@@ -289,6 +317,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   return {
     provider: "claude",
     state,
+    queue,
     start: () => start(),
     send,
     edit,

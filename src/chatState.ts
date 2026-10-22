@@ -47,7 +47,7 @@ export type QuestionChoice = { question: string; selected: string[]; other: stri
 export type Json = Record<string, unknown>;
 
 export type ChatItem =
-  | { kind: "user"; id: string; text: string; images: number; previews: string[]; providerTurnId?: string }
+  | { kind: "user"; id: string; text: string; images: number; previews: string[]; providerTurnId?: string; fromQueue?: boolean }
   | { kind: "text"; id: string; messageId: string; text: string; final: boolean }
   | { kind: "thinking"; id: string; messageId: string; text: string; final: boolean }
   | { kind: "tool"; id: string; name: string; input: Json; status: ToolStatus; output: string | null; patch: DiffLine[] | null;
@@ -131,6 +131,7 @@ export type ChatState = {
 /** Acciones que entienden todos los proveedores. */
 export type BaseChatAction =
   | { type: "send"; id: string; text: string; previews?: string[]; now: number }
+  | { type: "queuedRead"; messages: { id: string; text: string; previews: string[] }[] }
   | { type: "bindTurn"; id: string; turnId: string }
   /** Conserva el prefijo anterior al mensaje reemplazado, en la conversación regenerada. */
   | { type: "rewind"; id: string; sessionId: string }
@@ -181,6 +182,16 @@ export function addNotice(items: ChatItem[], tone: "info" | "warn" | "error", va
 /** Acciones comunes; cada proveedor añade las suyas encima. */
 export function baseReducer(state: ChatState, action: BaseChatAction): ChatState {
   switch (action.type) {
+    case "queuedRead": {
+      const ids = new Set(state.items.map(item => item.id));
+      return { ...state, items: [...state.items, ...action.messages.filter(message => {
+        if (ids.has(message.id)) return false;
+        ids.add(message.id);
+        return true;
+      }).map(message => ({
+        kind: "user" as const, id: message.id, text: message.text, images: message.previews.length, previews: message.previews, fromQueue: true,
+      }))] };
+    }
     case "send":
       if (state.pendingMessageIds.includes(action.id)) return state;
       return {

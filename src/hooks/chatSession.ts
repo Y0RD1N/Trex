@@ -12,6 +12,7 @@ import {
 } from "../api";
 import type { ChatState, OutgoingImage, PermissionItem, QuestionChoice } from "../chatState";
 import type { AgentProvider } from "../types";
+import type { ChatMessageQueue } from "./useMessageQueue";
 
 /** Datos de la pestaña que necesita una sesión de chat. */
 export type ChatSessionOptions = {
@@ -38,6 +39,7 @@ export type ChatSessionOptions = {
 export type ChatSession = {
   provider: AgentProvider;
   state: ChatState;
+  queue: ChatMessageQueue;
   /** Arranca el proceso o lo reanuda tras cerrarse. */
   start: () => Promise<void>;
   /** Envía un mensaje; `display` es lo que se ve en el hilo si no es el texto enviado. */

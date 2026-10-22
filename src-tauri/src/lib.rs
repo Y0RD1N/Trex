@@ -15,6 +15,8 @@ mod codex_models;
 mod files;
 mod git;
 mod handoff;
+mod message_queue;
+mod queue_mcp;
 mod project_icon;
 mod shared_files;
 mod terminal_env;
@@ -318,6 +320,9 @@ async fn desktop_notification(app: AppHandle, title: String, body: String) -> Re
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if queue_mcp::run_if_requested() {
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -349,6 +354,12 @@ pub fn run() {
             conversations::claude_rewind_point,
             handoff::prepare_handoff,
             handoff::load_handoff,
+            message_queue::message_queue_list,
+            message_queue::message_queue_enqueue,
+            message_queue::message_queue_remove,
+            message_queue::message_queue_read,
+            message_queue::message_queue_ack,
+            queue_mcp::message_queue_mcp_config,
             attachments::read_image_file,
             attachments::read_clipboard_image,
             attachments::save_attachment,

@@ -18,6 +18,8 @@ carpeta, con el asistente y el perfil que elijas.
   Codex desde el menú de nueva sesión o con `Ctrl+Shift+R`.
 - **Continuar con otro asistente**: transfiere el trabajo de un chat a otro
   perfil de Claude Code o Codex, incluso si el anterior se quedó sin cuota.
+- **Mensajes en cola**: escribe mientras Claude o Codex trabajan; cada agente
+  decide cuándo consultar su bandeja. Puedes cancelar los mensajes pendientes.
 - **Vista previa de capturas**: revisa la imagen y la sesión de destino antes de
   adjuntarla. El texto se pega directamente.
 - **Atajos personalizables**: cambia las combinaciones en Ajustes → Atajos,
@@ -73,6 +75,27 @@ Los modelos se consultan en el perfil de destino sin iniciar una respuesta;
 puedes elegir uno o conservar el predeterminado del perfil. La elección se
 aplica desde el primer mensaje y se guarda con la pestaña.
 Si el asistente está trabajando, detén la respuesta antes de transferirla.
+
+Mientras un agente trabaja, el envío usa **En cola** de forma predeterminada.
+El texto, las imágenes y las referencias a archivos se guardan localmente por
+pestaña. El agente dispone de `trex_read_messages` y decide cuándo leerlos;
+se le indica que consulte en puntos oportunos y antes de terminar. La bandeja
+muestra los pendientes y permite cancelarlos hasta que comience su lectura.
+**Enviar ahora** conserva la entrega directa durante el trabajo.
+
+Si termina correctamente con mensajes pendientes, TREX inicia una continuación
+para que consulte la cola, una vez por lote. Al detenerlo, fallar o restaurar
+la aplicación, los mensajes quedan pendientes: pulsa **Continuar con la cola**
+para retomarlos. La lectura depende del agente y no tiene un plazo garantizado.
+Lee o cancela la cola antes de empezar una conversación nueva o transferirla.
+Esta función pertenece a la vista de chat; los perfiles que abren terminal usan
+los controles propios de su CLI.
+
+Codex usa un servidor [MCP del App Server](https://learn.chatgpt.com/docs/app-server)
+configurado para esa sesión, también al reanudar o regenerar conversaciones.
+Claude usa una [herramienta MCP del Agent SDK](https://code.claude.com/docs/en/agent-sdk/custom-tools)
+sobre el canal JSON existente. Los mensajes solo se extraen al invocar la
+herramienta, con un recibo persistente para poder reintentar la entrega.
 
 El relevo se prepara con el historial local disponible y el estado actual de
 Git, sin pedir una respuesta al asistente anterior. Conserva el objetivo, las

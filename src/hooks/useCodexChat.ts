@@ -6,7 +6,7 @@
  * turno; uno enviado mientras Codex trabaja se suma al turno en curso.
  */
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { codexContextWindows, formatError } from "../api";
+import { codexContextWindows, formatError, messageQueueMcpConfig } from "../api";
 import {
   allowsAll, autoAllowed, fastSpeed, initialChatState, record, text, type Json, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
@@ -18,6 +18,9 @@ import { mentionedSkills } from "../chatCommands";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { questionInstructions } from "../chatQuestions";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
+import { useMessageQueue } from "./useMessageQueue";
+import { codexInboxContent, InboxRequests, INBOX_INSTRUCTIONS, INBOX_TOOL, inboxConfigForShell } from "../messageQueue";
+import { codexInboxReceiptId } from "../inboxProtocol";
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
 const ANSWERED_IN_CHAT = new Set([
@@ -25,7 +28,7 @@ const ANSWERED_IN_CHAT = new Set([
 ]);
 /** Turnos de la conversación recuperada que se muestran al abrirla. */
 const HISTORY_TURNS = 40;
-const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")}`;
+const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS}`;
 
 type Pending = { resolve: (result: unknown) => void; reject: (error: Error) => void };
 
@@ -36,6 +39,10 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   stateRef.current = state;
   const callbacks = useRef(options);
   callbacks.current = options;
+  const queue = useMessageQueue(sessionId);
+  const inboxRequests = useRef(new InboxRequests());
+  const inboxConfigRef = useRef<Json>({});
+  const isCurrentRef = useRef<(id: string) => boolean>(() => false);
 
   const nextIdRef = useRef(1);
   const pendingRef = useRef(new Map<number, Pending>());
@@ -50,6 +57,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   /** Tras empezar una conversación nueva, la de la pestaña ya no se reanuda. */
   const freshRef = useRef(false);
   const editingRef = useRef(false);
+  const deliveryTailRef = useRef<Promise<unknown>>(Promise.resolve());
   /** Modo, modelo, esfuerzo y velocidad elegidos: se leen al empezar cada turno, sin esperar al render. */
   const choicesRef = useRef<{ mode: string | null; model: string | null; effort: string | null; fast: boolean | null }>({
     mode: options.mode, model: state.modelChoice, effort: null, fast: null });
@@ -114,6 +122,31 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       else pending.resolve(message.result);
       return;
     }
+    if (method === "item/tool/call" && id !== undefined && id !== null && record(message.params)?.tool === INBOX_TOOL) {
+      dispatch({ type: "rpc", message, scope: procId, now: Date.now() });
+      void (async () => {
+        let snapshot;
+        try {
+          const params = record(message.params);
+          if (!record(params?.arguments) || Object.keys(params!.arguments as object).length) throw new Error("La herramienta de cola no acepta argumentos.");
+          snapshot = await inboxRequests.current.read(JSON.stringify([procId, id]), queue.client.read);
+        } catch (error) {
+          if (isCurrentRef.current(procId)) writeOrReport(resultLine(id as string | number,
+            { contentItems: [{ type: "inputText", text: `No se pudo leer la cola: ${formatError(error)}` }], success: false }));
+          return;
+        }
+        if (!isCurrentRef.current(procId)) return;
+        try {
+          await writeRef.current(resultLine(id as string | number, { contentItems: codexInboxContent(snapshot.receipt), success: true }));
+          if (!isCurrentRef.current(procId)) return;
+          if (snapshot.receipt) {
+            dispatch({ type: "queuedRead", messages: snapshot.receipt.messages });
+            await queue.client.ack(snapshot.receipt.id, () => isCurrentRef.current(procId));
+          }
+        } catch (error) { notice("error", `La entrega de la cola quedó pendiente: ${formatError(error)}`); }
+      })();
+      return;
+    }
     // Con «Permitir todo», un permiso que llegue (por ejemplo, de un turno que empezó antes) se acepta sin tarjeta.
     if (id !== undefined && id !== null && method && allowsAll(choicesRef.current.mode ?? stateRef.current.permissionMode)) {
       const result = autoApproval(method, (message.params ?? {}) as Json);
@@ -141,9 +174,19 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         stopRequestedRef.current = false;
       }
     }
+    if (method === "item/completed") {
+      const receiptId = codexInboxReceiptId(record(message.params)?.item);
+      if (receiptId) {
+        void queue.client.load().then(async snapshot => {
+          if (!isCurrentRef.current(procId) || snapshot.receipt?.id !== receiptId) return;
+          dispatch({ type: "queuedRead", messages: snapshot.receipt.messages });
+          await queue.client.ack(receiptId, () => isCurrentRef.current(procId));
+        }).catch(error => notice("error", `La confirmación de la cola quedó pendiente: ${formatError(error)}`));
+      }
+    }
     dispatch({ type: "rpc", message, scope: procId, now: Date.now() });
     if (method === "skills/changed") void readSkills().catch(() => undefined);
-  }, [writeOrReport, notice, turnKnown, readSkills]);
+  }, [writeOrReport, notice, turnKnown, readSkills, queue.client]);
 
   const agent = useAgentProcess(sessionId, {
     onLine: handleLine,
@@ -157,6 +200,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     },
   });
   writeRef.current = agent.write;
+  isCurrentRef.current = agent.isCurrent;
 
   /** Historial de la conversación recuperada, una sola vez por pestaña. */
   const loadHistory = useCallback(async (threadId: string, report: boolean): Promise<void> => {
@@ -171,7 +215,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   }, [request, notice]);
 
   const newThread = useCallback(async (overrides: Json): Promise<string> => {
-    const response = await request<{ thread?: { id?: string } }>("thread/start", { cwd, ...overrides });
+    const response = await request<{ thread?: { id?: string } }>("thread/start", { cwd, ...overrides,
+      config: { ...record(overrides.config), ...inboxConfigRef.current } });
     dispatch({ type: "thread", response });
     const threadId = response?.thread?.id;
     if (!threadId) throw new Error("Codex no devolvió la conversación.");
@@ -195,6 +240,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
 
     // Archivos y preguntas de la interfaz; las instrucciones de AGENTS.md siguen aparte.
     const overrides: Json = { developerInstructions: CHAT_INSTRUCTIONS, ...launch.thread,
+      config: { ...record(launch.thread.config), ...inboxConfigRef.current },
       ...(choicesRef.current.model ? { model: choicesRef.current.model } : {}) };
     const resumeId = stateRef.current.sessionId ?? (freshRef.current ? null : callbacks.current.conversationId ?? launch.resumeId);
     if (resumeId) {
@@ -217,12 +263,14 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   }, [request, notice, loadHistory, newThread, cwd, env, readSkills]);
 
   const start = useCallback(async (): Promise<void> => {
+    inboxRequests.current.clear();
     rejectPending("Codex se reinició.");
     nextIdRef.current = 1;
     turnIdRef.current = null;
     // Un perfil que solo funciona en la terminal no llega aquí (App abre la terminal).
     const launch = codexLaunch(args) ?? codexLaunch(null)!;
     try {
+      inboxConfigRef.current = inboxConfigForShell(await messageQueueMcpConfig(sessionId), shell);
       const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags: launch.flags, shell, env });
       if (!procId) return;
       dispatch({ type: "spawned" });
@@ -252,18 +300,24 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
 
   const thread = (): Promise<string> => threadRef.current ?? Promise.reject(new Error("La conversación no está abierta."));
 
-  const deliver = async (text: string, images: OutgoingImage[], userId?: string): Promise<void> => {
+  const deliver = (text: string, images: OutgoingImage[], userId?: string): Promise<void> => {
+    const delivery = deliveryTailRef.current.then(async () => {
     const threadId = await thread();
     const current = stateRef.current;
-    const result = await request<{ turn?: { id?: string } }>("turn/start", {
-      threadId, input: userInput(text, images, mentionedSkills(text, current.skills)),
-      ...turnOverrides(choicesRef.current, { model: current.model, effort: current.effort,
-        fastTier: fastSpeed(current.models, current.model, choicesRef.current.model ?? current.modelChoice)?.tier }),
+    const activeTurnId = turnIdRef.current;
+    const result = await request<{ turn?: { id?: string }; turnId?: string }>(activeTurnId ? "turn/steer" : "turn/start", {
+      threadId, input: userInput(text, images, mentionedSkills(text, current.skills)), clientUserMessageId: userId,
+      ...(activeTurnId ? { expectedTurnId: activeTurnId } : turnOverrides(choicesRef.current, { model: current.model, effort: current.effort,
+        fastTier: fastSpeed(current.models, current.model, choicesRef.current.model ?? current.modelChoice)?.tier })),
     });
-    if (result?.turn?.id) {
-      turnKnown(result.turn.id);
-      if (userId) dispatch({ type: "bindTurn", id: userId, turnId: result.turn.id });
+    const accepted = result?.turn?.id ?? result?.turnId;
+    if (accepted) {
+      turnKnown(accepted);
+      if (userId) dispatch({ type: "bindTurn", id: userId, turnId: accepted });
     }
+    });
+    deliveryTailRef.current = delivery.catch(() => undefined);
+    return delivery;
   };
 
   /** Mensaje del usuario en el hilo y, cuando Codex esté listo, la petición que lo atiende. */
@@ -294,6 +348,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       const response = await request<{ thread?: { id?: string } }>("thread/fork", {
         threadId: await thread(), beforeTurnId: original.providerTurnId, cwd, excludeTurns: true,
         ...(codexLaunch(args) ?? codexLaunch(null)!).thread,
+        developerInstructions: CHAT_INSTRUCTIONS,
+        config: { ...record((codexLaunch(args) ?? codexLaunch(null)!).thread.config), ...inboxConfigRef.current },
       });
       const newId = response.thread?.id;
       if (!newId) throw new Error("Codex no devolvió la conversación regenerada.");
@@ -369,6 +425,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   return {
     provider: "codex",
     state,
+    queue,
     start,
     send,
     edit,

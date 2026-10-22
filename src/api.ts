@@ -146,6 +146,9 @@ export const agentWrite = (id: string, line: string): Promise<void> =>
 
 export const agentKill = (id: string): Promise<void> => invoke<void>("agent_kill", { id });
 
+export const messageQueueMcpConfig = (queueId: string): Promise<Record<string, unknown>> =>
+  invoke("message_queue_mcp_config", { queueId });
+
 /** Archivos del proyecto (relativos a su carpeta) para las menciones con `@`. */
 export const listProjectFiles = (cwd: string): Promise<string[]> => invoke<string[]>("list_project_files", { cwd });
 

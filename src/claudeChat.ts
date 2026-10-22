@@ -16,6 +16,7 @@ import { claudeRateLimitUsage, parseClaudeUsage } from "./planUsage";
 import { FILE_SHARING_INSTRUCTIONS } from "./sharedFiles";
 import { imageReference, withoutImageLabels } from "./imageReferences";
 import { questionInstructions } from "./chatQuestions";
+import { INBOX_INSTRUCTIONS } from "./messageQueue";
 
 export type ChatAction =
   | BaseChatAction
@@ -48,7 +49,7 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
   if (!restricted && !/(^|\s)--(allow-)?dangerously-skip-permissions(\s|=|$)/.test(profileArgs ?? "")) flags.push("--allow-dangerously-skip-permissions");
   // Instrucciones de la interfaz, salvo que el perfil ya defina las del sistema.
   if (!/(^|\s)--(append-)?system-prompt(-file)?(\s|=|$)/.test(profileArgs ?? "")) {
-    flags.push("--append-system-prompt", `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("claude")}`);
+    flags.push("--append-system-prompt", `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("claude")} ${INBOX_INSTRUCTIONS}`);
   }
   const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
   if (conversationId && !choosesConversation) flags.push("--resume", conversationId);

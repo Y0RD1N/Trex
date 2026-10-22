@@ -34,6 +34,7 @@ import type { ChatSession, ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
 import { useHandoffDelivery } from "../hooks/useHandoffDelivery";
+import { INBOX_WAKE } from "../messageQueue";
 import { createHandoffContext, type HandoffContext, type HandoffReference } from "../handoff";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
@@ -49,6 +50,7 @@ import QuestionPanel from "./chat/QuestionPanel";
 import Suggestions from "./chat/Suggestions";
 import WorkSummary from "./chat/WorkSummary";
 import BranchMenu, { GIT_BRANCH_CHANGED } from "./chat/BranchMenu";
+import QueuedMessages from "./chat/QueuedMessages";
 import "./ChatView.css";
 import "./chat/MessageActions.css";
 
@@ -159,6 +161,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const [editing, setEditing] = useState<{ id: string; draft: string; attachments: ChatAttachment[]; docs: ChatFile[] } | null>(null);
   const [submittingEdit, setSubmittingEdit] = useState(false);
   const editSendingRef = useRef(false);
+  const [queueSaving, setQueueSaving] = useState(false);
+  const queueSavingRef = useRef(false);
+  const [sendDuringWork, setSendDuringWork] = useState("queue");
+  const queueWakeRef = useRef({ armed: false, attempted: "", sending: false });
   const summaryCacheRef = useRef<SummaryCache>(new Map());
   // Sugerencias de `@`, `/` y `$`: posición del cursor, opción resaltada y menú descartado con Esc.
   const [caret, setCaret] = useState(0);
@@ -330,13 +336,31 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   }, [visible, resizeInput]);
 
   const running = state.pendingTurns > 0;
+  const hasQueued = session.queue.snapshot.messages.length > 0 || !!session.queue.snapshot.receipt;
+  const wakeQueue = useStableCallback((): void => {
+    if (queueWakeRef.current.sending || running || handoffPending || !session.queue.ready) return;
+    queueWakeRef.current.sending = true;
+    void Promise.resolve(session.send(INBOX_WAKE, [], [], "Leer los mensajes en cola")).finally(() => { queueWakeRef.current.sending = false; });
+  });
+  // One follow-up per batch after a successful turn. A stop, failure or restored
+  // tab leaves its messages pending until the user explicitly continues.
+  useEffect(() => {
+    const pending = session.queue.snapshot.messages.map(message => message.id).join(",");
+    const wake = queueWakeRef.current;
+    if (running && pending) wake.armed = true;
+    if (running || !wake.armed || !pending || wake.attempted === pending || state.process !== "ready") return;
+    wake.armed = false;
+    if (state.items[state.items.length - 1]?.kind !== "turn") return;
+    wake.attempted = pending;
+    wakeQueue();
+  }, [running, session.queue.snapshot.messages, state.items, state.process, wakeQueue]);
   const consumeHandoff = useStableCallback((id: string) => callbacks.current.onHandoffConsumed?.(sessionId, id));
   const handoffDelivery = useHandoffDelivery({ reference: props.handoff, session, visible, conversationId,
     requireReview: props.handoffRestored, onConsumed: consumeHandoff });
   const handoffPending = !!props.handoff?.pending;
   const canHandoff = state.items.some(item => item.kind === "user" || item.kind === "text");
   const requestHandoff = (): void => {
-    if (running || submittingEdit || !canHandoff || !props.projectId) return;
+    if (running || submittingEdit || queueSavingRef.current || hasQueued || !session.queue.ready || !canHandoff || !props.projectId) return;
     callbacks.current.onHandoffRequest?.(createHandoffContext(state, {
       sessionId, provider, profileId: props.profileId ?? null, profileName: props.profileName || agent.product,
       title: props.sessionTitle || projectName, projectId: props.projectId, projectName, cwd,
@@ -361,7 +385,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     backToInput();
   };
   const beginEdit = useStableCallback((id: string): void => {
-    if (handoffPending || running || editSendingRef.current || preparing) return;
+    if (handoffPending || running || hasQueued || !session.queue.ready || editSendingRef.current || preparing) return;
     const item = state.items.find(item => item.kind === "user" && item.id === id);
     if (item?.kind !== "user") return;
     try {
@@ -380,7 +404,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     } catch (error) { callbacks.current.onMessage(formatError(error)); }
   });
   const resendMessage = useStableCallback((id: string): void => {
-    if (handoffPending || running || editSendingRef.current || preparing) return;
+    if (handoffPending || running || hasQueued || !session.queue.ready || editSendingRef.current || preparing) return;
     const item = state.items.find(item => item.kind === "user" && item.id === id);
     if (item?.kind !== "user") return;
     try {
@@ -392,7 +416,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     } catch (error) { callbacks.current.onMessage(formatError(error)); }
   });
   const regenerateMessage = useStableCallback((id: string): void => {
-    if (handoffPending || running || editSendingRef.current || preparing) return;
+    if (handoffPending || running || hasQueued || !session.queue.ready || editSendingRef.current || preparing) return;
     const item = state.items.find(item => item.kind === "user" && item.id === id);
     if (item?.kind !== "user") return;
     editSendingRef.current = true;
@@ -605,6 +629,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     const wanted = args.toLowerCase();
     switch (local) {
       case "clear": case "new":
+        if (!session.queue.ready) { session.notice("info", "Espera a que termine de cargar la cola antes de empezar otra conversación."); return true; }
+        if (hasQueued) { session.notice("info", "Lee o cancela los mensajes en cola antes de empezar otra conversación."); return true; }
         session.reset();
         titledRef.current = false;
         return true;
@@ -638,7 +664,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   };
 
   const send = (override?: string): void => {
-    if (handoffPending) return;
+    if (handoffPending || queueSavingRef.current) return;
     const text = (override ?? draftRef.current).trim();
     const images = attachmentsRef.current;
     const attached = docsRef.current;
@@ -665,6 +691,21 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     setDismissed(null);
     if (command && runLocal(command.name, command.args)) {
       setDraft("");
+      return;
+    }
+    if (!session.queue.ready) {
+      callbacks.current.onMessage("Espera a que termine de cargar la cola antes de enviar el mensaje.");
+      return;
+    }
+    if ((running || hasQueued) && sendDuringWork === "queue") {
+      if (running) queueWakeRef.current.armed = true;
+      queueSavingRef.current = true;
+      editSendingRef.current = true;
+      setQueueSaving(true);
+      void session.queue.enqueue(message, images.map(({ mediaType, data }) => ({ mediaType, data })), images.map(image => image.preview)).then(() => {
+        setDraft(""); setAttachments([]); setDocs([]); setDismissed(null);
+      }).catch(error => callbacks.current.onMessage(`No se pudo guardar el mensaje en cola: ${formatError(error)}`))
+        .finally(() => { queueSavingRef.current = false; editSendingRef.current = false; setQueueSaving(false); });
       return;
     }
     setDraft("");
@@ -787,19 +828,19 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   // Filas del hilo: se rehacen solo cuando cambia algo que muestran, no con cada tecla en la caja.
   const editingId = editing?.id ?? null;
-  const busy = preparing > 0 || handoffPending;
+  const busy = preparing > 0 || handoffPending || hasQueued || !session.queue.ready;
   const rows = useMemo(() => {
     // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
     const askingFor = new Set(threadItems.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
     const asked = (id: string): boolean => askingFor.has(id) || askingFor.has(id.split("#")[0]);
     const canEdit = (item: Extract<ChatItem, { kind: "user" }>): boolean =>
-      provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id);
+      !item.fromQueue && (provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id));
     return threadItems.slice(threadStart).map((item, offset) => {
       const animate = threadStart + offset >= enterFrom;
       const next = threadItems[threadStart + offset + 1];
       switch (item.kind) {
         case "user": return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews}
-          onEdit={beginEdit} onResend={resendMessage} editing={editingId === item.id} editable={canEdit(item)}
+          onEdit={beginEdit} onResend={resendMessage} editing={editingId === item.id} editable={canEdit(item)} fromQueue={item.fromQueue}
           disabled={running || submittingEdit || busy} animate={animate} />;
         case "text": {
           if (!item.text.trim()) return null;
@@ -882,6 +923,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
     <div className="chat-composer-wrap" ref={composerRef}>
      <div className="chat-dock">
+      <QueuedMessages queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending}
+        onContinue={wakeQueue} onRemove={id => { void session.queue.client.remove(id).catch(error => callbacks.current.onMessage(formatError(error))); }} />
       {showSuggestions && !question && <Suggestions id={`${sessionId}-suggestions`} items={suggestions} active={selectedSuggestion} loading={loadingSuggestions}
         loadingLabel={wantsSkills ? "Cargando skills…" : "Buscando archivos…"}
         emptyLabel={wantsSkills ? skillsError ?? (state.skills.length ? "No hay skills que coincidan con tu búsqueda." : "No hay skills disponibles en esta sesión.") : undefined}
@@ -935,11 +978,11 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             : part.text)}
           {draft.endsWith("\n") ? "​" : ""}
         </div>
-        <textarea ref={inputRef} rows={1} value={draft} readOnly={submittingEdit || handoffPending} aria-label={`Mensaje para ${agent.name}`}
+        <textarea ref={inputRef} rows={1} value={draft} readOnly={submittingEdit || queueSaving || handoffPending} aria-label={`Mensaje para ${agent.name}`}
           aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? `${sessionId}-suggestions` : undefined}
           aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${selectedSuggestion}` : undefined}
           placeholder={running
-            ? provider === "codex" ? "Añade algo más a la respuesta en curso…" : "Añade algo más; se enviará al terminar…"
+            ? sendDuringWork === "queue" ? "Añade un mensaje a la cola; el agente decide cuándo leerlo…" : "Enviar al agente durante el trabajo…"
             : `Pide cambios · @ archivos${provider === "claude" ? " y subagentes" : ""} · / comandos · $ skills`}
           onChange={event => { setDraft(event.target.value); setCaret(event.target.selectionStart); if (!event.target.value) setDismissed(null); }}
           onSelect={event => setCaret(event.currentTarget.selectionStart)}
@@ -994,22 +1037,26 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           }} />
         </div>
         <div className="chat-input-actions">
+          {(running || hasQueued) && !editing && <Select className="chat-tray-chip chat-tray-select chat-message-delivery" menuClassName="chat-glass-menu" value={sendDuringWork}
+            options={[{ value: "queue", label: "En cola", description: "El agente decide cuándo leer el mensaje" },
+              { value: "now", label: "Enviar ahora", description: "Entrega el mensaje durante el trabajo en curso" }]}
+            align="end" onChange={setSendDuringWork} aria-label="Entrega de mensajes durante el trabajo" />}
           <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
-            disabled={submittingEdit || handoffPending}
+            disabled={submittingEdit || queueSaving || handoffPending}
             onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
           {running && !draft.trim() && !attachments.length && !docs.length
             ? <button type="button" className="chat-send stop tip" aria-label="Detener" data-tip="Detener (Esc)" onClick={session.interrupt}><StopIcon /></button>
-            : <button type="submit" className="chat-send tip" aria-label={editing ? "Guardar y regenerar" : "Enviar"}
-              data-tip={editing ? "Guardar y regenerar" : "Enviar"}
-              disabled={handoffPending || (!draft.trim() && !attachments.length && !docs.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
-                {submittingEdit ? <span className="chat-spinner" /> : <ArrowUpIcon />}</button>}
+            : <button type="submit" className="chat-send tip" aria-label={editing ? "Guardar y regenerar" : (running || hasQueued) && sendDuringWork === "queue" ? "Añadir a la cola" : "Enviar"}
+              data-tip={editing ? "Guardar y regenerar" : (running || hasQueued) && sendDuringWork === "queue" ? "Añadir a la cola" : "Enviar"}
+              disabled={handoffPending || !session.queue.ready || queueSaving || (!draft.trim() && !attachments.length && !docs.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
+                {submittingEdit || queueSaving ? <span className="chat-spinner" /> : <ArrowUpIcon />}</button>}
         </div>
         </div>
       </form>
       <div className="chat-tray">
         {props.onHandoffRequest && <button type="button" className="chat-tray-chip chat-handoff-button tip"
           aria-label="Continuar con otro asistente" data-tip={running ? "Detén la respuesta antes de cambiar de asistente" : "Continuar este trabajo con otro perfil"}
-          disabled={running || submittingEdit || !canHandoff || handoffDelivery.sending}
+          disabled={running || submittingEdit || queueSaving || hasQueued || !session.queue.ready || !canHandoff || handoffDelivery.sending}
           onClick={requestHandoff}><RotateIcon size={13} /><span>Continuar con…</span></button>}
         <Select className="chat-tray-chip chat-tray-select" menuClassName="chat-glass-menu" value={mode} options={modeOptions} align="start"
           openSignal={menuSignal.mode}

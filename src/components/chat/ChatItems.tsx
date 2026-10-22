@@ -22,9 +22,9 @@ const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
   web: <GlobeIcon />, task: <SparkIcon />, todo: <ListIcon />, plan: <MapIcon />, question: <QuestionIcon />, tool: <WrenchIcon />,
 };
 
-export const UserMessage = memo(function UserMessage({ id, text, images, previews, onEdit, onResend, disabled, editing, editable = true, animate = false }: {
+export const UserMessage = memo(function UserMessage({ id, text, images, previews, onEdit, onResend, disabled, editing, editable = true, animate = false, fromQueue = false }: {
   id: string; text: string; images: number; previews: string[]; onEdit: (id: string) => void; onResend: (id: string) => void;
-  disabled: boolean; editing: boolean; editable?: boolean; animate?: boolean;
+  disabled: boolean; editing: boolean; editable?: boolean; animate?: boolean; fromQueue?: boolean;
 }) {
   const entry = useMessageEntry(animate);
   const viewer = useImageViewer();
@@ -37,6 +37,7 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
   const open = (path: string): void => { void openFile(path).catch(() => undefined); };
   const parts = useMemo(() => referenceParts(body, { Imagen: images, Archivo: files.length }), [body, images, files.length]);
   return <div ref={entry.ref} className={`chat-user-group${editing ? " is-editing" : ""}${entry.entering ? " chat-enter" : ""}`}>
+    {fromQueue && <small className="chat-queue-read">Leído desde la cola</small>}
     {previews.length > 0 && <div className="chat-user-gallery">
       {previews.map((preview, index) => <button key={index} type="button" className="chat-user-thumb" aria-label={`Ver imagen ${index + 1}`}
         title={`Imagen ${index + 1}`} onClick={() => showImage(index)}>
