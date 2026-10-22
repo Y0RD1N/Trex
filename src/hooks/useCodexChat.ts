@@ -16,6 +16,7 @@ import {
 } from "../codexChat";
 import { mentionedSkills } from "../chatCommands";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
+import { questionInstructions } from "../chatQuestions";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
@@ -24,6 +25,7 @@ const ANSWERED_IN_CHAT = new Set([
 ]);
 /** Turnos de la conversación recuperada que se muestran al abrirla. */
 const HISTORY_TURNS = 40;
+const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")}`;
 
 type Pending = { resolve: (result: unknown) => void; reject: (error: Error) => void };
 
@@ -191,8 +193,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     // Uso del plan de la cuenta; después, Codex avisa de cada cambio con `account/rateLimits/updated`.
     void request("account/rateLimits/read", {}).then(data => dispatch({ type: "plan", data })).catch(() => undefined);
 
-    // Cómo adjuntar archivos al chat; las instrucciones de AGENTS.md siguen aparte.
-    const overrides: Json = { developerInstructions: FILE_SHARING_INSTRUCTIONS, ...launch.thread };
+    // Archivos y preguntas de la interfaz; las instrucciones de AGENTS.md siguen aparte.
+    const overrides: Json = { developerInstructions: CHAT_INSTRUCTIONS, ...launch.thread };
     const resumeId = stateRef.current.sessionId ?? (freshRef.current ? null : callbacks.current.conversationId ?? launch.resumeId);
     if (resumeId) {
       try {
@@ -346,7 +348,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     stopRequestedRef.current = false;
     dispatch({ type: "reset" });
     if (!alive || !threadRef.current) { void start(); return; }
-    const opened = newThread({ developerInstructions: FILE_SHARING_INSTRUCTIONS, ...(codexLaunch(args) ?? codexLaunch(null)!).thread });
+    const opened = newThread({ developerInstructions: CHAT_INSTRUCTIONS, ...(codexLaunch(args) ?? codexLaunch(null)!).thread });
     threadRef.current = opened;
     opened.catch(error => notice("error", `No se pudo abrir la conversación de Codex: ${formatError(error)}`));
   };

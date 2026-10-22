@@ -19,6 +19,7 @@ import {
   shownUsage, supportedEfforts, type ChatItem, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
+import { pendingTextQuestion, textQuestionAnswer } from "../chatQuestions";
 import {
   fileReference, imageReference, insertImageReferences, moveSelection, referenceParts, removeImageReference, splitAttachedFiles,
   withAttachedFiles, type TextSelection,
@@ -152,6 +153,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const [caret, setCaret] = useState(0);
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [dismissedQuestion, setDismissedQuestion] = useState<string | null>(null);
   const [files, setFiles] = useState<string[] | null>(null);
   const filesAtRef = useRef(0);
   const filesRequestRef = useRef(0);
@@ -712,9 +714,16 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   // Tras elegir en un selector, se sigue escribiendo en la caja.
   const backToInput = (): void => { requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true })); };
 
+  // Una pregunta con viñetas también se puede contestar si el agente no usó su herramienta.
+  const textQuestion = useMemo(() => pendingTextQuestion(state.items), [state.items]);
+
   // Identidad fija: las filas del hilo están memorizadas y no deben repintarse por ella.
   const answer = useStableCallback((item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
-    session.answer(item, allowed, remember, choices);
+    if (item.id === textQuestion?.id) {
+      setDismissedQuestion(item.id);
+      const response = allowed ? textQuestionAnswer(choices ?? []) : "";
+      if (response) session.send(response, [], []);
+    } else session.answer(item, allowed, remember, choices);
     stickRef.current = true;
     // La caja vuelve a la vista en el siguiente render (si era una pregunta, ocupaba su sitio).
     backToInput();
@@ -722,7 +731,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   /** Pregunta del asistente que espera respuesta: ocupa el sitio de la caja de mensaje. */
   const question = state.items.find((item): item is PermissionItem =>
-    item.kind === "permission" && item.state === "pending" && item.toolName === "AskUserQuestion");
+    item.kind === "permission" && item.state === "pending" && item.toolName === "AskUserQuestion")
+    ?? (!editing && textQuestion?.id !== dismissedQuestion ? textQuestion : null);
 
   const lastItem = state.items[state.items.length - 1];
   const thinking = !lastItem || lastItem.kind === "user" || lastItem.kind === "thinking";

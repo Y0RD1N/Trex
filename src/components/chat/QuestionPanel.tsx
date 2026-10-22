@@ -110,6 +110,9 @@ export default function QuestionPanel({ item, agent, active, onAnswer }: Props) 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
     if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+    // Enter activa el botón enfocado (Omitir, Atrás, pestañas…), incluso con selección múltiple.
+    if (event.key === "Enter" && event.target instanceof HTMLButtonElement
+      && !optionRefs.current.includes(event.target)) return;
     if (!typing && /^[1-9]$/.test(event.key) && question.kind === "choice") {
       const index = Number(event.key) - 1;
       if (index < question.options.length) {

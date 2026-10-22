@@ -144,7 +144,10 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
   varias preguntas se avanza una a una y con **Atrás** se vuelve. Si Claude
   adjunta vistas previas, se ven al lado al pasar por cada opción. **Omitir**
   deja que el asistente siga a su criterio. Lo que respondiste queda en el
-  hilo. Codex pregunta así también fuera del modo Planificar (trex activa su
+  hilo. Si el asistente escribe una pregunta de elección con una lista de
+  opciones en el mensaje, también se puede responder desde este panel; la
+  elección se envía como mensaje y **Omitir** cierra el panel sin enviar nada.
+  Codex pregunta así también fuera del modo Planificar (trex activa su
   función `default_mode_request_user_input`; un perfil con
   `--disable default_mode_request_user_input` la apaga).
 - **Uso del plan**: junto al contexto, la bandeja muestra cuánto llevas de tu
