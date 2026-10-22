@@ -23,7 +23,7 @@ import { projectSections } from "../sidebarGroups";
 import type { CliStatus } from "../hooks/useCliUpdates";
 import type { CliId } from "../cliUpdates";
 import AgentIcon from "./AgentIcon";
-import { AlertIcon, CloseIcon, FolderPlusIcon, GaugeIcon, MoonIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
+import { AlertIcon, CloseIcon, FolderPlusIcon, GaugeIcon, MoonIcon, PanelIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
 import { sessionLabel } from "../sessionTitle";
@@ -65,6 +65,7 @@ type Props = {
   /** Uso del plan de todas las cuentas. */
   onOpenUsage: () => void;
   onToggleTheme: () => void;
+  onToggleSidebar: () => void;
   onResize: (width: number) => void;
   /** Versiones nuevas de Claude Code o Codex pendientes de instalar. */
   updates: CliStatus[];
@@ -100,6 +101,7 @@ export default function Sidebar({
   onOpenSettings,
   onOpenUsage,
   onToggleTheme,
+  onToggleSidebar,
   onResize,
   updates,
   onUpdateCli,
@@ -170,6 +172,7 @@ export default function Sidebar({
 
   return (
     <aside
+      id="workspace-sidebar"
       ref={reveal.ref}
       className={`sidebar${sidebarCollapsed ? " collapsed" : ""}${peek ? " peek" : ""}${sidebarWidth <= 220 ? " compact" : ""}`}
       style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
@@ -186,6 +189,12 @@ export default function Sidebar({
               <span className="sidebar-name" data-tauri-drag-region>trex</span>
               <span className="sidebar-caption" data-tauri-drag-region>Espacio de trabajo</span>
             </span>
+            <button type="button" className="icon-btn sidebar-collapse tip tip-below"
+              aria-label={peek ? "Fijar barra lateral" : "Ocultar barra lateral"}
+              data-tip={`${peek ? "Fijar" : "Ocultar"} barra lateral (${shortcutLabel(shortcuts.toggleSidebar)})`}
+              aria-controls="workspace-sidebar" aria-expanded={!sidebarCollapsed} onClick={onToggleSidebar}>
+              <PanelIcon size={17} />
+            </button>
           </header>
         </div>
 

@@ -32,6 +32,7 @@ import {
   saveConfig,
 } from "./api";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { shortcutLabel } from "./shortcuts";
 import { useWindowFrame } from "./hooks/useWindowFrame";
 import { usePresence } from "./hooks/usePresence";
 import { waitForMotion } from "./motion";
@@ -76,7 +77,7 @@ import { createSplitLayout, replaceSplitPane, splitPaneStyle, visibleSplit, type
 import SplitDivider from "./components/SplitDivider";
 import SplitPaneHeader from "./components/SplitPaneHeader";
 import AgentIcon from "./components/AgentIcon";
-import { TerminalIcon } from "./components/Icons";
+import { PanelIcon, TerminalIcon } from "./components/Icons";
 import CommandPalette from "./components/CommandPalette";
 import RecoverConversations from "./components/RecoverConversations";
 import UsageDialog from "./components/UsageDialog";
@@ -969,19 +970,22 @@ function AppShell() {
   }, []);
 
   /**
-   * Muestra u oculta la barra lateral (botón de panel de la barra superior y
+   * Muestra u oculta la barra lateral (cabecera de proyectos, botón flotante y
    * Ctrl+B / ⌘B). El estado vive en "ui", así que se persiste con el resto de
    * la configuración y se recuerda en el siguiente arranque.
    */
   const toggleSidebar = useCallback(() => {
-    if (document.querySelector(".sidebar")?.contains(document.activeElement)) {
-      document.querySelector<HTMLButtonElement>(".panel-toggle")?.focus({ preventScroll: true });
-    }
+    const collapsed = !configRef.current?.ui.sidebarCollapsed;
+    const moveFocus = document.activeElement instanceof Element &&
+      document.activeElement.closest(".sidebar, .sidebar-reopen") !== null;
     setConfig((prev) =>
       prev
         ? { ...prev, ui: { ...prev.ui, sidebarCollapsed: !prev.ui.sidebarCollapsed } }
         : prev,
     );
+    if (moveFocus) requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(collapsed ? ".sidebar-reopen" : ".sidebar-collapse")?.focus({ preventScroll: true });
+    });
   }, []);
 
   /**
@@ -1113,6 +1117,7 @@ function AppShell() {
         onOpenSettings={openSettings}
         onOpenUsage={openUsage}
         onToggleTheme={toggleTheme}
+        onToggleSidebar={toggleSidebar}
         onResize={setSidebarWidth}
         updates={pendingUpdates}
         onUpdateCli={updateCli}
@@ -1120,6 +1125,11 @@ function AppShell() {
       />
 
       <main className="main">
+        <button type="button" className="sidebar-reopen tip tip-below" hidden={!config.ui.sidebarCollapsed}
+          aria-label="Mostrar barra lateral" aria-controls="workspace-sidebar" aria-expanded="false"
+          data-tip={`Mostrar barra lateral (${shortcutLabel(config.settings.shortcuts.toggleSidebar)})`} onClick={toggleSidebar}>
+          <PanelIcon size={18} />
+        </button>
         <TerminalTabs
           tabs={projectTabs}
           activeTabId={activeTabId}
@@ -1127,8 +1137,6 @@ function AppShell() {
           hasProject={activeProjectId !== null}
           profiles={config.settings.profiles}
           defaultProfileId={preferredProfile.id}
-          sidebarCollapsed={config.ui.sidebarCollapsed}
-          onToggleSidebar={toggleSidebar}
           autoHideTopBar={config.ui.autoHideTopBar}
           onToggleTopBar={toggleTopBar}
           onRevealProject={

@@ -77,7 +77,7 @@ export default function Dialog({
     return () => {
       siblings.forEach(element => { element.inert = false; });
       trigger?.removeAttribute("data-dialog-anchor");
-      const candidates = [returnFocus, previous, document.querySelector<HTMLElement>(".modal-header .icon-btn, .panel-toggle")];
+      const candidates = [returnFocus, previous, ...document.querySelectorAll<HTMLElement>(".modal-header .icon-btn, .sidebar:not(.collapsed) .sidebar-collapse, .sidebar.peek .sidebar-collapse, .sidebar-reopen:not([hidden])")];
       const restore = candidates.find(element => element?.isConnected && !element.closest("[inert]") && element.getClientRects().length);
       restore?.focus({ preventScroll: true });
     };

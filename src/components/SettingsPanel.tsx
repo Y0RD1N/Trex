@@ -77,8 +77,8 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     modalRef.current?.querySelector<HTMLButtonElement>(".modal-header button")?.focus({ preventScroll: true });
     return () => {
-      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus({ preventScroll: true });
-      else document.querySelector<HTMLButtonElement>(".panel-toggle")?.focus({ preventScroll: true });
+      if (previous?.isConnected && !previous.closest("[inert]") && previous.getClientRects().length) previous.focus({ preventScroll: true });
+      else document.querySelector<HTMLButtonElement>(".sidebar:not(.collapsed) .sidebar-collapse, .sidebar.peek .sidebar-collapse, .sidebar-reopen:not([hidden])")?.focus({ preventScroll: true });
     };
   }, [leaving]);
 

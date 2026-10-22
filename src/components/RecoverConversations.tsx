@@ -87,6 +87,7 @@ export default function RecoverConversations({
     <FeatureDialog
       {...motion}
       title="Recuperar conversación"
+      className="recovery-dialog"
       onClose={onClose}
       footer={
         <>

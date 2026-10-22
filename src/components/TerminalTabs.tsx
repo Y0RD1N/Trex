@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { useHoverReveal } from "../hooks/useHoverReveal";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { AgentNotice, LauncherProfile, TabState } from "../types";
-import { FolderIcon, GridIcon, LayoutIcon, MaximizeIcon, PanelIcon, PlusIcon, SearchIcon, SplitIcon, TerminalIcon } from "./Icons";
+import { FolderIcon, GridIcon, LayoutIcon, MaximizeIcon, PlusIcon, SearchIcon, SplitIcon, TerminalIcon } from "./Icons";
 import type { SplitDirection } from "../splitLayout";
 import { sessionTitle } from "../sessionTitle";
 import WindowControls from "./WindowControls";
@@ -33,8 +33,6 @@ type Props = {
   hasProject: boolean;
   profiles: LauncherProfile[];
   defaultProfileId: string;
-  sidebarCollapsed: boolean;
-  onToggleSidebar: () => void;
   /** Barra oculta hasta acercar el cursor al borde superior. */
   autoHideTopBar: boolean;
   onToggleTopBar: () => void;
@@ -59,8 +57,8 @@ type Props = {
 };
 
 export default function TerminalTabs({
-  tabs, activeTabId, projectName, hasProject, sidebarCollapsed, profiles, defaultProfileId,
-  onToggleSidebar, autoHideTopBar, onToggleTopBar, onRevealProject, onNew, onNewShell, onOpenSettings, onOpenProfiles,
+  tabs, activeTabId, projectName, hasProject, profiles, defaultProfileId,
+  autoHideTopBar, onToggleTopBar, onRevealProject, onNew, onNewShell, onOpenSettings, onOpenProfiles,
   onCommandPalette,onRecover,onChangeSplit,splitDirection,shortcuts,
   notices, soundEnabled, liveTabIds, onOpenNotice, onMarkNoticesRead, onClearNotices, onToggleSound, onPreviewSound,
 }: Props) {
@@ -143,16 +141,6 @@ export default function TerminalTabs({
         }
       </div>
 
-      <button
-        type="button"
-        className="window-btn panel-toggle tip tip-below"
-        data-tip={`${sidebarCollapsed ? "Mostrar" : "Ocultar"} barra lateral (${shortcutLabel(shortcuts.toggleSidebar)})`}
-        aria-label={sidebarCollapsed ? "Mostrar barra lateral" : "Ocultar barra lateral"}
-        aria-expanded={!sidebarCollapsed}
-        onClick={onToggleSidebar}
-      >
-        <PanelIcon size={16} />
-      </button>
       <NotificationCenter notices={notices} soundEnabled={soundEnabled} liveTabIds={liveTabIds}
         onOpenSession={onOpenNotice} onMarkRead={onMarkNoticesRead} onClear={onClearNotices}
         onToggleSound={onToggleSound} onPreviewSound={onPreviewSound} />
