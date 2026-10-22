@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import DropdownMenu from "../DropdownMenu";
-import { AlertIcon, ArrowRightIcon, BoltIcon, CheckIcon, ChevronIcon, CloseIcon, SettingsIcon } from "../Icons";
+import { AlertIcon, BoltIcon, CheckIcon, ChevronIcon, CloseIcon, SettingsIcon } from "../Icons";
 import type { SelectOption } from "../Select";
 import { EFFORT_LEVELS, type ModelInfo } from "../../chatState";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
@@ -16,17 +16,13 @@ type Props = {
   speed: ModelInfo["fast"] | null;
   fast: boolean;
   onFast: (value: boolean) => void;
-  onHandoff?: () => void;
-  handoffDisabled: boolean;
-  handoffHint: string;
   openSignal?: { mode: number; effort: number };
 };
 
 type Section = "mode" | "effort";
 const fullAccess = (mode: string): boolean => mode === "full" || mode === "bypassPermissions";
 
-export default function ComposerSettings({ mode, modes, onMode, levels, effort, onEffort, speed, fast, onFast,
-  onHandoff, handoffDisabled, handoffHint, openSignal }: Props) {
+export default function ComposerSettings({ mode, modes, onMode, levels, effort, onEffort, speed, fast, onFast, openSignal }: Props) {
   const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
@@ -137,19 +133,6 @@ export default function ComposerSettings({ mode, modes, onMode, levels, effort, 
           <span className="chat-composer-settings-switch" aria-hidden="true"><span /></span>
         </button>
         <p id={`${menuId}-speed-hint`} className="chat-composer-settings-hint">{speed.hint}</p>
-      </div>}
-      {onHandoff && <div className="chat-composer-settings-handoff">
-        <button type="button" disabled={handoffDisabled} aria-describedby={handoffDisabled ? `${menuId}-handoff-hint` : undefined}
-          className="chat-composer-settings-handoff-action" onClick={() => {
-            if (handoffDisabled) return;
-            // The app dialog captures this persistent button to restore focus.
-            triggerRef.current?.focus({ preventScroll: true });
-            close();
-            onHandoff();
-          }}>
-          <span>Continuar con otro asistente…</span><ArrowRightIcon size={15} />
-        </button>
-        {handoffDisabled && <p id={`${menuId}-handoff-hint`} className="chat-composer-settings-hint">{handoffHint}</p>}
       </div>}
     </DropdownMenu>
   </>;

@@ -4,7 +4,7 @@ import { contextPercent, formatTokens, type ContextUsage } from "../../chatState
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { accountUsageWindows, headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
 import DropdownMenu from "../DropdownMenu";
-import { CloseIcon } from "../Icons";
+import { AlertIcon, CloseIcon } from "../Icons";
 import { ContextDetails } from "./ContextMeter";
 import { PlanWindows } from "./PlanMeter";
 import "./UsageMenu.css";
@@ -44,11 +44,11 @@ export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpe
   const planSeverity = limiting ? severityRank[limiting.severity] : 0;
   const showPlan = limiting !== null && planSeverity > 0 && (planSeverity > contextSeverity
     || planSeverity === contextSeverity && limiting.percent >= (percent ?? 0));
-  const severity = Math.max(contextSeverity, planSeverity);
-  const level = severity >= 2 ? " critical" : severity >= 1 ? " high" : "";
   const contextLevel = contextSeverity >= 2 ? " critical" : contextSeverity >= 1 ? " high" : "";
-  const label = showPlan ? `${limiting.label.replace(/^Sesión \(5 h\)/, "Sesión")} ${percentLabel(limiting.percent)}`
-    : percent !== null ? `Contexto ${percentLabel(percent)}` : "Uso";
+  const level = percent !== null ? contextLevel : planSeverity >= 2 ? " critical" : planSeverity >= 1 ? " high" : "";
+  const label = percent !== null ? `Contexto ${percentLabel(percent)}`
+    : showPlan ? `${limiting.label.replace(/^Sesión \(5 h\)/, "Sesión")} ${percentLabel(limiting.percent)}` : "Uso";
+  const scopedWarning = limiting && planSeverity > 0 && !visibleWindows.some(entry => entry.window?.id === limiting.id) ? limiting : null;
   const contextSummary = usage
     ? `Contexto: ${percent === null ? "porcentaje no disponible" : percentLabel(percent)} · ${formatTokens(usage.used)}${usage.window ? ` de ${formatTokens(usage.window)}` : ""} tokens`
     : "Contexto: no disponible";
@@ -56,7 +56,7 @@ export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpe
     ? `Uso del plan: ${plan.windows.map(window => `${window.label}: ${percentLabel(window.percent)}`).join(" · ")}`
     : "Uso del plan: porcentajes no disponibles";
   const summary = `${contextSummary}\n${planSummary}`;
-  const ringPercent = showPlan ? limiting.percent : percent ?? 0;
+  const ringPercent = percent ?? (showPlan ? limiting.percent : 0);
   const ringLength = 2 * Math.PI * 5.5;
   const ringFilled = ringPercent > 0 ? Math.max(ringPercent, 4) : 0;
   const close = (): void => setAnchor(null);
@@ -99,6 +99,9 @@ export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpe
           </span>
           <span className="chat-usage-window-bar"><i style={{ width: `${window ? Math.max(window.percent, window.percent > 0 ? 2 : 0) : 0}%` }} /></span>
         </span>)}
+      </span>}
+      {scopedWarning && percent !== null && <span className={`chat-usage-warning ${scopedWarning.severity}`} aria-hidden="true">
+        <AlertIcon size={12} />{scopedWarning.label} {percentLabel(scopedWarning.percent)}
       </span>}
     </button>
     <DropdownMenu id={id} anchor={anchor} triggerRef={triggerRef} role="dialog" label="Uso y contexto"

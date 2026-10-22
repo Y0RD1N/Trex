@@ -67,7 +67,7 @@ carpeta, con el asistente y el perfil que elijas.
 
 ## Claude Code y Codex como chat
 
-En **Ajustes del agente → Continuar con otro asistente…** puedes pasar el trabajo a
+Con **Continuar con otro agente**, debajo del mensaje, puedes pasar el trabajo a
 otro perfil: Claude 1 → Claude 2, Claude → Codex o en sentido contrario. Elige
 el destino y su modelo, revisa el contexto y, si quieres, indica el siguiente paso. TREX
 abre una conversación nueva en el mismo proyecto y conserva la original.

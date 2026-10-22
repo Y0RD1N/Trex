@@ -361,8 +361,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const canHandoff = state.items.some(item => item.kind === "user" || item.kind === "text");
   const handoffDisabled = running || submittingEdit || queueSaving || hasQueued || !session.queue.ready || !canHandoff || handoffDelivery.sending;
   const handoffHint = running ? "Disponible al terminar la respuesta. También puedes detenerla con Esc."
+    : submittingEdit ? "Espera a que termine de enviarse la edición."
+    : queueSaving ? "Espera a que se guarde el mensaje en cola."
+    : !session.queue.ready ? "Cargando los mensajes pendientes de esta conversación."
     : hasQueued ? "Lee o cancela los mensajes en cola antes de cambiar de asistente."
     : !canHandoff ? "Envía un mensaje para poder continuar este trabajo con otro asistente."
+    : handoffDelivery.sending ? "Espera a que termine de entregarse el contexto."
     : "Continúa este trabajo con otro perfil y conserva el contexto.";
   const requestHandoff = (): void => {
     if (running || submittingEdit || queueSavingRef.current || hasQueued || !session.queue.ready || !canHandoff || !props.projectId) return;
@@ -1045,7 +1049,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
             disabled={submittingEdit || queueSaving || handoffPending}
             onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
-          <span className="chat-input-action-spacer" aria-hidden="true" />
           {(running || hasQueued) && !editing && <Select className="chat-tray-chip chat-tray-select chat-message-delivery" menuClassName="chat-glass-menu" value={sendDuringWork}
             options={[{ value: "queue", label: "En cola", description: "El agente decide cuándo leer el mensaje" },
               { value: "now", label: "Enviar ahora", description: "Entrega el mensaje durante el trabajo en curso" }]}
@@ -1064,9 +1067,13 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           onModel={model => { session.setModel(model); backToInput(); }} openSignal={menuSignal.model} triggerClassName="chat-composer-model" />
         <ComposerSettings mode={mode} modes={modeOptions} onMode={session.setMode}
           levels={efforts} effort={state.effort} onEffort={session.setEffort} speed={speed} fast={state.fast} onFast={session.setFast}
-          onHandoff={props.onHandoffRequest ? requestHandoff : undefined} handoffDisabled={handoffDisabled} handoffHint={handoffHint}
           openSignal={menuSignal} />
         <span className="chat-composer-spacer" />
+        {props.onHandoffRequest && <button type="button" className="chat-tray-chip chat-handoff-button tip"
+          aria-label="Continuar con otro agente" data-tip={handoffHint} disabled={handoffDisabled}
+          onClick={event => { event.currentTarget.focus({ preventScroll: true }); requestHandoff(); }}><RotateIcon size={13} /><span>Continuar con otro agente</span></button>}
+      </div>
+      <div className="chat-composer-meta">
         {(usage || state.plan) && <UsageMenu usage={usage} plan={state.plan} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
           onOpenAll={() => callbacks.current.onOpenUsage()}
           onCompact={() => {
@@ -1075,9 +1082,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             if (!runLocal("compact", "")) session.send("/compact", [], []);
             backToInput();
           }} />}
+        {branch && <BranchMenu cwd={cwd} branch={branch} busy={running || submittingEdit} visible={visible}
+          onChange={setBranch} onMessage={message => callbacks.current.onMessage(message)} />}
       </div>
-      {branch && <div className="chat-composer-meta"><BranchMenu cwd={cwd} branch={branch} busy={running || submittingEdit} visible={visible}
-        onChange={setBranch} onMessage={message => callbacks.current.onMessage(message)} /></div>}
      </div>
     </div>
   </div>;

@@ -200,34 +200,3 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.chat-composer-settings-handoff {
-  margin-top: 3px;
-  padding: 10px 4px 4px;
-  border-top: 1px solid var(--border);
-}
-.chat-composer-settings-handoff-action {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  min-height: 32px;
-  padding: 7px 6px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-  text-align: left;
-}
-.chat-composer-settings-handoff-action > svg {
-  flex: 0 0 auto;
-}
-.chat-composer-settings-handoff-action:hover:not(:disabled) {
-  background: var(--bg-elevated);
-  color: var(--text);
-}
-.chat-composer-settings-handoff-action:disabled {
-  color: var(--text-dim);
-}
