@@ -1062,6 +1062,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         </div>
         </div>
       </form>
+      <div className="chat-controls">
       <div className="chat-tray">
         <ModelMenu provider={provider} models={state.models} model={state.model} choice={state.modelChoice}
           onModel={model => { session.setModel(model); backToInput(); }} openSignal={menuSignal.model} triggerClassName="chat-composer-model" />
@@ -1071,7 +1072,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         <span className="chat-composer-spacer" />
         {props.onHandoffRequest && <button type="button" className="chat-tray-chip chat-handoff-button tip"
           aria-label="Continuar con otro agente" data-tip={handoffHint} disabled={handoffDisabled}
-          onClick={event => { event.currentTarget.focus({ preventScroll: true }); requestHandoff(); }}><RotateIcon size={13} /><span>Continuar con otro agente</span></button>}
+          onClick={event => { event.currentTarget.focus({ preventScroll: true }); requestHandoff(); }}><span>Continuar con otro agente</span><span className="chat-handoff-arrow" aria-hidden="true">↗</span></button>}
       </div>
       <div className="chat-composer-meta">
         {(usage || state.plan) && <UsageMenu usage={usage} plan={state.plan} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
@@ -1084,6 +1085,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           }} />}
         {branch && <BranchMenu cwd={cwd} branch={branch} busy={running || submittingEdit} visible={visible}
           onChange={setBranch} onMessage={message => callbacks.current.onMessage(message)} />}
+      </div>
       </div>
      </div>
     </div>
