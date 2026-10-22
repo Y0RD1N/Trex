@@ -1591,7 +1591,7 @@ pre.chat-ask-preview-body {
 }
 
 /* --- Caja de mensaje ----------------------------------------------------- */
-/* Una caja compacta para escribir; ajustes y estado quedan fuera del borde. */
+/* Texto, ajustes y estado comparten una sola superficie compacta. */
 .chat-composer-wrap {
   position: absolute;
   z-index: 2;
@@ -1614,26 +1614,29 @@ pre.chat-ask-preview-body {
     var(--term-bg) 100%);
   pointer-events: none;
 }
-/* La escritura y las acciones comparten una tarjeta; los ajustes quedan fuera. */
+/* Un borde común mantiene los controles unidos al campo sin añadir otra tarjeta. */
 .chat-dock {
   position: relative;
   max-width: var(--chat-width);
   margin: 0 auto;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--bg-elevated) 35%, var(--term-bg));
   pointer-events: auto;
+  transition: border-color var(--dur) var(--ease-out);
 }
 .chat-composer {
   position: relative;
   z-index: 1;
   padding: 7px 9px 7px 14px;
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  border-radius: 15px;
-  background: color-mix(in srgb, var(--bg-elevated) 35%, var(--term-bg));
-  transition: border-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
+  border: 0;
+  background: transparent;
 }
 /* Solo la escritura tiñe el borde, y apenas: abrir y cerrar los selectores no lo hace parpadear. */
-.chat-dock:has(textarea:focus) .chat-composer {
-  border-color: color-mix(in srgb, var(--accent) 15%, var(--dock-edge));
+.chat-dock:has(textarea:focus) {
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
 }
+.chat-dock > .chat-ask { border: 0; background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .chat-input-row {
   display: flex;
   align-items: flex-end;
@@ -1745,15 +1748,16 @@ pre.chat-ask-preview-body {
 .chat-send:disabled { opacity: 0.4; box-shadow: none; cursor: default; }
 .chat-send.stop { background: var(--text); color: var(--term-bg); box-shadow: none; }
 
-/* Modelo, ajustes y continuación, sin una segunda tarjeta. */
+/* Una separación tenue une visualmente los controles al área de escritura. */
 .chat-tray {
   position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  margin: 0;
-  padding: 4px 0 0;
+  margin: 0 6px;
+  padding: 3px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
 }
 .chat-tray .chat-tray-chip,
 .chat-tray .input.chat-tray-chip {
@@ -1834,7 +1838,7 @@ pre.chat-ask-preview-body {
   flex-wrap: wrap;
   gap: 2px 10px;
   min-width: 0;
-  padding: 0;
+  padding: 0 6px 5px;
 }
 .chat-composer-meta .chat-tray-info.chat-branch-trigger {
   display: inline-flex;
