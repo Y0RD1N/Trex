@@ -25,8 +25,8 @@ export function EffortBars({ effort }: { effort: string | null }) {
 }
 
 /** Píldora de la bandeja que abre un menú propio. */
-function TrayMenu({ label, icon, text, badge, menuLabel, className = "", openSignal = 0, children }: {
-  label: string; icon: ReactNode; text: string; menuLabel: string; className?: string;
+function TrayMenu({ label, icon, text, badge, menuLabel, className = "", triggerClassName = "", openSignal = 0, children }: {
+  label: string; icon: ReactNode; text: string; menuLabel: string; className?: string; triggerClassName?: string;
   /** Marca tras el texto (por ejemplo, el rayo de la velocidad rápida). */
   badge?: ReactNode;
   /** Al cambiar, el menú se abre (por ejemplo, con `/model`). */
@@ -38,7 +38,7 @@ function TrayMenu({ label, icon, text, badge, menuLabel, className = "", openSig
   const close = (): void => setAnchor(null);
   useEffect(() => { if (openSignal && triggerRef.current) setAnchor({ element: triggerRef.current }); }, [openSignal]);
   return <>
-    <button ref={triggerRef} type="button" className="chat-tray-chip" aria-haspopup="menu" aria-expanded={!!anchor} aria-label={label}
+    <button ref={triggerRef} type="button" className={`chat-tray-chip ${triggerClassName}`} aria-haspopup="menu" aria-expanded={!!anchor} aria-label={label}
       onClick={() => setAnchor(anchor ? null : { element: triggerRef.current! })}
       onKeyDown={event => {
         if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); setAnchor({ element: event.currentTarget }); }
@@ -55,9 +55,9 @@ function TrayMenu({ label, icon, text, badge, menuLabel, className = "", openSig
   </>;
 }
 
-export function ModelMenu({ provider, models, model, choice, onModel, openSignal }: {
+export function ModelMenu({ provider, models, model, choice, onModel, openSignal, triggerClassName }: {
   provider: AgentProvider; models: ModelInfo[]; model: string | null; choice: string | null; onModel: (value: string) => void;
-  openSignal?: number;
+  openSignal?: number; triggerClassName?: string;
 }) {
   const [showOthers, setShowOthers] = useState(false);
   const current = currentModel(models, model, choice);
@@ -75,7 +75,7 @@ export function ModelMenu({ provider, models, model, choice, onModel, openSignal
       <span className="select-check" aria-hidden="true">{selected && <CheckIcon size={15} />}</span>
     </button>;
   };
-  return <TrayMenu label={`Modelo: ${name}`} icon={<AgentIcon kind={provider} size={13} />} text={name} menuLabel="Modelo" className="chat-model-menu" openSignal={openSignal}>
+  return <TrayMenu label={`Modelo: ${name}`} icon={<AgentIcon kind={provider} size={13} />} text={name} menuLabel="Modelo" className="chat-model-menu" openSignal={openSignal} triggerClassName={triggerClassName}>
     {close => <>
       <div className="chat-menu-label">Modelo</div>
       {main.length ? main.map(item => option(item, close))

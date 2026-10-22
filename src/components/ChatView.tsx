@@ -38,14 +38,14 @@ import { INBOX_WAKE } from "../messageQueue";
 import { createHandoffContext, type HandoffContext, type HandoffReference } from "../handoff";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon, RotateIcon } from "./Icons";
+import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, RotateIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
-import { EffortMenu, ModelMenu } from "./chat/ModelMenu";
+import { ModelMenu } from "./chat/ModelMenu";
+import ComposerSettings from "./chat/ComposerSettings";
+import UsageMenu from "./chat/UsageMenu";
 import { FileBadge, SharedFilesContext } from "./chat/SharedFiles";
 import { useImageViewer } from "./ImageViewer";
 import { useStableCallback } from "../hooks/useStableCallback";
-import ContextMeter from "./chat/ContextMeter";
-import PlanMeter from "./chat/PlanMeter";
 import QuestionPanel from "./chat/QuestionPanel";
 import Suggestions from "./chat/Suggestions";
 import WorkSummary from "./chat/WorkSummary";
@@ -359,6 +359,11 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     requireReview: props.handoffRestored, onConsumed: consumeHandoff });
   const handoffPending = !!props.handoff?.pending;
   const canHandoff = state.items.some(item => item.kind === "user" || item.kind === "text");
+  const handoffDisabled = running || submittingEdit || queueSaving || hasQueued || !session.queue.ready || !canHandoff || handoffDelivery.sending;
+  const handoffHint = running ? "Disponible al terminar la respuesta. También puedes detenerla con Esc."
+    : hasQueued ? "Lee o cancela los mensajes en cola antes de cambiar de asistente."
+    : !canHandoff ? "Envía un mensaje para poder continuar este trabajo con otro asistente."
+    : "Continúa este trabajo con otro perfil y conserva el contexto.";
   const requestHandoff = (): void => {
     if (running || submittingEdit || queueSavingRef.current || hasQueued || !session.queue.ready || !canHandoff || !props.projectId) return;
     callbacks.current.onHandoffRequest?.(createHandoffContext(state, {
@@ -982,8 +987,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? `${sessionId}-suggestions` : undefined}
           aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${selectedSuggestion}` : undefined}
           placeholder={running
-            ? sendDuringWork === "queue" ? "Añade un mensaje a la cola; el agente decide cuándo leerlo…" : "Enviar al agente durante el trabajo…"
-            : `Pide cambios · @ archivos${provider === "claude" ? " y subagentes" : ""} · / comandos · $ skills`}
+            ? sendDuringWork === "queue" ? "Añade un mensaje a la cola…" : "Envía una indicación…"
+            : "Escribe un mensaje…"}
           onChange={event => { setDraft(event.target.value); setCaret(event.target.selectionStart); if (!event.target.value) setDismissed(null); }}
           onSelect={event => setCaret(event.currentTarget.selectionStart)}
           onScroll={event => { if (mirrorRef.current) mirrorRef.current.scrollTop = event.currentTarget.scrollTop; }}
@@ -1037,13 +1042,14 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           }} />
         </div>
         <div className="chat-input-actions">
+          <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
+            disabled={submittingEdit || queueSaving || handoffPending}
+            onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
+          <span className="chat-input-action-spacer" aria-hidden="true" />
           {(running || hasQueued) && !editing && <Select className="chat-tray-chip chat-tray-select chat-message-delivery" menuClassName="chat-glass-menu" value={sendDuringWork}
             options={[{ value: "queue", label: "En cola", description: "El agente decide cuándo leer el mensaje" },
               { value: "now", label: "Enviar ahora", description: "Entrega el mensaje durante el trabajo en curso" }]}
             align="end" onChange={setSendDuringWork} aria-label="Entrega de mensajes durante el trabajo" />}
-          <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
-            disabled={submittingEdit || queueSaving || handoffPending}
-            onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
           {running && !draft.trim() && !attachments.length && !docs.length
             ? <button type="button" className="chat-send stop tip" aria-label="Detener" data-tip="Detener (Esc)" onClick={session.interrupt}><StopIcon /></button>
             : <button type="submit" className="chat-send tip" aria-label={editing ? "Guardar y regenerar" : (running || hasQueued) && sendDuringWork === "queue" ? "Añadir a la cola" : "Enviar"}
@@ -1054,35 +1060,24 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         </div>
       </form>
       <div className="chat-tray">
-        {props.onHandoffRequest && <button type="button" className="chat-tray-chip chat-handoff-button tip"
-          aria-label="Continuar con otro asistente" data-tip={running ? "Detén la respuesta antes de cambiar de asistente" : "Continuar este trabajo con otro perfil"}
-          disabled={running || submittingEdit || queueSaving || hasQueued || !session.queue.ready || !canHandoff || handoffDelivery.sending}
-          onClick={requestHandoff}><RotateIcon size={13} /><span>Continuar con…</span></button>}
-        <Select className="chat-tray-chip chat-tray-select" menuClassName="chat-glass-menu" value={mode} options={modeOptions} align="start"
-          openSignal={menuSignal.mode}
-          onChange={value => { session.setMode(value); backToInput(); }}
-          aria-label={`Permisos: ${modeOptions.find(option => option.value === mode)?.label ?? mode}`} />
-        <span className="chat-tray-sep" aria-hidden="true" />
         <ModelMenu provider={provider} models={state.models} model={state.model} choice={state.modelChoice}
-          onModel={model => { session.setModel(model); backToInput(); }} openSignal={menuSignal.model} />
-        {(efforts.length > 0 || speed) && <>
-          <span className="chat-tray-sep" aria-hidden="true" />
-          <EffortMenu levels={efforts} effort={state.effort} onEffort={effort => { session.setEffort(effort); backToInput(); }}
-            speed={speed} fast={state.fast} onFast={fast => { session.setFast(fast); backToInput(); }}
-            openSignal={menuSignal.effort} />
-        </>}
+          onModel={model => { session.setModel(model); backToInput(); }} openSignal={menuSignal.model} triggerClassName="chat-composer-model" />
+        <ComposerSettings mode={mode} modes={modeOptions} onMode={session.setMode}
+          levels={efforts} effort={state.effort} onEffort={session.setEffort} speed={speed} fast={state.fast} onFast={session.setFast}
+          onHandoff={props.onHandoffRequest ? requestHandoff : undefined} handoffDisabled={handoffDisabled} handoffHint={handoffHint}
+          openSignal={menuSignal} />
         <span className="chat-composer-spacer" />
-        {state.plan && <PlanMeter usage={state.plan} product={agent.product} onOpenAll={() => callbacks.current.onOpenUsage()} />}
-        {usage && <ContextMeter usage={usage} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
+        {(usage || state.plan) && <UsageMenu usage={usage} plan={state.plan} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
+          onOpenAll={() => callbacks.current.onOpenUsage()}
           onCompact={() => {
             stickRef.current = true;
             // Claude Code resume con su propio `/compact`; Codex, con su petición.
             if (!runLocal("compact", "")) session.send("/compact", [], []);
             backToInput();
           }} />}
-        {branch && <BranchMenu cwd={cwd} branch={branch} busy={running || submittingEdit} visible={visible}
-          onChange={setBranch} onMessage={message => callbacks.current.onMessage(message)} />}
       </div>
+      {branch && <div className="chat-composer-meta"><BranchMenu cwd={cwd} branch={branch} busy={running || submittingEdit} visible={visible}
+        onChange={setBranch} onMessage={message => callbacks.current.onMessage(message)} /></div>}
      </div>
     </div>
   </div>;

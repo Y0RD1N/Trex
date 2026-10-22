@@ -1591,8 +1591,8 @@ pre.chat-ask-preview-body {
 }
 
 /* --- Caja de mensaje ----------------------------------------------------- */
-/* Flota sobre el hilo: una tarjeta de cristal para escribir y, debajo, una
-   bandeja con los selectores. Se ve bien aunque el WebView no pinte el
+/* Flota sobre el hilo: una tarjeta de cristal para escribir y, debajo,
+   los ajustes agrupados. Se ve bien aunque el WebView no pinte el
    desenfoque (WebKitGTK no siempre lo hace): las capas casi opacas, el brillo
    superior y la sombra amplia dan la sensación de cristal por sí mismas. */
 .chat-composer-wrap {
@@ -1617,7 +1617,7 @@ pre.chat-ask-preview-body {
     color-mix(in srgb, var(--term-bg) 94%, transparent) 75%);
   pointer-events: none;
 }
-/* Tarjeta para escribir y, debajo, la bandeja de selectores: dos piezas de cristal que flotan juntas. */
+/* La escritura y las acciones comparten una tarjeta; los ajustes quedan fuera. */
 .chat-dock {
   position: relative;
   max-width: var(--chat-width);
@@ -1627,7 +1627,7 @@ pre.chat-ask-preview-body {
 .chat-composer {
   position: relative;
   z-index: 1;
-  padding: 6px 6px 6px 16px;
+  padding: 10px;
   border: 1px solid var(--dock-edge);
   border-radius: 18px;
   background: var(--dock-sheen), var(--dock-glass);
@@ -1642,7 +1642,8 @@ pre.chat-ask-preview-body {
 }
 .chat-input-row {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
 }
 /* La caja de texto es transparente: lo que se ve es su copia de detrás, que
@@ -1653,6 +1654,7 @@ pre.chat-ask-preview-body {
   display: flex;
   flex: 1;
   min-width: 0;
+  margin: 0 6px;
 }
 .chat-input-row textarea,
 .chat-input-mirror {
@@ -1717,6 +1719,7 @@ pre.chat-ask-preview-body {
   flex-shrink: 0;
   height: 38px;
 }
+.chat-input-action-spacer { flex: 1; }
 .chat-icon-btn {
   display: grid;
   place-items: center;
@@ -1751,22 +1754,15 @@ pre.chat-ask-preview-body {
 .chat-send:disabled { opacity: 0.4; box-shadow: none; cursor: default; }
 .chat-send.stop { background: var(--text); color: var(--term-bg); box-shadow: none; }
 
-/* La bandeja asoma bajo la tarjeta, un poco más estrecha, como una repisa de cristal. */
+/* Tres accesos sin una segunda caja: modelo, ajustes y uso. */
 .chat-tray {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
   min-width: 0;
-  margin: -14px 14px 0;
-  padding: 16px 8px 4px;
-  border: 1px solid var(--dock-edge);
-  border-top: 0;
-  border-radius: 0 0 14px 14px;
-  background: var(--dock-tray);
-  -webkit-backdrop-filter: blur(var(--dock-blur)) saturate(var(--dock-saturate));
-  backdrop-filter: blur(var(--dock-blur)) saturate(var(--dock-saturate));
-  box-shadow: 0 16px 32px -20px rgba(0, 0, 0, 0.65);
+  margin: 0;
+  padding: 7px 2px 0;
 }
 .chat-tray .chat-tray-chip,
 .chat-tray .input.chat-tray-chip {
@@ -1775,8 +1771,8 @@ pre.chat-ask-preview-body {
   gap: 6px;
   width: auto;
   min-width: 0;
-  height: 26px;
-  padding: 0 7px;
+  height: 30px;
+  padding: 0 8px;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -1798,10 +1794,11 @@ pre.chat-ask-preview-body {
   width: 12px;
   height: 12px;
   color: var(--text-dim);
-  transform: rotate(90deg);
   transition: transform var(--dur) var(--ease-spring);
 }
-.chat-tray .chat-tray-chip[aria-expanded="true"] > svg { transform: rotate(-90deg); }
+.chat-tray :is(.chat-composer-model, .chat-composer-settings-trigger) > svg { transform: rotate(90deg); }
+.chat-tray :is(.chat-composer-model, .chat-composer-settings-trigger)[aria-expanded="true"] > svg { transform: rotate(-90deg); }
+.chat-tray .chat-composer-model { flex: 0 1 auto; max-width: 45%; color: var(--text); }
 .chat-tray .chat-tray-chip .select-icon,
 .chat-tray-icon {
   display: grid;
@@ -1837,6 +1834,19 @@ pre.chat-ask-preview-body {
   white-space: nowrap;
 }
 .chat-composer-spacer { flex: 1; }
+.chat-composer-meta {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  padding: 3px 4px 0;
+}
+.chat-composer-meta .chat-tray-info.chat-branch-trigger {
+  display: inline-flex;
+  max-width: min(300px, 100%);
+  height: 24px;
+  padding: 0 4px;
+  font-size: 10.5px;
+}
 
 /* --- Sugerencias de @, / y $ ----------------------------------------------
    Flotan sobre la caja con el mismo cristal negro que los menús. */
@@ -2271,11 +2281,16 @@ pre.chat-ask-preview-body {
 @container (max-width: 520px) {
   .chat-thread { padding: 20px 16px calc(var(--composer-space, 120px) + 12px); }
   .chat-composer-wrap { padding: 0 12px 12px; }
-  .chat-tray-info { display: none; }
-  .chat-tray-text, .chat-tray .chat-tray-chip .select-value { max-width: 96px; }
   .chat-working-hint { display: none; }
   .chat-empty { padding-bottom: 0; }
   .chat-empty h2 { font-size: 19px; }
+}
+@container (max-width: 560px) {
+  .chat-tray { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 6px; }
+  .chat-tray .chat-composer-model { grid-column: 1 / -1; justify-self: start; max-width: 100%; }
+  .chat-tray .chat-composer-settings-trigger { justify-self: start; }
+  .chat-tray .chat-usage-trigger { justify-self: end; }
+  .chat-tray .chat-composer-spacer { display: none; }
 }
 .terminal-host:has(> .chat) { container-type: inline-size; }
 
@@ -2327,8 +2342,6 @@ pre.chat-ask-preview-body {
   .chat-assistant-actions { opacity: 1; transform: none; }
   .chat-attachment-remove { opacity: 1; transform: none; }
 }
-
-:root[data-theme="light"] .chat-tray { box-shadow: 0 14px 28px -20px rgba(16, 24, 40, 0.3); }
 
 /* Menús en claro: cristal blanco con el mismo desenfoque. */
 :root[data-theme="light"] .context-menu.chat-glass-menu {

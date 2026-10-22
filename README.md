@@ -67,7 +67,7 @@ carpeta, con el asistente y el perfil que elijas.
 
 ## Claude Code y Codex como chat
 
-Con **Continuar con…**, junto a la caja de mensaje, puedes pasar el trabajo a
+En **Ajustes del agente → Continuar con otro asistente…** puedes pasar el trabajo a
 otro perfil: Claude 1 → Claude 2, Claude → Codex o en sentido contrario. Elige
 el destino y su modelo, revisa el contexto y, si quieres, indica el siguiente paso. TREX
 abre una conversación nueva en el mismo proyecto y conserva la original.
@@ -160,21 +160,22 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
   como una checklist.
 - **Permisos**: cuando el asistente necesita permiso, aparece una tarjeta con
   **Permitir**, la opción de permitirlo en la sesión o siempre, y **Denegar**.
-  El selector de la caja de mensaje cambia el modo: Preguntar, Aceptar
+  El panel **Ajustes del agente**, debajo del mensaje, cambia el modo: Preguntar, Aceptar
   ediciones, Planificar o Permitir todo en Claude; Solo lectura, Automático,
   Planificar o Permitir todo en Codex. **Permitir todo** se aplica al momento:
   lo que estaba esperando permiso se acepta y no vuelve a preguntar (las
   preguntas con opciones y los planes sí esperan tu respuesta). Cada pestaña
   recuerda su modo al reabrir trex y los chats nuevos empiezan con el último
-  que elegiste.
+  que elegiste. El acceso al panel indica **Acceso total**, **Solo lectura** o
+  **Planificar** cuando corresponde, para mantener visible el modo activo.
 - **Contexto**: en Claude y en Codex, el anillo de la bandeja muestra desde
   que abres el chat qué parte de la ventana de contexto ocupa la conversación;
   se pone ámbar al 70 % y rojo al 90 %. Al pulsarlo ves el desglose (en Claude,
   lo mismo que `/context`; en Codex, también los tokens de toda la
   conversación) y puedes resumirla con `/compact`.
-- **Modelo y esfuerzo**: los selectores muestran los modelos de tu cuenta y
-  solo los niveles de esfuerzo que admite cada uno. En Codex se aplican desde
-  el siguiente mensaje.
+- **Modelo y esfuerzo**: el modelo tiene un acceso propio; **Ajustes del agente**
+  agrupa permisos, esfuerzo y velocidad. Solo aparecen los niveles que admite
+  cada modelo. En Codex se aplican desde el siguiente mensaje.
 - **Planes**: en modo Planificar, Codex muestra el plan entero con un botón
   **Implementar el plan**, que vuelve al modo en que trabajabas y lo pone en
   marcha.
@@ -194,9 +195,9 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
   Codex pregunta así también fuera del modo Planificar (trex activa su
   función `default_mode_request_user_input`; un perfil con
   `--disable default_mode_request_user_input` la apaga).
-- **Uso del plan**: junto al contexto, la bandeja muestra cuánto llevas de tu
-  plan (la ventana de 5 horas o la semana, la que más importa ahora); al
-  pulsarlo ves cada ventana con su reinicio y el uso extra. **Uso de las
+- **Uso del plan**: comparte un único acceso con el contexto. Al pulsarlo ves
+  ambos desgloses, cada ventana con su reinicio y el uso extra. Si un límite
+  necesita atención, su nombre y porcentaje aparecen en el acceso. **Uso de las
   cuentas** (el medidor de la barra lateral o la paleta de comandos) muestra
   a la vez el de todos tus perfiles, como `/usage` en cada asistente: trex
   lanza el CLI un momento sin enviar mensajes, así que no gasta tokens.

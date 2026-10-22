@@ -25,19 +25,22 @@ function Ring({ percent }: { percent: number }) {
   </svg>;
 }
 
-export default function ContextMeter({ usage, product, busy, onCompact }: {
+type ContextProps = {
   usage: ContextUsage;
   /** Nombre del asistente, para explicar cuándo resume él solo. */
   product: string;
   /** El asistente está trabajando: ahora no se puede resumir. */
   busy: boolean;
   onCompact: () => void;
+};
+
+/** Desglose compartido por el menú de contexto y el diálogo de uso. */
+export function ContextDetails({ usage, product, busy, onCompact, inline = false, onClose }: ContextProps & {
+  /** El contenedor ya aporta el título y usa botones normales, como un diálogo. */
+  inline?: boolean;
+  onClose?: () => void;
 }) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
-  const close = (): void => setAnchor(null);
   const percent = contextPercent(usage);
-  const level = percent === null ? "" : percent >= 90 ? " critical" : percent >= 70 ? " high" : "";
   const shown = percent === null ? formatTokens(usage.used) : percentLabel(percent);
   const summary = `${formatTokens(usage.used)}${usage.window ? ` de ${formatTokens(usage.window)}` : ""} tokens`;
   // Las partes fijas son las que mide el asistente; los mensajes, todo lo demás.
@@ -56,6 +59,41 @@ export default function ContextMeter({ usage, product, busy, onCompact }: {
   ].filter(Boolean);
 
   return <>
+    {!inline && <div className="chat-menu-label">Contexto</div>}
+    <div className="chat-context-head">
+      <strong>{shown}</strong>
+      <span>{summary}</span>
+    </div>
+    {usage.window && <div className="chat-context-bar" aria-hidden="true">
+      {rows.map(row => <i key={row.name} style={{ width: share(row.tokens), background: row.color }} />)}
+      {reserve && <i className="reserve" style={{ width: share(reserve) }} />}
+    </div>}
+    <ul className="chat-context-parts">
+      {rows.map(row => <li key={row.name}>
+        <i style={{ background: row.color }} /><span>{row.name}</span><b>{formatTokens(row.tokens)}</b>
+      </li>)}
+      {reserve && <li className="muted"><i className="reserve" /><span>Reserva para resumir</span><b>{formatTokens(reserve)}</b></li>}
+      {free !== null && <li className="muted"><i className="free" /><span>Libre</span><b>{formatTokens(free)}</b></li>}
+    </ul>
+    {notes.length > 0 && <p className="chat-context-note">{notes.join(" ")}</p>}
+    <button type="button" role={inline ? undefined : "menuitem"} tabIndex={inline ? undefined : -1}
+      className="context-item chat-context-compact" disabled={busy}
+      onClick={() => { onClose?.(); onCompact(); }}>
+      <span>Resumir conversación</span><small>/compact</small>
+    </button>
+  </>;
+}
+
+export default function ContextMeter({ usage, product, busy, onCompact }: ContextProps) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
+  const close = (): void => setAnchor(null);
+  const percent = contextPercent(usage);
+  const level = percent === null ? "" : percent >= 90 ? " critical" : percent >= 70 ? " high" : "";
+  const shown = percent === null ? formatTokens(usage.used) : percentLabel(percent);
+  const summary = `${formatTokens(usage.used)}${usage.window ? ` de ${formatTokens(usage.window)}` : ""} tokens`;
+
+  return <>
     <button ref={triggerRef} type="button" className={`chat-tray-chip chat-context${level}`} aria-haspopup="menu" aria-expanded={!!anchor}
       aria-label={`Contexto: ${percent === null ? summary : `${shown} usado, ${summary}`}`}
       data-tip={anchor ? undefined : `Contexto usado: ${summary}`}
@@ -65,27 +103,7 @@ export default function ContextMeter({ usage, product, busy, onCompact }: {
     </button>
     <DropdownMenu anchor={anchor} triggerRef={triggerRef} label="Uso del contexto"
       className={`chat-tray-menu chat-glass-menu chat-context-menu${level}`} onClose={close}>
-      <div className="chat-menu-label">Contexto</div>
-      <div className="chat-context-head">
-        <strong>{shown}</strong>
-        <span>{summary}</span>
-      </div>
-      {usage.window && <div className="chat-context-bar" aria-hidden="true">
-        {rows.map(row => <i key={row.name} style={{ width: share(row.tokens), background: row.color }} />)}
-        {reserve && <i className="reserve" style={{ width: share(reserve) }} />}
-      </div>}
-      <ul className="chat-context-parts">
-        {rows.map(row => <li key={row.name}>
-          <i style={{ background: row.color }} /><span>{row.name}</span><b>{formatTokens(row.tokens)}</b>
-        </li>)}
-        {reserve && <li className="muted"><i className="reserve" /><span>Reserva para resumir</span><b>{formatTokens(reserve)}</b></li>}
-        {free !== null && <li className="muted"><i className="free" /><span>Libre</span><b>{formatTokens(free)}</b></li>}
-      </ul>
-      {notes.length > 0 && <p className="chat-context-note">{notes.join(" ")}</p>}
-      <button type="button" role="menuitem" tabIndex={-1} className="context-item chat-context-compact" disabled={busy}
-        onClick={() => { close(); onCompact(); }}>
-        <span>Resumir conversación</span><small>/compact</small>
-      </button>
+      <ContextDetails usage={usage} product={product} busy={busy} onCompact={onCompact} onClose={close} />
     </DropdownMenu>
   </>;
 }

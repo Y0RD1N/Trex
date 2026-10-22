@@ -1,0 +1,58 @@
+.chat-tray .chat-usage-trigger {
+  --context-color: var(--accent);
+  flex-shrink: 0;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-tray .chat-usage-trigger .chat-tray-text { max-width: none; }
+.chat-usage-trigger.high { --usage-color: #e5a50a; }
+.chat-usage-trigger.critical { --usage-color: #f0616d; }
+.chat-tray .chat-usage-trigger.high,
+.chat-tray .chat-usage-trigger.critical { --context-color: var(--usage-color); color: var(--usage-color); }
+
+.context-menu.chat-tray-menu.chat-usage-menu {
+  width: min(360px, calc(100vw - 24px));
+  min-width: 0;
+  max-width: var(--floating-max-width, calc(100vw - 24px));
+  max-height: min(560px, 70vh, var(--floating-max-height, 70vh));
+}
+
+.chat-usage-menu > * { flex-shrink: 0; }
+.chat-usage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px 6px 10px;
+}
+
+.chat-usage-header strong { color: var(--text); font-size: 13px; font-weight: 600; }
+.chat-usage-close {
+  display: grid;
+  flex: 0 0 28px;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-usage-close:hover { background: var(--hover); color: var(--text); }
+.chat-usage-close:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
+.chat-usage-section { min-width: 0; padding-bottom: 6px; }
+.chat-usage-section + .chat-usage-section,
+.chat-usage-footer { border-top: 1px solid var(--border); padding-top: 6px; }
+.chat-usage-section .chat-menu-label { margin: 0; padding-bottom: 8px; }
+.chat-usage-section .chat-context-head { flex-wrap: wrap; row-gap: 2px; }
+.chat-usage-section .chat-context-parts span { white-space: normal; overflow-wrap: anywhere; }
+.chat-usage-section .plan-window-head > span { min-width: 0; overflow-wrap: anywhere; }
+.chat-usage-section .plan-window-head b { flex-shrink: 0; }
+.chat-usage-plan-name { margin: 0; padding: 0 10px 4px; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+
+:root[data-theme="light"] .chat-usage-trigger.high { --usage-color: #b7791f; }
+:root[data-theme="light"] .chat-usage-trigger.critical { --usage-color: #d1242f; }
