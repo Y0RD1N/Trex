@@ -24,6 +24,8 @@ export type ChatSessionOptions = {
   conversationId: string | null;
   /** Modo de permisos con el que empieza la sesión (el que la pestaña tenía elegido). */
   mode: string | null;
+  /** Modelo elegido antes de abrir la pestaña; null conserva el del perfil. */
+  model?: string | null;
   /**
    * La pestaña se ve. El proceso arranca la primera vez que se muestra: las
    * sesiones restauradas que no se abren no gastan memoria ni CPU.
@@ -39,7 +41,7 @@ export type ChatSession = {
   /** Arranca el proceso o lo reanuda tras cerrarse. */
   start: () => Promise<void>;
   /** Envía un mensaje; `display` es lo que se ve en el hilo si no es el texto enviado. */
-  send: (text: string, images: OutgoingImage[], previews: string[], display?: string) => void;
+  send: (text: string, images: OutgoingImage[], previews: string[], display?: string) => void | Promise<boolean>;
   /** Reemplaza el mensaje y regenera desde ese punto en una rama del historial original. */
   edit: (id: string, text: string, images: OutgoingImage[], previews: string[]) => Promise<void>;
   /** Empieza una conversación nueva en la misma pestaña. */

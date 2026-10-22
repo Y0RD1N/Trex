@@ -5,6 +5,7 @@
 import type { ColorScheme, MotionPreference } from "./visualDesign";
 import type { ShortcutBindings } from "./shortcuts";
 import type { SplitLayout } from "./splitLayout";
+import type { HandoffReference } from "./handoff";
 
 /** Forma en la que el backend lanza un asistente dentro del PTY. */
 export type LaunchMode = "arg" | "inject";
@@ -130,6 +131,8 @@ export type PersistedTab = {
   conversationId?: string | null;
   /** Modo de permisos elegido en el chat de la pestaña. */
   chatMode?: string | null;
+  chatModel?: string | null;
+  handoff?: HandoffReference | null;
 };
 
 export type AppConfig = {
@@ -204,9 +207,15 @@ export type SpawnRequest = {
 
 /** Pestaña viva en la interfaz (estado de React, no persistido tal cual). */
 export type TabState = SessionLaunch & {
+  /** Continuidad local: nunca reutiliza el id de conversación de otra cuenta. */
+  handoff?: HandoffReference | null;
+  /** Solo runtime: cualquier envío recuperado requiere revisión, incluso sin id de conversación. */
+  handoffRestored?: boolean;
   conversationId: string | null;
   /** Modo de permisos elegido en el chat (se guarda con la pestaña). */
   chatMode: string | null;
+  /** Modelo elegido para esta pestaña, incluido el primer turno de una continuación. */
+  chatModel?: string | null;
   /** Id único de la sesión PTY (también identifica la pestaña). */
   id: string;
   projectId: string;

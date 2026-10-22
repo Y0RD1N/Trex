@@ -16,6 +16,8 @@ carpeta, con el asistente y el perfil que elijas.
 - **Paleta de comandos**: `Ctrl+K` busca acciones, proyectos, perfiles y sesiones.
 - **Recuperar conversaciones**: continúa el historial local de Claude Code o
   Codex desde el menú de nueva sesión o con `Ctrl+Shift+R`.
+- **Continuar con otro asistente**: transfiere el trabajo de un chat a otro
+  perfil de Claude Code o Codex, incluso si el anterior se quedó sin cuota.
 - **Vista previa de capturas**: revisa la imagen y la sesión de destino antes de
   adjuntarla. El texto se pega directamente.
 - **Atajos personalizables**: cambia las combinaciones en Ajustes → Atajos,
@@ -62,6 +64,25 @@ carpeta, con el asistente y el perfil que elijas.
   anterior hasta reiniciarlas.
 
 ## Claude Code y Codex como chat
+
+Con **Continuar con…**, junto a la caja de mensaje, puedes pasar el trabajo a
+otro perfil: Claude 1 → Claude 2, Claude → Codex o en sentido contrario. Elige
+el destino y su modelo, revisa el contexto y, si quieres, indica el siguiente paso. TREX
+abre una conversación nueva en el mismo proyecto y conserva la original.
+Los modelos se consultan en el perfil de destino sin iniciar una respuesta;
+puedes elegir uno o conservar el predeterminado del perfil. La elección se
+aplica desde el primer mensaje y se guarda con la pestaña.
+Si el asistente está trabajando, detén la respuesta antes de transferirla.
+
+El relevo se prepara con el historial local disponible y el estado actual de
+Git, sin pedir una respuesta al asistente anterior. Conserva el objetivo, las
+instrucciones recientes, el último plan y las tareas, además de decisiones y
+resultados registrados; los relevos posteriores conservan esos antecedentes
+de forma acotada. El nuevo asistente comprueba los archivos antes de seguir.
+El historial puede estar incompleto y se recorta si es largo. Las imágenes
+adjuntas se omiten: consulta el chat original o adjúntalas de nuevo si hacen
+falta. La transferencia requiere otro perfil compatible con la vista de chat;
+los que fijan una conversación o usan un modo especial aparecen deshabilitados.
 
 Las conversaciones largas muestran sus mensajes más recientes y cargan los
 anteriores al subir (o con **Mostrar mensajes anteriores**), sin mover lo que

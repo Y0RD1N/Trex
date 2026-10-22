@@ -156,6 +156,40 @@
 }
 .chat-copy:active:not(:disabled) { transform: scale(0.92); }
 
+.chat-handoff-button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.chat-handoff-button:disabled { opacity: .45; cursor: default; }
+.chat-handoff-status {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.chat-handoff-heading { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.chat-handoff-heading svg { color: var(--accent-strong); flex-shrink: 0; }
+.chat-handoff-status p { margin: 0; line-height: 1.6; }
+.chat-handoff-message { min-width: 0; }
+.chat-handoff-message summary { cursor: pointer; font-weight: 500; color: var(--text); }
+.chat-handoff-message pre {
+  max-height: 280px;
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.65 var(--font-mono);
+  color: var(--text-muted);
+}
+@media (max-width: 720px) {
+  .chat-handoff-button { padding-inline: 6px; }
+  .chat-handoff-button span { max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+}
+
 /* --- Markdown ------------------------------------------------------------
    Lectura cómoda: el cuerpo un punto más suave que las negritas, el acento en
    viñetas, títulos, enlaces y código en línea, y bloques de código con

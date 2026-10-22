@@ -14,6 +14,7 @@ mod conversations;
 mod codex_models;
 mod files;
 mod git;
+mod handoff;
 mod project_icon;
 mod shared_files;
 mod terminal_env;
@@ -346,6 +347,8 @@ pub fn run() {
             conversations::list_conversations,
             conversations::read_conversation,
             conversations::claude_rewind_point,
+            handoff::prepare_handoff,
+            handoff::load_handoff,
             attachments::read_image_file,
             attachments::read_clipboard_image,
             attachments::save_attachment,

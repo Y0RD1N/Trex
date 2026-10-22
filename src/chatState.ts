@@ -147,11 +147,16 @@ export type BaseChatAction =
   | { type: "stderr"; line: string }
   | { type: "exit"; code: number | null };
 
-/** Estado inicial; `mode` es el modo de permisos que la pestaña tenía elegido. */
-export const initialChatState = (mode: string | null = null): ChatState => ({
+/** Un modelo guardado es un identificador del CLI, nunca argumentos ni texto de control. */
+export const normalizeModelChoice = (value: unknown): string | null =>
+  typeof value === "string" && value.trim().length > 0 && value.trim().length <= 256 && !/[\s\u0000-\u001f\u007f]/.test(value.trim())
+    ? value.trim() : null;
+
+/** Estado inicial con las elecciones guardadas antes de arrancar el proceso. */
+export const initialChatState = (mode: string | null = null, model: string | null = null): ChatState => ({
   items: [], pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], completedTurnIds: [],
   turnStartedAt: null, sessionId: null, turnId: null, turnDiff: null, model: null, models: [],
-  modelChoice: null, effort: null, effortChoice: null, fast: false, fastChoice: null, permissionMode: mode, modeChoice: mode,
+  modelChoice: normalizeModelChoice(model), effort: null, effortChoice: null, fast: false, fastChoice: null, permissionMode: mode, modeChoice: mode,
   commands: [], agents: [], skills: [], usage: null, plan: null, costUsd: null,
   stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null, historyCount: 0, process: "starting", exitCode: null, stderr: [],
 });

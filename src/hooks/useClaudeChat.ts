@@ -29,7 +29,7 @@ type Control =
 
 export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env, conversationId } = options;
-  const [state, dispatch] = useReducer(chatReducer, options.mode, initialChatState);
+  const [state, dispatch] = useReducer(chatReducer, null, () => initialChatState(options.mode, options.model));
   const stateRef = useRef(state);
   stateRef.current = state;
   const callbacks = useRef(options);
@@ -208,15 +208,17 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
 
   const alive = state.process === "ready" || state.process === "starting";
 
-  const send = (text: string, images: OutgoingImage[], previews: string[], display?: string): void => {
+  const send = async (text: string, images: OutgoingImage[], previews: string[], display?: string): Promise<boolean> => {
     const id = crypto.randomUUID();
     dispatch({ type: "send", id, text: display ?? text, previews, now: Date.now() });
-    const deliver = (): void => {
-      void agent.write(userMessageLine(claudeSkillText(text, stateRef.current.skills), images, id))
-        .catch(error => dispatch({ type: "sendFailed", id, message: `No se pudo enviar el mensaje: ${formatError(error)}` }));
-    };
-    if (alive) deliver();
-    else void start().then(deliver);
+    try {
+      if (!alive) await start();
+      await agent.write(userMessageLine(claudeSkillText(text, stateRef.current.skills), images, id));
+      return true;
+    } catch (error) {
+      dispatch({ type: "sendFailed", id, message: `No se pudo enviar el mensaje: ${formatError(error)}` });
+      return false;
+    }
   };
 
   const edit: ChatSession["edit"] = async (id, text, images, previews) => {

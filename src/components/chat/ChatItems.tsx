@@ -56,7 +56,9 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
       </button>)}
     </div>}
     {(body || (images > 0 && !previews.length)) && <div className="chat-user">
-      {body && <div className="chat-user-text">{parts.map((part, index) => {
+      {body && <div className="chat-user-text">{body.includes("<!-- trex-handoff:")
+        ? <details className="chat-handoff-message"><summary>Contexto para continuar el trabajo</summary><pre>{body}</pre></details>
+        : parts.map((part, index) => {
         if (!("kind" in part)) return part.text;
         if (part.kind === "Archivo") {
           const path = files[part.index];

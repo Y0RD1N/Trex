@@ -31,7 +31,7 @@ type Pending = { resolve: (result: unknown) => void; reject: (error: Error) => v
 
 export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env } = options;
-  const [state, dispatch] = useReducer(codexReducer, options.mode, initialChatState);
+  const [state, dispatch] = useReducer(codexReducer, null, () => initialChatState(options.mode, options.model));
   const stateRef = useRef(state);
   stateRef.current = state;
   const callbacks = useRef(options);
@@ -52,7 +52,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const editingRef = useRef(false);
   /** Modo, modelo, esfuerzo y velocidad elegidos: se leen al empezar cada turno, sin esperar al render. */
   const choicesRef = useRef<{ mode: string | null; model: string | null; effort: string | null; fast: boolean | null }>({
-    mode: options.mode, model: null, effort: null, fast: null });
+    mode: options.mode, model: state.modelChoice, effort: null, fast: null });
   const writeRef = useRef<(line: string) => Promise<void>>(() => Promise.resolve());
 
   const notice = useCallback((tone: "info" | "warn" | "error", text: string) => dispatch({ type: "notice", id: localId(), tone, text }), []);
@@ -194,7 +194,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     void request("account/rateLimits/read", {}).then(data => dispatch({ type: "plan", data })).catch(() => undefined);
 
     // Archivos y preguntas de la interfaz; las instrucciones de AGENTS.md siguen aparte.
-    const overrides: Json = { developerInstructions: CHAT_INSTRUCTIONS, ...launch.thread };
+    const overrides: Json = { developerInstructions: CHAT_INSTRUCTIONS, ...launch.thread,
+      ...(choicesRef.current.model ? { model: choicesRef.current.model } : {}) };
     const resumeId = stateRef.current.sessionId ?? (freshRef.current ? null : callbacks.current.conversationId ?? launch.resumeId);
     if (resumeId) {
       try {
@@ -266,15 +267,20 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   };
 
   /** Mensaje del usuario en el hilo y, cuando Codex esté listo, la petición que lo atiende. */
-  const submit = (display: string, previews: string[], work: (id: string) => Promise<void>, failure = "No se pudo enviar el mensaje"): void => {
+  const submit = async (display: string, previews: string[], work: (id: string) => Promise<void>, failure = "No se pudo enviar el mensaje"): Promise<boolean> => {
     const id = localId();
     dispatch({ type: "send", id, text: display, previews, now: Date.now() });
-    const failed = (error: unknown): void => dispatch({ type: "turnFailed", message: `${failure}: ${formatError(error)}` });
-    if (alive) void work(id).catch(failed);
-    else void start().then(() => work(id)).catch(failed);
+    try {
+      if (!alive) await start();
+      await work(id);
+      return true;
+    } catch (error) {
+      dispatch({ type: "turnFailed", message: `${failure}: ${formatError(error)}` });
+      return false;
+    }
   };
 
-  const send = (text: string, images: OutgoingImage[], previews: string[], display?: string): void =>
+  const send = (text: string, images: OutgoingImage[], previews: string[], display?: string): Promise<boolean> =>
     submit(display ?? text, previews, id => deliver(text, images, id));
 
   const edit: ChatSession["edit"] = async (id, text, images, previews) => {

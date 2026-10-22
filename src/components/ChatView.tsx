@@ -33,9 +33,11 @@ import { reducedMotion } from "../visualDesign";
 import type { ChatSession, ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
+import { useHandoffDelivery } from "../hooks/useHandoffDelivery";
+import { createHandoffContext, type HandoffContext, type HandoffReference } from "../handoff";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon } from "./Icons";
+import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, ShieldIcon, StopIcon, RotateIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { EffortMenu, ModelMenu } from "./chat/ModelMenu";
 import { FileBadge, SharedFilesContext } from "./chat/SharedFiles";
@@ -51,6 +53,14 @@ import "./ChatView.css";
 import "./chat/MessageActions.css";
 
 export type ChatViewProps = ChatSessionOptions & {
+  projectId?: string;
+  profileId?: string | null;
+  profileName?: string | null;
+  sessionTitle?: string;
+  handoff?: HandoffReference | null;
+  handoffRestored?: boolean;
+  onHandoffRequest?: (context: HandoffContext) => void;
+  onHandoffConsumed?: (tabId: string, id: string) => void;
   provider: AgentProvider;
   projectName: string;
   settings: Settings;
@@ -62,6 +72,7 @@ export type ChatViewProps = ChatSessionOptions & {
   onTitle: (tabId: string, title: string) => void;
   /** Modo de permisos elegido: se guarda con la pestaña. */
   onMode: (tabId: string, provider: AgentProvider, mode: string) => void;
+  onModel?: (tabId: string, model: string | null) => void;
   /** Aviso pasajero (toast) para lo que no debe quedar en el hilo. */
   onMessage: (message: string) => void;
   /** Abre el uso del plan de todas las cuentas. */
@@ -165,7 +176,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   const callbacks = useRef(props);
   callbacks.current = props;
-  const titledRef = useRef(conversationId !== null);
+  const titledRef = useRef(conversationId !== null || !!props.handoff);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
@@ -319,6 +330,18 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   }, [visible, resizeInput]);
 
   const running = state.pendingTurns > 0;
+  const consumeHandoff = useStableCallback((id: string) => callbacks.current.onHandoffConsumed?.(sessionId, id));
+  const handoffDelivery = useHandoffDelivery({ reference: props.handoff, session, visible, conversationId,
+    requireReview: props.handoffRestored, onConsumed: consumeHandoff });
+  const handoffPending = !!props.handoff?.pending;
+  const canHandoff = state.items.some(item => item.kind === "user" || item.kind === "text");
+  const requestHandoff = (): void => {
+    if (running || submittingEdit || !canHandoff || !props.projectId) return;
+    callbacks.current.onHandoffRequest?.(createHandoffContext(state, {
+      sessionId, provider, profileId: props.profileId ?? null, profileName: props.profileName || agent.product,
+      title: props.sessionTitle || projectName, projectId: props.projectId, projectName, cwd,
+    }));
+  };
   const summaries = useMemo(() => completedWork(threadItems, cwd, state.historyCount, summaryCacheRef.current), [threadItems, cwd, state.historyCount]);
   const responseOrigins = useMemo(() => {
     const origins = new Map<string, Extract<ChatItem, { kind: "user" }>>();
@@ -338,7 +361,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     backToInput();
   };
   const beginEdit = useStableCallback((id: string): void => {
-    if (running || editSendingRef.current || preparing) return;
+    if (handoffPending || running || editSendingRef.current || preparing) return;
     const item = state.items.find(item => item.kind === "user" && item.id === id);
     if (item?.kind !== "user") return;
     try {
@@ -357,7 +380,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     } catch (error) { callbacks.current.onMessage(formatError(error)); }
   });
   const resendMessage = useStableCallback((id: string): void => {
-    if (running || editSendingRef.current || preparing) return;
+    if (handoffPending || running || editSendingRef.current || preparing) return;
     const item = state.items.find(item => item.kind === "user" && item.id === id);
     if (item?.kind !== "user") return;
     try {
@@ -369,7 +392,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     } catch (error) { callbacks.current.onMessage(formatError(error)); }
   });
   const regenerateMessage = useStableCallback((id: string): void => {
-    if (running || editSendingRef.current || preparing) return;
+    if (handoffPending || running || editSendingRef.current || preparing) return;
     const item = state.items.find(item => item.kind === "user" && item.id === id);
     if (item?.kind !== "user") return;
     editSendingRef.current = true;
@@ -545,6 +568,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   useEffect(() => {
     if (state.modeChoice) callbacks.current.onMode(sessionId, provider, state.modeChoice);
   }, [state.modeChoice, sessionId, provider]);
+  useEffect(() => {
+    callbacks.current.onModel?.(sessionId, state.modelChoice);
+  }, [state.modelChoice, sessionId]);
   /** Modo de trabajo al que se vuelve al poner en marcha un plan. */
   const workModeRef = useRef(mode === "plan" ? agent.defaultMode : mode);
   useEffect(() => { if (mode !== "plan") workModeRef.current = mode; }, [mode]);
@@ -612,6 +638,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   };
 
   const send = (override?: string): void => {
+    if (handoffPending) return;
     const text = (override ?? draftRef.current).trim();
     const images = attachmentsRef.current;
     const attached = docsRef.current;
@@ -749,9 +776,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     return { latestTodos: todos, latestPlan: provider === "codex" ? plan : undefined, planIndex: index };
   }, [threadItems, provider]);
   // El plan se puede poner en marcha cuando es lo último que propuso Codex.
-  const planReady = !running && mode === "plan" && latestPlan !== undefined
+  const planReady = !handoffPending && !running && mode === "plan" && latestPlan !== undefined
     && !threadItems.slice(planIndex + 1).some(item => item.kind === "user");
   const implementPlan = useStableCallback((): void => {
+    if (handoffPending) return;
     session.setMode(workModeRef.current);
     stickRef.current = true;
     session.send("Implementa el plan.", [], []);
@@ -759,7 +787,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   // Filas del hilo: se rehacen solo cuando cambia algo que muestran, no con cada tecla en la caja.
   const editingId = editing?.id ?? null;
-  const busy = preparing > 0;
+  const busy = preparing > 0 || handoffPending;
   const rows = useMemo(() => {
     // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
     const askingFor = new Set(threadItems.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
@@ -778,7 +806,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           const user = responseOrigins.get(item.id);
           return <AssistantText key={item.id} text={item.text} streaming={!item.final} animate={animate}
             regenerateId={user && canEdit(user) && user.images === user.previews.length ? user.id : undefined}
-            onRegenerate={regenerateMessage} disabled={running || submittingEdit || editingId !== null}
+            onRegenerate={regenerateMessage} disabled={running || submittingEdit || busy || editingId !== null}
             actions={item.final && (next ? next.kind === "turn" || next.kind === "user" : !running)} />;
         }
         case "thinking": return <Thinking key={item.id} text={item.text} />;
@@ -809,7 +837,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
       <SharedFilesContext.Provider value={filesContext}>
       <div className="chat-thread" ref={threadRef}>
-        {empty && <div className="chat-empty">
+        {empty && !handoffPending && <div className="chat-empty">
           <AgentIcon kind={provider} size={30} activity={activity} />
           <h2>¿En qué trabajamos en {projectName}?</h2>
           <p>{cwd}</p>
@@ -824,7 +852,17 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           {state.turnStartedAt !== null && <WorkingTime since={state.turnStartedAt} live={visible} />}
           <span className="chat-working-hint">Esc para detener</span>
         </div>}
-        {(state.process === "exited" || state.process === "failed") && <div className="chat-ended">
+        {handoffPending && <div className="chat-handoff-status" role={handoffDelivery.error ? "alert" : "status"}>
+          <div className="chat-handoff-heading"><RotateIcon size={16} /><strong>Continuación de {props.handoff?.sourceLabel}</strong></div>
+          <p>{handoffDelivery.error ?? (handoffDelivery.sending ? "Entregando el contexto al asistente…"
+            : handoffDelivery.loading ? "Recuperando el contexto guardado…"
+            : handoffDelivery.requiresReview ? "El contexto sigue disponible. Revisa el historial antes de volver a enviarlo."
+            : "Preparando al asistente para continuar el trabajo…")}</p>
+          {(handoffDelivery.error || handoffDelivery.requiresReview || state.process === "failed" || state.process === "exited") &&
+            <button type="button" className="btn btn-small" disabled={handoffDelivery.loading || handoffDelivery.sending || running}
+              onClick={handoffDelivery.retry}>{handoffDelivery.requiresReview && !handoffDelivery.error ? "Enviar contexto" : "Reintentar continuación"}</button>}
+        </div>}
+        {!handoffPending && (state.process === "exited" || state.process === "failed") && <div className="chat-ended">
           <div>
             <strong>{state.process === "failed" ? `${agent.product} no pudo arrancar` : `La sesión de ${agent.product} se cerró`}</strong>
             {state.exitCode !== null && state.exitCode !== 0 && <span> · código {state.exitCode}</span>}
@@ -897,7 +935,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             : part.text)}
           {draft.endsWith("\n") ? "​" : ""}
         </div>
-        <textarea ref={inputRef} rows={1} value={draft} readOnly={submittingEdit} aria-label={`Mensaje para ${agent.name}`}
+        <textarea ref={inputRef} rows={1} value={draft} readOnly={submittingEdit || handoffPending} aria-label={`Mensaje para ${agent.name}`}
           aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? `${sessionId}-suggestions` : undefined}
           aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${selectedSuggestion}` : undefined}
           placeholder={running
@@ -957,18 +995,22 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         </div>
         <div className="chat-input-actions">
           <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
-            disabled={submittingEdit}
+            disabled={submittingEdit || handoffPending}
             onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
           {running && !draft.trim() && !attachments.length && !docs.length
             ? <button type="button" className="chat-send stop tip" aria-label="Detener" data-tip="Detener (Esc)" onClick={session.interrupt}><StopIcon /></button>
             : <button type="submit" className="chat-send tip" aria-label={editing ? "Guardar y regenerar" : "Enviar"}
               data-tip={editing ? "Guardar y regenerar" : "Enviar"}
-              disabled={(!draft.trim() && !attachments.length && !docs.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
+              disabled={handoffPending || (!draft.trim() && !attachments.length && !docs.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
                 {submittingEdit ? <span className="chat-spinner" /> : <ArrowUpIcon />}</button>}
         </div>
         </div>
       </form>
       <div className="chat-tray">
+        {props.onHandoffRequest && <button type="button" className="chat-tray-chip chat-handoff-button tip"
+          aria-label="Continuar con otro asistente" data-tip={running ? "Detén la respuesta antes de cambiar de asistente" : "Continuar este trabajo con otro perfil"}
+          disabled={running || submittingEdit || !canHandoff || handoffDelivery.sending}
+          onClick={requestHandoff}><RotateIcon size={13} /><span>Continuar con…</span></button>}
         <Select className="chat-tray-chip chat-tray-select" menuClassName="chat-glass-menu" value={mode} options={modeOptions} align="start"
           openSignal={menuSignal.mode}
           onChange={value => { session.setMode(value); backToInput(); }}
@@ -984,7 +1026,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         </>}
         <span className="chat-composer-spacer" />
         {state.plan && <PlanMeter usage={state.plan} product={agent.product} onOpenAll={() => callbacks.current.onOpenUsage()} />}
-        {usage && <ContextMeter usage={usage} product={agent.product} busy={running || state.process !== "ready"}
+        {usage && <ContextMeter usage={usage} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
           onCompact={() => {
             stickRef.current = true;
             // Claude Code resume con su propio `/compact`; Codex, con su petición.

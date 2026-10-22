@@ -11,6 +11,8 @@ import { normalizeDesign } from "./visualDesign";
 import { normalizeShortcuts, bindingError, keyError } from "./shortcuts";
 import { normalizeSplitLayout, type SplitLayout } from "./splitLayout";
 import { validConversationId } from "./conversations";
+import { normalizeHandoffReference, type HandoffContext, type PreparedHandoff } from "./handoff";
+import { normalizeModelChoice } from "./chatState";
 import type {
   AgentProvider,
   AppConfig,
@@ -91,6 +93,12 @@ export const loadConfig = (): Promise<AppConfig> => invoke<AppConfig>("load_conf
 
 export const saveConfig = (config: AppConfig): Promise<AppConfig> =>
   invoke<AppConfig>("save_config", { config });
+
+export const prepareHandoff = (context: HandoffContext): Promise<PreparedHandoff> =>
+  invoke("prepare_handoff", { cwd: context.source.cwd, sourceSessionId: context.source.sessionId,
+    sourceProvider: context.source.provider, sourceLabel: context.source.profileName, content: context.content });
+
+export const loadHandoff = (id: string): Promise<PreparedHandoff> => invoke("load_handoff", { id });
 
 export const getAppInfo = (): Promise<AppInfo> => invoke<AppInfo>("app_info");
 
@@ -481,7 +489,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
       const launch = normalizeLaunch(rec.launch, kind);
       if (rec.launch != null && !launch) continue;
       lastTabs.push({ id: typeof rec.id === "string" && /^t-[a-z0-9-]+$/i.test(rec.id) ? rec.id : undefined, projectId, kind, subtitle, launch, conversationId: validConversationId(rec.conversationId) ? rec.conversationId : null,
-        chatMode: chatMode(kind, rec.chatMode) });
+        chatMode: chatMode(kind, rec.chatMode), chatModel: kind === "shell" ? null : normalizeModelChoice(rec.chatModel),
+        handoff: kind === "shell" ? null : normalizeHandoffReference(rec.handoff) });
     }
   }
 

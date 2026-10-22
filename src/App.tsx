@@ -28,6 +28,7 @@ import {
   normalizeConfig,
   normalizeText,
   ptyKill,
+  prepareHandoff,
   saveConfig,
 } from "./api";
 import { useShortcuts } from "./hooks/useShortcuts";
@@ -69,6 +70,7 @@ import { applyDesign } from "./visualDesign";
 import type { ClipboardContent } from "./paste";
 import { resumedLaunch } from "./conversations";
 import { codexChatSupported } from "./codexChat";
+import { normalizeModelChoice } from "./chatState";
 import { showDesktopNotice } from "./desktopNotifications";
 import { createSplitLayout, replaceSplitPane, splitPaneStyle, visibleSplit, type SplitDirection, type SplitLayout } from "./splitLayout";
 import SplitDivider from "./components/SplitDivider";
@@ -79,6 +81,8 @@ import CommandPalette from "./components/CommandPalette";
 import RecoverConversations from "./components/RecoverConversations";
 import UsageDialog from "./components/UsageDialog";
 import FeatureDialog from "./components/FeatureDialog";
+import HandoffDialog, { handoffTargetReason } from "./components/HandoffDialog";
+import type { HandoffContext, HandoffReference, PreparedHandoff } from "./handoff";
 import type { PaletteCommand } from "./commandPalette";
 import { useNotificationSound } from "./hooks/useNotificationSound";
 import { useCliUpdates } from "./hooks/useCliUpdates";
@@ -105,6 +109,7 @@ const buildTab = (
   return {
     conversationId: null,
     chatMode: null,
+    chatModel: null,
     id: newSessionId(),
     projectId,
     kind,
@@ -138,6 +143,11 @@ function AppShell() {
   const [usageOpen,setUsageOpen] = useState(false);
   const openUsage = useCallback(() => setUsageOpen(true), []);
   const [recoveryOpen,setRecoveryOpen] = useState(false);
+  const [handoffDialog, setHandoffDialog] = useState<{ context: HandoffContext; prepared: PreparedHandoff | null; loading: boolean; error: string | null } | null>(null);
+  const [handoffSubmitting, setHandoffSubmitting] = useState(false);
+  const handoffGeneration = useRef(0);
+  const handoffSubmittingRef = useRef(false);
+  const handoffSurfaceRef = useRef<HTMLDivElement>(null);
   const [imagePreview,setImagePreview] = useState<{ image: Extract<ClipboardContent,{kind:"image"}>; tabId:string; resolve:(paste:boolean)=>void } | null>(null);
   const imagePreviewRef = useRef(imagePreview); imagePreviewRef.current = imagePreview;
   const previewImage = useCallback((image: Extract<ClipboardContent,{kind:"image"}>,tabId:string): Promise<boolean> => new Promise(resolve => {
@@ -157,6 +167,7 @@ function AppShell() {
   const palettePresence = usePresence(paletteOpen ? true : null, 160, paletteSurfaceRef);
   const usagePresence = usePresence(usageOpen ? true : null, 160, usageSurfaceRef);
   const recoveryPresence = usePresence(recoveryOpen ? true : null, 160, recoverySurfaceRef);
+  const handoffPresence = usePresence(handoffDialog, 160, handoffSurfaceRef);
   const imagePreviewPresence = usePresence(imagePreview, 160, imagePreviewSurfaceRef);
   const shownImagePreview = imagePreviewPresence.value;
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -296,6 +307,8 @@ function AppShell() {
     subtitle: tab.subtitle,
     conversationId:tab.conversationId,
     chatMode: tab.chatMode,
+    chatModel: tab.chatModel ?? null,
+    handoff: tab.handoff ?? null,
     launch: { profileId: tab.profileId, profileName: tab.profileName, command: tab.command, args: tab.args,
       shell: tab.shell, launchMode: tab.launchMode, env: tab.env },
   })));
@@ -374,7 +387,7 @@ function AppShell() {
       // Recrea las pestañas de la sesión anterior (mismo proyecto y comando).
       const restored = persisted.map((tab) => {
         const launch = restoreLaunch(tab, settings);
-        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch, id:tab.id ?? newSessionId(), conversationId:tab.conversationId ?? null, chatMode: tab.chatMode ?? null };
+        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch, id:tab.id ?? newSessionId(), conversationId:tab.conversationId ?? null, chatMode: tab.chatMode ?? null, chatModel: tab.chatModel ?? null, handoff: tab.handoff ?? null, handoffRestored: !!tab.handoff?.pending };
       });
       setTabs(restored);
       // Proyecto activo: el persistido si tiene pestañas restauradas; si no, el de la primera.
@@ -631,7 +644,7 @@ function AppShell() {
 
   // --- Pestañas ---------------------------------------------------------------
 
-  const openTab = useCallback((projectId: string, profileId: string | null, conversation?: Conversation) => {
+  const openTab = useCallback((projectId: string, profileId: string | null, conversation?: Conversation, handoff?: HandoffReference, model?: string | null) => {
     const currentConfig = configRef.current;
     if (!currentConfig) return;
     const settings = currentConfig.settings;
@@ -647,6 +660,11 @@ function AppShell() {
       sameKind.length === 0 ? base : `${base} ${sameKind.length + 1}`;
 
     const tab = buildTab(projectId, profile?.provider ?? "shell", subtitle, settings, profile ?? null);
+    if (handoff && profile) {
+      tab.handoff = handoff;
+      tab.chatModel = normalizeModelChoice(model);
+      tab.subtitle = `${profile.name} · continuación de ${handoff.sourceLabel}`;
+    }
     if (conversation && profile) {
       // El chat retoma la conversación por su id; la terminal necesita la opción en el comando.
       const chat = profile.provider === "claude" || codexChatSupported(tab.args);
@@ -671,6 +689,61 @@ function AppShell() {
         : prev,
     );
     return tab.id;
+  }, []);
+
+  const requestHandoff = useCallback((context: HandoffContext) => {
+    const source = tabsRef.current.find(tab => tab.id === context.source.sessionId);
+    if (!source || source.projectId !== context.source.projectId || source.activity === "working" || source.activity === "waiting") {
+      showToast("Espera a que termine la respuesta o detenla antes de continuar en otro perfil.");
+      return;
+    }
+    const generation = ++handoffGeneration.current;
+    setHandoffDialog({ context, prepared: null, loading: true, error: null });
+    void prepareHandoff(context).then(prepared => {
+      if (handoffGeneration.current === generation) setHandoffDialog({ context, prepared, loading: false, error: null });
+    }).catch(error => {
+      if (handoffGeneration.current === generation) setHandoffDialog({ context, prepared: null, loading: false, error: formatError(error) });
+    });
+  }, [showToast]);
+
+  const closeHandoff = useCallback(() => {
+    if (handoffSubmittingRef.current) return;
+    handoffGeneration.current++;
+    setHandoffDialog(null);
+  }, []);
+
+  const continueHandoff = (profileId: string, instruction: string, model: string | null): void => {
+    if (handoffSubmittingRef.current || !handoffDialog?.prepared) return;
+    const source = tabsRef.current.find(tab => tab.id === handoffDialog.context.source.sessionId);
+    const current = configRef.current;
+    const profile = current?.settings.profiles.find(item => item.id === profileId);
+    if (!source || !current || !profile || !current.projects.some(project => project.id === source.projectId)) {
+      setHandoffDialog(previous => previous && { ...previous, error: "El proyecto o el perfil ya no está disponible." });
+      return;
+    }
+    const reason = handoffTargetReason(profile, source.profileId, current.settings);
+    if (reason || source.activity === "working" || source.activity === "waiting") {
+      setHandoffDialog(previous => previous && { ...previous, error: reason ?? "Detén la respuesta del origen antes de continuar." });
+      return;
+    }
+    handoffSubmittingRef.current = true;
+    setHandoffSubmitting(true);
+    const reference: HandoffReference = { id: handoffDialog.prepared.id, sourceLabel: handoffDialog.prepared.sourceLabel,
+      pending: true, instruction: instruction.slice(0, 4000) };
+    const surface = handoffSurfaceRef.current;
+    handoffGeneration.current++;
+    setHandoffDialog(null);
+    // El destino recibe el foco cuando el diálogo ya ha liberado el proyecto.
+    requestAnimationFrame(() => waitForMotion(surface, () => requestAnimationFrame(() => {
+      openTab(source.projectId, profileId, undefined, reference, model);
+      handoffSubmittingRef.current = false;
+      setHandoffSubmitting(false);
+    })));
+  };
+
+  const handoffConsumed = useCallback((tabId: string, id: string) => {
+    setTabs(previous => previous.map(tab => tab.id === tabId && tab.handoff?.id === id && tab.handoff.pending
+      ? { ...tab, handoff: { ...tab.handoff, pending: false } } : tab));
   }, []);
 
   const selectPaneSession = (index: number, id: string): void => {
@@ -828,6 +901,11 @@ function AppShell() {
       : { ...previous, ui: { ...previous.ui, chatModes: { ...previous.ui.chatModes, [provider]: mode } } });
   }, []);
 
+  const handleChatModel = useCallback((tabId: string, model: string | null) => {
+    setTabs(previous => previous.some(tab => tab.id === tabId && (tab.chatModel ?? null) !== model)
+      ? previous.map(tab => tab.id === tabId ? { ...tab, chatModel: model } : tab) : previous);
+  }, []);
+
   const handleChatTitle = useCallback((tabId: string, title: string) => {
     setTabs(prev => prev.map(tab => {
       const name = tab.profileName ?? "";
@@ -954,7 +1032,7 @@ function AppShell() {
       resetFont: resetFontSize,
     },
     { enabled: config !== null, settingsOpen: settingsPresence.value !== null,
-      modalOpen: palettePresence.value !== null || usagePresence.value !== null || recoveryPresence.value !== null || imagePreviewPresence.value !== null,
+      modalOpen: palettePresence.value !== null || usagePresence.value !== null || recoveryPresence.value !== null || imagePreviewPresence.value !== null || handoffPresence.value !== null,
       bindings:config?.settings.shortcuts },
   );
 
@@ -1109,6 +1187,14 @@ function AppShell() {
                     onRotate={() => changeSplit(split.direction === "columns" ? "rows" : "columns")}
                     onSingle={() => { setActiveTabId(tab.id); setExpandedPaneId(paneExpanded ? null : tab.id); }} />}
                   {tab.kind !== "shell" && (tab.kind === "claude" || codexChatSupported(tab.args)) ? <ChatView
+                    projectId={project.id}
+                    profileId={tab.profileId}
+                    profileName={tab.profileName}
+                    sessionTitle={sessionLabel(tab)}
+                    handoff={tab.handoff}
+                    handoffRestored={tab.handoffRestored}
+                    onHandoffRequest={requestHandoff}
+                    onHandoffConsumed={handoffConsumed}
                     provider={tab.kind}
                     sessionId={tab.id}
                     cwd={project.path}
@@ -1119,6 +1205,7 @@ function AppShell() {
                     env={tab.env}
                     conversationId={tab.conversationId}
                     mode={tab.chatMode ?? config.ui.chatModes?.[tab.kind] ?? null}
+                    model={tab.chatModel ?? null}
                     settings={config.settings}
                     visible={isVisible}
                     focused={isActive}
@@ -1129,6 +1216,7 @@ function AppShell() {
                     onConversation={handleConversation}
                     onTitle={handleChatTitle}
                     onMode={handleChatMode}
+                    onModel={handleChatModel}
                     onMessage={showToast}
                     onOpenUsage={openUsage}
                   /> : <TerminalView
@@ -1221,6 +1309,10 @@ function AppShell() {
       {toast && (
         <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />
       )}
+      {handoffPresence.value && <HandoffDialog {...handoffPresence.value}
+        profiles={config.settings.profiles} settings={config.settings} onClose={closeHandoff}
+        onContinue={continueHandoff} submitting={handoffSubmitting}
+        entering={handoffPresence.entering} leaving={handoffPresence.leaving} surfaceRef={handoffSurfaceRef} />}
       {palettePresence.value && <CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)}
         surfaceRef={paletteSurfaceRef} entering={palettePresence.entering} leaving={palettePresence.leaving} />}
       {usagePresence.value && <UsageDialog settings={config.settings} cwd={appInfo?.homeDir || activeProject?.path || "/"} onClose={()=>setUsageOpen(false)}
