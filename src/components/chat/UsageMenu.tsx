@@ -2,7 +2,7 @@ import { useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { contextPercent, formatTokens, type ContextUsage } from "../../chatState";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
-import { headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
+import { accountUsageWindows, headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
 import DropdownMenu from "../DropdownMenu";
 import { CloseIcon } from "../Icons";
 import { ContextDetails } from "./ContextMeter";
@@ -30,6 +30,13 @@ export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpe
   const contextSeverity = percent === null ? 0 : percent >= 90 ? 2 : percent >= 70 ? 1 : 0;
   // Una ventana secundaria puede alcanzar el límite después de elegirse la principal.
   const headline = headlineWindow(plan);
+  // Las ventanas generales quedan siempre a la vista; los límites por modelo
+  // siguen en el desglose y conservan sus avisos en el encabezado.
+  const generalWindows = accountUsageWindows(plan);
+  const visibleWindows = plan?.windows.length ? [
+    { key: "session", label: "5 h", window: generalWindows.session },
+    { key: "weekly", label: "Semana", window: generalWindows.weekly },
+  ] : [];
   const limiting = plan?.windows.reduce((best, window) => !best
     || severityRank[window.severity] > severityRank[best.severity]
     || severityRank[window.severity] === severityRank[best.severity] && window.percent > best.percent
@@ -77,12 +84,22 @@ export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpe
           setAnchor({ element: triggerRef.current! });
         }
       }}>
-      <span className="chat-tray-icon"><svg className="chat-context-ring" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-        <circle className="track" cx="8" cy="8" r="5.5" />
-        <circle className="value" cx="8" cy="8" r="5.5" strokeDasharray={ringLength}
-          strokeDashoffset={ringLength * (1 - ringFilled / 100)} />
-      </svg></span>
-      <span className="chat-tray-text">{label}</span>
+      <span className="chat-usage-overview">
+        <span className="chat-tray-icon"><svg className="chat-context-ring" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <circle className="track" cx="8" cy="8" r="5.5" />
+          <circle className="value" cx="8" cy="8" r="5.5" strokeDasharray={ringLength}
+            strokeDashoffset={ringLength * (1 - ringFilled / 100)} />
+        </svg></span>
+        <span className="chat-tray-text">{label}</span>
+      </span>
+      {visibleWindows.length > 0 && <span className="chat-usage-windows" aria-hidden="true">
+        {visibleWindows.map(({ key, label, window }) => <span key={key} className={`chat-usage-window ${window?.severity ?? "unavailable"}`}>
+          <span className="chat-usage-window-value">
+            <span>{label}</span><b>{window ? percentLabel(window.percent) : "—"}</b>
+          </span>
+          <span className="chat-usage-window-bar"><i style={{ width: `${window ? Math.max(window.percent, window.percent > 0 ? 2 : 0) : 0}%` }} /></span>
+        </span>)}
+      </span>}
     </button>
     <DropdownMenu id={id} anchor={anchor} triggerRef={triggerRef} role="dialog" label="Uso y contexto"
       className="chat-tray-menu chat-glass-menu chat-usage-menu" onClose={close}>

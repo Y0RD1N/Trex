@@ -198,6 +198,18 @@ export function parseCodexUsage(raw: unknown, previous: PlanUsage | null = null)
 export const headlineWindow = (usage: PlanUsage | null): PlanWindow | null =>
   usage?.windows.find(window => window.headline) ?? usage?.windows[0] ?? null;
 
+/** Ventanas generales: los límites propios de un modelo no sustituyen al de la cuenta. */
+export function accountUsageWindows(usage: PlanUsage | null): { session: PlanWindow | null; weekly: PlanWindow | null } {
+  const windows = usage?.windows ?? [];
+  const byId = (...ids: string[]): PlanWindow | undefined => ids.map(id => windows.find(window => window.id === id)).find(Boolean);
+  const codexWindow = (label: string): PlanWindow | undefined => windows.find(window =>
+    (window.id === "codex:primary" || window.id === "codex:secondary") && window.label === label);
+  return {
+    session: byId("session", "five_hour") ?? codexWindow("Sesión (5 h)") ?? null,
+    weekly: byId("weekly_all", "seven_day") ?? codexWindow("Semana") ?? null,
+  };
+}
+
 /** Cuándo se reinicia una ventana, en palabras: «en 3 h 20 min», «el jueves a las 18:59». */
 export function resetLabel(resetsAt: number | null, now: number): string | null {
   if (resetsAt === null) return null;

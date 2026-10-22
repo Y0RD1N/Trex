@@ -195,7 +195,9 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
   Codex pregunta así también fuera del modo Planificar (trex activa su
   función `default_mode_request_user_input`; un perfil con
   `--disable default_mode_request_user_input` la apaga).
-- **Uso del plan**: comparte un único acceso con el contexto. Al pulsarlo ves
+- **Uso del plan**: el visor mantiene visibles los porcentajes y las barras de
+  **5 horas** y **semana** junto al contexto; **—** indica un dato no disponible.
+  Al pulsarlo ves
   ambos desgloses, cada ventana con su reinicio y el uso extra. Si un límite
   necesita atención, su nombre y porcentaje aparecen en el acceso. **Uso de las
   cuentas** (el medidor de la barra lateral o la paleta de comandos) muestra
