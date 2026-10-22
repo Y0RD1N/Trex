@@ -1,5 +1,5 @@
 /**
- * Navegación de proyectos y sesiones, con controles planos y búsqueda global.
+ * Navegación de proyectos y sesiones, con superficies suaves y búsqueda global.
  *
  * La franja superior es la barra de título de la ventana sin bordes: lleva
  * `data-tauri-drag-region` (solo en contenedores y textos; nunca en botones ni
@@ -182,10 +182,10 @@ export default function Sidebar({
             <span className="sidebar-brand" aria-hidden="true" data-tauri-drag-region>
               ✳
             </span>
-            <span className="sidebar-name" data-tauri-drag-region>
-              trex
+            <span className="sidebar-identity" data-tauri-drag-region>
+              <span className="sidebar-name" data-tauri-drag-region>trex</span>
+              <span className="sidebar-caption" data-tauri-drag-region>Espacio de trabajo</span>
             </span>
-            <span className="sidebar-caption" data-tauri-drag-region>workspace</span>
           </header>
         </div>
 
@@ -326,14 +326,14 @@ export default function Sidebar({
           <div className="sidebar-footer-row">
             <button
               type="button"
-              className="icon-btn sidebar-footer-control tip"
+              className="icon-btn sidebar-footer-control sidebar-add tip"
               data-tip="Añadir proyecto"
               aria-label="Añadir proyecto"
               onClick={onAdd}
             >
-              <FolderPlusIcon size={19} />
+              <FolderPlusIcon size={17} />
+              <span>{sidebarWidth < 260 ? "Nuevo" : "Nuevo proyecto"}</span>
             </button>
-            <span className="sidebar-footer-spacer" />
             <button
               type="button"
               className="icon-btn sidebar-footer-control tip"
