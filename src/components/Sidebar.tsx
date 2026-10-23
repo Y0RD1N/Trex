@@ -27,6 +27,7 @@ import { AlertIcon, CloseIcon, FolderPlusIcon, GaugeIcon, MoonIcon, PanelIcon, S
 import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
 import { sessionLabel } from "../sessionTitle";
+import { projectActivity } from "../agentActivity";
 
 /** Ancho al que vuelve la barra lateral con doble clic en el divisor. */
 const DEFAULT_SIDEBAR_WIDTH = 290;
@@ -243,6 +244,7 @@ export default function Sidebar({
                   project={project}
                   active={project.id === activeProjectId}
                   tabCount={sessions.length}
+                  activity={projectActivity(sessions)}
                   expanded={expanded}
                   onToggleExpanded={() => toggleProject(project.id)}
                   onSelect={() => onSelect(project.id)}

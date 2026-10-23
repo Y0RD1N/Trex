@@ -52,9 +52,10 @@ export function ContextDetails({ usage, product, busy, onCompact, inline = false
   const reserve = usage.window && usage.reserve ? usage.reserve : null;
   const free = usage.window ? Math.max(0, usage.window - usage.used - (reserve ?? 0)) : null;
   const share = (tokens: number): string => usage.window ? `${Math.min(100, (tokens / usage.window) * 100)}%` : "0%";
+  const supportsCompact = product !== "Trex CLI";
   const notes = [
-    reserve && usage.window ? `Al llegar a ${formatTokens(usage.window - reserve)}, ${product} resume la conversación por sí solo.`
-      : usage.window ? `${product} resume la conversación por sí solo cuando se acerca al límite.` : null,
+    supportsCompact && reserve && usage.window ? `Al llegar a ${formatTokens(usage.window - reserve)}, ${product} resume la conversación por sí solo.`
+      : supportsCompact && usage.window ? `${product} resume la conversación por sí solo cuando se acerca al límite.` : null,
     usage.total ? `${formatTokens(usage.total)} tokens procesados en toda la conversación.` : null,
   ].filter(Boolean);
 
@@ -76,11 +77,11 @@ export function ContextDetails({ usage, product, busy, onCompact, inline = false
       {free !== null && <li className="muted"><i className="free" /><span>Libre</span><b>{formatTokens(free)}</b></li>}
     </ul>
     {notes.length > 0 && <p className="chat-context-note">{notes.join(" ")}</p>}
-    <button type="button" role={inline ? undefined : "menuitem"} tabIndex={inline ? undefined : -1}
+    {supportsCompact && <button type="button" role={inline ? undefined : "menuitem"} tabIndex={inline ? undefined : -1}
       className="context-item chat-context-compact" disabled={busy}
       onClick={() => { onClose?.(); onCompact(); }}>
       <span>Resumir conversación</span><small>/compact</small>
-    </button>
+    </button>}
   </>;
 }
 

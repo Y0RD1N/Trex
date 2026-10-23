@@ -2,7 +2,8 @@ import type { OutgoingImage } from "./chatState";
 
 export type QueuedMessage = { id: string; text: string; images: OutgoingImage[]; previews: string[]; createdAt: number };
 export type QueueReceipt = { id: string; messages: QueuedMessage[] };
-export type QueueSnapshot = { messages: QueuedMessage[]; receipt: QueueReceipt | null };
+export type QueueDispatch = { id: string; message: QueuedMessage; predecessors: string[] };
+export type QueueSnapshot = { messages: QueuedMessage[]; receipt: QueueReceipt | null; outbox?: QueueDispatch[] };
 export const EMPTY_QUEUE: QueueSnapshot = { messages: [], receipt: null };
 export const INBOX_TOOL = "trex_read_messages";
 export const INBOX_SERVER = "trex_inbox";
@@ -28,6 +29,10 @@ export type QueueTransport = {
   remove: (id: string) => Promise<QueueSnapshot>;
   read: () => Promise<QueueSnapshot>;
   ack: (id: string) => Promise<QueueSnapshot>;
+  update: (id: string, text: string, expectedText: string) => Promise<QueueSnapshot>;
+  claimDirect: (id: string, expected: QueuedMessage) => Promise<QueueSnapshot>;
+  ackDirect: (id: string) => Promise<QueueSnapshot>;
+  restoreDirect: (id: string) => Promise<QueueSnapshot>;
 };
 
 export class MessageQueue {
@@ -49,6 +54,26 @@ export class MessageQueue {
   remove = (id: string) => this.run(() => this.transport.remove(id));
   read = () => this.run(this.transport.read);
   ack = (id: string, current: () => boolean = () => true) => this.run(() => current() ? this.transport.ack(id) : this.transport.list());
+  update = (id: string, text: string, expectedText: string) => this.run(() => this.transport.update(id, text, expectedText));
+  claimDirect = (id: string, expected: QueuedMessage) => this.run(() => this.transport.claimDirect(id, expected));
+  ackDirect = (id: string) => this.run(() => this.transport.ackDirect(id));
+  restoreDirect = (id: string) => this.run(() => this.transport.restoreDirect(id));
+}
+
+/** Reserve before sending so an inbox read cannot deliver the same message.
+ * Uncertain writes remain durable for explicit review; never automatically replay.
+ */
+export async function dispatchQueuedMessage(queue: MessageQueue, message: QueuedMessage,
+  send: (message: QueuedMessage) => void | Promise<boolean>, current: () => boolean = () => true): Promise<void> {
+  if (!current()) throw new Error("La conversación ya no está disponible.");
+  const claimed = await queue.claimDirect(message.id, message);
+  const dispatch = claimed.outbox?.find(entry => entry.message.id === message.id);
+  if (!dispatch) throw new Error("El mensaje ya no está disponible para enviarlo directamente.");
+  if (!current()) throw new Error("El envío quedó pendiente de revisión al cerrar la conversación.");
+  const accepted = await send(dispatch.message);
+  if (accepted !== true) throw new Error("No se confirmó el envío directo. Revisa el historial antes de devolver el mensaje a la cola.");
+  if (!current()) throw new Error("El envío aceptado quedó pendiente de confirmación al cerrar la conversación.");
+  await queue.ackDirect(dispatch.id);
 }
 
 /** A retried provider request must receive its original batch, never newer messages. */

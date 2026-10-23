@@ -14,6 +14,10 @@ export function useMessageQueue(queueId: string) {
       list: () => call("list"), enqueue: message => call("enqueue", { message }),
       remove: messageId => call("remove", { messageId }), read: () => call("read"),
       ack: receiptId => call("ack", { receiptId }),
+      update: (messageId, text, expectedText) => call("update", { messageId, text, expectedText }),
+      claimDirect: (messageId, expected) => call("claim_direct", { messageId, expected }),
+      ackDirect: dispatchId => call("ack_direct", { dispatchId }),
+      restoreDirect: dispatchId => call("restore_direct", { dispatchId }),
     }, value => { if (mounted.current) { setSnapshot(value); setReady(true); setError(null); } });
   }
   const client = queueRef.current;

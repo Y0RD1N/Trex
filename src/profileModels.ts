@@ -4,6 +4,7 @@ import type { ModelInfo } from "./chatState";
 import { claudeChatFlags, controlLine, parseModels } from "./claudeChat";
 import { codexLaunch, notificationLine, parseCodexModels, requestLine } from "./codexChat";
 import { canResume } from "./conversations";
+import { parseTrexModels } from "./trexChat";
 import { launchForProfile } from "./profiles";
 import type { LauncherProfile, Settings } from "./types";
 
@@ -70,7 +71,7 @@ export function createProfileModelLoader(transport: ProfileModelTransport, { tim
     const requestModels = (cursor?: string): void => {
       phase = "models";
       expectedId = ++nextId;
-      void write(requestLine(expectedId, "model/list", cursor ? { cursor } : {})).catch(finish);
+      void write(requestLine(expectedId, profile.provider === "trex" ? "models/list" : "model/list", cursor ? { cursor } : {})).catch(finish);
     };
     const onLine = (line: string): void => {
       if (done) return;
@@ -92,11 +93,16 @@ export function createProfileModelLoader(transport: ProfileModelTransport, { tim
       }
       if (!("result" in message)) return;
       if (phase === "initialize") {
+        if (profile.provider === "trex") {
+          if (asRecord(message.result)?.protocolVersion !== 1) { finish(new Error("Trex CLI necesita actualizarse para consultar sus modelos.")); return; }
+          requestModels(); return;
+        }
         expectedId = -1;
         void write(notificationLine("initialized")).then(() => { if (!done) requestModels(); }).catch(finish);
         return;
       }
       const result = asRecord(message.result);
+      if (profile.provider === "trex") { finish(undefined, parseTrexModels(result?.models)); return; }
       for (const model of parseCodexModels(result?.data)) if (!models.some(item => item.value === model.value)) models.push(model);
       const cursor = typeof result?.nextCursor === "string" ? result.nextCursor : null;
       if (cursor) {
@@ -118,11 +124,12 @@ export function createProfileModelLoader(transport: ProfileModelTransport, { tim
         ]);
         if (done) return;
         spawnStarted = true;
-        await transport.spawn({ id, cwd, command: launch.command!, profileArgs: profile.provider === "claude" ? launch.args : null,
-          flags: profile.provider === "claude" ? claudeChatFlags(launch.args, null) : codex!.flags, shell: launch.shell, env: launch.env });
+        await transport.spawn({ id, cwd, command: launch.command!, profileArgs: profile.provider === "claude" || profile.provider === "trex" ? launch.args : null,
+          flags: profile.provider === "trex" ? ["app-server"] : profile.provider === "claude" ? claudeChatFlags(launch.args, null) : codex!.flags, shell: launch.shell, env: launch.env });
         // Una cancelación puede haber ocurrido mientras el backend creaba el proceso.
         if (done) { kill(); return; }
         await write(profile.provider === "claude" ? controlLine(initializeId, { subtype: "initialize" })
+          : profile.provider === "trex" ? requestLine(expectedId, "initialize", { protocolVersion: 1, client: "trex-models", inbox: false })
           : requestLine(expectedId, "initialize", { clientInfo: { name: "trex", title: "trex", version: "0.1.0" },
             capabilities: { experimentalApi: true, requestAttestation: false } }));
       } catch (error) { finish(error); }

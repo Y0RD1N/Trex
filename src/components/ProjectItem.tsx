@@ -4,9 +4,9 @@
  * Fila compacta de carpeta con expansión de sesiones y menú contextual.
  * El nombre se puede editar con doble clic o desde el propio menú.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
-import type { LauncherProfile, Project } from "../types";
+import type { AgentActivity, LauncherProfile, Project } from "../types";
 import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, PencilIcon, StarIcon, TrashIcon } from "./Icons";
 import DropdownMenu from "./DropdownMenu";
 import ProfileMenuItems from "./ProfileMenuItems";
@@ -17,6 +17,7 @@ type Props = {
   profiles: LauncherProfile[];
   active: boolean;
   tabCount: number;
+  activity: AgentActivity;
   expanded: boolean;
   onToggleExpanded: () => void;
   onSelect: () => void;
@@ -33,6 +34,7 @@ export default function ProjectItem({
   profiles,
   active,
   tabCount,
+  activity,
   expanded,
   onToggleExpanded,
   onSelect,
@@ -49,6 +51,9 @@ export default function ProjectItem({
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
   const logo = useProjectIcon(project.path);
   const [brokenLogo, setBrokenLogo] = useState<string | null>(null);
+  const activityId = useId();
+  const activityText = activity === "working" ? "Hay un agente trabajando en este proyecto"
+    : activity === "waiting" ? "Un agente espera tu respuesta en este proyecto" : "";
 
   useEffect(() => {
     setDraftName(project.name);
@@ -74,6 +79,7 @@ export default function ProjectItem({
   return (
     <div
       className={`project-item${active ? " active" : ""}`}
+      data-activity={activity}
       onClick={onSelect}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -92,11 +98,13 @@ export default function ProjectItem({
           <ChevronIcon size={11} />
         </button>
       ) : <span className="project-disclosure-placeholder" />}
-      <span className={`project-icon${logo && logo !== brokenLogo ? " has-logo" : ""}`} aria-hidden="true">
+      <span className={`project-icon${logo && logo !== brokenLogo ? " has-logo" : ""}`} aria-hidden="true" title={activityText || undefined}>
         {logo && logo !== brokenLogo
           ? <img src={logo} alt="" draggable={false} onError={() => setBrokenLogo(logo)} />
           : <FolderIcon size={16} />}
+        {activity !== "idle" && <span className={`project-activity is-${activity}`} />}
       </span>
+      <span id={activityId} className="sr-only">{activityText}</span>
 
       <div className="project-info">
         {editing ? (
@@ -123,8 +131,9 @@ export default function ProjectItem({
           <button
             type="button"
             className="project-name project-select tip"
-            data-tip={`${project.name}\n${project.path}\nDoble clic para renombrar`}
+            data-tip={`${project.name}\n${project.path}${activityText ? `\n${activityText}` : ""}\nDoble clic para renombrar`}
             aria-label={project.name}
+            aria-describedby={activityText ? activityId : undefined}
             onClick={(event) => { event.stopPropagation(); onSelect(); }}
           >
             <span

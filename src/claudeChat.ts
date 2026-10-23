@@ -7,7 +7,7 @@
  * toca la interfaz ni el backend, así que se prueba sin Tauri.
  */
 import {
-  addNotice, baseReducer, choiceAnswers, finalize, initialChatState, list, record, resultText, text,
+  addNotice, baseReducer, choiceAnswers, finalize, initialChatState, list, liveCompletion, record, resultText, text,
   type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type DiffLine, type Json, type ModelInfo, type OutgoingImage,
   type QuestionChoice,
 } from "./chatState";
@@ -177,6 +177,7 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
     : list(message.content).map(record).filter((block): block is Json => !!block));
   const typed: string[] = [];
   let images = 0;
+  let interrupted = false;
   for (const raw of content) {
     const block = record(raw);
     if (!block) continue;
@@ -198,6 +199,7 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
     } else if (block.type === "text") {
       const value = text(block.text);
       if (interruptedText(value)) {
+        interrupted = true;
         items = [...items, { kind: "notice", id: `n-${items.length}-${text(event.uuid)}`, tone: "info", text: "Detenido. Puedes seguir escribiendo." }];
       } else if (fromHistory && !hiddenUserText(value)) typed.push(value);
     } else if (block.type === "image" && fromHistory) images += 1;
@@ -205,23 +207,22 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
   if (typed.length || images) {
     items = [...items, { kind: "user", id: text(event.uuid) || `u-${items.length}`, text: typed.join("\n\n"), images, previews: [] }];
   }
-  return { ...state, items };
+  const interruptedIds = state.activeMessageIds.length ? state.activeMessageIds : state.pendingMessageIds.slice(0, 1);
+  return { ...state, items, lastCompletion: interrupted && !fromHistory
+    ? liveCompletion(state, `claude:interrupted:${JSON.stringify(interruptedIds)}`, "interrupted", interruptedIds, items) : state.lastCompletion };
 }
 
 function applyResult(state: ChatState, event: Json, now: number): ChatState {
-  const resultId = text(event.uuid) ? `claude:${text(event.uuid)}` : null;
-  if (resultId && state.completedTurnIds.includes(resultId)) return state;
-  const interrupted = event.subtype === "error_during_execution";
-  let items = finalize(state.items).map(item => item.kind === "tool" && item.status === "running"
-    ? { ...item, status: interrupted || event.is_error === true ? "error" as const : "done" as const }
-    : item.kind === "permission" && item.state === "pending" ? { ...item, state: "denied" as const } : item);
-  const message = text(event.result) || list(event.errors).map(text).filter(Boolean).join("\n");
-  if (event.is_error === true && !interrupted) {
-    items = [...items, { kind: "notice", id: `e-${items.length}`, tone: "error", text: message || "Claude no pudo completar la respuesta." }];
-  } else if (!interrupted && state.turnStartedAt !== null) {
-    const durationMs = typeof event.duration_ms === "number" ? event.duration_ms : now - state.turnStartedAt;
-    items = [...items, { kind: "turn", id: `t-${text(event.uuid) || items.length}`, durationMs }];
-  }
+  const referenced = Array.isArray(event.user_message_uuids) && event.user_message_uuids.length
+    ? list(event.user_message_uuids).map(text).filter(Boolean) : [text(event.user_message_uuid)].filter(Boolean);
+  // Los productores antiguos sin UUID tampoco pueden publicar dos éxitos por el mismo terminal.
+  // Si no hay identidad ni atribución, una repetición idéntica se trata conservadoramente como duplicada.
+  const resultId = text(event.uuid) ? `claude:${text(event.uuid)}` : referenced.length
+    ? `claude:messages:${JSON.stringify(referenced)}` : `claude:legacy:${JSON.stringify(event)}`;
+  if (state.completedTurnIds.includes(resultId)) return state;
+  if (text(event.session_id) && state.sessionId && event.session_id !== state.sessionId) return state;
+  const interrupted = ["error_during_execution", "interrupted", "cancelled", "canceled"].includes(text(event.subtype));
+  const failed = !interrupted && (event.subtype !== "success" || event.is_error === true || list(event.errors).length > 0 || !!event.error);
   let pendingMessageIds = state.pendingMessageIds;
   if (interrupted && state.queuedAfterInterrupt !== null) {
     pendingMessageIds = pendingMessageIds.filter(id => state.queuedAfterInterrupt!.includes(id));
@@ -238,10 +239,26 @@ function applyResult(state: ChatState, event: Json, now: number): ChatState {
       pendingMessageIds = event.queued_turn_count ? pendingMessageIds.slice(-event.queued_turn_count) : [];
     } else pendingMessageIds = pendingMessageIds.slice(1);
   }
+  const consumed = state.pendingMessageIds.filter(id => !pendingMessageIds.includes(id));
+  // Un terminal atrasado no cierra ni finaliza la respuesta que se está escribiendo ahora.
+  if (referenced.length && (!consumed.length || state.activeMessageIds.length > 0
+    && !consumed.some(id => state.activeMessageIds.includes(id)))) return state;
+  let items = finalize(state.items).map(item => item.kind === "tool" && item.status === "running"
+    ? { ...item, status: interrupted || failed ? "error" as const : "done" as const }
+    : item.kind === "permission" && item.state === "pending" ? { ...item, state: "denied" as const } : item);
+  const message = text(event.result) || list(event.errors).map(text).filter(Boolean).join("\n");
+  if (failed) {
+    items = addNotice(items, "error", message || "Claude no pudo completar la respuesta.", "e");
+  } else if (!interrupted && state.turnStartedAt !== null && consumed.length) {
+    const durationMs = typeof event.duration_ms === "number" ? event.duration_ms : now - state.turnStartedAt;
+    items = [...items, { kind: "turn", id: `t-${text(event.uuid) || items.length}`, durationMs }];
+  }
   const pendingTurns = pendingMessageIds.length;
   return {
     ...state, items, pendingTurns, pendingMessageIds, activeMessageIds: [], queuedAfterInterrupt: null,
-    completedTurnIds: resultId ? [...state.completedTurnIds, resultId].slice(-64) : state.completedTurnIds,
+    completedTurnIds: [...state.completedTurnIds, resultId],
+    lastCompletion: liveCompletion(state, resultId, interrupted ? "interrupted" : failed ? "failed" : "completed", consumed, items),
+    turnItemStart: pendingTurns ? items.length : null,
     turnStartedAt: pendingTurns > 0 ? now : null,
     stream: { messageId: null, blocks: {} },
     costUsd: typeof event.total_cost_usd === "number" ? event.total_cost_usd : state.costUsd,
@@ -383,6 +400,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "sendFailed": {
       const pendingMessageIds = state.pendingMessageIds.filter(id => id !== action.id);
       return { ...state, pendingMessageIds, pendingTurns: pendingMessageIds.length,
+        lastCompletion: liveCompletion(state, `send:${action.id}`, "failed", [action.id]),
+        turnItemStart: pendingMessageIds.length ? state.turnItemStart : null,
         activeMessageIds: state.activeMessageIds.filter(id => id !== action.id),
         turnStartedAt: pendingMessageIds.length ? state.turnStartedAt : null,
         items: addNotice(state.items, "error", action.message, "e") };
@@ -415,7 +434,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Una herramienta sin resultado quedó cortada al cerrar la sesión anterior.
       const history = finalize(replay.items).map(item => item.kind === "tool" && item.status === "running" ? { ...item, status: "done" as const } : item);
       // Sustituye un historial anterior en vez de repetirlo.
-      return { ...state, items: [...history, ...state.items.slice(state.historyCount)], historyCount: history.length };
+      return { ...state, items: [...history, ...state.items.slice(state.historyCount)], historyCount: history.length,
+        turnItemStart: state.turnItemStart === null ? null : state.turnItemStart + history.length - state.historyCount };
     }
     case "catalog": {
       const models = parseModels(action.models);

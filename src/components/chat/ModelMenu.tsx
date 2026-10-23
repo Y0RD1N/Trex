@@ -79,7 +79,7 @@ export function ModelMenu({ provider, models, model, choice, onModel, openSignal
     {close => <>
       <div className="chat-menu-label">Modelo</div>
       {main.length ? main.map(item => option(item, close))
-        : <div className="chat-menu-empty">Los modelos aparecen cuando {provider === "codex" ? "Codex" : "Claude Code"} termina de arrancar.</div>}
+        : <div className="chat-menu-empty">Los modelos aparecen cuando {provider === "trex" ? "Trex CLI" : provider === "codex" ? "Codex" : "Claude Code"} termina de arrancar.</div>}
       {others.length > 0 && <>
         <button type="button" role="menuitem" tabIndex={-1} aria-expanded={showOthers} className="context-item chat-model-more"
           onClick={() => setShowOthers(!showOthers)}>

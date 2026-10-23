@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "targets": ["nsis"],
+    "resources": {
+      "installer/payload/trex-agent.exe": "trex-agent.payload"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "template": "installer/installer.nsi",
+        "installerHooks": "installer/trex-cli.nsh"
+      }
+    }
+  }
+}

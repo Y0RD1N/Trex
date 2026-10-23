@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { useHoverReveal } from "../hooks/useHoverReveal";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { AgentNotice, LauncherProfile, TabState } from "../types";
-import { FolderIcon, GridIcon, LayoutIcon, MaximizeIcon, PlusIcon, SearchIcon, SplitIcon, TerminalIcon } from "./Icons";
+import { FolderIcon, GridIcon, LayoutIcon, MapIcon, MaximizeIcon, PlusIcon, SearchIcon, SplitIcon, TerminalIcon } from "./Icons";
 import type { SplitDirection } from "../splitLayout";
 import { sessionTitle } from "../sessionTitle";
 import WindowControls from "./WindowControls";
@@ -39,6 +39,7 @@ type Props = {
   onRevealProject: (() => void) | null;
   onNew: (profileId: string) => void;
   onNewShell: () => void;
+  onWorkflow?: () => void;
   onOpenSettings: () => void;
   onOpenProfiles: () => void;
   onCommandPalette: () => void;
@@ -58,7 +59,7 @@ type Props = {
 
 export default function TerminalTabs({
   tabs, activeTabId, projectName, hasProject, profiles, defaultProfileId,
-  autoHideTopBar, onToggleTopBar, onRevealProject, onNew, onNewShell, onOpenSettings, onOpenProfiles,
+  autoHideTopBar, onToggleTopBar, onRevealProject, onNew, onNewShell, onWorkflow, onOpenSettings, onOpenProfiles,
   onCommandPalette,onRecover,onChangeSplit,splitDirection,shortcuts,
   notices, soundEnabled, liveTabIds, onOpenNotice, onMarkNoticesRead, onClearNotices, onToggleSound, onPreviewSound,
 }: Props) {
@@ -84,13 +85,15 @@ export default function TerminalTabs({
     <header className="tabs-bar" data-tauri-drag-region="deep">
       <div className="workspace-title" data-tauri-drag-region>
         <span className={current?.kind === "claude" ? "workspace-mark claude" : "workspace-mark"} aria-hidden="true">
-          {current ? <AgentIcon kind={current.kind} activity={current.exited ? "idle" : current.activity} nativeIndicator={title?.nativeIndicator} /> : <FolderIcon size={15} />}
+          {current?.agentRoom ? <span className="workspace-team-mark"><AgentIcon kind={current.agentRoom.planner.agent.provider} size={12} /><AgentIcon kind={current.agentRoom.executor.agent.provider} size={12} /></span>
+            : current ? <AgentIcon kind={current.kind} activity={current.exited ? "idle" : current.activity} nativeIndicator={title?.nativeIndicator} /> : <FolderIcon size={15} />}
         </span>
         <span className="workspace-title-text" title={title?.label ?? projectName} data-tauri-drag-region>
           {title?.label ?? (hasProject ? projectName : "Tu espacio")}
         </span>
         {current && <span className="workspace-project" data-tauri-drag-region>{projectName}</span>}
-        {current?.profileName && <span className="workspace-profile" title={`Perfil: ${current.profileName} · ${current.command}`} data-tauri-drag-region>{current.profileName}</span>}
+        {current?.agentRoom ? <span className="workspace-profile" data-tauri-drag-region>{current.agentRoom.planner.agent.profileName} + {current.agentRoom.executor.agent.profileName}</span>
+          : current?.profileName && <span className="workspace-profile" title={`Perfil: ${current.profileName} · ${current.command}`} data-tauri-drag-region>{current.profileName}</span>}
       </div>
 
       <div className="session-create">
@@ -128,6 +131,9 @@ export default function TerminalTabs({
           <DropdownMenu anchor={menu} triggerRef={menuButtonRef} label="Crear sesión"
             className="session-create-menu" onClose={() => setMenu(null)}>
             <ProfileMenuItems profiles={profiles} defaultProfileId={defaultProfileId} defaultShortcut={shortcuts.newClaudeTab} onOpen={profileId => { setMenu(null); onNew(profileId); }} />
+            {onWorkflow && <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onWorkflow(); }}>
+              <span className="context-icon" aria-hidden="true"><MapIcon size={16} /></span>Planear y ejecutar con agentes…
+            </button>}
             <div className="context-sep" role="separator" />
             <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onNewShell(); }}>
               <span className="context-icon" aria-hidden="true"><TerminalIcon size={16} /></span>

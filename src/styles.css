@@ -2195,6 +2195,36 @@ body.dragging-sidebar .sidebar {
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }
 .project-item.active .project-icon { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 12%, transparent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+/* El estado sigue visible aunque las sesiones del proyecto estén contraídas. */
+.project-icon { position: relative; }
+.project-activity {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  color: var(--accent-strong);
+  background: currentColor;
+  box-shadow: 0 0 0 2px var(--bg-sidebar);
+  pointer-events: none;
+}
+.project-activity.is-working::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border: 1px solid currentColor;
+  border-radius: inherit;
+  animation: project-activity-pulse 1.8s ease-out infinite;
+}
+.project-activity.is-waiting { color: var(--warn); }
+@keyframes project-activity-pulse {
+  from { transform: scale(.7); opacity: .65; }
+  to { transform: scale(1.3); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-activity.is-working::after { animation: none; opacity: .35; }
+}
 /* El logo del proyecto ocupa el sitio de la carpeta y se aviva al pasar o al activarse. */
 .project-icon.has-logo img {
   width: 16px;

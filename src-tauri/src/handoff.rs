@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
@@ -19,8 +20,8 @@ const MAX_FILE_BYTES: usize = (MAX_CONTENT_BYTES + MAX_CWD_BYTES) * 6 + 16 * 102
 const GIT_BUDGET: Duration = Duration::from_secs(8);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const TRUNCATED: &str = "\n[Contexto Git truncado por tamaño.]\n";
-// Estas convenciones no detectan secretos insertados en archivos de código con
-// nombres arbitrarios. Se excluyen antes de producir los diffs, no después.
+// Se excluyen antes de producir los diffs. Además se filtra el texto completo
+// antes de persistirlo: los archivos con nombres ordinarios también pueden contener claves.
 const EXCLUDED_DIFF_PATHS: &[&str] = &[
     ":(top,exclude,glob,icase)**/.env",
     ":(top,exclude,glob,icase)**/.env.*",
@@ -48,6 +49,108 @@ pub struct PreparedHandoff {
     pub truncated: bool,
 }
 
+// Mismo alcance que clean/sanitizeHandoffText de src/handoff.ts. Git se añade
+// después del filtrado del frontend, así que esta frontera debe ser nativa.
+fn sanitize_handoff_text(value: &str) -> String {
+    static RULES: OnceLock<Vec<(regex::Regex, &'static str)>> = OnceLock::new();
+    let rules = RULES.get_or_init(|| {
+        let mut rules = vec![
+            (r"\x1b\[[0-?]*[ -/]*[@-~]".to_string(), ""),
+            (r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]".to_string(), ""),
+        ];
+        // regex no admite la referencia inversa usada por el frontend.
+        for tag in [
+            "environment_context",
+            "credentials",
+            "permissions_instructions",
+            "permission_context",
+            "auth_info",
+        ] {
+            rules.push((
+                format!(r"(?is)<{tag}\b[^>]*>.*?</{tag}>"),
+                "[datos del entorno omitidos]",
+            ));
+        }
+        let assignment = r#"["']?(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret|credentials?)(?:\\*["'])?[ \t]*[:=]"#;
+        let scalar = r#"(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\s,}\]"']+)"#;
+        rules.extend([
+            (
+                r"(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|$)".into(),
+                "[clave privada omitida]",
+            ),
+            (r#"(?i)data:[^\s<>"')]+"#.into(), "[adjunto omitido]"),
+            (
+                r"[A-Za-z0-9+/]{160,}={0,2}".into(),
+                "[datos binarios omitidos]",
+            ),
+            (
+                r"(?-u:\b)(?:sk-(?:ant-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})(?-u:\b)".into(),
+                "[credencial omitida]",
+            ),
+            (
+                r"(?i)(?P<scheme>https?:(?:\\*/){2})[^\s/@]+:[^\s/@]+@".into(),
+                "${scheme}[credenciales omitidas]@",
+            ),
+            // Git agrupa las líneas retiradas antes de las añadidas: puede
+            // haber otras propiedades entre los valores antiguo y nuevo.
+            // Se conservan esas líneas; el límite final protege la siguiente clave.
+            (
+                format!(r"(?i){assignment}(?:[ \t]*\r?\n[+-]?[ \t]*)*[ \t]*\r?\n-[ \t]*{scalar}[ \t]*[,}}]?(?P<between>(?:[ \t]*\r?\n(?:-[^\r\n]*|[ \t]*))*)(?:[ \t]*\r?\n\+[ \t]*)+{scalar}(?P<end>[ \t]*[,}}\]]|[ \t]*(?:\r?\n|$))"),
+                "[dato sensible omitido]${between}\n+[dato sensible omitido]${end}",
+            ),
+            (
+                format!(r"(?i){assignment}(?:[ \t]*\r?\n[+-]?[ \t]*)+{scalar}"),
+                "[dato sensible omitido]",
+            ),
+            // Las comillas también pueden estar escapadas en JSON anidado o
+            // en los nombres de archivo que Git representa entre comillas.
+            (
+                r#"(?im)^.*(?:["']?(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret|credentials?)(?:\\*["'])?\s*[:=]|(?-u:\b)Bearer\s+[A-Za-z0-9._~+/-]+).*$"#.into(),
+                "[dato sensible omitido]",
+            ),
+            (
+                r#"(?-u:\b)[A-Z][A-Z0-9_]{2,}=(?:"[^"\n]*"|'[^'\n]*'|[^\s;,]+)"#.into(),
+                "[variable de entorno omitida]",
+            ),
+            (
+                r#"(?i)--(?:api-key|access-token|token|password|secret)(?:=|\s+)(?:"[^"\n]*"|'[^'\n]*'|[^\s]+)"#.into(),
+                "[credencial omitida]",
+            ),
+            (r"<!--\s*trex-handoff[^>]*-->".into(), ""),
+        ]);
+        rules
+            .into_iter()
+            .map(|(pattern, replacement)| {
+                (regex::Regex::new(&pattern).expect("handoff sanitizer regex"), replacement)
+            })
+            .collect()
+    });
+    let mut text = value.to_string();
+    for (pattern, replacement) in rules {
+        text = pattern
+            .replace_all(&text, |captures: &regex::Captures<'_>| {
+                let mut omission = String::new();
+                captures.expand(replacement, &mut omission);
+                // No expandir evita recortar planes o la última instrucción
+                // al filtrar muchas asignaciones cortas dentro de los límites.
+                if omission.len() > captures[0].len() {
+                    if let Some(scheme) = captures.name("scheme") {
+                        format!("{}[x]@", scheme.as_str())
+                    } else if let Some(between) = captures.name("between") {
+                        format!("[x]{}\n+[x]{}", between.as_str(), &captures["end"])
+                    } else {
+                        "[x]".to_string()
+                    }
+                } else {
+                    omission
+                }
+            })
+            .into_owned();
+    }
+    // Se conserva el espacio del contexto y de las rutas válidas.
+    text
+}
+
 fn validate_metadata(value: &str, label: &str) -> Result<(), String> {
     if value.trim().is_empty()
         || value.len() > MAX_METADATA_BYTES
@@ -67,7 +170,7 @@ fn validate_source(
 ) -> Result<(), String> {
     validate_metadata(session_id, "El identificador de la conversación")?;
     validate_metadata(label, "El nombre del perfil")?;
-    if !matches!(provider, "claude" | "codex") {
+    if !matches!(provider, "claude" | "codex" | "trex") {
         return Err("El proveedor de origen no es válido.".into());
     }
     if cwd.is_empty() || cwd.len() > MAX_CWD_BYTES || cwd.contains('\0') || !Path::new(cwd).is_dir()
@@ -240,7 +343,17 @@ fn run_git(
         .env_remove("GIT_ICASE_PATHSPECS")
         .env_remove("GIT_EXTERNAL_DIFF")
         .env_remove("GIT_DIFF_OPTS");
+    #[cfg(test)]
+    isolate_test_git(&mut command);
     run_command(command, limit, remaining.min(GIT_COMMAND_TIMEOUT))
+}
+
+#[cfg(test)]
+fn isolate_test_git(command: &mut Command) {
+    command.env("GIT_CONFIG_NOSYSTEM", "1").env(
+        "GIT_CONFIG_GLOBAL",
+        if cfg!(windows) { "NUL" } else { "/dev/null" },
+    );
 }
 
 fn capture_git(cwd: &str) -> (String, bool) {
@@ -358,13 +471,18 @@ fn save_in(
     let mut prepared = PreparedHandoff {
         id: String::new(),
         created_at: now.as_millis().try_into().unwrap_or(u64::MAX),
-        source_label,
+        source_label: sanitize_handoff_text(&source_label),
         source_provider,
-        source_session_id,
-        cwd,
-        content,
+        source_session_id: sanitize_handoff_text(&source_session_id),
+        cwd: sanitize_handoff_text(&cwd),
+        content: sanitize_handoff_text(&content),
         truncated,
     };
+    validate_metadata(
+        &prepared.source_session_id,
+        "El identificador de la conversación",
+    )?;
+    validate_metadata(&prepared.source_label, "El nombre del perfil")?;
     for _ in 0..16 {
         prepared.id = format!(
             "{:032x}-{:08x}-{:016x}",
@@ -423,7 +541,10 @@ fn load_from(data_dir: &Path, id: &str) -> Result<PreparedHandoff, String> {
     )?;
     validate_metadata(&prepared.source_label, "El nombre del perfil")?;
     if prepared.id != id
-        || !matches!(prepared.source_provider.as_str(), "claude" | "codex")
+        || !matches!(
+            prepared.source_provider.as_str(),
+            "claude" | "codex" | "trex"
+        )
         || prepared.cwd.is_empty()
         || prepared.cwd.len() > MAX_CWD_BYTES
         || prepared.cwd.contains('\0')
@@ -500,6 +621,7 @@ mod tests {
         fn git(&self, args: &[&str]) -> String {
             let mut command = Command::new("git");
             command.arg("-C").arg(&self.0).args(args);
+            isolate_test_git(&mut command);
             run_command(command, 64 * 1024, Duration::from_secs(5))
                 .unwrap()
                 .text
@@ -579,6 +701,337 @@ mod tests {
             read_bounded(std::io::Cursor::new(vec![b'x'; 200_000]), 512).unwrap();
         assert_eq!(bytes.len(), 512);
         assert!(clipped);
+    }
+
+    #[test]
+    fn native_sanitizer_covers_frontend_credentials_and_escaped_json() {
+        let cases = [
+            ("api_key=AUDIT_FAKE_ONLY", "AUDIT_FAKE_ONLY"),
+            (r#"{"api_key":"AUDIT_JSON_ONLY"}"#, "AUDIT_JSON_ONLY"),
+            (r#"config = "{\"api_key\":\"AUDIT_ESCAPED_ONLY\"}";"#, "AUDIT_ESCAPED_ONLY"),
+            (r#"{\\"client_secret\\":\\"AUDIT_NESTED_ONLY\\"}"#, "AUDIT_NESTED_ONLY"),
+            ("Authorization: Bearer AUDIT_BEARER_ONLY", "AUDIT_BEARER_ONLY"),
+            ("refresh_token: AUDIT_REFRESH_ONLY", "AUDIT_REFRESH_ONLY"),
+            ("oauth-token = AUDIT_OAUTH_ONLY", "AUDIT_OAUTH_ONLY"),
+            ("id_token: AUDIT_ID_ONLY", "AUDIT_ID_ONLY"),
+            ("credentials: AUDIT_CREDENTIAL_ONLY", "AUDIT_CREDENTIAL_ONLY"),
+            ("password=AUDIT_PASSWORD_ONLY", "AUDIT_PASSWORD_ONLY"),
+            ("run --token AUDIT_FLAG_ONLY", "AUDIT_FLAG_ONLY"),
+            ("https://user:AUDIT_URL_ONLY@example.test/path", "AUDIT_URL_ONLY"),
+            ("sk-ant-AUDIT_PROVIDER_FAKE_ONLY", "AUDIT_PROVIDER_FAKE_ONLY"),
+            ("ghp_AUDIT_GITHUB_FAKE_ONLY_12345", "AUDIT_GITHUB_FAKE_ONLY_12345"),
+            ("github_pat_AUDIT_PAT_FAKE_ONLY_12345", "AUDIT_PAT_FAKE_ONLY_12345"),
+            ("SERVICE_CONFIG=AUDIT_ENV_ONLY", "AUDIT_ENV_ONLY"),
+            ("<environment_context>AUDIT_CONTEXT_ONLY</environment_context>", "AUDIT_CONTEXT_ONLY"),
+            ("<credentials>AUDIT_BLOCK_ONLY</credentials>", "AUDIT_BLOCK_ONLY"),
+            ("-----BEGIN RSA PRIVATE KEY-----\nAUDIT_PRIVATE_ONLY\n-----END RSA PRIVATE KEY-----", "AUDIT_PRIVATE_ONLY"),
+            ("data:text/plain,AUDIT_DATA_ONLY", "AUDIT_DATA_ONLY"),
+        ];
+        for (input, secret) in cases {
+            let text = format!(
+                "Conserva el objetivo.\n{input}\nÚltima instrucción: verifica el plan completo. 🦖"
+            );
+            let sanitized = sanitize_handoff_text(&text);
+            assert!(!sanitized.contains(secret), "unfiltered pattern: {input}");
+            assert!(sanitized.starts_with("Conserva el objetivo.\n"));
+            assert!(sanitized.ends_with("Última instrucción: verifica el plan completo. 🦖"));
+            assert!(sanitized.len() <= text.len());
+        }
+        let safe = "# Plan completo\n1. Refactoriza parse_api_key(input) y valida los errores.\nlet secret_count = 2;\nlet token = response.token();\nlet schema = [\"api_key\", \"password\"];\n2. Conserva los proveedores claude, codex y trex.\nÚltima intención: ejecuta las pruebas y conserva el plan. 🦖\n";
+        assert_eq!(sanitize_handoff_text(safe), safe);
+        for short in [
+            "secret=",
+            "data:x",
+            "https://u:p@example.test",
+            "sk-123456789012",
+        ] {
+            assert!(sanitize_handoff_text(short).len() <= short.len());
+        }
+    }
+
+    #[test]
+    fn ordinary_tracked_git_credentials_are_redacted_before_serialization_and_reload() {
+        let project = TestDir::new();
+        let data = TestDir::new();
+        project.git(&["init", "-q", "-b", "main"]);
+        fs::write(
+            project.0.join("config.json"),
+            "{\"api_key\":\"AUDIT_OLD_ONLY\"}\noriginal\n",
+        )
+        .unwrap();
+        project.git(&["add", "config.json"]);
+        project.git(&[
+            "-c",
+            "user.name=TREX test",
+            "-c",
+            "user.email=trex@example.test",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ]);
+        project.git(&["checkout", "-q", "-b", "api_key=AUDIT_BRANCH_ONLY"]);
+        fs::write(
+            project.0.join("config.json"),
+            "api_key=AUDIT_FAKE_ONLY\nSTAGED_SAFE_CONTEXT\n",
+        )
+        .unwrap();
+        project.git(&["add", "config.json"]);
+        fs::write(
+            project.0.join("config.json"),
+            "api_key=AUDIT_FAKE_ONLY\nconfig = \"{\\\"access_token\\\":\\\"AUDIT_ESCAPED_GIT_ONLY\\\"}\";\nUNSTAGED_SAFE_CONTEXT\n",
+        ).unwrap();
+        fs::write(
+            project.0.join("api_key=AUDIT_STATUS_ONLY.txt"),
+            "untracked content is never read",
+        )
+        .unwrap();
+        let status_before = project.git(&["status", "--porcelain=v1", "--untracked-files=all"]);
+        let (raw, _) = capture_git(project.cwd());
+        for secret in [
+            "AUDIT_FAKE_ONLY",
+            "AUDIT_ESCAPED_GIT_ONLY",
+            "AUDIT_BRANCH_ONLY",
+            "AUDIT_STATUS_ONLY",
+        ] {
+            assert!(
+                raw.contains(secret),
+                "fixture did not expose {secret} to native Git capture"
+            );
+        }
+        let plan = format!("## Plan completo\n{}\nÚltima intención: conserva TODOS los pasos y verifica el estado. 🦖", "Paso seguro: implementa y verifica.\n".repeat(1_500));
+        let source = format!("Conversación: api_key=AUDIT_TITLE_ONLY\n{plan}");
+        assert!(source.len() < MAX_SOURCE_CONTENT_BYTES);
+        let prepared = save_in(
+            &data.0,
+            project.cwd().into(),
+            "session".into(),
+            "trex".into(),
+            "TREX api_key=AUDIT_LABEL_ONLY".into(),
+            source,
+        )
+        .unwrap();
+        let serialized = fs::read_to_string(
+            data.0
+                .join("handoffs")
+                .join(format!("{}.json", prepared.id)),
+        )
+        .unwrap();
+        let loaded = load_from(&data.0, &prepared.id).unwrap();
+        assert_eq!(loaded, prepared);
+        for secret in [
+            "AUDIT_FAKE_ONLY",
+            "AUDIT_OLD_ONLY",
+            "AUDIT_ESCAPED_GIT_ONLY",
+            "AUDIT_BRANCH_ONLY",
+            "AUDIT_STATUS_ONLY",
+            "AUDIT_TITLE_ONLY",
+            "AUDIT_LABEL_ONLY",
+        ] {
+            assert!(!serialized.contains(secret), "persisted {secret}");
+            assert!(
+                !serde_json::to_string(&loaded).unwrap().contains(secret),
+                "reloaded {secret}"
+            );
+        }
+        assert!(loaded.content.contains(&plan));
+        for safe in [
+            "config.json",
+            "STAGED_SAFE_CONTEXT",
+            "UNSTAGED_SAFE_CONTEXT",
+            "Cambios preparados (staged)",
+            "Cambios sin preparar (unstaged)",
+        ] {
+            assert!(loaded.content.contains(safe), "lost context {safe}");
+        }
+        assert!(loaded.content.len() <= MAX_CONTENT_BYTES);
+        assert_eq!(loaded.cwd, project.cwd());
+        assert_eq!(loaded.source_session_id, "session");
+        assert_eq!(loaded.source_provider, "trex");
+        assert!(!loaded.truncated);
+        assert_eq!(
+            project.git(&["status", "--porcelain=v1", "--untracked-files=all"]),
+            status_before
+        );
+    }
+
+    #[test]
+    fn multiline_values_and_escaped_urls_preserve_safe_context_and_do_not_expand() {
+        let cases = [
+            ("{\"api_key\":\n \"AUDIT_MULTI_WITH spaces and \\\"quotes\\\"\", \"keep\": \"SAFE_CONTEXT\"}", "AUDIT_MULTI_WITH"),
+            ("+{\"api_key\":\n+ \"AUDIT_PLUS_ONLY\",\n+ \"keep\": \"SAFE_CONTEXT\"}", "AUDIT_PLUS_ONLY"),
+            ("-{\"api_key\":\r\n- \"AUDIT_MINUS_ONLY\",\r\n- \"keep\": \"SAFE_CONTEXT\"}", "AUDIT_MINUS_ONLY"),
+            ("password:\n AUDIT_BARE_ONLY\nSAFE_CONTEXT", "AUDIT_BARE_ONLY"),
+            (" \"api_key\":\n- \"AUDIT_OLD_PAIR\",\n+ \"AUDIT_NEW_PAIR\",\n  \"keep\": \"SAFE_CONTEXT\"", "AUDIT_"),
+            (" \"api_key\":\n- \"AUDIT_OLD_GROUP\",\n- \"keep\": \"SAFE_CONTEXT\",\n+ \"AUDIT_NEW_GROUP\",\n+ \"keep\": \"SAFE_CONTEXT\"", "AUDIT_"),
+            (" \"api_key\":\n- \"a\",\n- \"keep\": \"SAFE_CONTEXT\",\n+ \"b\",\n+ \"keep\": \"SAFE_CONTEXT\"", "\"a\""),
+            (" \"api_key\":\n-\n- \"AUDIT_OLD_BLANK\",\n+\n+ \"AUDIT_NEW_BLANK\",\n  \"keep\": \"SAFE_CONTEXT\"", "AUDIT_"),
+            (" \"api_key\":\n- \"AUDIT_OLD_CONTEXT\",\n \n+ \"AUDIT_NEW_CONTEXT\",\n  \"keep\": \"SAFE_CONTEXT\"", "AUDIT_"),
+            // Una propiedad JSON de la siguiente línea no es un segundo valor.
+            (" \"api_key\":\n- \"AUDIT_BEFORE_SAFE\",\n+ \"SAFE_CONTEXT\": \"keep\"", "AUDIT_BEFORE_SAFE"),
+        ];
+        for (input, secret) in cases {
+            let sanitized = sanitize_handoff_text(input);
+            assert!(
+                !sanitized.contains(secret),
+                "unfiltered multiline value: {input}"
+            );
+            assert!(
+                sanitized.contains("SAFE_CONTEXT"),
+                "lost adjacent context: {input}"
+            );
+            assert!(sanitized.len() <= input.len());
+        }
+        for slashes in [0, 1, 2, 3, 7] {
+            let slash = format!("{}/", "\\".repeat(slashes));
+            let scheme = format!("https:{slash}{slash}");
+            for credential in ["u:p", "user:AUDIT_ESCAPED_URL_ONLY"] {
+                let input = format!("{{\"url\":\"{scheme}{credential}@example.test/safe-path\",\"keep\":\"SAFE_CONTEXT\"}}");
+                let sanitized = sanitize_handoff_text(&input);
+                assert!(!sanitized.contains(credential));
+                assert!(sanitized.contains(&scheme));
+                assert!(sanitized.contains("@example.test/safe-path"));
+                assert!(sanitized.contains("SAFE_CONTEXT"));
+                assert!(sanitized.len() <= input.len());
+            }
+            let safe = format!("{{\"url\":\"{scheme}example.test/safe-only\"}}");
+            assert_eq!(sanitize_handoff_text(&safe), safe);
+        }
+    }
+
+    #[test]
+    fn multiline_credentials_and_escaped_urls_are_redacted_in_git_save_reload() {
+        let project = TestDir::new();
+        let data = TestDir::new();
+        let fixture = |stage: &str| {
+            let blanks = match stage {
+                "OLD" => "\n",
+                "UNSTAGED" => "\n\n\n",
+                _ => "\n\n",
+            };
+            let mut config = format!("{{\n  \"api_key\":\n{blanks}    \"AUDIT_MULTI_{stage}\",\n");
+            for slashes in [0, 1, 3, 7] {
+                let slash = format!("{}/", "\\".repeat(slashes));
+                config.push_str(&format!("  \"endpoint_{slashes}\": \"https:{slash}{slash}user:AUDIT_URL_{stage}_{slashes}@example.test/safe-path\",\n"));
+            }
+            config.push_str("  \"keep\": \"SAFE_CONTEXT\"\n}\n");
+            config
+        };
+        project.git(&["init", "-q", "-b", "main"]);
+        fs::write(project.0.join("config.json"), fixture("OLD")).unwrap();
+        project.git(&["add", "config.json"]);
+        project.git(&[
+            "-c",
+            "user.name=TREX test",
+            "-c",
+            "user.email=trex@example.test",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ]);
+        fs::write(project.0.join("config.json"), fixture("STAGED")).unwrap();
+        // También cubre una asignación añadida completa, con prefijo + en la clave y valor.
+        fs::write(project.0.join("new-config.json"), fixture("ADDED")).unwrap();
+        project.git(&["add", "config.json", "new-config.json"]);
+        fs::write(project.0.join("config.json"), fixture("UNSTAGED")).unwrap();
+        let before = project.git(&["status", "--porcelain=v1", "--untracked-files=all"]);
+        let (raw, _) = capture_git(project.cwd());
+        assert!(raw.contains("-    \"AUDIT_MULTI_OLD\""));
+        assert!(raw.contains("+    \"AUDIT_MULTI_STAGED\""));
+        assert!(raw.contains("+  \"api_key\":\n+\n+\n+    \"AUDIT_MULTI_ADDED\""));
+        assert!(raw.contains("+\n+    \"AUDIT_MULTI_STAGED\""));
+        let step = "Paso seguro 🦖á汉: conserva y verifica el contexto.\n";
+        let plan = format!("## Plan completo\n{}\nÚltima intención: conserva todos los pasos y verifica el estado. 🦖", step.repeat((MAX_SOURCE_CONTENT_BYTES - 200) / step.len()));
+        assert!(plan.len() <= MAX_SOURCE_CONTENT_BYTES);
+        let prepared = save_in(
+            &data.0,
+            project.cwd().into(),
+            "session".into(),
+            "codex".into(),
+            "Codex".into(),
+            plan.clone(),
+        )
+        .unwrap();
+        let serialized = fs::read_to_string(
+            data.0
+                .join("handoffs")
+                .join(format!("{}.json", prepared.id)),
+        )
+        .unwrap();
+        let loaded = load_from(&data.0, &prepared.id).unwrap();
+        assert_eq!(loaded, prepared);
+        let loaded_json = serde_json::to_string(&loaded).unwrap();
+        for stage in ["OLD", "STAGED", "UNSTAGED", "ADDED"] {
+            let secret = format!("AUDIT_MULTI_{stage}");
+            assert!(raw.contains(&secret), "missing Git fixture {secret}");
+            assert!(!serialized.contains(&secret), "persisted {secret}");
+            assert!(!loaded_json.contains(&secret), "reloaded {secret}");
+            for slashes in [0, 1, 3, 7] {
+                let secret = format!("AUDIT_URL_{stage}_{slashes}");
+                assert!(raw.contains(&secret), "missing Git fixture {secret}");
+                assert!(!serialized.contains(&secret), "persisted {secret}");
+                assert!(!loaded_json.contains(&secret), "reloaded {secret}");
+                let slash = format!("{}/", "\\".repeat(slashes));
+                assert!(loaded.content.contains(&format!("https:{slash}{slash}")));
+            }
+        }
+        assert!(loaded.content.starts_with(&plan));
+        assert!(loaded.content.contains("SAFE_CONTEXT"));
+        assert!(loaded.content.contains("@example.test/safe-path"));
+        assert!(loaded.content.len() <= MAX_CONTENT_BYTES);
+        assert!(loaded.content.len() <= plan.len() + raw.len());
+        assert!(!loaded.truncated);
+        assert_eq!(loaded.cwd, project.cwd());
+        assert_eq!(loaded.source_provider, "codex");
+        assert_eq!(
+            project.git(&["status", "--porcelain=v1", "--untracked-files=all"]),
+            before
+        );
+        assert_eq!(
+            fs::read_to_string(project.0.join("config.json")).unwrap(),
+            fixture("UNSTAGED")
+        );
+    }
+
+    #[test]
+    fn sensitive_metadata_is_filtered_for_all_existing_providers() {
+        let project = TestDir::new();
+        let data = TestDir::new();
+        let cwd = project.0.join("api_key=AUDIT_CWD_ONLY");
+        fs::create_dir(&cwd).unwrap();
+        for provider in ["claude", "codex", "trex"] {
+            let prepared = save_in(
+                &data.0,
+                cwd.to_str().unwrap().into(),
+                "session access_token=AUDIT_SESSION_ONLY".into(),
+                provider.into(),
+                "Profile password=AUDIT_LABEL_ONLY".into(),
+                "Continúa el plan completo.".into(),
+            )
+            .unwrap();
+            let serialized = fs::read_to_string(
+                data.0
+                    .join("handoffs")
+                    .join(format!("{}.json", prepared.id)),
+            )
+            .unwrap();
+            for secret in ["AUDIT_CWD_ONLY", "AUDIT_SESSION_ONLY", "AUDIT_LABEL_ONLY"] {
+                assert!(!serialized.contains(secret));
+            }
+            assert_eq!(load_from(&data.0, &prepared.id).unwrap(), prepared);
+            assert_eq!(prepared.source_provider, provider);
+            assert!(valid_id(&prepared.id));
+            assert!(prepared.created_at > 0);
+        }
     }
 
     #[test]

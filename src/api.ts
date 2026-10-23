@@ -12,7 +12,9 @@ import { normalizeShortcuts, bindingError, keyError } from "./shortcuts";
 import { normalizeSplitLayout, type SplitLayout } from "./splitLayout";
 import { validConversationId } from "./conversations";
 import { normalizeHandoffReference, type HandoffContext, type PreparedHandoff } from "./handoff";
-import { normalizeModelChoice } from "./chatState";
+import { normalizeEffortChoice, normalizeModelChoice } from "./chatState";
+import { normalizeAgentWorkflow } from "./agentWorkflow";
+import { normalizeAgentRoom } from "./agentRoom";
 import type {
   AgentProvider,
   AppConfig,
@@ -478,6 +480,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   const CHAT_MODES: Record<AgentProvider, string[]> = {
     claude: ["default", "acceptEdits", "plan", "bypassPermissions", "auto", "dontAsk"],
     codex: ["read-only", "auto", "plan", "full"],
+    trex: ["plan", "ask", "auto", "full"],
   };
   const chatMode = (kind: TabKind, value: unknown): string | null =>
     kind !== "shell" && typeof value === "string" && CHAT_MODES[kind].includes(value) ? value : null;
@@ -487,13 +490,16 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
       if (!rec) continue;
       const projectId = asString(rec.projectId, "");
       if (!projectId) continue;
-      const kind: TabKind = rec.kind === "shell" || rec.kind === "codex" ? rec.kind : "claude";
+      const kind: TabKind = rec.kind === "shell" || rec.kind === "codex" || rec.kind === "trex" ? rec.kind : "claude";
       const subtitle = asString(rec.subtitle, "").trim() || kind;
       const launch = normalizeLaunch(rec.launch, kind);
       if (rec.launch != null && !launch) continue;
       lastTabs.push({ id: typeof rec.id === "string" && /^t-[a-z0-9-]+$/i.test(rec.id) ? rec.id : undefined, projectId, kind, subtitle, launch, conversationId: validConversationId(rec.conversationId) ? rec.conversationId : null,
         chatMode: chatMode(kind, rec.chatMode), chatModel: kind === "shell" ? null : normalizeModelChoice(rec.chatModel),
-        handoff: kind === "shell" ? null : normalizeHandoffReference(rec.handoff) });
+        chatEffort: kind === "shell" ? null : normalizeEffortChoice(rec.chatEffort),
+        handoff: kind === "shell" ? null : normalizeHandoffReference(rec.handoff),
+        workflow: kind === "shell" ? null : normalizeAgentWorkflow(rec.workflow),
+        agentRoom: kind === "shell" ? null : normalizeAgentRoom(rec.agentRoom) });
     }
   }
 
@@ -518,7 +524,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     splitLayouts,
   };
   const chatModes = asRecord(uiRaw.chatModes);
-  for (const provider of ["claude", "codex"] as const) {
+  for (const provider of ["claude", "codex", "trex"] as const) {
     const mode = chatMode(provider, chatModes?.[provider]);
     if (mode) ui.chatModes = { ...ui.chatModes, [provider]: mode };
   }

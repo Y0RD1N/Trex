@@ -56,8 +56,13 @@ export default function FeatureDialog({
       });
       const anotherDialog = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]'))
         .some(element => element !== ref.current && !element.closest('[inert], [aria-hidden="true"]'));
-      if (!anotherDialog && previous?.isConnected && !previous.closest("[inert]"))
-        previous.focus({ preventScroll: true });
+      if (!anotherDialog) {
+        const target = previous?.isConnected && !previous.closest("[inert]") ? previous
+          : ['.session-create > button[aria-label="Nueva sesión"]:not(:disabled)', '.sidebar-collapse', '.sidebar-reopen:not([hidden])']
+            .map(selector => document.querySelector<HTMLElement>(selector))
+            .find(element => element && element.getClientRects().length && !element.closest("[inert]"));
+        target?.focus({ preventScroll: true });
+      }
     };
   }, []);
   const keys = (event: KeyboardEvent): void => {

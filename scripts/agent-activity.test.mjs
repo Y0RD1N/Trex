@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = await readFile(new URL("../src/agentActivity.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
-const { screenActivity, activitySignal } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { screenActivity, activitySignal, projectActivity } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 test("Claude sigue ocupado durante la espera del modelo, sin depender de nuevos bytes", () => {
   const footer = ["✻ Coalescing… (15s · ↓ 120 tokens · thinking)", "❯ ", "⏵⏵ auto mode on"];
@@ -50,4 +50,16 @@ test("las notificaciones de finalización y el regreso al prompt limpian el esta
   for (const marker of ["A", "B", "D;0"]) assert.equal(activitySignal(133, marker), "idle");
   assert.equal(activitySignal(133, "C"), undefined);
   assert.equal(activitySignal(777, "unrelated"), undefined);
+});
+
+test("el proyecto refleja cualquier agente ocupado, incluidas sesiones de fondo y chats compartidos", () => {
+  const session = (kind, activity, exited = false) => ({ kind, activity, exited });
+  assert.equal(projectActivity([]), "idle");
+  assert.equal(projectActivity([session("claude", "idle"), session("codex", "working")]), "working");
+  assert.equal(projectActivity([session("claude", "working"), session("codex", "idle")]), "working");
+  assert.equal(projectActivity([session("claude", "waiting"), session("codex", "working")]), "working");
+  assert.equal(projectActivity([session("codex", "working"), session("claude", "waiting")]), "working");
+  assert.equal(projectActivity([session("claude", "waiting"), session("codex", "idle")]), "waiting");
+  assert.equal(projectActivity([session("shell", "working"), session("codex", "working", true)]), "idle");
+  assert.equal(projectActivity([session("claude", "waiting", true), session("codex", "idle")]), "idle");
 });

@@ -159,6 +159,12 @@ fn build_launch(req: &AgentSpawnRequest, search_path: Option<std::ffi::OsString>
     if [command, profile_args].iter().any(|value| value.contains(['\r', '\n', '\0'])) {
         return Err("El comando y los argumentos del perfil deben ocupar una sola línea.".into());
     }
+    // Trex is optional and app-owned: never accept an unrelated PATH binary or
+    // shell alias. Its API protocol runs directly even if the profile uses WSL.
+    if crate::trex_cli::is_trex_command(&req.command) {
+        let program = crate::trex_cli::installed_cli_path()?.to_string_lossy().into_owned();
+        return direct_trex_launch(req, program);
+    }
     let shell = resolve_shell(req.shell.as_deref().unwrap_or("default"))?;
 
     if shell.kind == ShellKind::Wsl {
@@ -186,6 +192,12 @@ fn build_launch(req: &AgentSpawnRequest, search_path: Option<std::ffi::OsString>
         _ => vec!["-i".into(), "-c".into(), shell_line(command, profile_args, &req.flags, quote_posix)],
     };
     Ok(Launch { program: shell.program, args, via_shell: true })
+}
+
+fn direct_trex_launch(req: &AgentSpawnRequest, program: String) -> Result<Launch, String> {
+    let mut args = split_args(req.profile_args.as_deref().unwrap_or(""), is_windows())?;
+    args.extend(req.flags.iter().cloned());
+    Ok(Launch { program, args, via_shell: false })
 }
 
 #[cfg(unix)]
@@ -256,7 +268,7 @@ impl AgentState {
         }
         if let Some(extra) = &req.env {
             for (key, value) in extra {
-                let value = if key == "CODEX_HOME" || key == "CLAUDE_CONFIG_DIR" { expand_config_dir(value) } else { value.clone() };
+                let value = if key == "CODEX_HOME" || key == "CLAUDE_CONFIG_DIR" || key == "TREX_HOME" { expand_config_dir(value) } else { value.clone() };
                 cmd.env(key, value);
             }
         }
@@ -402,6 +414,7 @@ pub fn tauri_emitter(app: AppHandle, id: String) -> Arc<dyn Fn(AgentEvent) + Sen
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::sync::mpsc;
 
     fn request(command: &str, profile_args: &str) -> AgentSpawnRequest {
@@ -425,6 +438,46 @@ mod tests {
         assert_eq!(split_args(r"--add-dir C:\work\app", true).unwrap(), vec!["--add-dir", r"C:\work\app"]);
         assert!(split_args("--name 'sin cerrar", false).is_err());
         assert!(split_args("", false).unwrap().is_empty());
+        for windows in [true, false] {
+            assert_eq!(
+                split_args(r##"--profile 'Work'"'"'s "API"\team'"##, windows).unwrap(),
+                vec!["--profile", r#"Work's "API"\team"#]
+            );
+        }
+    }
+
+    #[test]
+    fn trex_profiles_keep_arguments_and_run_without_a_shell() {
+        let mut req = request("trex-agent", "--profile 'TREX 1'");
+        req.shell = Some("wsl".into());
+        req.flags = vec!["app-server".into()];
+        let launch = direct_trex_launch(&req, "absolute installed path with spaces".into()).unwrap();
+        assert!(!launch.via_shell);
+        assert_eq!(launch.program, "absolute installed path with spaces");
+        assert_eq!(launch.args, ["--profile", "TREX 1", "app-server"]);
+        req.profile_args = Some("--profile 'unclosed".into());
+        assert!(direct_trex_launch(&req, "known sibling".into()).is_err());
+    }
+
+    #[test]
+    fn reserved_trex_command_never_uses_a_path_impostor() {
+        let directory = std::env::temp_dir().join(format!("trex-path-test-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&directory).unwrap();
+        let impostor = directory.join(if is_windows() { "trex-agent.exe" } else { "trex-agent" });
+        std::fs::write(&impostor, b"must never execute").unwrap();
+        let mut req = request("trex-agent", "--profile TREX1");
+        req.shell = Some("invalid-shell-that-must-not-be-resolved".into());
+        let result = build_launch(&req, Some(std::env::join_paths([&directory]).unwrap()));
+        std::fs::remove_file(&impostor).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+        match result {
+            Ok(launch) => {
+                assert_ne!(std::path::Path::new(&launch.program), impostor);
+                assert!(!launch.via_shell);
+            }
+            Err(error) => assert!(error.contains("Trex CLI no está instalado"), "{error}"),
+        }
     }
 
     #[cfg(unix)]

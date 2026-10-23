@@ -1,5 +1,5 @@
 /** Archivos editados en un turno: usa el diff neto del proveedor cuando existe. */
-import { diffStats, inputDiff, relativePath, type ChatItem, type DiffLine, type ToolItem } from "./chatState";
+import { diffStats, inputDiff, list, record, relativePath, type ChatItem, type DiffLine, type ToolItem } from "./chatState";
 
 export type ChangedFile = {
   path: string;
@@ -77,7 +77,9 @@ export function filesFromDiff(raw: string, cwd: string): ChangedFile[] {
 
 export function summarizeWork(items: ChatItem[], cwd: string, rawDiff?: string): WorkSummary {
   const byPath = new Map<string, ChangedFile>();
-  for (const item of items) {
+  const expanded = items.flatMap((item): ChatItem[] => item.kind === "tool" && item.name === "TrexPatch"
+    ? list(item.input.files).flatMap((value, index) => { const file = record(value); return file ? [{ ...item, id: `${item.id}:${index}`, name: "Edit", input: file, patch: null }] : []; }) : [item]);
+  for (const item of expanded) {
     if (item.kind !== "tool") continue;
     const file = toolFile(item, cwd);
     if (!file) continue;

@@ -1,6 +1,29 @@
 import type { AgentProvider, LauncherProfile, PersistedTab, SessionLaunch, Settings, TabKind } from "./types";
 
-export const PROVIDER_NAMES: Record<AgentProvider, string> = { claude: "Claude Code", codex: "Codex" };
+export const PROVIDER_NAMES: Record<AgentProvider, string> = { claude: "Claude Code", codex: "Codex", trex: "Trex CLI" };
+
+/** Literal fragments work with the native argument parser on Windows and Unix. */
+export function trexProfileArgs(name: string): string {
+  return `--profile ${name.split("'").map(part => `'${part}'`).join(`"'"`)}`;
+}
+
+export function trexProfileName(profile: Pick<LauncherProfile, "args" | "name">): string {
+  const tokens: string[] = [];
+  let token = "", quote = "", started = false;
+  for (const char of profile.args) {
+    if (quote) { if (char === quote) quote = ""; else token += char; }
+    else if (char === "'" || char === '"') { quote = char; started = true; }
+    else if (/\s/.test(char)) { if (started) { tokens.push(token); token = ""; started = false; } }
+    else { token += char; started = true; }
+  }
+  if (quote) return profile.name;
+  if (started) tokens.push(token);
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index] === "--profile" && tokens[index + 1]) return tokens[index + 1];
+    if (tokens[index].startsWith("--profile=")) return tokens[index].slice(10) || profile.name;
+  }
+  return profile.name;
+}
 
 export function initialProfiles(settings: Pick<Settings, "claudeCommand" | "claudeArgs" | "launchMode">): LauncherProfile[] {
   return [
@@ -18,11 +41,11 @@ export function normalizeProfiles(raw: unknown, legacy: Pick<Settings, "claudeCo
     if (!entry || typeof entry !== "object") continue;
     const rec = entry as Record<string, unknown>;
     if (typeof rec.id !== "string" || !rec.id.trim() || ids.has(rec.id)) continue;
-    if (rec.provider !== "claude" && rec.provider !== "codex") continue;
+    if (rec.provider !== "claude" && rec.provider !== "codex" && rec.provider !== "trex") continue;
     ids.add(rec.id);
     const str = (key: string, fallback = ""): string => typeof rec[key] === "string" ? rec[key] as string : fallback;
     profiles.push({ id: rec.id, provider: rec.provider, name: str("name", PROVIDER_NAMES[rec.provider]).trim() || PROVIDER_NAMES[rec.provider],
-      command: str("command", rec.provider).trim() || rec.provider, args: str("args"), shell: str("shell"),
+      command: str("command", rec.provider === "trex" ? "trex-agent" : rec.provider).trim() || (rec.provider === "trex" ? "trex-agent" : rec.provider), args: str("args"), shell: str("shell"),
       launchMode: rec.launchMode === "inject" ? "inject" : "arg", configDir: str("configDir").trim() });
   }
   return profiles.length ? profiles : initialProfiles(legacy);
@@ -30,6 +53,12 @@ export function normalizeProfiles(raw: unknown, legacy: Pick<Settings, "claudeCo
 
 export function defaultProfile(settings: Settings): LauncherProfile {
   return settings.profiles.find(profile => profile.id === settings.defaultProfileId) ?? settings.profiles[0];
+}
+
+/** La elección opcional del instalador nunca elimina la configuración de una cuenta. */
+export function profilesForInstallation(settings: Settings, trexInstalled: boolean): LauncherProfile[] {
+  const profiles = settings.profiles.filter(profile => trexInstalled || profile.provider !== "trex");
+  return profiles.length ? profiles : initialProfiles(settings);
 }
 
 export function launchForProfile(settings: Settings, profile: LauncherProfile | null): SessionLaunch {
@@ -40,7 +69,7 @@ export function launchForProfile(settings: Settings, profile: LauncherProfile | 
     args: profile?.args.trim() || null,
     shell: profile?.shell || settings.shell,
     launchMode: profile?.launchMode ?? "arg",
-    env: profile?.configDir.trim() ? { [profile.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]: profile.configDir.trim() } : null,
+    env: profile?.configDir.trim() ? { [profile.provider === "trex" ? "TREX_HOME" : profile.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]: profile.configDir.trim() } : null,
   };
 }
 
@@ -52,6 +81,7 @@ export function restoreLaunch(tab: PersistedTab, settings: Settings): SessionLau
   const profile = settings.profiles.find(item => item.provider === tab.kind);
   // Las pestañas antiguas de Claude conservan los ajustes antiguos, aunque el predeterminado sea Codex.
   if (tab.kind === "claude") return launchForProfile(settings, { ...initialProfiles(settings)[0], id: profile?.id ?? "claude-default" });
+  if (tab.kind === "trex") return launchForProfile(settings, profile ?? { id: "trex-default", name: "TREX1", provider: "trex", command: "trex-agent", args: "--profile TREX1", shell: "", launchMode: "arg", configDir: "" });
   return launchForProfile(settings, profile ?? initialProfiles(settings)[1]);
 }
 

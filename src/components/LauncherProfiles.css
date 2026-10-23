@@ -67,6 +67,25 @@
 .profile-default-badge { flex-shrink: 0; padding: 4px 7px; border: 1px solid var(--profile-edge); border-radius: 999px; background: color-mix(in srgb, var(--profile-inset) 70%, transparent); font-size: 9px; line-height: 1.3; color: var(--text-muted); }
 .profile-add-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .profile-add-actions .btn { display: flex; gap: 6px; align-items: center; font-size: 11px; }
+.profile-card:disabled { cursor: wait; opacity: .65; }
+.profile-add-actions .btn:disabled { cursor: default; opacity: .5; }
+.trex-cli-availability { display: flex; flex-direction: column; min-width: 0; gap: 10px; padding: 15px; border: 1px solid var(--profile-edge); border-radius: var(--radius-section, 16px); background: color-mix(in srgb, var(--profile-raised) 40%, var(--profile-inset)); box-shadow: inset 0 1px 0 var(--profile-highlight); }
+.trex-cli-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.trex-cli-heading > div { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.trex-cli-heading strong { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 12px; font-weight: 550; line-height: 1.5; color: var(--text); }
+.trex-cli-heading strong > span { padding: 2px 6px; border: 1px solid var(--profile-edge); border-radius: 999px; color: var(--text-dim); font-size: 9px; font-weight: 400; }
+.trex-cli-heading > div > span { color: var(--text-muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.trex-cli-heading .btn { flex-shrink: 0; font-size: 10px; }
+.trex-cli-availability > p, .trex-unavailable > p { margin: 0; color: var(--text-dim); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.trex-cli-path { color: var(--text-dim); font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.trex-profile-editor > .profile-editor-heading > span { overflow-wrap: anywhere; }
+.trex-profile-editor > .profile-default-control { margin-top: 2px; }
+.trex-unavailable { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.trex-unavailable-badge { padding: 4px 8px; border: 1px solid var(--warn-border); border-radius: 999px; background: var(--warn-bg); color: var(--warn-text); font-size: 10px; line-height: 1.5; }
+.trex-unavailable dl { display: flex; flex-direction: column; gap: 11px; width: 100%; margin: 0; padding: 13px; border: 1px solid var(--profile-edge); border-radius: var(--radius-control, 11px); background: var(--profile-raised); }
+.trex-unavailable dl > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 10px; font-size: 11px; line-height: 1.6; }
+.trex-unavailable dt { color: var(--text-dim); }
+.trex-unavailable dd { margin: 0; color: var(--text-muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
 
 /* El editor es el grupo principal; los campos mantienen un contorno ligero. */
 .profile-editor {
@@ -100,7 +119,7 @@
 .profile-status .btn { flex-shrink: 0; font-size: 10px; }
 .profile-default-control { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--profile-edge); border-radius: var(--radius-control, 11px); background: var(--profile-raised); color: var(--text-muted); font-size: 11px; line-height: 1.6; cursor: pointer; }
 .profile-default-control input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent-strong); flex: 0 0 auto; }
-.launcher-profiles :is(.profile-card, .profile-default-control input, .profile-editor-heading .icon-btn):focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.launcher-profiles :is(.profile-card, .profile-default-control input, .profile-editor-heading .icon-btn, .profile-add-actions .btn, .trex-cli-heading .btn):focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .launcher-profiles .profile-editor-heading .icon-btn:focus-visible { outline-offset: 0; }
 
 @media (max-width: 440px) {
@@ -112,4 +131,8 @@
   .profile-status > span:nth-child(2) { flex-basis: calc(100% - 16px); }
   .profile-status .btn { margin-left: 14px; }
   .profile-add-actions .btn { flex: 1 1 auto; }
+  .trex-cli-availability { padding: 12px; }
+  .trex-cli-heading { flex-wrap: wrap; }
+  .trex-cli-heading > div { flex-basis: calc(100% - 42px); }
+  .trex-cli-heading > .btn { margin-left: 42px; }
 }

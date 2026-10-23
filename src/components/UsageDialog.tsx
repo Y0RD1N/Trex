@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readAccountUsage } from "../accountUsage";
 import { formatError } from "../api";
+import { PROVIDER_NAMES } from "../profiles";
 import { extraLabel, type PlanUsage } from "../planUsage";
 import type { LauncherProfile, Settings } from "../types";
 import AgentIcon from "./AgentIcon";
@@ -94,7 +95,7 @@ export default function UsageDialog({ settings, cwd, onClose, ...motion }: {
             <div className="usage-account-identity">
               <h3 id={headingId}>{profile.name}</h3>
               <div className="usage-account-meta">
-                <span>{profile.provider === "claude" ? "Claude Code" : "Codex"}</span>
+                <span>{PROVIDER_NAMES[profile.provider]}</span>
                 <span aria-hidden="true">·</span>
                 <code className="usage-command">{profile.command}</code>
               </div>
@@ -104,7 +105,7 @@ export default function UsageDialog({ settings, cwd, onClose, ...motion }: {
           {reading.status === "error" ? <p className="usage-empty error" role="status">No se pudo leer el uso: {reading.message}</p>
             : hasUsage ? <PlanWindows usage={usage} now={now} />
             : reading.status === "loading" ? <p className="usage-empty" role="status"><span className="chat-spinner" aria-hidden="true" /> Leyendo el uso…</p>
-            : <p className="usage-empty">Esta cuenta no tiene límites de plan (por ejemplo, usa una clave de API).</p>}
+            : <p className="usage-empty">{profile.provider === "trex" ? "Conexión por API. Los tokens y el coste disponible se muestran en cada conversación; consulta el saldo en tu proveedor." : "Esta cuenta no tiene límites de plan (por ejemplo, usa una clave de API)."}</p>}
         </section>;
       })}
     </div>

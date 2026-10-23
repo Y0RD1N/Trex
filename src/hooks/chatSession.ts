@@ -27,6 +27,10 @@ export type ChatSessionOptions = {
   mode: string | null;
   /** Modelo elegido antes de abrir la pestaña; null conserva el del perfil. */
   model?: string | null;
+  /** Esfuerzo elegido antes del primer turno; null conserva el del proveedor/perfil. */
+  effort?: string | null;
+  /** Pestaña de planificación de un workflow; no puede abandonar plan durante su vida. */
+  planningOnly?: boolean;
   /**
    * La pestaña se ve. El proceso arranca la primera vez que se muestra: las
    * sesiones restauradas que no se abren no gastan memoria ni CPU.
@@ -44,6 +48,8 @@ export type ChatSession = {
   start: () => Promise<void>;
   /** Envía un mensaje; `display` es lo que se ve en el hilo si no es el texto enviado. */
   send: (text: string, images: OutgoingImage[], previews: string[], display?: string) => void | Promise<boolean>;
+  /** Envío inmediato explícito; false puede dejar una entrega incierta para revisión manual. */
+  sendNow?: (text: string, images: OutgoingImage[], previews: string[], display?: string, onInterrupt?: (messageId: string) => void) => Promise<boolean>;
   /** Reemplaza el mensaje y regenera desde ese punto en una rama del historial original. */
   edit: (id: string, text: string, images: OutgoingImage[], previews: string[]) => Promise<void>;
   /** Empieza una conversación nueva en la misma pestaña. */
@@ -54,6 +60,8 @@ export type ChatSession = {
   refreshSkills: () => Promise<void>;
   notice: (tone: "info" | "warn" | "error", text: string) => void;
   interrupt: () => void;
+  /** Confirmación explícita de revisión tras una operación nativa incierta. */
+  recover?: () => Promise<void>;
   answer: (item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]) => void;
   setMode: (mode: string) => void;
   setModel: (model: string) => void;

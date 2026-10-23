@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listConversations, canResume, profileAccountDir } from "../conversations";
-import { launchForProfile } from "../profiles";
+import { launchForProfile, trexProfileName } from "../profiles";
 import { formatError, normalizeText } from "../api";
 import type {
   Conversation,
@@ -52,7 +52,7 @@ export default function RecoverConversations({
     setLoading(true);
     // Un lanzador como `claude2` guarda sus conversaciones en su propia carpeta.
     void profileAccountDir(profile, settings.shell)
-      .then((configDir) => listConversations(profile.provider, configDir, project.path))
+      .then((configDir) => listConversations(profile.provider, configDir, project.path, profile.provider === "trex" ? trexProfileName(profile) : undefined))
       .then((result) => {
         if (generation.current === request) setItems(result);
       })
@@ -70,6 +70,7 @@ export default function RecoverConversations({
     profile.provider,
     profile.configDir,
     profile.command,
+    profile.args,
     profile.shell,
     settings.shell,
     project.path,
@@ -128,7 +129,7 @@ export default function RecoverConversations({
       </div>
       <p className="feature-hint">
         Se abre una terminal nueva con el contexto guardado por{" "}
-        {profile.provider === "claude" ? "Claude Code" : "Codex"}.
+        {profile.provider === "trex" ? "Trex CLI" : profile.provider === "claude" ? "Claude Code" : "Codex"}.
       </p>
       <div className="conversation-results" aria-busy={loading}>
         {loading ? (

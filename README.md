@@ -18,8 +18,12 @@ carpeta, con el asistente y el perfil que elijas.
   Codex desde el menú de nueva sesión o con `Ctrl+Shift+R`.
 - **Continuar con otro asistente**: transfiere el trabajo de un chat a otro
   perfil de Claude Code o Codex, incluso si el anterior se quedó sin cuota.
-- **Mensajes en cola**: escribe mientras Claude o Codex trabajan; cada agente
-  decide cuándo consultar su bandeja. Puedes cancelar los mensajes pendientes.
+- **Planificar e implementar**: elige un perfil y un modelo para cada etapa;
+  Claude Code y Codex pueden desempeñar cualquiera de los dos roles. El plan
+  definitivo se entrega automáticamente al ejecutor en otra conversación.
+- **Mensajes en cola**: escribe mientras Claude, Codex o Trex trabajan; cada
+  agente decide cuándo consultar su bandeja. Puedes editar, enviar directamente
+  o cancelar los mensajes pendientes.
 - **Vista previa de capturas**: revisa la imagen y la sesión de destino antes de
   adjuntarla. El texto se pega directamente.
 - **Atajos personalizables**: cambia las combinaciones en Ajustes → Atajos,
@@ -67,6 +71,33 @@ carpeta, con el asistente y el perfil que elijas.
 
 ## Claude Code y Codex como chat
 
+Desde **Nueva sesión (+) → Planear y ejecutar con agentes…**, describe la tarea
+y elige por separado el perfil, el modelo y su nivel de esfuerzo para planificación
+e implementación. Los esfuerzos disponibles corresponden al modelo elegido;
+puedes conservar su valor predeterminado.
+Puedes combinar Claude → Codex, Codex → Claude o dos modelos del mismo perfil.
+Los modelos se consultan en cada cuenta, sin iniciar una respuesta.
+
+La primera etapa permanece en modo de planificación con permisos de solo
+lectura. Cuando devuelve un plan definitivo y termina correctamente, TREX lo
+guarda completo y empieza la implementación en el mismo chat, con el modelo
+elegido y los permisos habituales del ejecutor. Si necesita aclaraciones,
+responde en ese mismo hilo. Cada respuesta identifica a su asistente; cada uno
+conserva su propia cuenta, conversación, modelo y esfuerzo.
+
+Puedes usar **Planear aquí** desde un chat existente para añadir el segundo
+asistente conservando el historial y el perfil original en una de las etapas.
+Después, **Nueva planificación** o `/plan tu nueva idea` inicia otro ciclo con el
+contexto acumulado, sin crear más pestañas. `@planificador` y `@ejecutor` dirigen
+mensajes a cada rol; `@Claude` y `@Codex` también funcionan si el proveedor
+identifica a un único participante. Los mensajes normales se envían al destino
+seleccionado. Los cambios de rol comparten un extracto acotado del historial,
+sin sustituir el plan definitivo completo ni los permisos del asistente.
+
+**Detener** pausa la transición y detiene la respuesta activa; los errores
+también detienen el flujo. Al reabrir la aplicación, los flujos pendientes se
+recuperan pausados para revisar su progreso antes de reanudarlos.
+
 Con **Continuar con otro agente**, debajo del mensaje, puedes pasar el trabajo a
 otro perfil: Claude 1 → Claude 2, Claude → Codex o en sentido contrario. Elige
 el destino y su modelo, revisa el contexto y, si quieres, indica el siguiente paso. TREX
@@ -80,8 +111,14 @@ Mientras un agente trabaja, el envío usa **En cola** de forma predeterminada.
 El texto, las imágenes y las referencias a archivos se guardan localmente por
 pestaña. El agente dispone de `trex_read_messages` y decide cuándo leerlos;
 se le indica que consulte en puntos oportunos y antes de terminar. La bandeja
-muestra los pendientes y permite cancelarlos hasta que comience su lectura.
-**Enviar ahora** conserva la entrega directa durante el trabajo.
+muestra los pendientes y permite editarlos o cancelarlos hasta que comience su
+lectura. Cada mensaje tiene un botón **Enviar ahora** que conserva sus adjuntos;
+en Trex CLI detiene el turno anterior antes de entregar la corrección. Editar un
+mensaje conserva su posición y no altera el borrador del campo principal.
+
+Si no se puede confirmar un envío directo, el mensaje permanece guardado para
+revisión. Comprueba la conversación antes de restaurarlo a la cola: reenviarlo
+sin revisar podría repetir una instrucción ya recibida.
 
 Si termina correctamente con mensajes pendientes, TREX inicia una continuación
 para que consulte la cola, una vez por lote. Al detenerlo, fallar o restaurar
@@ -256,6 +293,46 @@ Editar o eliminar un perfil afecta al menú de sesiones nuevas y no cambia las
 sesiones que ya estaban abiertas. La configuración anterior de Claude se migra
 a un perfil y se añade un perfil inicial de Codex.
 
+## Trex CLI opcional y conexiones API
+
+El instalador de Windows ofrece **Instalar Trex CLI (modelos con API key)**.
+La casilla empieza desmarcada y las actualizaciones recuerdan la elección.
+Sin el CLI, Trex conserva el flujo de Claude Code y Codex. Quitar el componente
+conserva las conexiones, las claves y los historiales para recuperarlos después.
+
+Con el componente instalado, abre **Ajustes → Asistentes → Trex API**. Crea una
+conexión por cuenta con su nombre, proveedor, ID del modelo, dirección API y
+clave. Por ejemplo, **TREX1** para DeepSeek, **TREX2** para MiniMax y **TREX3**
+para OpenRouter. También admite endpoints personalizados compatibles con Chat
+Completions. Guardar la conexión modifica el CLI al instante; **Guardar cambios**
+conserva su referencia en la lista de asistentes de la app. La clave no se guarda
+en la configuración de Trex, los argumentos del proceso ni el historial del chat.
+
+Cada perfil puede abrir un chat, planificar o ejecutar en un chat compartido,
+incluyendo dos modelos del mismo proveedor. El catálogo determina los esfuerzos
+disponibles. Los mensajes enviados durante un turno van a la bandeja que el agente
+consulta con `trex_read_messages`. El modo **Planificar** impide las escrituras y
+los comandos de shell; **Preguntar** solicita permiso para cada modificación o
+comando, y **Permitir todo** los autoriza. Una sesión interrumpida con herramientas
+inciertas requiere revisar sus archivos y confirmar `/recover`; el chat compartido
+lo confirma al pulsar la acción de reanudación después de revisar el historial.
+
+El ejecutable `trex-agent.exe` queda junto a `trex.exe`; el instalador no modifica
+PATH ni los perfiles del shell. Puede ejecutarse desde su ruta completa:
+
+```powershell
+& 'RUTA_DE_INSTALACION\trex-agent.exe' profiles list --json
+& 'RUTA_DE_INSTALACION\trex-agent.exe' --profile TREX1 models list --json
+& 'RUTA_DE_INSTALACION\trex-agent.exe' --profile TREX1 chat --mode plan --cwd 'D:\proyecto'
+```
+
+El CLI guarda las conexiones e historiales en la carpeta de datos `trex-agent`
+del usuario; `TREX_HOME` permite seleccionar otra carpeta. En Windows protege las
+claves con DPAPI; en Linux/macOS utiliza el almacén seguro del sistema. Los
+perfiles con un `TREX_HOME` personalizado siguen funcionando en el chat, pero su
+gestión se realiza desde el CLI con esa misma carpeta. El visor de uso muestra
+tokens y el coste que informe la API, en lugar de cuotas de cinco horas o semana.
+
 ## Cursor de texto
 
 El cursor se previsualiza antes de guardar y se aplica a todas las terminales
@@ -354,8 +431,13 @@ esas mismas comprobaciones en Windows y Ubuntu.
 npm run tauri build
 ```
 
-- **Windows**: genera instalador `.msi` y `.exe` (NSIS) en
+- **Windows**: genera instalador `.exe` (NSIS), con el componente CLI opcional, en
   `src-tauri/target/release/bundle/`.
+
+El proceso compila el crate independiente `trex-cli` y prepara su payload antes
+de empaquetar. `npm run cli:build -- --debug` permite preparar el CLI de desarrollo.
+El contrato de integración está en `trex-cli/PROTOCOL.md`; los detalles de instalación
+opcional y las pruebas aisladas están en `src-tauri/installer/README.md`.
 - **Linux**: genera `.deb` y `.AppImage`, pero hay que compilar **en Linux**
   (nativo, contenedor o CI con GitHub Actions).
 

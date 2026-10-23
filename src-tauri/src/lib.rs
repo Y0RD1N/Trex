@@ -20,6 +20,7 @@ mod queue_mcp;
 mod project_icon;
 mod shared_files;
 mod terminal_env;
+mod trex_cli;
 
 use agent::{AgentSpawnRequest, AgentSpawnResponse, AgentState};
 use config::AppConfig;
@@ -343,6 +344,11 @@ pub fn run() {
             agent_kill,
             detect_claude,
             detect_codex,
+            trex_cli::trex_cli_status,
+            trex_cli::trex_cli_profiles,
+            trex_cli::trex_cli_save_profile,
+            trex_cli::trex_cli_remove_profile,
+            trex_cli::trex_cli_conversations,
             app_info,
             load_config,
             save_config,
@@ -356,6 +362,10 @@ pub fn run() {
             handoff::load_handoff,
             message_queue::message_queue_list,
             message_queue::message_queue_enqueue,
+            message_queue::message_queue_update,
+            message_queue::message_queue_claim_direct,
+            message_queue::message_queue_ack_direct,
+            message_queue::message_queue_restore_direct,
             message_queue::message_queue_remove,
             message_queue::message_queue_read,
             message_queue::message_queue_ack,

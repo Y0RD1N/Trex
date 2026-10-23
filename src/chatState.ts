@@ -65,6 +65,17 @@ export type PermissionItem = Extract<ChatItem, { kind: "permission" }>;
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 export type UserItem = Extract<ChatItem, { kind: "user" }>;
 
+/** Resultado terminal de un envío en directo; el historial nunca publica uno. */
+export type ChatCompletion = {
+  /** Identidad estable: las notificaciones repetidas no producen otro resultado. */
+  id: string;
+  status: "completed" | "interrupted" | "failed";
+  /** Envíos locales consumidos por esta respuesta (Claude puede agruparlos). */
+  messageIds: string[];
+  /** Textos, herramientas y permisos de esta respuesta; sobreviven a la hidratación del historial. */
+  itemIds: string[];
+};
+
 /** Una parte fija de lo que ocupa el contexto: instrucciones, herramientas, skills… */
 export type ContextPart = { name: string; tokens: number };
 /** Lo que ocupa la conversación en la ventana de contexto del modelo. */
@@ -85,9 +96,14 @@ export type ChatState = {
   pendingTurns: number;
   /** Mensajes aún no consumidos; Claude puede agrupar varios en un solo turno. */
   pendingMessageIds: string[];
+  /** Envíos ya escritos cuya interrupción aún espera el terminal del proveedor. */
+  interruptedMessageIds: string[];
   activeMessageIds: string[];
   /** Terminales ya recibidos: una notificación tardía no vuelve a abrirlos. */
   completedTurnIds: string[];
+  lastCompletion: ChatCompletion | null;
+  /** Inicio de los elementos de la respuesta en curso, sin los de turnos anteriores. */
+  turnItemStart: number | null;
   turnStartedAt: number | null;
   /** Conversación del proveedor (sesión de Claude Code o hilo de Codex). */
   sessionId: string | null;
@@ -131,6 +147,10 @@ export type ChatState = {
 /** Acciones que entienden todos los proveedores. */
 export type BaseChatAction =
   | { type: "send"; id: string; text: string; previews?: string[]; now: number }
+  /** Un envío local cancelado antes de que el proveedor confirme su recepción. */
+  | { type: "cancelSend"; id: string }
+  /** Conserva la atribución de un envío ya escrito hasta que llegue su terminal. */
+  | { type: "interruptSend"; id: string }
   | { type: "queuedRead"; messages: { id: string; text: string; previews: string[] }[] }
   | { type: "bindTurn"; id: string; turnId: string }
   /** Conserva el prefijo anterior al mensaje reemplazado, en la conversación regenerada. */
@@ -154,10 +174,11 @@ export const normalizeModelChoice = (value: unknown): string | null =>
     ? value.trim() : null;
 
 /** Estado inicial con las elecciones guardadas antes de arrancar el proceso. */
-export const initialChatState = (mode: string | null = null, model: string | null = null): ChatState => ({
-  items: [], pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], completedTurnIds: [],
+export const initialChatState = (mode: string | null = null, model: string | null = null, effort: string | null = null): ChatState => ({
+  items: [], pendingTurns: 0, pendingMessageIds: [], interruptedMessageIds: [], activeMessageIds: [], completedTurnIds: [],
+  lastCompletion: null, turnItemStart: null,
   turnStartedAt: null, sessionId: null, turnId: null, turnDiff: null, model: null, models: [],
-  modelChoice: normalizeModelChoice(model), effort: null, effortChoice: null, fast: false, fastChoice: null, permissionMode: mode, modeChoice: mode,
+  modelChoice: normalizeModelChoice(model), effort: normalizeEffortChoice(effort), effortChoice: normalizeEffortChoice(effort), fast: false, fastChoice: null, permissionMode: mode, modeChoice: mode,
   commands: [], agents: [], skills: [], usage: null, plan: null, costUsd: null,
   stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null, historyCount: 0, process: "starting", exitCode: null, stderr: [],
 });
@@ -177,6 +198,21 @@ export const finalize = (items: ChatItem[]): ChatItem[] =>
 export function addNotice(items: ChatItem[], tone: "info" | "warn" | "error", value: string, prefix = "n"): ChatItem[] {
   const recent = items.slice(-6).some(item => item.kind === "notice" && item.text === value);
   return recent ? items : [...items, { kind: "notice", id: `${prefix}-${items.length}`, tone, text: value }];
+}
+
+/** Solo atribuye terminales a envíos aún pendientes, nunca a turnos reproducidos. */
+export function liveCompletion(state: ChatState, id: string, status: ChatCompletion["status"], messageIds: string[],
+  items: ChatItem[] = state.items): ChatCompletion | null {
+  const consumed = [...new Set(messageIds.filter(messageId => state.pendingMessageIds.includes(messageId)))];
+  const previous = state.lastCompletion;
+  if (!consumed.length || previous?.id === id) return previous;
+  if (consumed.some(messageId => state.interruptedMessageIds.includes(messageId))) status = "interrupted";
+  // Un resultado contradictorio posterior no convierte una cancelación o fallo en éxito.
+  if (status === "completed" && previous && previous.status !== "completed"
+    && consumed.some(messageId => previous.messageIds.includes(messageId))) return previous;
+  return { id, status, messageIds: consumed, itemIds: items.slice(state.turnItemStart ?? state.historyCount)
+    .filter(item => item.kind === "text" || item.kind === "thinking" || item.kind === "tool" || item.kind === "permission")
+    .map(item => item.id) };
 }
 
 /** Acciones comunes; cada proveedor añade las suyas encima. */
@@ -200,18 +236,35 @@ export function baseReducer(state: ChatState, action: BaseChatAction): ChatState
           images: action.previews?.length ?? 0, previews: action.previews ?? [] }],
         pendingTurns: state.pendingTurns + 1,
         pendingMessageIds: [...state.pendingMessageIds, action.id],
+        interruptedMessageIds: state.interruptedMessageIds.filter(id => state.pendingMessageIds.includes(id)),
+        turnItemStart: state.turnItemStart ?? state.items.length + 1,
         queuedAfterInterrupt: state.queuedAfterInterrupt === null ? null : [...state.queuedAfterInterrupt, action.id],
         turnStartedAt: state.turnStartedAt ?? action.now,
       };
     case "bindTurn":
       return { ...state, items: state.items.map(item => item.kind === "user" && item.id === action.id
         ? { ...item, providerTurnId: action.turnId } : item) };
+    case "cancelSend": {
+      if (!state.pendingMessageIds.includes(action.id)) return state;
+      const pendingMessageIds = state.pendingMessageIds.filter(id => id !== action.id);
+      return { ...state, pendingMessageIds, pendingTurns: Math.min(state.pendingTurns, pendingMessageIds.length),
+        interruptedMessageIds: state.interruptedMessageIds.filter(id => id !== action.id),
+        activeMessageIds: state.activeMessageIds.filter(id => id !== action.id),
+        queuedAfterInterrupt: state.queuedAfterInterrupt?.filter(id => id !== action.id) ?? null,
+        lastCompletion: liveCompletion(state, `cancel:${action.id}`, "interrupted", [action.id]),
+        turnItemStart: pendingMessageIds.length ? state.turnItemStart : null,
+        turnStartedAt: pendingMessageIds.length ? state.turnStartedAt : null };
+    }
+    case "interruptSend":
+      if (!state.pendingMessageIds.includes(action.id) || state.interruptedMessageIds.includes(action.id)) return state;
+      return { ...state, interruptedMessageIds: [...state.interruptedMessageIds, action.id],
+        lastCompletion: liveCompletion(state, `cancel:${action.id}`, "interrupted", [action.id]) };
     case "rewind": {
       const index = state.items.findIndex(item => item.kind === "user" && item.id === action.id);
       if (index < 0) return state;
       return { ...state, items: state.items.slice(0, index), historyCount: Math.min(state.historyCount, index),
-        sessionId: action.sessionId, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], completedTurnIds: [],
-        turnStartedAt: null, turnId: null, turnDiff: null,
+        sessionId: action.sessionId, pendingTurns: 0, pendingMessageIds: [], interruptedMessageIds: [], activeMessageIds: [], completedTurnIds: [],
+        turnStartedAt: null, turnId: null, turnDiff: null, lastCompletion: null, turnItemStart: null,
         usage: null, costUsd: null, stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null };
     }
     case "answer":
@@ -233,9 +286,12 @@ export function baseReducer(state: ChatState, action: BaseChatAction): ChatState
         effort: state.effort, effortChoice: state.effortChoice, fast: state.fast, fastChoice: state.fastChoice, permissionMode: state.permissionMode, modeChoice: state.modeChoice,
         commands: state.commands, agents: state.agents, skills: state.skills, plan: state.plan };
     case "spawned":
-      return { ...state, process: "ready", exitCode: null, stderr: [] };
+      return { ...state, process: "ready", exitCode: null, stderr: [],
+        lastCompletion: state.lastCompletion?.status === "interrupted" ? state.lastCompletion : null,
+        turnItemStart: state.pendingTurns ? state.turnItemStart : null };
     case "spawnFailed":
       return { ...state, process: "failed", pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null,
+        lastCompletion: liveCompletion(state, `spawn:${JSON.stringify(state.pendingMessageIds)}`, "failed", state.pendingMessageIds), turnItemStart: null,
         items: [...state.items, { kind: "notice", id: `f-${state.items.length}`, tone: "error", text: action.message }] };
     case "stderr":
       return { ...state, stderr: [...state.stderr, action.line].slice(-40) };
@@ -245,6 +301,8 @@ export function baseReducer(state: ChatState, action: BaseChatAction): ChatState
         item.kind === "permission" && item.state === "pending" ? { ...item, state: "denied" as const }
           : item.kind === "tool" && item.status === "running" ? { ...item, status: "error" as const } : item);
       return { ...state, items, process: "exited", exitCode: action.code, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null,
+        lastCompletion: liveCompletion(state, `exit:${JSON.stringify(state.pendingMessageIds)}`, action.code ? "failed" : "interrupted", state.pendingMessageIds, items),
+        turnItemStart: null,
         queuedAfterInterrupt: null };
     }
   }
@@ -271,6 +329,14 @@ const limitLines = (lines: DiffLine[], maxLines: number): DiffLine[] =>
 
 /** Vista previa de una edición de Claude Code antes de tener el parche (permisos, historial). */
 export function inputDiff(name: string, input: Json, maxLines = 400): DiffLine[] | null {
+  if (name === "TrexPatch") {
+    const lines = list(input.files).flatMap(value => {
+      const file = record(value);
+      if (!file) return [];
+      return [{ kind: "gap" as const, text: text(file.file_path) }, ...(inputDiff("Edit", file, maxLines) ?? [])];
+    });
+    return lines.length ? limitLines(lines, maxLines) : null;
+  }
   const edits = name === "MultiEdit" ? list(input.edits).map(record).filter((edit): edit is Json => !!edit)
     : name === "Edit" ? [input] : [];
   const lines: DiffLine[] = [];
@@ -439,6 +505,7 @@ export function describeTool(name: string, input: Json, cwd: string, running: bo
     case "Read": return { icon: "read", verb: verb("Leyendo", "Leyó"), target: path("file_path") };
     case "Edit": case "MultiEdit": return { icon: "edit", verb: verb("Editando", "Editó"), target: path("file_path") };
     case "Write": return { icon: "edit", verb: verb("Escribiendo", "Escribió"), target: path("file_path") };
+    case "TrexPatch": return { icon: "edit", verb: verb("Editando", "Editó"), target: list(input.files).map(value => relativePath(text(record(value)?.file_path), cwd)).filter(Boolean).join(", ") };
     case "Delete": return { icon: "edit", verb: verb("Eliminando", "Eliminó"), target: path("file_path") };
     case "Move": return { icon: "edit", verb: verb("Moviendo", "Movió"), target: `${path("file_path")} → ${path("destination")}` };
     case "NotebookEdit": return { icon: "edit", verb: verb("Editando", "Editó"), target: path("notebook_path") };
@@ -523,6 +590,9 @@ export const EFFORT_LEVELS: Record<string, { label: string; short: string; hint:
 };
 
 export const effortLabel = (effort: string | null): string => (effort && EFFORT_LEVELS[effort]?.label) || effort || "";
+/** Solo niveles reconocidos del protocolo, nunca argumentos ni opciones arbitrarias. */
+export const normalizeEffortChoice = (value: unknown): string | null =>
+  typeof value === "string" && Object.prototype.hasOwnProperty.call(EFFORT_LEVELS, value.trim()) ? value.trim() : null;
 
 /** Niveles de esfuerzo que admite el modelo en uso. */
 export const supportedEfforts = (models: ModelInfo[], model: string | null, choice: string | null): string[] =>

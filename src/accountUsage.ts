@@ -21,6 +21,7 @@ const USAGE_REQUEST = "trex-usage";
 let counter = 0;
 
 export function readAccountUsage(profile: LauncherProfile, settings: Settings, cwd: string): Promise<PlanUsage | null> {
+  if (profile.provider === "trex") return Promise.resolve(null);
   const launch = launchForProfile(settings, profile);
   const claude = profile.provider === "claude";
   const product = claude ? "Claude Code" : "Codex";

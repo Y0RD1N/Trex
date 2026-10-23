@@ -12,6 +12,7 @@ import "./UsageMenu.css";
 type Props = {
   usage: ContextUsage | null;
   plan: PlanUsage | null;
+  costUsd?: number | null;
   product: string;
   busy: boolean;
   onCompact: () => void;
@@ -22,7 +23,7 @@ const severityRank: Record<UsageSeverity, number> = { normal: 0, warning: 1, cri
 const percentLabel = (percent: number): string => percent > 0 && percent < 1 ? "<1 %" : `${Math.round(percent)} %`;
 
 /** Un único acceso al contexto de la conversación y a los límites de la cuenta. */
-export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpenAll }: Props) {
+export default function UsageMenu({ usage, plan, costUsd, product, busy, onCompact, onOpenAll }: Props) {
   const id = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
@@ -55,7 +56,8 @@ export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpe
   const planSummary = plan?.windows.length
     ? `Uso del plan: ${plan.windows.map(window => `${window.label}: ${percentLabel(window.percent)}`).join(" · ")}`
     : "Uso del plan: porcentajes no disponibles";
-  const summary = `${contextSummary}\n${planSummary}`;
+  const cost = typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd >= 0 ? costUsd.toLocaleString("es", { style: "currency", currency: "USD", maximumFractionDigits: 4 }) : null;
+  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
   const ringPercent = percent ?? (showPlan ? limiting.percent : 0);
   const ringLength = 2 * Math.PI * 5.5;
   const ringFilled = ringPercent > 0 ? Math.max(ringPercent, 4) : 0;
@@ -71,7 +73,7 @@ export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpe
     action();
   };
 
-  if (!usage && !plan) return null;
+  if (!usage && !plan && cost === null) return null;
 
   return <>
     <button ref={triggerRef} type="button" className={`chat-tray-chip chat-usage-trigger${level}`}
@@ -122,6 +124,7 @@ export default function UsageMenu({ usage, plan, product, busy, onCompact, onOpe
         <PlanWindows usage={plan} now={Date.now()} />
       </section>}
       <div className="chat-usage-footer">
+        {cost && <p className="chat-usage-plan-name">Coste informado: <strong>{cost}</strong></p>}
         <button type="button" className="context-item chat-plan-all" onClick={() => runAction(onOpenAll)}>
           Ver todas las cuentas
         </button>

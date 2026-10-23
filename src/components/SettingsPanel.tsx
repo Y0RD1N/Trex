@@ -42,7 +42,7 @@ const SECTIONS = [
   { id: "cursor", label: "Cursor", icon: <CursorIcon />, description: "Ajusta la forma, el grosor y el parpadeo del cursor de texto." },
   { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, description: "Personaliza las combinaciones del teclado." },
   { id: "notifications", label: "Notificaciones", icon: <BellIcon size={16} strokeWidth={1.6} />, description: "Avisos del escritorio cuando tus asistentes necesitan atención." },
-  { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, description: "Perfiles independientes para Claude Code y Codex." },
+  { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, description: "Perfiles independientes para Claude Code, Codex y Trex API." },
   { id: "sessions", label: "Sesiones", icon: <PanelIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
   { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
 ] as const;
@@ -56,6 +56,9 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   const [terminalAdvanced, setTerminalAdvanced] = useState(false);
   const [scrollbackText, setScrollbackText] = useState(String(settings.scrollback));
   const [copied, setCopied] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const profileBusyRef = useRef(false);
+  const changeProfileBusy = (busy: boolean): void => { profileBusyRef.current = busy; setProfileBusy(busy); };
   const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 680px), (max-height: 560px)").matches);
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -106,7 +109,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   }, [section]);
 
   const requestClose = useCallback((trigger: HTMLElement | null = closeButtonRef.current) => {
-    if (leaving || closePending.current) return;
+    if (leaving || closePending.current || profileBusyRef.current) return;
     if (!dirty) { onClose(); return; }
     closePending.current = true;
     void dialog.confirm({
@@ -138,7 +141,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   }, [requestClose, leaving]);
 
   const save = (): void => {
-    if (!dirty || !validHistory || profileError || shortcutError) return;
+    if (profileBusyRef.current || !dirty || !validHistory || profileError || shortcutError) return;
     onSave({ ...draft,
       profiles: draft.profiles.map(profile => ({ ...profile, name: profile.name.trim(), command: profile.command.trim(), args: profile.args.trim(), configDir: profile.configDir.trim() })),
       claudeCommand: draft.claudeCommand.trim() || "claude",
@@ -200,7 +203,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
             <h2 className="modal-title" id={`${id}-title`}>Ajustes</h2>
             <p className="modal-subtitle">Personaliza tu espacio de trabajo</p>
           </div>
-          <button ref={closeButtonRef} type="button" className="icon-btn" aria-label="Cerrar ajustes" title="Cerrar (Esc)" onClick={event => requestClose(event.currentTarget)}><CloseIcon size={16} /></button>
+          <button ref={closeButtonRef} type="button" className="icon-btn" disabled={profileBusy} aria-label="Cerrar ajustes" title="Cerrar (Esc)" onClick={event => requestClose(event.currentTarget)}><CloseIcon size={16} /></button>
         </header>
 
         <div className="settings-layout">
@@ -283,6 +286,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
 
               {item.id === "profiles" && <LauncherProfiles profiles={draft.profiles} defaultProfileId={draft.defaultProfileId}
                 appInfo={appInfo} claudeInfo={claudeInfo} codexInfo={codexInfo} onRedetect={onRedetect}
+                onBusyChange={changeProfileBusy}
                 onChange={(profiles, defaultProfileId) => patch({ profiles, defaultProfileId })} />}
 
               {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
@@ -343,14 +347,14 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
 
         <footer className="settings-footer">
           <div className="settings-save-status" aria-live="polite">
-            {profileError ? <button type="button" className="settings-error-link" onClick={() => setSection("profiles")}>{profileError}</button>
+            {profileBusy ? "Guardando la conexión en Trex CLI…" : profileError ? <button type="button" className="settings-error-link" onClick={() => setSection("profiles")}>{profileError}</button>
               : shortcutError ? <button type="button" className="settings-error-link" onClick={() => setSection("shortcuts")}>{shortcutError}</button>
               : !validHistory ? <button type="button" className="settings-error-link" onClick={reviewHistory}>Revisa el historial del terminal</button>
               : <><span className={dirty ? "settings-dirty-dot" : "settings-clean-dot"} aria-hidden="true" />{dirty ? "Cambios sin guardar" : "Sin cambios pendientes"}</>}
           </div>
           <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={event => requestClose(event.currentTarget)}>Cerrar</button>
-            <button type="button" className="btn btn-primary" disabled={!dirty || !validHistory || !!profileError || !!shortcutError} onClick={save}>Guardar cambios</button>
+            <button type="button" className="btn btn-ghost" disabled={profileBusy} onClick={event => requestClose(event.currentTarget)}>Cerrar</button>
+            <button type="button" className="btn btn-primary" disabled={profileBusy || !dirty || !validHistory || !!profileError || !!shortcutError} onClick={save}>Guardar cambios</button>
           </div>
         </footer>
       </div>

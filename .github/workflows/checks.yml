@@ -37,5 +37,12 @@ jobs:
         run: npm test
       - name: Build frontend
         run: npm run build
+      - name: Trex CLI tests
+        run: cargo +stable test --locked --manifest-path trex-cli/Cargo.toml
+      - name: Installer process lifecycle tests
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File scripts/test-installer-process-lifecycle.ps1
+      - name: Prepare native CLI resource
+        run: npm run cli:build -- --debug
       - name: Native backend tests
         run: cargo +stable test --locked --manifest-path src-tauri/Cargo.toml --lib

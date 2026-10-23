@@ -74,21 +74,30 @@ function bounded(value: string, limit: number): string {
 
 /** Solo texto visible. Nunca serializa el objeto de estado, inputs arbitrarios, cuentas ni previews. */
 function clean(value: string): string {
+  // La redacción no debe desplazar instrucciones seguras fuera de su límite.
+  const omit = (match: string, label: string): string => bytes(label) <= bytes(match) ? label : bytes(match) >= 3 ? "[x]" : "";
   return value
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-    .replace(/<(environment_context|credentials|permissions_instructions|permission_context|auth_info)\b[^>]*>[\s\S]*?<\/\1>/gi, "[datos del entorno omitidos]")
-    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g, "[clave privada omitida]")
-    .replace(/data:[^\s<>"')]+/gi, "[adjunto omitido]")
-    .replace(/[A-Za-z0-9+/]{160,}={0,2}/g, "[datos binarios omitidos]")
-    .replace(/\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "[credencial omitida]")
-    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[credenciales omitidas]@")
-    .replace(/^.*(?:["']?(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret|credentials?)["']?\s*[:=]|\bBearer\s+[A-Za-z0-9._~+/-]+).*$/gim, "[dato sensible omitido]")
-    .replace(/\b[A-Z][A-Z0-9_]{2,}=(?:"[^"\n]*"|'[^'\n]*'|[^\s;,]+)/g, "[variable de entorno omitida]")
-    .replace(/--(?:api-key|access-token|token|password|secret)(?:=|\s+)(?:"[^"\n]*"|'[^'\n]*'|[^\s]+)/gi, "[credencial omitida]")
+    .replace(/<(environment_context|credentials|permissions_instructions|permission_context|auth_info)\b[^>]*>[\s\S]*?<\/\1>/gi, match => omit(match, "[datos del entorno omitidos]"))
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g, match => omit(match, "[clave privada omitida]"))
+    .replace(/data:[^\s<>"')]+/gi, match => omit(match, "[adjunto omitido]"))
+    .replace(/[A-Za-z0-9+/]{160,}={0,2}/g, match => omit(match, "[datos binarios omitidos]"))
+    .replace(/\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, match => omit(match, "[credencial omitida]"))
+    .replace(/(https?:(?:\\*\/){2})[^\s/@]+:[^\s/@]+@/gi, (match, scheme: string) => omit(match, `${scheme}[credenciales omitidas]@`))
+    // Los valores JSON/YAML pueden empezar en otra línea; Git añade + o -.
+    .replace(/["']?(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret|credentials?)(?:\\*["'])?[ \t]*[:=][ \t]*\r?\n(?:[+-]?[ \t]*\r?\n)*-[ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\s,}\]"']+)[ \t]*[,}]?[ \t]*\r?\n\+[ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\s,}\]"']+)(?=[ \t]*[,}\]]|[ \t]*(?:\r?\n|$))/gi, match => omit(match, "[dato sensible omitido]"))
+    .replace(/["']?(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret|credentials?)(?:\\*["'])?[ \t]*[:=][ \t]*\r?\n(?:[+-]?[ \t]*\r?\n)*[+-]?[ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\s,}\]"']+)/gi, match => omit(match, "[dato sensible omitido]"))
+    .replace(/^.*(?:["']?(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret|credentials?)(?:\\*["'])?\s*[:=]|\bBearer\s+[A-Za-z0-9._~+/-]+).*$/gim, match => omit(match, "[dato sensible omitido]"))
+    .replace(/\b[A-Z][A-Z0-9_]{2,}=(?:"[^"\n]*"|'[^'\n]*'|[^\s;,]+)/g, match => omit(match, "[variable de entorno omitida]"))
+    .replace(/--(?:api-key|access-token|token|password|secret)(?:=|\s+)(?:"[^"\n]*"|'[^'\n]*'|[^\s]+)/gi, match => omit(match, "[credencial omitida]"))
     .replace(/<!--\s*trex-handoff[^>]*-->/g, "")
     .trim();
 }
+
+/** Texto portátil para planes completos, con el mismo filtrado que las continuaciones. */
+export const sanitizeHandoffText = (value: string): string => clean(value);
+export const sanitizeHandoffInstruction = (value: string): string => prefix(clean(value), 4_000);
 
 function transferredContext(value: string): string | null {
   if (!/<!--\s*trex-handoff:[^>]+-->/.test(value)) return null;
@@ -279,5 +288,5 @@ export function normalizeHandoffReference(raw: unknown): HandoffReference | null
   const sourceLabel = prefix(clean(value.sourceLabel), 160);
   if (!sourceLabel) return null;
   return { id: value.id, sourceLabel, pending: value.pending === true,
-    ...(typeof value.instruction === "string" ? { instruction: prefix(clean(value.instruction), 4_000) } : {}) };
+    ...(typeof value.instruction === "string" ? { instruction: sanitizeHandoffInstruction(value.instruction) } : {}) };
 }

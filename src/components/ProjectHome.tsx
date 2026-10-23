@@ -1,6 +1,6 @@
 import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 import type { LauncherProfile, Project } from "../types";
-import { FolderIcon, TerminalIcon, ArrowRightIcon } from "./Icons";
+import { FolderIcon, TerminalIcon, ArrowRightIcon, MapIcon } from "./Icons";
 import AgentIcon from "./AgentIcon";
 
 type Props = {
@@ -10,10 +10,11 @@ type Props = {
   shortcuts: ShortcutBindings;
   onOpen: (profileId: string) => void;
   onShell: () => void;
+  onWorkflow?: () => void;
   onReveal: () => void;
 };
 
-export default function ProjectHome({ project, profiles, defaultProfileId, shortcuts, onOpen, onShell, onReveal }: Props) {
+export default function ProjectHome({ project, profiles, defaultProfileId, shortcuts, onOpen, onShell, onWorkflow, onReveal }: Props) {
   return (
     <section className="project-home" aria-label={`Inicio de ${project.name}`}>
       <div className="project-home-content" key={project.id}>
@@ -35,6 +36,9 @@ export default function ProjectHome({ project, profiles, defaultProfileId, short
             <span>Abrir terminal</span>
             <kbd>{shortcutLabel(shortcuts.newShellTab)}</kbd>
           </button>
+          {onWorkflow && <button type="button" className="home-action" onClick={onWorkflow}>
+            <MapIcon size={14} /><span>Planear y ejecutar con agentes</span><ArrowRightIcon size={14} />
+          </button>}
         </div>
         <p className="home-shortcuts"><kbd>{shortcutLabel(shortcuts.commandPalette)}</kbd> Paleta de comandos</p>
       </div>

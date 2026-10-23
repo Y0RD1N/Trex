@@ -4,12 +4,14 @@ import { buildHandoffPrompt, handoffAlreadySent, type HandoffReference, type Pre
 import type { ChatSession } from "./chatSession";
 
 /** La entrega pendiente sobrevive al reinicio; una conversación restaurada nunca se reenvía a ciegas. */
-export function useHandoffDelivery({ reference, session, visible, conversationId, requireReview = false, onConsumed }: {
+export function useHandoffDelivery({ reference, session, visible, conversationId, requireReview = false, loadWhenConsumed = false, autoSend = true, onConsumed }: {
   reference?: HandoffReference | null;
   session: ChatSession;
   visible: boolean;
   conversationId: string | null;
   requireReview?: boolean;
+  loadWhenConsumed?: boolean;
+  autoSend?: boolean;
   onConsumed: (id: string) => void;
 }) {
   const [prepared, setPrepared] = useState<PreparedHandoff | null>(null);
@@ -27,7 +29,7 @@ export function useHandoffDelivery({ reference, session, visible, conversationId
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   useEffect(() => {
-    if (!reference?.pending || !visible) return;
+    if (!reference || (!reference.pending && !loadWhenConsumed) || !visible) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -37,7 +39,7 @@ export function useHandoffDelivery({ reference, session, visible, conversationId
       if (!cancelled) setError(`No se pudo recuperar el contexto: ${formatError(reason)}`);
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [reference?.id, reference?.pending, visible, revision]);
+  }, [reference?.id, reference?.pending, visible, revision, loadWhenConsumed]);
 
   const deliver = useCallback(async (): Promise<void> => {
     const current = latest.current;
@@ -68,12 +70,12 @@ export function useHandoffDelivery({ reference, session, visible, conversationId
     }
     // Al restaurar una sesión el historial puede fallar o estar recortado: se
     // ofrece un envío manual en vez de arriesgar una segunda ejecución.
-    if (!restored.current && prepared?.id === reference.id && !loading && !error
+    if (autoSend && !restored.current && prepared?.id === reference.id && !loading && !error
       && session.state.process === "ready" && session.state.pendingTurns === 0 && attempted.current !== reference.id) {
       void deliver();
     }
   }, [reference, visible, prepared, loading, error, session.state.process,
-    session.state.pendingTurns, session.state.items, session.state.historyCount, onConsumed, deliver]);
+    session.state.pendingTurns, session.state.items, session.state.historyCount, autoSend, onConsumed, deliver]);
 
   return {
     prepared, loading, sending, error, requiresReview: restored.current,

@@ -7,7 +7,7 @@
  * TerminalView, se monta una vez por pestaña y el padre la oculta con
  * display:none, así que el proceso y el hilo se conservan al cambiar de sesión.
  */
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { formatError, gitBranch, listProjectFiles, readClipboard } from "../api";
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
@@ -16,7 +16,7 @@ import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../share
 import { matchesPasteShortcut } from "../paste";
 import {
   chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, formatTokens, modelName, pendingPermissions,
-  shownUsage, supportedEfforts, type ChatItem, type PermissionItem, type QuestionChoice,
+  shownUsage, supportedEfforts, type ChatItem, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
 import { pendingTextQuestion, textQuestionAnswer } from "../chatQuestions";
@@ -33,8 +33,11 @@ import { reducedMotion } from "../visualDesign";
 import type { ChatSession, ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
+import { useTrexChat } from "../hooks/useTrexChat";
 import { useHandoffDelivery } from "../hooks/useHandoffDelivery";
-import { INBOX_WAKE } from "../messageQueue";
+import { useAgentWorkflow } from "../hooks/useAgentWorkflow";
+import type { AgentWorkflow } from "../agentWorkflow";
+import { dispatchQueuedMessage, INBOX_WAKE, type QueuedMessage } from "../messageQueue";
 import { createHandoffContext, type HandoffContext, type HandoffReference } from "../handoff";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
@@ -55,12 +58,26 @@ import "./ChatView.css";
 import "./chat/MessageActions.css";
 
 export type ChatViewProps = ChatSessionOptions & {
+  toolbar?: ReactNode;
+  composerLead?: ReactNode;
+  itemLabels?: Record<string, { provider: AgentProvider; label: string }>;
+  inputLocked?: boolean;
+  historyReadOnly?: boolean;
+  onBeforeSend?: (text: string, images: OutgoingImage[], previews: string[]) => boolean | "blocked" | Promise<true | "blocked">;
+  onQueuedSend?: (message: QueuedMessage) => Promise<boolean>;
+  queuedSendReason?: (message: QueuedMessage) => string | null;
+  localCommandReason?: (name: string, args: string) => string | null;
+  onPlanHere?: (context: HandoffContext, itemIds: string[]) => void;
   projectId?: string;
   profileId?: string | null;
   profileName?: string | null;
   sessionTitle?: string;
   handoff?: HandoffReference | null;
   handoffRestored?: boolean;
+  workflow?: AgentWorkflow | null;
+  onWorkflowPlan?: (tabId: string, runId: string, context?: HandoffContext) => void;
+  onWorkflowStatus?: (tabId: string, runId: string, status: AgentWorkflow["status"], error?: string | null) => void;
+  onWorkflowPeer?: (tabId: string) => void;
   onHandoffRequest?: (context: HandoffContext) => void;
   onHandoffConsumed?: (tabId: string, id: string) => void;
   provider: AgentProvider;
@@ -75,6 +92,7 @@ export type ChatViewProps = ChatSessionOptions & {
   /** Modo de permisos elegido: se guarda con la pestaña. */
   onMode: (tabId: string, provider: AgentProvider, mode: string) => void;
   onModel?: (tabId: string, model: string | null) => void;
+  onEffort?: (tabId: string, effort: string | null) => void;
   /** Aviso pasajero (toast) para lo que no debe quedar en el hilo. */
   onMessage: (message: string) => void;
   /** Abre el uso del plan de todas las cuentas. */
@@ -82,6 +100,14 @@ export type ChatViewProps = ChatSessionOptions & {
 };
 
 const PROVIDERS: Record<AgentProvider, { name: string; product: string; defaultMode: string; modes: SelectOption[]; otherModes: Record<string, string> }> = {
+  trex: {
+    name: "Trex", product: "Trex CLI", defaultMode: "ask",
+    modes: [
+      { value: "ask", label: "Preguntar", description: "Pide permiso para editar y ejecutar comandos", icon: <ShieldIcon size={13} /> },
+      { value: "plan", label: "Planificar", description: "Lee e investiga el proyecto sin modificar archivos", icon: <MapIcon size={13} /> },
+      { value: "full", label: "Permitir todo", description: "Edita y ejecuta sin pedir permiso", icon: <AlertIcon size={13} /> },
+    ], otherModes: { auto: "Preguntar" },
+  },
   claude: {
     name: "Claude", product: "Claude Code", defaultMode: "default",
     modes: [
@@ -163,7 +189,13 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const editSendingRef = useRef(false);
   const [queueSaving, setQueueSaving] = useState(false);
   const queueSavingRef = useRef(false);
-  const [sendDuringWork, setSendDuringWork] = useState("queue");
+  const queueActionRef = useRef({ mounted: true, generation: 0 });
+  useEffect(() => {
+    queueActionRef.current.mounted = true;
+    return () => { queueActionRef.current.mounted = false; queueActionRef.current.generation++; };
+  }, []);
+  const [deliveryChoice, setSendDuringWork] = useState("queue");
+  const sendDuringWork = provider === "trex" ? "queue" : deliveryChoice;
   const queueWakeRef = useRef({ armed: false, attempted: "", sending: false });
   const summaryCacheRef = useRef<SummaryCache>(new Map());
   // Sugerencias de `@`, `/` y `$`: posición del cursor, opción resaltada y menú descartado con Esc.
@@ -327,18 +359,29 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     const input = inputRef.current;
     if (!input || !visible) return;
     let disposed = false;
+    let frame = 0;
+    let observedWidth = input.clientWidth;
     const resize = (): void => { if (!disposed) resizeInput(); };
-    const observer = new ResizeObserver(resize);
+    // El alto lo ajusta resizeInput; observarlo otra vez crea un ciclo al estrechar el panel.
+    const observer = new ResizeObserver(() => {
+      const width = input.clientWidth;
+      if (width === observedWidth) return;
+      observedWidth = width;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(resize);
+    });
     observer.observe(input);
     window.addEventListener("resize", resize);
     void document.fonts.ready.then(resize);
-    return () => { disposed = true; observer.disconnect(); window.removeEventListener("resize", resize); };
+    return () => { disposed = true; cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener("resize", resize); };
   }, [visible, resizeInput]);
 
   const running = state.pendingTurns > 0;
-  const hasQueued = session.queue.snapshot.messages.length > 0 || !!session.queue.snapshot.receipt;
+  const workflowLocked = !!props.inputLocked || props.workflow?.role === "planner" && props.workflow.status === "transferring";
+  const hasDirectQueue = !!session.queue.snapshot.outbox?.length;
+  const hasQueued = session.queue.snapshot.messages.length > 0 || !!session.queue.snapshot.receipt || hasDirectQueue;
   const wakeQueue = useStableCallback((): void => {
-    if (queueWakeRef.current.sending || running || handoffPending || !session.queue.ready) return;
+    if (queueWakeRef.current.sending || queueSavingRef.current || hasDirectQueue || running || handoffPending || workflowLocked || !session.queue.ready) return;
     queueWakeRef.current.sending = true;
     void Promise.resolve(session.send(INBOX_WAKE, [], [], "Leer los mensajes en cola")).finally(() => { queueWakeRef.current.sending = false; });
   });
@@ -348,18 +391,25 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     const pending = session.queue.snapshot.messages.map(message => message.id).join(",");
     const wake = queueWakeRef.current;
     if (running && pending) wake.armed = true;
-    if (running || !wake.armed || !pending || wake.attempted === pending || state.process !== "ready") return;
+    if (running || queueSaving || hasDirectQueue || !wake.armed || !pending || wake.attempted === pending || state.process !== "ready") return;
     wake.armed = false;
     if (state.items[state.items.length - 1]?.kind !== "turn") return;
     wake.attempted = pending;
     wakeQueue();
-  }, [running, session.queue.snapshot.messages, state.items, state.process, wakeQueue]);
+  }, [running, queueSaving, hasDirectQueue, session.queue.snapshot.messages, state.items, state.process, wakeQueue]);
   const consumeHandoff = useStableCallback((id: string) => callbacks.current.onHandoffConsumed?.(sessionId, id));
   const handoffDelivery = useHandoffDelivery({ reference: props.handoff, session, visible, conversationId,
-    requireReview: props.handoffRestored, onConsumed: consumeHandoff });
+    requireReview: props.handoffRestored, loadWhenConsumed: props.workflow?.role === "planner",
+    autoSend: !props.workflow || props.workflow.status === "planning" || props.workflow.status === "executing", onConsumed: consumeHandoff });
   const handoffPending = !!props.handoff?.pending;
+  const workflowSource = useMemo(() => ({ sessionId, provider, profileId: props.profileId ?? null,
+    profileName: props.profileName ?? agent.product, title: props.sessionTitle ?? "Planificación",
+    projectId: props.projectId ?? "", projectName, cwd }), [sessionId, provider, props.profileId, props.profileName, props.sessionTitle, props.projectId, projectName, cwd, agent.product]);
+  const workflowControl = useAgentWorkflow({ workflow: props.workflow, session, source: workflowSource, original: handoffDelivery.prepared,
+    handoffPending, busy: queueSaving || hasQueued || !session.queue.ready || handoffDelivery.loading || handoffDelivery.sending || submittingEdit,
+    onPlan: props.onWorkflowPlan, onStatus: props.onWorkflowStatus });
   const canHandoff = state.items.some(item => item.kind === "user" || item.kind === "text");
-  const handoffDisabled = running || submittingEdit || queueSaving || hasQueued || !session.queue.ready || !canHandoff || handoffDelivery.sending;
+  const handoffDisabled = workflowLocked || running || submittingEdit || queueSaving || hasQueued || !session.queue.ready || !canHandoff || handoffDelivery.sending;
   const handoffHint = running ? "Disponible al terminar la respuesta. También puedes detenerla con Esc."
     : submittingEdit ? "Espera a que termine de enviarse la edición."
     : queueSaving ? "Espera a que se guarde el mensaje en cola."
@@ -374,6 +424,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       sessionId, provider, profileId: props.profileId ?? null, profileName: props.profileName || agent.product,
       title: props.sessionTitle || projectName, projectId: props.projectId, projectName, cwd,
     }));
+  };
+  const planHere = (): void => {
+    if (handoffDisabled || !props.projectId) return;
+    props.onPlanHere?.(createHandoffContext(state, { sessionId, provider, profileId: props.profileId ?? null,
+      profileName: props.profileName || agent.product, title: props.sessionTitle || projectName,
+      projectId: props.projectId, projectName, cwd }), state.items.map(item => item.id));
   };
   const summaries = useMemo(() => completedWork(threadItems, cwd, state.historyCount, summaryCacheRef.current), [threadItems, cwd, state.historyCount]);
   const responseOrigins = useMemo(() => {
@@ -411,6 +467,37 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         inputRef.current?.setSelectionRange(message.text.length, message.text.length);
       });
     } catch (error) { callbacks.current.onMessage(formatError(error)); }
+  });
+  const stopResponse = useStableCallback((): void => {
+    queueActionRef.current.generation++;
+    workflowControl.stop();
+  });
+  const queueAction = async (work: () => Promise<unknown>): Promise<void> => {
+    if (queueSavingRef.current || !session.queue.ready || workflowLocked || handoffPending || submittingEdit) throw new Error("Espera a que termine la operación pendiente de la conversación.");
+    queueSavingRef.current = true; setQueueSaving(true);
+    try { await work(); }
+    finally {
+      queueSavingRef.current = false;
+      if (queueActionRef.current.mounted) {
+        setQueueSaving(false);
+        void session.queue.reload().catch(() => undefined);
+      }
+    }
+  };
+  const sendQueuedNow = (message: QueuedMessage): Promise<void> => queueAction(async () => {
+    if (session.queue.snapshot.outbox?.length) throw new Error("Revisa el envío directo pendiente antes de enviar otro mensaje de la cola.");
+    const reason = callbacks.current.queuedSendReason?.(message);
+    if (reason) throw new Error(reason);
+    const generation = ++queueActionRef.current.generation;
+    queueWakeRef.current.armed = false;
+    await dispatchQueuedMessage(session.queue.client, message, value => {
+      if (callbacks.current.onQueuedSend) return callbacks.current.onQueuedSend(value);
+      return session.sendNow
+        ? session.sendNow(value.text, value.images, value.previews, undefined,
+          session.provider === "trex" ? workflowControl.supersedeActiveTurn : undefined)
+        : session.send(value.text, value.images, value.previews);
+    },
+    () => queueActionRef.current.mounted && queueActionRef.current.generation === generation);
   });
   const resendMessage = useStableCallback((id: string): void => {
     if (handoffPending || running || hasQueued || !session.queue.ready || editSendingRef.current || preparing) return;
@@ -604,11 +691,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   useEffect(() => {
     callbacks.current.onModel?.(sessionId, state.modelChoice);
   }, [state.modelChoice, sessionId]);
+  useEffect(() => {
+    callbacks.current.onEffort?.(sessionId, state.effortChoice);
+  }, [state.effortChoice, sessionId]);
   /** Modo de trabajo al que se vuelve al poner en marcha un plan. */
   const workModeRef = useRef(mode === "plan" ? agent.defaultMode : mode);
   useEffect(() => { if (mode !== "plan") workModeRef.current = mode; }, [mode]);
-  const modeOptions = agent.modes.some(option => option.value === mode) ? agent.modes
-    : [...agent.modes, { value: mode, label: agent.otherModes[mode] ?? mode, icon: <ShieldIcon size={13} /> }];
+  const availableModes = props.planningOnly ? agent.modes.filter(option => option.value === "plan") : agent.modes;
+  const modeOptions = availableModes.some(option => option.value === mode) ? availableModes
+    : [...availableModes, { value: mode, label: agent.otherModes[mode] ?? mode, icon: <ShieldIcon size={13} /> }];
   const efforts = supportedEfforts(state.models, state.model, state.modelChoice);
   const filesContext = useMemo(() => ({ cwd, streaming: false }), [cwd]);
   const viewer = useImageViewer();
@@ -640,6 +731,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       case "clear": case "new":
         if (!session.queue.ready) { session.notice("info", "Espera a que termine de cargar la cola antes de empezar otra conversación."); return true; }
         if (hasQueued) { session.notice("info", "Lee o cancela los mensajes en cola antes de empezar otra conversación."); return true; }
+        if (props.workflow) props.onWorkflowStatus?.(sessionId, props.workflow.id, "paused", "Flujo pausado al empezar otra conversación.");
         session.reset();
         titledRef.current = false;
         return true;
@@ -673,7 +765,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   };
 
   const send = (override?: string): void => {
-    if (handoffPending || queueSavingRef.current) return;
+    if (workflowLocked || handoffPending || queueSavingRef.current) return;
     const text = (override ?? draftRef.current).trim();
     const images = attachmentsRef.current;
     const attached = docsRef.current;
@@ -698,8 +790,22 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     }
     const command = images.length || attached.length ? null : parseCommand(text);
     setDismissed(null);
+    const localReason = command ? props.localCommandReason?.(command.name, command.args) : null;
+    if (localReason) { callbacks.current.onMessage(localReason); return; }
     if (command && runLocal(command.name, command.args)) {
       setDraft("");
+      return;
+    }
+    const intercepted = props.onBeforeSend?.(message, images.map(({ mediaType, data }) => ({ mediaType, data })), images.map(image => image.preview));
+    if (intercepted) {
+      const originalDraft = draftRef.current;
+      const accept = (result: true | "blocked"): void => {
+        if (result === true && draftRef.current === originalDraft && attachmentsRef.current === images && docsRef.current === attached) {
+          setDraft(""); setAttachments([]); setDocs([]); stickRef.current = true;
+        }
+      };
+      if (typeof intercepted === "object") void intercepted.then(accept).catch(error => callbacks.current.onMessage(formatError(error)));
+      else accept(intercepted);
       return;
     }
     if (!session.queue.ready) {
@@ -717,6 +823,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         .finally(() => { queueSavingRef.current = false; editSendingRef.current = false; setQueueSaving(false); });
       return;
     }
+    const unsent = { draft: draftRef.current, images, attached };
     setDraft("");
     setAttachments([]);
     setDocs([]);
@@ -727,7 +834,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       callbacks.current.onTitle(sessionId, conversationTitle(text || (attached.length === 1 && !images.length ? attached[0].name
         : attached.length ? "Archivos adjuntos" : images.length === 1 ? "Imagen" : "Imágenes")));
     }
-    session.send(message, images.map(({ mediaType, data }) => ({ mediaType, data })), images.map(image => image.preview));
+    const restoreUnsent = (): void => {
+      if (!draftRef.current && !attachmentsRef.current.length && !docsRef.current.length) {
+        setDraft(unsent.draft); setAttachments(unsent.images); setDocs(unsent.attached);
+      }
+    };
+    void (async () => {
+      const accepted = await session.send(message, images.map(({ mediaType, data }) => ({ mediaType, data })), images.map(image => image.preview));
+      if (accepted === false) restoreUnsent();
+    })().catch(error => { restoreUnsent(); callbacks.current.onMessage(formatError(error)); });
   };
 
   // --- Sugerencias ------------------------------------------------------------
@@ -796,6 +911,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   // Identidad fija: las filas del hilo están memorizadas y no deben repintarse por ella.
   const answer = useStableCallback((item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
+    if (workflowLocked) return;
     if (item.id === textQuestion?.id) {
       setDismissedQuestion(item.id);
       const response = allowed ? textQuestionAnswer(choices ?? []) : "";
@@ -826,7 +942,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     return { latestTodos: todos, latestPlan: provider === "codex" ? plan : undefined, planIndex: index };
   }, [threadItems, provider]);
   // El plan se puede poner en marcha cuando es lo último que propuso Codex.
-  const planReady = !handoffPending && !running && mode === "plan" && latestPlan !== undefined
+  const planReady = !props.planningOnly && !handoffPending && !running && mode === "plan" && latestPlan !== undefined
     && !threadItems.slice(planIndex + 1).some(item => item.kind === "user");
   const implementPlan = useStableCallback((): void => {
     if (handoffPending) return;
@@ -837,27 +953,32 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   // Filas del hilo: se rehacen solo cuando cambia algo que muestran, no con cada tecla en la caja.
   const editingId = editing?.id ?? null;
-  const busy = preparing > 0 || handoffPending || hasQueued || !session.queue.ready;
+  const busy = workflowLocked || preparing > 0 || handoffPending || hasQueued || !session.queue.ready;
   const rows = useMemo(() => {
     // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
     const askingFor = new Set(threadItems.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
     const asked = (id: string): boolean => askingFor.has(id) || askingFor.has(id.split("#")[0]);
     const canEdit = (item: Extract<ChatItem, { kind: "user" }>): boolean =>
-      !item.fromQueue && (provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id));
+      !props.historyReadOnly && !item.fromQueue && (provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id));
     return threadItems.slice(threadStart).map((item, offset) => {
       const animate = threadStart + offset >= enterFrom;
       const next = threadItems[threadStart + offset + 1];
       switch (item.kind) {
         case "user": return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews}
           onEdit={beginEdit} onResend={resendMessage} editing={editingId === item.id} editable={canEdit(item)} fromQueue={item.fromQueue}
-          disabled={running || submittingEdit || busy} animate={animate} />;
+          disabled={props.historyReadOnly || running || submittingEdit || busy} animate={animate} />;
         case "text": {
           if (!item.text.trim()) return null;
           const user = responseOrigins.get(item.id);
-          return <AssistantText key={item.id} text={item.text} streaming={!item.final} animate={animate}
+          const label = props.itemLabels?.[item.id];
+          const displayedText = label && /^\s*<trex_plan>[\s\S]*<\/trex_plan>\s*$/.test(item.text)
+            ? item.text.replace(/^\s*<trex_plan>\s*/, "").replace(/\s*<\/trex_plan>\s*$/, "") : item.text;
+          const response = <AssistantText key={item.id} text={displayedText} streaming={!item.final} animate={animate}
             regenerateId={user && canEdit(user) && user.images === user.previews.length ? user.id : undefined}
             onRegenerate={regenerateMessage} disabled={running || submittingEdit || busy || editingId !== null}
             actions={item.final && (next ? next.kind === "turn" || next.kind === "user" : !running)} />;
+          return label ? <div key={item.id} className="chat-attributed-message">
+            <div className="chat-message-author"><AgentIcon kind={label.provider} size={13} /><span>{label.label}</span></div>{response}</div> : response;
         }
         case "thinking": return <Thinking key={item.id} text={item.text} />;
         case "tool": return asked(item.id) ? null : <ToolRow key={item.id} item={item} cwd={cwd}
@@ -871,7 +992,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       }
     });
   }, [threadItems, threadStart, enterFrom, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
-    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer]);
+    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels]);
   const stderrTail = state.stderr.slice(-6).join("\n");
 
   return <div ref={rootRef} className={`chat${empty ? " is-empty" : ""}${dragging ? " is-dragging" : ""}`}
@@ -884,9 +1005,33 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       setDragging(false);
       addDropped(Array.from(event.dataTransfer.files));
     }}>
+    {props.toolbar}
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
       <SharedFilesContext.Provider value={filesContext}>
       <div className="chat-thread" ref={threadRef}>
+        {props.workflow && <div className={`chat-workflow is-${props.workflow.status}`} aria-label="Control entre agentes">
+          <div className="chat-workflow-route">
+            <span className={props.workflow.role === "planner" ? "current" : ""}><MapIcon size={13} />
+              <span><small>Planificación</small><strong>{props.workflow.planner.profileName}</strong><em>{props.workflow.planner.model ?? "Modelo del perfil"}{props.workflow.planner.effort ? ` · ${effortLabel(props.workflow.planner.effort)}` : ""}</em></span></span>
+            <i className="chat-workflow-arrow" aria-hidden="true"><ArrowDownIcon size={13} /></i>
+            <span className={props.workflow.role === "executor" ? "current" : ""}><AgentIcon kind={props.workflow.executor.provider} size={14} />
+              <span><small>Implementación</small><strong>{props.workflow.executor.profileName}</strong><em>{props.workflow.executor.model ?? "Modelo del perfil"}{props.workflow.executor.effort ? ` · ${effortLabel(props.workflow.executor.effort)}` : ""}</em></span></span>
+          </div>
+          <div className="chat-workflow-state" role="status">
+            <span>{props.workflow.error ?? ({ planning: "Preparando el plan · implementación automática al terminar", waiting: "Esperando el plan definitivo",
+              transferring: "Guardando el plan y preparando al ejecutor…", executing: props.workflow.role === "planner" ? "Plan entregado al ejecutor" : "Implementando el plan",
+              completed: "Respuesta del ejecutor lista", paused: "Flujo pausado", failed: "Flujo detenido por un error" })[props.workflow.status]}</span>
+            <div className="chat-workflow-actions">
+              {props.workflow.peerTabId && <button type="button" onClick={() => props.onWorkflowPeer?.(props.workflow!.peerTabId!)}>
+                {props.workflow.role === "planner" ? "Ver implementación" : "Ver planificación"}</button>}
+              {["planning", "waiting", "transferring", "executing"].includes(props.workflow.status)
+                ? <button type="button" onClick={stopResponse}>Detener flujo</button>
+                : props.workflow.status !== "completed" && !(props.workflow.role === "planner" && props.workflow.peerTabId)
+                  && !handoffPending && <button type="button" disabled={running || queueSaving || hasQueued || !session.queue.ready || handoffDelivery.loading}
+                    onClick={() => void workflowControl.resume()}>{props.workflow.role === "planner" && props.workflow.plan ? "Reintentar implementación" : "Reanudar flujo"}</button>}
+            </div>
+          </div>
+        </div>}
         {empty && !handoffPending && <div className="chat-empty">
           <AgentIcon kind={provider} size={30} activity={activity} />
           <h2>¿En qué trabajamos en {projectName}?</h2>
@@ -906,11 +1051,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <div className="chat-handoff-heading"><RotateIcon size={16} /><strong>Continuación de {props.handoff?.sourceLabel}</strong></div>
           <p>{handoffDelivery.error ?? (handoffDelivery.sending ? "Entregando el contexto al asistente…"
             : handoffDelivery.loading ? "Recuperando el contexto guardado…"
+            : props.workflow?.status === "paused" ? "Flujo pausado. El contexto se enviará al reanudar."
             : handoffDelivery.requiresReview ? "El contexto sigue disponible. Revisa el historial antes de volver a enviarlo."
             : "Preparando al asistente para continuar el trabajo…")}</p>
-          {(handoffDelivery.error || handoffDelivery.requiresReview || state.process === "failed" || state.process === "exited") &&
+          {(handoffDelivery.error || handoffDelivery.requiresReview || props.workflow?.status === "paused" || props.workflow?.status === "failed" || state.process === "failed" || state.process === "exited") &&
             <button type="button" className="btn btn-small" disabled={handoffDelivery.loading || handoffDelivery.sending || running}
-              onClick={handoffDelivery.retry}>{handoffDelivery.requiresReview && !handoffDelivery.error ? "Enviar contexto" : "Reintentar continuación"}</button>}
+              onClick={() => {
+                if (props.workflow) props.onWorkflowStatus?.(sessionId, props.workflow.id, props.workflow.role === "planner" ? "planning" : "executing");
+                handoffDelivery.retry();
+              }}>{props.workflow?.status === "paused" ? "Reanudar flujo" : handoffDelivery.requiresReview && !handoffDelivery.error ? "Enviar contexto" : "Reintentar continuación"}</button>}
         </div>}
         {!handoffPending && (state.process === "exited" || state.process === "failed") && <div className="chat-ended">
           <div>
@@ -932,8 +1081,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
     <div className="chat-composer-wrap" ref={composerRef}>
      <div className="chat-dock">
-      <QueuedMessages queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending}
-        onContinue={wakeQueue} onRemove={id => { void session.queue.client.remove(id).catch(error => callbacks.current.onMessage(formatError(error))); }} />
+      {props.composerLead}
+      <QueuedMessages queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending || workflowLocked}
+        onContinue={wakeQueue} onRemove={id => { void queueAction(() => session.queue.client.remove(id)).catch(error => callbacks.current.onMessage(formatError(error))); }}
+        onEdit={(id, text, expectedText) => queueAction(() => session.queue.client.update(id, text, expectedText))}
+        onSendNow={sendQueuedNow} onRestoreDirect={id => queueAction(() => session.queue.client.restoreDirect(id))}
+        directDisabledReason={message => hasDirectQueue ? "Revisa el envío directo pendiente antes de enviar otro mensaje." : props.queuedSendReason?.(message) ?? null} />
       {showSuggestions && !question && <Suggestions id={`${sessionId}-suggestions`} items={suggestions} active={selectedSuggestion} loading={loadingSuggestions}
         loadingLabel={wantsSkills ? "Cargando skills…" : "Buscando archivos…"}
         emptyLabel={wantsSkills ? skillsError ?? (state.skills.length ? "No hay skills que coincidan con tu búsqueda." : "No hay skills disponibles en esta sesión.") : undefined}
@@ -987,7 +1140,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             : part.text)}
           {draft.endsWith("\n") ? "​" : ""}
         </div>
-        <textarea ref={inputRef} rows={1} value={draft} readOnly={submittingEdit || queueSaving || handoffPending} aria-label={`Mensaje para ${agent.name}`}
+        <textarea ref={inputRef} rows={1} value={draft} readOnly={workflowLocked || submittingEdit || queueSaving || handoffPending} aria-label={`Mensaje para ${agent.name}`}
           aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? `${sessionId}-suggestions` : undefined}
           aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${selectedSuggestion}` : undefined}
           placeholder={running
@@ -1041,7 +1194,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
               cancelEdit();
             } else if (event.key === "Escape" && running) {
               event.preventDefault();
-              session.interrupt();
+              stopResponse();
             }
           }} />
         </div>
@@ -1049,15 +1202,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
             disabled={submittingEdit || queueSaving || handoffPending}
             onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
-          {(running || hasQueued) && !editing && <Select className="chat-tray-chip chat-tray-select chat-message-delivery" menuClassName="chat-glass-menu" value={sendDuringWork}
+          {(running || hasQueued) && !editing && (provider === "trex" ? <span className="chat-tray-chip chat-message-delivery" title="El agente consulta tus mensajes en cola cuando llega a un punto adecuado">En cola</span> : <Select className="chat-tray-chip chat-tray-select chat-message-delivery" menuClassName="chat-glass-menu" value={sendDuringWork}
             options={[{ value: "queue", label: "En cola", description: "El agente decide cuándo leer el mensaje" },
               { value: "now", label: "Enviar ahora", description: "Entrega el mensaje durante el trabajo en curso" }]}
-            align="end" onChange={setSendDuringWork} aria-label="Entrega de mensajes durante el trabajo" />}
+            align="end" onChange={setSendDuringWork} aria-label="Entrega de mensajes durante el trabajo" />)}
           {running && !draft.trim() && !attachments.length && !docs.length
-            ? <button type="button" className="chat-send stop tip" aria-label="Detener" data-tip="Detener (Esc)" onClick={session.interrupt}><StopIcon /></button>
+            ? <button type="button" className="chat-send stop tip" aria-label="Detener" data-tip="Detener (Esc)" onClick={stopResponse}><StopIcon /></button>
             : <button type="submit" className="chat-send tip" aria-label={editing ? "Guardar y regenerar" : (running || hasQueued) && sendDuringWork === "queue" ? "Añadir a la cola" : "Enviar"}
               data-tip={editing ? "Guardar y regenerar" : (running || hasQueued) && sendDuringWork === "queue" ? "Añadir a la cola" : "Enviar"}
-              disabled={handoffPending || !session.queue.ready || queueSaving || (!draft.trim() && !attachments.length && !docs.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
+              disabled={workflowLocked || handoffPending || !session.queue.ready || queueSaving || (!draft.trim() && !attachments.length && !docs.length) || preparing > 0 || submittingEdit || (!!editing && running)}>
                 {submittingEdit || queueSaving ? <span className="chat-spinner" /> : <ArrowUpIcon />}</button>}
         </div>
         </div>
@@ -1070,12 +1223,14 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           levels={efforts} effort={state.effort} onEffort={session.setEffort} speed={speed} fast={state.fast} onFast={session.setFast}
           openSignal={menuSignal} />
         <span className="chat-composer-spacer" />
+        {props.onPlanHere && <button type="button" className="chat-tray-chip chat-plan-here" disabled={handoffDisabled}
+          onClick={event => { event.currentTarget.focus({ preventScroll: true }); planHere(); }}><MapIcon size={13} /><span>Planear aquí</span></button>}
         {props.onHandoffRequest && <button type="button" className="chat-tray-chip chat-handoff-button tip"
           aria-label="Continuar con otro agente" data-tip={handoffHint} disabled={handoffDisabled}
           onClick={event => { event.currentTarget.focus({ preventScroll: true }); requestHandoff(); }}><span>Continuar con otro agente</span><span className="chat-handoff-arrow" aria-hidden="true">↗</span></button>}
       </div>
       <div className="chat-composer-meta">
-        {(usage || state.plan) && <UsageMenu usage={usage} plan={state.plan} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
+        {(usage || state.plan || state.costUsd !== null) && <UsageMenu usage={usage} plan={state.plan} costUsd={state.costUsd} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
           onOpenAll={() => callbacks.current.onOpenUsage()}
           onCompact={() => {
             stickRef.current = true;
@@ -1101,7 +1256,11 @@ function CodexChat(props: ChatViewProps) {
 }
 
 function ChatView(props: ChatViewProps) {
-  return props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
+  return props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
+}
+
+function TrexChat(props: ChatViewProps) {
+  return <ChatPanel {...props} historyReadOnly session={useTrexChat(props)} />;
 }
 
 export default memo(ChatView);

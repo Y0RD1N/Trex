@@ -33,6 +33,14 @@ export type Suggestion = {
  * los suyos.
  */
 export const LOCAL_COMMANDS: Record<AgentProvider, CommandInfo[]> = {
+  trex: [
+    { name: "recover", description: "Confirma la revisión de una sesión interrumpida antes de continuar", hint: "" },
+    { name: "new", description: "Empieza una conversación nueva", hint: "" },
+    { name: "model", description: "Elige el modelo de la conexión API", hint: "" },
+    { name: "effort", description: "Elige el esfuerzo que admite el modelo", hint: "" },
+    { name: "permissions", description: "Cambia los permisos de Trex CLI", hint: "" },
+    { name: "status", description: "Modelo, esfuerzo, permisos y contexto usado", hint: "" },
+  ],
   claude: [
     { name: "clear", description: "Empieza una conversación nueva", hint: "" },
     { name: "model", description: "Elige el modelo", hint: "" },

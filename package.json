@@ -7,6 +7,8 @@
     "test": "node --test scripts/*.test.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
+    "cli:build": "node scripts/build-trex-cli.mjs",
+    "build:desktop": "node scripts/build-trex-cli.mjs && npm run build",
     "preview": "vite preview",
     "tauri": "tauri"
   },

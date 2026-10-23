@@ -8,7 +8,7 @@
  * vuelta. No toca la interfaz ni el backend, así que se prueba sin Tauri.
  */
 import {
-  addNotice, baseReducer, choiceAnswers, clip, diffStats, finalize, list, questionsOf, record, speedHint, text, unifiedDiffLines,
+  addNotice, baseReducer, choiceAnswers, clip, diffStats, finalize, list, liveCompletion, questionsOf, record, speedHint, text, unifiedDiffLines,
   type BaseChatAction, type ChatItem, type ChatState, type Json, type ModelInfo, type OutgoingImage,
   type PermissionItem, type QuestionChoice, type ToolItem, type ToolStatus,
 } from "./chatState";
@@ -18,6 +18,11 @@ import { imageReference, withoutImageLabels } from "./imageReferences";
 
 export type CodexAction =
   | BaseChatAction
+  /** Reserva local: todavía no participa en el turno del proveedor. */
+  | (Extract<BaseChatAction, { type: "send" }> & { deferred: true })
+  | { type: "sendIssued"; id: string; turnId?: string; now: number }
+  | { type: "sendFailed"; id: string; message: string }
+  | { type: "interruptIssued" }
   /** Notificación o petición del servidor. `scope` distingue procesos sucesivos. */
   | { type: "rpc"; message: unknown; scope: string; now: number }
   /** Respuesta a `thread/start` o `thread/resume`. */
@@ -513,11 +518,20 @@ function planTodos(items: ChatItem[], params: Json): ChatItem[] {
 
 function completeTurn(state: ChatState, turn: Json, now: number): ChatState {
   const turnId = text(turn.id);
-  const completedId = turnId ? `codex:${turnId}` : null;
-  if (completedId && state.completedTurnIds.includes(completedId)) return state;
+  // Sin identidad no se puede distinguir un terminal atrasado del turno en curso.
+  if (!turnId) return state;
+  const completedId = `codex:${turnId}`;
+  if (state.completedTurnIds.includes(completedId)) return state;
   if (turnId && state.turnId && state.turnId !== turnId) return state;
+  const bound = state.items.filter(item => item.kind === "user" && state.pendingMessageIds.includes(item.id) && item.providerTurnId);
+  if (bound.length && !bound.some(item => item.kind === "user" && item.providerTurnId === turnId)) return state;
+  const consumed = issuedMessages(state, turnId);
+  if (!consumed.length && state.turnId !== turnId) return state;
+  const pendingMessageIds = state.pendingMessageIds.filter(id => !consumed.includes(id));
   const status = text(turn.status);
-  const interrupted = status === "interrupted", failed = status === "failed";
+  const interrupted = ["interrupted", "cancelled", "canceled"].includes(status)
+    || consumed.some(id => state.interruptedMessageIds.includes(id));
+  const failed = !interrupted && (status !== "completed" || !!turn.error);
   let items = finalize(state.items).map(item =>
     item.kind === "tool" && item.status === "running" ? { ...item, status: interrupted || failed ? "error" as const : "done" as const }
       : item.kind === "permission" && item.state === "pending" ? { ...item, state: "denied" as const } : item);
@@ -526,13 +540,25 @@ function completeTurn(state: ChatState, turn: Json, now: number): ChatState {
     const error = record(turn.error);
     const message = [text(error?.message), text(error?.additionalDetails)].filter(Boolean).join("\n") || "Codex no pudo completar la respuesta.";
     items = addNotice(items, "error", message, "e");
-  } else if (state.turnStartedAt !== null || typeof turn.durationMs === "number") {
+  } else if ((consumed.length || !state.pendingMessageIds.length) && (state.turnStartedAt !== null || typeof turn.durationMs === "number")) {
     const durationMs = typeof turn.durationMs === "number" ? turn.durationMs : now - (state.turnStartedAt ?? now);
     items = [...items, { kind: "turn", id: `t-${text(turn.id) || items.length}`, durationMs,
       ...(state.turnDiff !== null ? { diff: state.turnDiff } : {}) }];
   }
-  return { ...state, items, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null, turnDiff: null,
-    completedTurnIds: completedId ? [...state.completedTurnIds, completedId].slice(-64) : state.completedTurnIds };
+  return { ...state, items, pendingTurns: pendingMessageIds.length ? 1 : 0, pendingMessageIds,
+    activeMessageIds: state.activeMessageIds.filter(id => !consumed.includes(id)),
+    interruptedMessageIds: state.interruptedMessageIds.filter(id => !consumed.includes(id)), turnStartedAt: null, turnId: null, turnDiff: null,
+    completedTurnIds: [...state.completedTurnIds, completedId], turnItemStart: null,
+    lastCompletion: liveCompletion(state, completedId, interrupted ? "interrupted" : failed ? "failed" : "completed", consumed, items) };
+}
+
+/** Un terminal solo consume mensajes emitidos para ese turno, nunca reservas locales. */
+function issuedMessages(state: ChatState, turnId: string): string[] {
+  return state.pendingMessageIds.filter(id => {
+    const item = state.items.find(item => item.kind === "user" && item.id === id);
+    return item?.kind === "user" && (state.activeMessageIds.includes(id) || item.providerTurnId === turnId)
+      && (!item.providerTurnId || item.providerTurnId === turnId);
+  });
 }
 
 /** Petición del servidor que necesita respuesta de la persona. */
@@ -588,6 +614,7 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
     case "turn/started": {
       const turn = record(params.turn) ?? {};
       if (state.completedTurnIds.includes(`codex:${text(turn.id)}`)) return state;
+      if (state.turnId && text(turn.id) && state.turnId !== turn.id) return state;
       return { ...state, turnId: text(turn.id) || state.turnId, pendingTurns: Math.max(1, state.pendingTurns), turnStartedAt: state.turnStartedAt ?? now };
     }
     case "turn/completed":
@@ -642,7 +669,10 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
     case "error": {
       if (params.willRetry === true) return state;
       const error = record(params.error) ?? {};
-      return { ...state, items: addNotice(state.items, "error", text(error.message) || "Codex informó de un error.", "e") };
+      const turnId = text(params.turnId) || state.turnId;
+      return { ...state, items: addNotice(state.items, "error", text(error.message) || "Codex informó de un error.", "e"),
+        lastCompletion: params.willRetry === false && turnId && turnId === state.turnId
+          ? liveCompletion(state, `codex:${turnId}`, "failed", issuedMessages(state, turnId)) : state.lastCompletion };
     }
     case "warning": {
       const message = visibleWarning(text(params.message));
@@ -696,9 +726,12 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
     case "rpc": {
       const message = record(action.message);
       if (!message) return state;
+      const params = record(message.params) ?? {};
+      if ((message.method === "turn/completed" || message.method === "turn/started")
+        && text(params.threadId) && state.sessionId && params.threadId !== state.sessionId) return state;
       if (message.id !== undefined && message.id !== null && typeof message.method === "string") return applyRequest(state, message, action.scope);
       if (typeof message.method !== "string") return state;
-      return applyNotification(state, message.method, record(message.params) ?? {}, action.now);
+      return applyNotification(state, message.method, params, action.now);
     }
     case "thread": {
       const response = record(action.response) ?? {};
@@ -712,9 +745,13 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
     }
     case "history": {
       let items: ChatItem[] = [];
+      const completedTurnIds = new Set(state.completedTurnIds);
       for (const raw of action.turns) {
         const turn = record(raw);
         if (!turn) continue;
+        if (text(turn.id) && ["completed", "interrupted", "failed", "cancelled", "canceled"].includes(text(turn.status))) {
+          completedTurnIds.add(`codex:${text(turn.id)}`);
+        }
         const start = items.length;
         for (const item of list(turn.items).map(record)) if (item) items = applyItem(items, item, "history");
         items = items.map((item, index) => index >= start && item.kind === "user"
@@ -725,7 +762,9 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
       }
       items = finalize(items);
       // Sustituye un historial anterior en vez de repetirlo.
-      return { ...state, items: [...items, ...state.items.slice(state.historyCount)], historyCount: items.length };
+      return { ...state, items: [...items, ...state.items.slice(state.historyCount)], historyCount: items.length,
+        completedTurnIds: [...completedTurnIds],
+        turnItemStart: state.turnItemStart === null ? null : state.turnItemStart + items.length - state.historyCount };
     }
     case "models": {
       const models = parseCodexModels(action.data, action.windows);
@@ -734,11 +773,43 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
     case "skills":
       return { ...state, skills: parseCodexSkills(action.data) };
     case "turnStarted":
-      return state.pendingTurns > 0 && !state.completedTurnIds.includes(`codex:${action.turnId}`) ? { ...state, turnId: action.turnId } : state;
+      return state.pendingTurns > 0 && !state.completedTurnIds.includes(`codex:${action.turnId}`)
+        && (!state.turnId || state.turnId === action.turnId) ? { ...state, turnId: action.turnId } : state;
     case "plan":
       return { ...state, plan: parseCodexUsage(action.data, state.plan) };
     case "turnFailed":
-      return { ...state, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null, items: addNotice(state.items, "error", action.message, "e") };
+      return { ...state, pendingTurns: 0, pendingMessageIds: [], activeMessageIds: [], turnStartedAt: null, turnId: null, turnItemStart: null,
+        completedTurnIds: state.turnId && !state.completedTurnIds.includes(`codex:${state.turnId}`)
+          ? [...state.completedTurnIds, `codex:${state.turnId}`] : state.completedTurnIds,
+        lastCompletion: liveCompletion(state, `codex:failed:${state.turnId ?? JSON.stringify(state.pendingMessageIds)}`, "failed", state.pendingMessageIds),
+        items: addNotice(state.items, "error", action.message, "e") };
+    case "interruptIssued":
+      return state.activeMessageIds.reduce((next, id) => baseReducer(next, { type: "interruptSend", id }), state);
+    case "sendIssued": {
+      if (!state.pendingMessageIds.includes(action.id)) return state;
+      const next = action.turnId ? baseReducer(state, { type: "bindTurn", id: action.id, turnId: action.turnId }) : state;
+      return { ...next, activeMessageIds: next.activeMessageIds.includes(action.id) ? next.activeMessageIds : [...next.activeMessageIds, action.id],
+        turnStartedAt: next.turnStartedAt ?? action.now, turnItemStart: next.turnItemStart ?? next.items.length };
+    }
+    case "sendFailed": {
+      const items = addNotice(state.items.map(item => item.kind === "user" && item.id === action.id
+        ? { ...item, providerTurnId: undefined } : item), "error", action.message, "e");
+      if (!state.pendingMessageIds.includes(action.id)) {
+        // Un terminal puede llegar antes del rechazo de un steer ya emitido.
+        // Corrige solo esa entrega; el turno nativo y las reservas nuevas siguen liquidados.
+        const previous = state.lastCompletion;
+        return { ...state, items, lastCompletion: previous?.status === "completed" && previous.messageIds.includes(action.id)
+          ? { id: `codex:send-failed:${action.id}`, status: "failed", messageIds: [action.id], itemIds: [] } : previous };
+      }
+      const pendingMessageIds = state.pendingMessageIds.filter(id => id !== action.id);
+      return { ...state, pendingMessageIds, pendingTurns: pendingMessageIds.length || state.turnId ? 1 : 0,
+        activeMessageIds: state.activeMessageIds.filter(id => id !== action.id),
+        interruptedMessageIds: state.interruptedMessageIds.filter(id => id !== action.id),
+        turnStartedAt: pendingMessageIds.length || state.turnId ? state.turnStartedAt : null,
+        turnItemStart: pendingMessageIds.length || state.turnId ? state.turnItemStart : null,
+        lastCompletion: liveCompletion(state, `codex:send-failed:${action.id}`, "failed", [action.id]),
+        items };
+    }
     case "answered": {
       const index = state.items.findIndex(item => item.kind === "permission" && item.id === action.id);
       const question = state.items[index];
@@ -759,7 +830,9 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
     case "send": {
       // Un mensaje durante un turno se suma a ese turno: no abre otro.
       const next = baseReducer(state, action);
-      return { ...next, pendingTurns: 1 };
+      return { ...next, pendingTurns: 1,
+        activeMessageIds: ("deferred" in action && action.deferred) || next.activeMessageIds.includes(action.id)
+          ? next.activeMessageIds : [...next.activeMessageIds, action.id] };
     }
     default:
       return baseReducer(state, action);

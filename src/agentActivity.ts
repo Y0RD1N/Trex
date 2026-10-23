@@ -1,4 +1,4 @@
-import type { AgentActivity, TabKind } from "./types";
+import type { AgentActivity, TabKind, TabState } from "./types";
 
 // Se inspecciona el pie actual de la TUI, no el historial ni cada paquete PTY.
 export const ACTIVITY_SAMPLE_MS = 100;
@@ -42,3 +42,14 @@ export function activitySignal(osc: number, data: string): AgentActivity | undef
 
 export const activityLabel = (activity: AgentActivity): string =>
   activity === "working" ? "Trabajando" : activity === "waiting" ? "Esperando tu respuesta" : "En espera";
+
+/** Incluye sesiones contraídas y de fondo; un proceso abierto no implica trabajo. */
+export function projectActivity(sessions: readonly Pick<TabState, "kind" | "activity" | "exited">[]): AgentActivity {
+  let activity: AgentActivity = "idle";
+  for (const session of sessions) {
+    if (session.kind === "shell" || session.exited) continue;
+    if (session.activity === "working") return "working";
+    if (session.activity === "waiting") activity = "waiting";
+  }
+  return activity;
+}
