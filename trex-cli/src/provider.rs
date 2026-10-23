@@ -1,7 +1,11 @@
 //! OpenAI-compatible provider transport. Assistant messages are deliberately kept
 //! as JSON so signed/opaque reasoning can be replayed without being discarded.
 
-use std::{collections::BTreeMap, net::IpAddr, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use futures_util::StreamExt;
@@ -9,6 +13,7 @@ use reqwest::{
     header::{HeaderValue, ACCEPT, AUTHORIZATION},
     Client, RequestBuilder, Url,
 };
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -18,6 +23,65 @@ use crate::profile::{self, Profile};
 const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TOOL_CALLS: u64 = 4096;
+const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CATALOG_OUTPUT_BYTES: usize = 1024 * 1024 - 64;
+const CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
+const EFFORT_METADATA_PATHS: &[&str] = &[
+    "/efforts",
+    "/supportedEfforts",
+    "/supported_efforts",
+    "/effort/supported_levels",
+    "/reasoning/supported_efforts",
+    "/reasoning/supportedEfforts",
+    "/capabilities/efforts",
+    "/capabilities/supportedEfforts",
+    "/capabilities/supported_efforts",
+    "/capabilities/reasoningEfforts",
+    "/capabilities/reasoning_efforts",
+    "/capabilities/reasoning/supported_efforts",
+    "/capabilities/reasoning/supportedEfforts",
+    "/capabilities/reasoning/efforts",
+    "/capabilities/effort/supported_levels",
+];
+const INPUT_MODALITY_METADATA_PATHS: &[&str] = &[
+    "/inputModalities",
+    "/input_modalities",
+    "/architecture/input_modalities",
+    "/capabilities/inputModalities",
+    "/capabilities/input_modalities",
+];
+
+/// Public discovery errors contain only a finite, safe code. Never attach
+/// parser, transport, storage, or provider errors, which may contain a secret.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogError {
+    Unauthorized,
+    Forbidden,
+    Unsupported,
+    Unavailable,
+    InvalidRequest,
+    InvalidResponse,
+}
+
+impl std::fmt::Display for CatalogError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Model discovery failed")
+    }
+}
+
+impl std::error::Error for CatalogError {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CatalogInput {
+    name: Option<String>,
+    provider: String,
+    #[serde(rename = "baseUrl")]
+    base_url: Option<String>,
+    #[serde(rename = "apiKey")]
+    api_key: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 pub enum ProviderDelta {
@@ -176,6 +240,235 @@ fn authenticated(request: RequestBuilder, profile: &Profile, url: &Url) -> Resul
     }
 }
 
+/// Discover a remote catalog without requiring or saving a configured model.
+/// Supplying a transient key never opens the stored credential backend. Without
+/// one, the saved key is usable only at the same provider and canonical URL.
+pub async fn discover_models(input: Value) -> std::result::Result<Vec<Value>, CatalogError> {
+    use CatalogError::{InvalidRequest, InvalidResponse, Unavailable};
+
+    let deadline = Instant::now() + CATALOG_TIMEOUT;
+    if ["name", "baseUrl", "apiKey"]
+        .into_iter()
+        .any(|field| input.get(field).is_some_and(|value| !value.is_string()))
+    {
+        return Err(InvalidRequest);
+    }
+    let input: CatalogInput = serde_json::from_value(input).map_err(|_| InvalidRequest)?;
+    if input
+        .name
+        .as_ref()
+        .is_some_and(|name| name.trim().is_empty() || name.chars().any(char::is_control))
+    {
+        return Err(InvalidRequest);
+    }
+    let requested = Profile {
+        name: String::new(),
+        provider: input.provider,
+        base_url: input.base_url.unwrap_or_default(),
+        model: String::new(),
+        effort: None,
+    };
+    let url = endpoint(&requested, "models").map_err(|_| InvalidRequest)?;
+    let key = match input.api_key {
+        Some(key) => Some(key),
+        None => match input.name {
+            Some(name) => {
+                let saved = profile::load(&name).map_err(|_| InvalidRequest)?;
+                if saved.provider != requested.provider
+                    || endpoint(&saved, "models").map_err(|_| InvalidRequest)? != url
+                {
+                    return Err(InvalidRequest);
+                }
+                // Pass the exact saved profile into its binding check. A
+                // concurrent endpoint change is rejected by profile::api_key.
+                profile::api_key(&saved).map_err(|_| Unavailable)?
+            }
+            None => None,
+        },
+    };
+    let key = key.as_deref().filter(|key| !key.is_empty());
+    if key.is_none() && !is_loopback(&url) {
+        return Err(InvalidRequest);
+    }
+    if key.is_some_and(|key| key.chars().any(|c| c.is_whitespace() || c.is_control())) {
+        return Err(InvalidRequest);
+    }
+    let mut builder = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .https_only(!is_loopback(&url))
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(CATALOG_TIMEOUT);
+    if is_loopback(&url) {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|_| Unavailable)?;
+    let mut request = client.get(url).header(ACCEPT, "application/json");
+    if let Some(key) = key {
+        // Both MiniMax pay-as-you-go API keys and M-Plan subscription keys
+        // use the same OpenAI-compatible Bearer authorization wire format.
+        let mut header =
+            HeaderValue::from_str(&format!("Bearer {key}")).map_err(|_| InvalidRequest)?;
+        header.set_sensitive(true);
+        request = request.header(AUTHORIZATION, header);
+    }
+    let bytes = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+        let response = request.send().await.map_err(|_| Unavailable)?;
+        match response.status().as_u16() {
+            200..=299 => {}
+            401 => return Err(CatalogError::Unauthorized),
+            403 => return Err(CatalogError::Forbidden),
+            300..=399 | 404 | 405 | 501 => return Err(CatalogError::Unsupported),
+            _ => return Err(Unavailable),
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_CATALOG_BYTES as u64)
+        {
+            return Err(InvalidResponse);
+        }
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| Unavailable)?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_CATALOG_BYTES {
+                return Err(InvalidResponse);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    })
+    .await
+    .map_err(|_| Unavailable)??;
+    let key = key.map(str::to_owned);
+    // Parsing and normalization must not block the async timer. The blocking
+    // work also checks the same deadline and bounds each loop before deduping.
+    let task = tokio::task::spawn_blocking(move || {
+        normalize_catalog(&bytes, &requested.provider, key.as_deref(), deadline)
+    });
+    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), task)
+        .await
+        .map_err(|_| Unavailable)?
+        .map_err(|_| Unavailable)?
+}
+
+fn catalog_deadline(deadline: Instant) -> std::result::Result<(), CatalogError> {
+    if Instant::now() >= deadline {
+        Err(CatalogError::Unavailable)
+    } else {
+        Ok(())
+    }
+}
+
+fn normalize_catalog(
+    bytes: &[u8],
+    provider: &str,
+    key: Option<&str>,
+    deadline: Instant,
+) -> std::result::Result<Vec<Value>, CatalogError> {
+    use CatalogError::InvalidResponse;
+
+    catalog_deadline(deadline)?;
+    let data: Value = serde_json::from_slice(bytes).map_err(|_| InvalidResponse)?;
+    catalog_deadline(deadline)?;
+    if data.get("error").is_some_and(|error| !error.is_null())
+        || data
+            .get("base_resp")
+            .is_some_and(|status| status.get("status_code").and_then(Value::as_i64) != Some(0))
+    {
+        return Err(InvalidResponse);
+    }
+    let catalog = data
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or(InvalidResponse)?;
+    if catalog.is_empty() || catalog.len() > 4096 {
+        return Err(InvalidResponse);
+    }
+    let mut models = Vec::with_capacity(catalog.len());
+    for model in catalog {
+        catalog_deadline(deadline)?;
+        // Check raw cardinality before filtering or deduplicating. Even an
+        // ignored alias or 100,000 identical strings must fail in constant time.
+        for path in EFFORT_METADATA_PATHS
+            .iter()
+            .chain(INPUT_MODALITY_METADATA_PATHS)
+            .chain([&"/architecture/output_modalities"])
+        {
+            if model
+                .pointer(path)
+                .and_then(Value::as_array)
+                .is_some_and(|values| {
+                    values.len() > 64
+                        || values
+                            .iter()
+                            .any(|value| value.as_str().is_some_and(|value| value.len() > 128))
+                })
+            {
+                return Err(InvalidResponse);
+            }
+        }
+        // OpenRouter explicitly identifies generated modalities. Models without
+        // text output cannot serve this chat client; absent metadata stays unknown.
+        if provider == "openrouter"
+            && model
+                .pointer("/architecture/output_modalities")
+                .and_then(Value::as_array)
+                .is_some_and(|outputs| !outputs.iter().any(|output| output == "text"))
+        {
+            continue;
+        }
+        models.extend(
+            normalize_models(provider, std::slice::from_ref(model)).map_err(|_| InvalidResponse)?,
+        );
+    }
+    let valid_text = |value: &Value, limit: usize| {
+        value.as_str().is_some_and(|value| {
+            !value.trim().is_empty() && value.len() <= limit && !value.chars().any(char::is_control)
+        })
+    };
+    if models.is_empty() {
+        return Err(InvalidResponse);
+    }
+    for model in &models {
+        catalog_deadline(deadline)?;
+        if !valid_text(&model["id"], 1024)
+            || model["id"].as_str().is_some_and(|id| id.trim() != id)
+            || !valid_text(&model["name"], 2048)
+            || model["contextWindow"]
+                .as_u64()
+                .is_some_and(|value| value > 9_007_199_254_740_991)
+            || ["efforts", "inputModalities"].into_iter().any(|field| {
+                model[field].as_array().is_some_and(|values| {
+                    values.len() > 64 || values.iter().any(|value| !valid_text(value, 128))
+                })
+            })
+        {
+            return Err(InvalidResponse);
+        }
+    }
+    catalog_deadline(deadline)?;
+    let serialized = serde_json::to_string(&models).map_err(|_| InvalidResponse)?;
+    if serialized.len() > MAX_CATALOG_OUTPUT_BYTES
+        || key.is_some_and(|key| {
+            serialized.contains(key) || models.iter().any(|model| contains_secret(model, key))
+        })
+    {
+        return Err(InvalidResponse);
+    }
+    catalog_deadline(deadline)?;
+    Ok(models)
+}
+
+fn contains_secret(value: &Value, key: &str) -> bool {
+    match value {
+        Value::String(value) => value.contains(key),
+        Value::Array(values) => values.iter().any(|value| contains_secret(value, key)),
+        Value::Object(values) => values.values().any(|value| contains_secret(value, key)),
+        scalar => scalar.to_string().contains(key),
+    }
+}
+
 /// Normalize model metadata for the CLI/server contract without inventing
 /// capabilities for models that have neither metadata nor documented levels.
 pub async fn models(profile: &Profile) -> Result<Vec<Value>> {
@@ -231,9 +524,10 @@ fn string_metadata(model: &Value, paths: &[&str]) -> Option<Vec<String>> {
         .find_map(|path| model.pointer(path).and_then(Value::as_array))
         .map(|values| {
             let mut strings = Vec::new();
+            let mut seen = HashSet::new();
             for value in values {
                 if let Some(value) = value.as_str().filter(|value| !value.trim().is_empty()) {
-                    if !strings.iter().any(|existing| existing == value) {
+                    if seen.insert(value) {
                         strings.push(value.to_owned());
                     }
                 }
@@ -249,7 +543,7 @@ fn normalize_models(provider: &str, models: &[Value]) -> Result<Vec<Value>> {
             let id = model
                 .get("id")
                 .and_then(Value::as_str)
-                .filter(|id| !id.trim().is_empty())
+                .filter(|id| !id.trim().is_empty() && !id.chars().any(char::is_control))
                 .context("Provider catalog contains a model without a valid ID")?;
             let name = ["name", "displayName", "display_name"]
                 .into_iter()
@@ -261,27 +555,7 @@ fn normalize_models(provider: &str, models: &[Value]) -> Result<Vec<Value>> {
                 })
                 .unwrap_or(id);
             let mut normalized = json!({"id": id, "name": name});
-            let efforts = string_metadata(
-                model,
-                &[
-                    "/efforts",
-                    "/supportedEfforts",
-                    "/supported_efforts",
-                    "/effort/supported_levels",
-                    "/reasoning/supported_efforts",
-                    "/reasoning/supportedEfforts",
-                    "/capabilities/efforts",
-                    "/capabilities/supportedEfforts",
-                    "/capabilities/supported_efforts",
-                    "/capabilities/reasoningEfforts",
-                    "/capabilities/reasoning_efforts",
-                    "/capabilities/reasoning/supported_efforts",
-                    "/capabilities/reasoning/supportedEfforts",
-                    "/capabilities/reasoning/efforts",
-                    "/capabilities/effort/supported_levels",
-                ],
-            )
-            .or_else(|| {
+            let efforts = string_metadata(model, EFFORT_METADATA_PATHS).or_else(|| {
                 documented_efforts(provider, id)
                     .map(|levels| levels.iter().map(|level| (*level).to_owned()).collect())
             });
@@ -306,16 +580,7 @@ fn normalize_models(provider: &str, models: &[Value]) -> Result<Vec<Value>> {
             }) {
                 normalized["contextWindow"] = json!(context);
             }
-            if let Some(modalities) = string_metadata(
-                model,
-                &[
-                    "/inputModalities",
-                    "/input_modalities",
-                    "/architecture/input_modalities",
-                    "/capabilities/inputModalities",
-                    "/capabilities/input_modalities",
-                ],
-            ) {
+            if let Some(modalities) = string_metadata(model, INPUT_MODALITY_METADATA_PATHS) {
                 normalized["inputModalities"] = json!(modalities);
             }
             Ok(normalized)
@@ -1754,10 +2019,22 @@ mod tests {
             profile.base_url = url.into();
             assert!(endpoint(&profile, "models").is_ok());
         }
-        assert_eq!(
-            endpoint(&profile("openrouter"), "models").unwrap().as_str(),
-            "https://openrouter.ai/api/v1/models"
-        );
+        for (provider, expected) in [
+            ("deepseek", "https://api.deepseek.com/models"),
+            ("minimax", "https://api.minimax.io/v1/models"),
+            ("openrouter", "https://openrouter.ai/api/v1/models"),
+        ] {
+            assert_eq!(
+                endpoint(&profile(provider), "models").unwrap().as_str(),
+                expected
+            );
+        }
+        let standard = endpoint(&profile("minimax"), "models").unwrap();
+        let mut equivalent = profile("minimax");
+        equivalent.base_url = "https://API.MINIMAX.IO:443/v1///".into();
+        assert_eq!(endpoint(&equivalent, "models").unwrap(), standard);
+        equivalent.base_url = "https://api.minimax.io/v1/other".into();
+        assert_ne!(endpoint(&equivalent, "models").unwrap(), standard);
     }
 
     #[tokio::test]

@@ -21,6 +21,15 @@
 .trex-key-state { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: var(--text-muted); font: 400 9px/1.5 var(--font-ui); }
 .trex-secret-field > label { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
 .trex-secret-field > label .trex-key-state { color: var(--ok-text); }
+.trex-secret-field a { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 2px; }
+.trex-catalog-status-row { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
+.trex-catalog-status { flex: 1 1 160px; min-width: 0; margin: 0; color: var(--text-muted); font: 400 11px/1.6 var(--font-ui); overflow-wrap: anywhere; }
+.trex-catalog-status.error { color: var(--danger); }
+.trex-catalog-refresh { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex-shrink: 0; min-height: 28px; font-size: 11px; }
+.trex-model-fallback { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--text-muted); font: 400 11px/1.6 var(--font-ui); text-align: left; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.trex-model-fallback:hover:not(:disabled) { color: var(--text); }
+.trex-model-fallback:disabled { opacity: .5; cursor: default; }
+.trex-model-field .select-trigger { width: 100%; font-size: 11px; }
 .trex-connection-form .input[readonly] { color: var(--text-muted); background: var(--profile-inset); }
 .trex-inline-note { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 11px 12px; border: 1px solid var(--profile-edge); border-radius: var(--radius-control, 11px); color: var(--text-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .trex-inline-note svg { margin-top: 2px; flex-shrink: 0; }
@@ -33,7 +42,7 @@
 .trex-form-actions .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; }
 .trex-form-actions .trex-delete { color: var(--text-muted); }
 .trex-form-actions .trex-delete:hover:not(:disabled) { color: var(--danger); border-color: var(--danger-border); background: var(--danger-bg); }
-.launcher-profiles :is(.trex-provider-option, .trex-connection-choice, .trex-form-actions .btn, .trex-new-connection):focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.launcher-profiles :is(.trex-provider-option, .trex-connection-choice, .trex-form-actions .btn, .trex-new-connection, .trex-catalog-refresh, .trex-model-fallback):focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .trex-provider-fieldset:disabled .trex-provider-option, .trex-connection-choice:disabled { opacity: .5; cursor: default; }
 @media (max-width: 440px) {
   .trex-provider-option { padding: 10px; }

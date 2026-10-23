@@ -17,6 +17,7 @@ trex-agent profiles list --json
 trex-agent profiles save --stdin-json
 trex-agent profiles remove NAME
 trex-agent --profile NAME models list --json
+trex-agent models list --json --stdin-json
 trex-agent [--profile NAME] sessions list --json
 trex-agent --profile NAME chat [--mode ask|plan|full] [--cwd PATH]
 trex-agent --profile NAME chat --conversation UUID
@@ -42,6 +43,62 @@ Profile summaries are `{name,provider,baseUrl,model,effort?,hasApiKey:boolean}`.
 `sessions list --json` returns an array of
 `{id,title,cwd,updatedAt,provider:"trex",messageCount,profile}`; `updatedAt` is
 Unix milliseconds.
+
+### Strict remote model discovery
+
+`models list --json --stdin-json` reads one JSON object, limited to 1 MiB:
+
+```json
+{"name":"TREX1","provider":"deepseek","baseUrl":"https://api.deepseek.com"}
+```
+
+`provider` is required. `name`, `baseUrl`, and `apiKey` are optional; no model is
+required or accepted. Present fields must be strings; null and other fields are
+rejected. A custom provider requires
+`baseUrl`; other providers use their standard endpoint when it is omitted or
+empty. The same URL security rules as profile saving apply. `--profile` cannot
+be combined with `--stdin-json`.
+
+When `apiKey` is omitted, `name` selects a stored credential only after the
+requested provider and canonical model endpoint match that saved profile.
+Canonical matching accounts for URL host casing, default ports, and trailing
+slashes. An explicit `apiKey` is transient, overrides any stored key, and does
+not read or modify stored credentials or profile metadata. An explicit empty
+string sends no key. Non-loopback endpoints require a key.
+
+The command performs an actual authenticated `GET /models` and returns:
+
+```json
+{"models":[{"id":"returned-model-id","name":"Returned model name"}],"source":"remote"}
+```
+
+Model entries use the same normalized fields as `models/list` below. OpenRouter
+entries whose explicit `architecture.output_modalities` excludes `text` are
+filtered out. Unknown capabilities remain omitted. Neither an unsupported
+endpoint nor an empty catalog produces a configured or static model fallback.
+A returned catalog describes provider metadata; it does not establish that a
+credential is entitled to invoke each model.
+
+The request has a 10-second deadline, a 5-second connection limit, and a 4 MiB
+response limit. Normalized stdout is limited to 1 MiB. Redirects and automatic
+retries are disabled. Invalid responses, including credential echoes in returned
+model fields, are rejected without printing upstream content.
+
+On failure the command exits with status 1 and emits only this safe stdout form:
+
+```json
+{"error":{"code":"unauthorized"}}
+```
+
+The finite codes are `unauthorized` (HTTP 401), `forbidden` (403), `unsupported`
+(redirects, 404, 405, or 501), `unavailable` (transport failure, deadline, secure
+credential read failure, or other unsuccessful HTTP status), `invalid_request`
+(input, URL, saved profile binding, or missing credential), and `invalid_response`
+(malformed, oversized, empty, or unusable catalog). Error envelopes contain no
+provider body, supplied value, credential, URL, or free-form error message.
+The older saved-profile command and app-server `models/list` retain their
+compatibility behavior, including the configured-model fallback for a custom
+provider without a discovery endpoint.
 
 `TREX_HOME` overrides the data directory (default OS application data directory
 `trex-agent`). Profile metadata contains no key. Windows keys use current-user

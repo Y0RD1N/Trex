@@ -13,6 +13,8 @@ const NOT_INSTALLED: &str =
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const INPUT_LIMIT: usize = 64 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+const COMMAND_FAILED: &str =
+    "No se pudo completar la operación de Trex CLI. Comprueba el perfil y la instalación.";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +50,46 @@ pub struct SaveProfileRequest {
     api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     effort: Option<String>,
+}
+
+// A fresh key is transient stdin input; a saved key is resolved only by the CLI.
+// Do not add Debug or return this request to the WebView.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalogRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    #[serde(default, skip_serializing)]
+    config_dir: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogModel {
+    id: String,
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    efforts: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_modalities: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ModelCatalog {
+    models: Vec<CatalogModel>,
+    source: String,
+}
+
+struct CliOutput {
+    success: bool,
+    bytes: Vec<u8>,
 }
 
 fn sibling_cli(executable: &Path) -> Option<PathBuf> {
@@ -130,12 +172,24 @@ fn invoke_cli_at(path: &Path, args: &[&str], input: Option<Vec<u8>>) -> Result<V
 }
 
 fn run_cli_command(
-    mut command: Command,
+    command: Command,
     args: &[&str],
     input: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
-    let failure =
-        "No se pudo completar la operación de Trex CLI. Comprueba el perfil y la instalación.";
+    let result = run_cli_command_output(command, args, input)?;
+    if result.success {
+        Ok(result.bytes)
+    } else {
+        Err(COMMAND_FAILED.into())
+    }
+}
+
+fn run_cli_command_output(
+    mut command: Command,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+) -> Result<CliOutput, String> {
+    let failure = COMMAND_FAILED;
     if input
         .as_ref()
         .is_some_and(|bytes| bytes.len() > INPUT_LIMIT)
@@ -182,9 +236,7 @@ fn run_cli_command(
             }
         }
     };
-    if !status?.success() {
-        return Err(failure.into());
-    }
+    let status = status?;
     // Bound pipe completion too: an unexpected descendant retaining a handle
     // must not leave the Tauri invocation waiting forever after the CLI exits.
     if let Some(input_rx) = input_rx {
@@ -197,7 +249,10 @@ fn run_cli_command(
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .map_err(|_| failure.to_string())?
         .map_err(|_| failure.to_string())?;
-    Ok(output)
+    Ok(CliOutput {
+        success: status.success(),
+        bytes: output,
+    })
 }
 
 fn invoke_cli(args: &[&str], input: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
@@ -237,6 +292,95 @@ pub async fn trex_cli_status() -> Result<CliStatus, String> {
 #[tauri::command]
 pub async fn trex_cli_profiles() -> Result<Vec<ProfileSummary>, String> {
     crate::blocking(|| parse_json(&invoke_cli(&["profiles", "list", "--json"], None)?)).await
+}
+
+fn catalog_output(output: CliOutput) -> Result<ModelCatalog, String> {
+    const INVALID: &str = "Trex CLI devolvió un catálogo de modelos no válido.";
+    if !output.success {
+        #[derive(Deserialize)]
+        struct Failure {
+            error: FailureCode,
+        }
+        #[derive(Deserialize)]
+        struct FailureCode {
+            code: String,
+        }
+        let failure: Failure =
+            serde_json::from_slice(&output.bytes).map_err(|_| COMMAND_FAILED.to_string())?;
+        let message = match failure.error.code.as_str() {
+            "unauthorized" => "La credencial no es válida o ha caducado. Comprueba la clave del proveedor.",
+            "forbidden" => "La credencial no tiene acceso al catálogo de modelos. Puedes indicar un modelo manualmente.",
+            "unsupported" => "El proveedor no ofrece un catálogo compatible. Puedes indicar un modelo manualmente.",
+            "unavailable" => "No se pudo conectar con el catálogo del proveedor. Vuelve a intentarlo.",
+            "invalid_request" => "Revisa el proveedor, la dirección y la credencial. Pega la clave sin el prefijo Bearer.",
+            "invalid_response" => INVALID,
+            _ => COMMAND_FAILED,
+        };
+        return Err(message.into());
+    }
+    let catalog: ModelCatalog =
+        serde_json::from_slice(&output.bytes).map_err(|_| INVALID.to_string())?;
+    let valid_text = |value: &str, limit: usize| {
+        !value.trim().is_empty() && value.len() <= limit && !value.chars().any(char::is_control)
+    };
+    if catalog.source != "remote"
+        || catalog.models.len() > 4096
+        || catalog.models.iter().any(|model| {
+            !valid_text(&model.id, 1024)
+                || model.id.trim() != model.id
+                || !valid_text(&model.name, 2048)
+                || model
+                    .context_window
+                    .is_some_and(|value| value == 0 || value > 9_007_199_254_740_991)
+                || [&model.efforts, &model.input_modalities]
+                    .into_iter()
+                    .any(|values| {
+                        values.as_ref().is_some_and(|values| {
+                            values.len() > 64 || values.iter().any(|value| !valid_text(value, 128))
+                        })
+                    })
+        })
+    {
+        return Err(INVALID.into());
+    }
+    Ok(catalog)
+}
+
+#[tauri::command]
+pub async fn trex_cli_models(request: ModelCatalogRequest) -> Result<ModelCatalog, String> {
+    crate::blocking(move || {
+        if !matches!(
+            request.provider.as_str(),
+            "minimax" | "deepseek" | "openrouter" | "custom"
+        ) || request.name.as_ref().is_some_and(|name| {
+            name.trim().is_empty()
+                || name.starts_with('-')
+                || name.len() > 128
+                || name.chars().any(char::is_control)
+        }) || request
+            .config_dir
+            .as_ref()
+            .is_some_and(|directory| directory.contains(['\r', '\n', '\0']))
+        {
+            return Err("La conexión elegida no es válida.".into());
+        }
+        let mut command = cli_command(&installed_cli_path()?);
+        if let Some(directory) = request
+            .config_dir
+            .as_ref()
+            .filter(|directory| !directory.trim().is_empty())
+        {
+            command.env("TREX_HOME", crate::pty::expand_config_dir(directory));
+        }
+        let input = serde_json::to_vec(&request)
+            .map_err(|_| "No se pudo preparar la consulta de modelos.".to_string())?;
+        catalog_output(run_cli_command_output(
+            command,
+            &["models", "list", "--json", "--stdin-json"],
+            Some(input),
+        )?)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -404,6 +548,98 @@ mod tests {
                 .err()
                 .unwrap(),
             "Trex CLI devolvió una respuesta no válida."
+        );
+    }
+
+    #[test]
+    fn catalog_bridge_returns_only_model_metadata_and_allows_empty_remote_results() {
+        let catalog = catalog_output(CliOutput {
+            success: true,
+            bytes: br#"{
+          "source":"remote","apiKey":"never-return-this",
+          "models":[{"id":"vendor/model","name":"A model","contextWindow":32768,
+          "efforts":["low","high"],"inputModalities":["text","image"],"apiKey":"never-return-this"}]
+        }"#
+            .to_vec(),
+        })
+        .unwrap();
+        let serialized = serde_json::to_string(&catalog).unwrap();
+        assert!(!serialized.contains("never-return-this"));
+        assert!(!serialized.contains("apiKey"));
+        assert_eq!(catalog.models[0].id, "vendor/model");
+        assert_eq!(catalog.models[0].context_window, Some(32768));
+        assert!(catalog_output(CliOutput {
+            success: true,
+            bytes: br#"{"source":"remote","models":[]}"#.to_vec()
+        })
+        .unwrap()
+        .models
+        .is_empty());
+        for payload in [
+            br#"{"source":"fallback","models":[]}"#.as_slice(),
+            br#"{"source":"remote","models":[{"id":" bad ","name":"bad"}]}"#.as_slice(),
+            br#"{"source":"remote","models":[{"id":"bad\nmodel","name":"bad"}]}"#.as_slice(),
+            br#"{"source":"remote","models":[{"id":"bad","name":"bad","contextWindow":0}]}"#
+                .as_slice(),
+        ] {
+            assert!(catalog_output(CliOutput {
+                success: true,
+                bytes: payload.to_vec()
+            })
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn catalog_errors_use_fixed_messages_without_echoing_upstream_diagnostics() {
+        for code in [
+            "unauthorized",
+            "forbidden",
+            "unsupported",
+            "unavailable",
+            "invalid_request",
+            "invalid_response",
+            "fake-secret",
+        ] {
+            let bytes = serde_json::to_vec(&serde_json::json!({"error":{"code":code,
+                "message":"api_key=fake-secret","apiKey":"fake-secret"}}))
+            .unwrap();
+            let error = catalog_output(CliOutput {
+                success: false,
+                bytes,
+            })
+            .err()
+            .unwrap();
+            assert!(!error.contains("fake-secret"));
+            assert!(!error.contains("api_key"));
+            assert!(!error.contains("apiKey"));
+        }
+        assert_eq!(
+            catalog_output(CliOutput {
+                success: false,
+                bytes: b"fake-secret".to_vec()
+            })
+            .err()
+            .unwrap(),
+            COMMAND_FAILED
+        );
+    }
+
+    #[test]
+    fn catalog_request_keeps_the_home_override_out_of_stdin() {
+        let request: ModelCatalogRequest = serde_json::from_value(serde_json::json!({
+            "name":"TREX2","provider":"minimax","baseUrl":"https://api.minimax.io/v1",
+            "apiKey":"fake-transient-key","configDir":"test-private-home"
+        }))
+        .unwrap();
+        assert_eq!(request.config_dir.as_deref(), Some("test-private-home"));
+        let serialized = serde_json::to_value(&request).unwrap();
+        assert_eq!(serialized["name"], "TREX2");
+        assert_eq!(serialized["apiKey"], "fake-transient-key");
+        assert!(serialized.get("configDir").is_none());
+        assert!(
+            serialized.get("model").is_none(),
+            "catalog discovery must not require a model ID"
         );
     }
 

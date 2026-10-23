@@ -65,6 +65,8 @@ enum Models {
     List {
         #[arg(long)]
         json: bool,
+        #[arg(long, requires = "json")]
+        stdin_json: bool,
     },
 }
 
@@ -97,7 +99,13 @@ fn main() {
     // pipe remains open. Do not let that read hold process shutdown forever.
     runtime.shutdown_timeout(std::time::Duration::from_millis(250));
     if let Err(error) = result {
-        eprintln!("trex-agent: {error:#}");
+        if let Some(code) = error.downcast_ref::<provider::CatalogError>() {
+            // The strict management protocol never exposes raw upstream,
+            // input, URL, credential-store, or transport error text.
+            let _ = print_json(&json!({"error":{"code":code}}));
+        } else {
+            eprintln!("trex-agent: {error:#}");
+        }
         std::process::exit(1);
     }
 }
@@ -141,8 +149,30 @@ async fn run() -> Result<()> {
             Profiles::Remove { name } => profile::remove(&name)?,
         },
         Command::Models {
-            command: Models::List { json: as_json },
+            command:
+                Models::List {
+                    json: as_json,
+                    stdin_json,
+                },
         } => {
+            if stdin_json {
+                if cli.profile.is_some() {
+                    return Err(provider::CatalogError::InvalidRequest.into());
+                }
+                let mut bytes = Vec::new();
+                std::io::stdin()
+                    .take(1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| provider::CatalogError::InvalidRequest)?;
+                if bytes.len() > 1024 * 1024 {
+                    return Err(provider::CatalogError::InvalidRequest.into());
+                }
+                let input: Value = serde_json::from_slice(&bytes)
+                    .map_err(|_| provider::CatalogError::InvalidRequest)?;
+                let models = provider::discover_models(input).await?;
+                print_json(&json!({"models":models,"source":"remote"}))?;
+                return Ok(());
+            }
             let profile = selected(cli.profile)?;
             let models = provider::models(&profile).await?;
             if as_json {

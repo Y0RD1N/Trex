@@ -301,12 +301,24 @@ Sin el CLI, Trex conserva el flujo de Claude Code y Codex. Quitar el componente
 conserva las conexiones, las claves y los historiales para recuperarlos después.
 
 Con el componente instalado, abre **Ajustes → Asistentes → Trex API**. Crea una
-conexión por cuenta con su nombre, proveedor, ID del modelo, dirección API y
-clave. Por ejemplo, **TREX1** para DeepSeek, **TREX2** para MiniMax y **TREX3**
+conexión por cuenta con su nombre, proveedor, dirección API y credencial.
+Trex consulta automáticamente el catálogo al abrir una conexión con clave guardada;
+para una conexión nueva, lo consulta al terminar de introducir la credencial.
+Elige el modelo de la lista y guarda la conexión. **Actualizar** vuelve a consultar
+el catálogo; si el proveedor no lo ofrece o rechaza el acceso, puedes usar un ID
+manual. Consultar modelos no genera respuestas ni comprueba saldo o permisos de uso.
+Por ejemplo, **TREX1** para DeepSeek, **TREX2** para MiniMax y **TREX3**
 para OpenRouter. También admite endpoints personalizados compatibles con Chat
 Completions. Guardar la conexión modifica el CLI al instante; **Guardar cambios**
 conserva su referencia en la lista de asistentes de la app. La clave no se guarda
 en la configuración de Trex, los argumentos del proceso ni el historial del chat.
+
+En MiniMax puedes introducir una **API Key** de pago por uso o una
+**Subscription Key** de M Plan / Token Plan. Son credenciales de productos distintos;
+introduce una sola, sin el prefijo `Bearer`. El CLI añade la autenticación al consultar
+el catálogo y al enviar mensajes. Una clave de suscripción puede no tener acceso
+al catálogo aunque sí permita usar un modelo. Véase la
+[configuración oficial de MiniMax](https://platform.minimax.io/docs/m-plan/other-tools).
 
 Cada perfil puede abrir un chat, planificar o ejecutar en un chat compartido,
 incluyendo dos modelos del mismo proveedor. El catálogo determina los esfuerzos

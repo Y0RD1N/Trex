@@ -346,6 +346,7 @@ pub fn run() {
             detect_codex,
             trex_cli::trex_cli_status,
             trex_cli::trex_cli_profiles,
+            trex_cli::trex_cli_models,
             trex_cli::trex_cli_save_profile,
             trex_cli::trex_cli_remove_profile,
             trex_cli::trex_cli_conversations,
