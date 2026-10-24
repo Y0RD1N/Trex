@@ -6,7 +6,7 @@
 import { useRef, useState } from "react";
 import DropdownMenu from "../DropdownMenu";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
-import { contextPercent, formatTokens, type ContextUsage } from "../../chatState";
+import { contextPercent, contextTokensLabel, formatTokens, type ContextUsage } from "../../chatState";
 
 /** Colores de las partes fijas, en el orden en que llegan; los mensajes van con el acento. */
 const PART_COLORS = ["#8b93a7", "#5b9cf5", "#c58af9", "#4ec9b0", "#e5c07b", "#56b6c2"];
@@ -41,19 +41,23 @@ export function ContextDetails({ usage, product, busy, onCompact, inline = false
   onClose?: () => void;
 }) {
   const percent = contextPercent(usage);
-  const shown = percent === null ? formatTokens(usage.used) : percentLabel(percent);
-  const summary = `${formatTokens(usage.used)}${usage.window ? ` de ${formatTokens(usage.window)}` : ""} tokens`;
+  const measured = usage.measured !== false;
+  const shown = !measured ? "Sin medición" : percent === null ? formatTokens(usage.used) : percentLabel(percent);
+  const summary = contextTokensLabel(usage);
   // Las partes fijas son las que mide el asistente; los mensajes, todo lo demás.
   const fixed = usage.parts.reduce((sum, part) => sum + part.tokens, 0);
-  const rows = usage.parts.length
+  const rows = !measured ? [] : usage.parts.length
     ? [...usage.parts.map((part, index) => ({ ...part, color: PART_COLORS[index % PART_COLORS.length] })),
       { name: "Mensajes", tokens: Math.max(0, usage.used - fixed), color: MESSAGES_COLOR }]
     : [{ name: "Conversación", tokens: usage.used, color: MESSAGES_COLOR }];
-  const reserve = usage.window && usage.reserve ? usage.reserve : null;
-  const free = usage.window ? Math.max(0, usage.window - usage.used - (reserve ?? 0)) : null;
+  const reserve = measured && usage.window && usage.reserve ? usage.reserve : null;
+  const free = measured && usage.window ? Math.max(0, usage.window - usage.used - (reserve ?? 0)) : null;
   const share = (tokens: number): string => usage.window ? `${Math.min(100, (tokens / usage.window) * 100)}%` : "0%";
   const supportsCompact = product !== "Trex CLI";
   const notes = [
+    !measured ? "El uso se mostrará cuando el proveedor informe los tokens." : null,
+    !usage.window ? "El proveedor no informó el límite de contexto de este modelo." : null,
+    measured && product === "Trex CLI" ? "Contexto medido en la última solicitud." : null,
     supportsCompact && reserve && usage.window ? `Al llegar a ${formatTokens(usage.window - reserve)}, ${product} resume la conversación por sí solo.`
       : supportsCompact && usage.window ? `${product} resume la conversación por sí solo cuando se acerca al límite.` : null,
     usage.total ? `${formatTokens(usage.total)} tokens procesados en toda la conversación.` : null,
@@ -65,17 +69,17 @@ export function ContextDetails({ usage, product, busy, onCompact, inline = false
       <strong>{shown}</strong>
       <span>{summary}</span>
     </div>
-    {usage.window && <div className="chat-context-bar" aria-hidden="true">
+    {measured && usage.window && <div className="chat-context-bar" aria-hidden="true">
       {rows.map(row => <i key={row.name} style={{ width: share(row.tokens), background: row.color }} />)}
       {reserve && <i className="reserve" style={{ width: share(reserve) }} />}
     </div>}
-    <ul className="chat-context-parts">
+    {measured && <ul className="chat-context-parts">
       {rows.map(row => <li key={row.name}>
         <i style={{ background: row.color }} /><span>{row.name}</span><b>{formatTokens(row.tokens)}</b>
       </li>)}
       {reserve && <li className="muted"><i className="reserve" /><span>Reserva para resumir</span><b>{formatTokens(reserve)}</b></li>}
       {free !== null && <li className="muted"><i className="free" /><span>Libre</span><b>{formatTokens(free)}</b></li>}
-    </ul>
+    </ul>}
     {notes.length > 0 && <p className="chat-context-note">{notes.join(" ")}</p>}
     {supportsCompact && <button type="button" role={inline ? undefined : "menuitem"} tabIndex={inline ? undefined : -1}
       className="context-item chat-context-compact" disabled={busy}
@@ -91,8 +95,8 @@ export default function ContextMeter({ usage, product, busy, onCompact }: Contex
   const close = (): void => setAnchor(null);
   const percent = contextPercent(usage);
   const level = percent === null ? "" : percent >= 90 ? " critical" : percent >= 70 ? " high" : "";
-  const shown = percent === null ? formatTokens(usage.used) : percentLabel(percent);
-  const summary = `${formatTokens(usage.used)}${usage.window ? ` de ${formatTokens(usage.window)}` : ""} tokens`;
+  const shown = usage.measured === false ? "Sin medición" : percent === null ? formatTokens(usage.used) : percentLabel(percent);
+  const summary = contextTokensLabel(usage);
 
   return <>
     <button ref={triggerRef} type="button" className={`chat-tray-chip chat-context${level}`} aria-haspopup="menu" aria-expanded={!!anchor}

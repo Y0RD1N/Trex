@@ -15,7 +15,7 @@ import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from 
 import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
 import { matchesPasteShortcut } from "../paste";
 import {
-  chatActivity, contextPercent, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, formatTokens, modelName, pendingPermissions,
+  chatActivity, contextPercent, contextTokensLabel, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, modelName, pendingPermissions,
   shownUsage, supportedEfforts, type ChatItem, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
@@ -715,7 +715,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       ...(state.effort ? [`Esfuerzo: ${effortLabel(state.effort)}`] : []),
       ...(speed ? [`Velocidad: ${state.fast ? "rápida" : "estándar"}`] : []),
       `Permisos: ${modeOptions.find(option => option.value === mode)?.label ?? mode}`,
-      ...(usage ? [`Contexto: ${formatTokens(usage.used)} tokens${usage.window ? ` de ${formatTokens(usage.window)} (${Math.round(percent ?? 0)} %)` : ""}`] : []),
+      ...(usage ? [`Contexto: ${contextTokensLabel(usage)}${percent !== null ? ` (${Math.round(percent)} %)` : ""}`] : []),
       ...(state.plan?.windows ?? []).map(window => `${window.label}: ${window.percent} %${window.resetsAt !== null ? ` (${resetLabel(window.resetsAt, Date.now())})` : ""}`),
       ...(state.sessionId ? [`Conversación: ${state.sessionId}`] : []),
     ].join("\n");

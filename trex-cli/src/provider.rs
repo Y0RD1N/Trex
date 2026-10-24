@@ -344,7 +344,7 @@ pub async fn discover_models(input: Value) -> std::result::Result<Vec<Value>, Ca
     // Parsing and normalization must not block the async timer. The blocking
     // work also checks the same deadline and bounds each loop before deduping.
     let task = tokio::task::spawn_blocking(move || {
-        normalize_catalog(&bytes, &requested.provider, key.as_deref(), deadline)
+        normalize_catalog(&bytes, &requested, key.as_deref(), deadline)
     });
     tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), task)
         .await
@@ -362,11 +362,12 @@ fn catalog_deadline(deadline: Instant) -> std::result::Result<(), CatalogError> 
 
 fn normalize_catalog(
     bytes: &[u8],
-    provider: &str,
+    profile: &Profile,
     key: Option<&str>,
     deadline: Instant,
 ) -> std::result::Result<Vec<Value>, CatalogError> {
     use CatalogError::InvalidResponse;
+    let provider = profile.provider.as_str();
 
     catalog_deadline(deadline)?;
     let data: Value = serde_json::from_slice(bytes).map_err(|_| InvalidResponse)?;
@@ -419,7 +420,8 @@ fn normalize_catalog(
             continue;
         }
         models.extend(
-            normalize_models(provider, std::slice::from_ref(model)).map_err(|_| InvalidResponse)?,
+            normalize_models_for_profile(profile, std::slice::from_ref(model))
+                .map_err(|_| InvalidResponse)?,
         );
     }
     let valid_text = |value: &Value, limit: usize| {
@@ -477,11 +479,11 @@ pub async fn models(profile: &Profile) -> Result<Vec<Value>> {
         .send()
         .await
         .map_err(|_| anyhow!("Provider model request failed"))?;
-    if profile.provider == "minimax"
+    if allows_documented_context(profile)
         && matches!(response.status().as_u16(), 404 | 405)
         && !is_loopback(&url)
     {
-        return normalize_models("minimax", &documented_minimax_models());
+        return normalize_models_for_profile(profile, &documented_minimax_models());
     }
     if profile.provider == "custom" && matches!(response.status().as_u16(), 404 | 405 | 501) {
         ensure!(
@@ -507,7 +509,7 @@ pub async fn models(profile: &Profile) -> Result<Vec<Value>> {
         .get("data")
         .and_then(Value::as_array)
         .context("Provider model response has no data array")?;
-    normalize_models(&profile.provider, models)
+    normalize_models_for_profile(profile, models)
 }
 
 fn documented_efforts(provider: &str, model: &str) -> Option<&'static [&'static str]> {
@@ -515,6 +517,62 @@ fn documented_efforts(provider: &str, model: &str) -> Option<&'static [&'static 
         ("deepseek", "deepseek-flash" | "deepseek-v4-pro") => Some(&["low", "high", "max"]),
         ("minimax", "MiniMax-M3.1-Flash") => Some(&["low", "medium", "high", "xhigh", "max"]),
         _ => None,
+    }
+}
+
+/// Exact published limits only. Provider aliases and custom endpoints must not
+/// inherit another provider's model specification based on a similar model ID.
+pub fn documented_context_window(profile: &Profile, model: &str) -> Option<u64> {
+    allows_documented_context(profile)
+        .then(|| documented_context_spec(&profile.provider, model))
+        .flatten()
+}
+
+fn allows_documented_context(profile: &Profile) -> bool {
+    profile.provider == "minimax"
+        && endpoint(profile, "models")
+            .is_ok_and(|url| url.as_str() == "https://api.minimax.io/v1/models")
+}
+
+fn documented_context_spec(provider: &str, model: &str) -> Option<u64> {
+    // https://platform.minimax.io/docs/api-reference/text-openai-api
+    // The published context length is decimal 1,000,000, not 1,048,576.
+    match (provider, model) {
+        ("minimax", "MiniMax-M3.1-Flash" | "MiniMax-M3") => Some(1_000_000),
+        _ => None,
+    }
+}
+
+fn remote_context_window(provider: &str, model: &Value) -> Option<u64> {
+    let root = [
+        "/contextWindow",
+        "/context_window",
+        "/context_length",
+        "/contextLength",
+        "/capabilities/contextWindow",
+        "/capabilities/context_window",
+        "/capabilities/context_length",
+    ]
+    .into_iter()
+    .find_map(|path| {
+        model
+            .pointer(path)
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0)
+    });
+    if provider == "openrouter" {
+        let endpoint = model
+            .pointer("/top_provider/context_length")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0);
+        // Root capacity can exceed the currently available endpoint's limit.
+        // max_completion_tokens is an output budget, never a context capacity.
+        match (root, endpoint) {
+            (Some(root), Some(endpoint)) => Some(root.min(endpoint)),
+            (root, endpoint) => root.or(endpoint),
+        }
+    } else {
+        root
     }
 }
 
@@ -537,6 +595,22 @@ fn string_metadata(model: &Value, paths: &[&str]) -> Option<Vec<String>> {
 }
 
 fn normalize_models(provider: &str, models: &[Value]) -> Result<Vec<Value>> {
+    normalize_models_with_context(provider, models, false)
+}
+
+fn normalize_models_for_profile(profile: &Profile, models: &[Value]) -> Result<Vec<Value>> {
+    normalize_models_with_context(
+        &profile.provider,
+        models,
+        allows_documented_context(profile),
+    )
+}
+
+fn normalize_models_with_context(
+    provider: &str,
+    models: &[Value],
+    documented_context: bool,
+) -> Result<Vec<Value>> {
     models
         .iter()
         .map(|model| {
@@ -562,23 +636,14 @@ fn normalize_models(provider: &str, models: &[Value]) -> Result<Vec<Value>> {
             if let Some(efforts) = efforts {
                 normalized["efforts"] = json!(efforts);
             }
-            if let Some(context) = [
-                "/contextWindow",
-                "/context_window",
-                "/context_length",
-                "/contextLength",
-                "/capabilities/contextWindow",
-                "/capabilities/context_window",
-                "/capabilities/context_length",
-            ]
-            .into_iter()
-            .find_map(|path| {
-                model
-                    .pointer(path)
-                    .and_then(Value::as_u64)
-                    .filter(|length| *length > 0)
-            }) {
+            if let Some(context) = remote_context_window(provider, model) {
                 normalized["contextWindow"] = json!(context);
+            } else if let Some(context) = documented_context
+                .then(|| documented_context_spec(provider, id))
+                .flatten()
+            {
+                normalized["contextWindow"] = json!(context);
+                normalized["contextWindowSource"] = json!("documented");
             }
             if let Some(modalities) = string_metadata(model, INPUT_MODALITY_METADATA_PATHS) {
                 normalized["inputModalities"] = json!(modalities);
@@ -1990,6 +2055,69 @@ mod tests {
         let unknown =
             normalize_models("minimax", &[json!({"id":"MiniMax-M3.1-Flash-new"})]).unwrap();
         assert!(unknown[0].get("efforts").is_none());
+    }
+
+    #[test]
+    fn official_minimax_context_is_exact_and_remote_metadata_takes_priority() {
+        let catalog = json!({"data":[
+            {"id":"MiniMax-M3.1-Flash"},
+            {"id":"MiniMax-M3"},
+            {"id":"MiniMax-M3.1-Flash-preview"},
+            {"id":"MiniMax-M3-preview"},
+            {"id":"minimax/MiniMax-M3.1-Flash"}
+        ]});
+        let bytes = serde_json::to_vec(&catalog).unwrap();
+        let official = profile("minimax");
+        let normalized =
+            normalize_catalog(&bytes, &official, None, Instant::now() + CATALOG_TIMEOUT).unwrap();
+        assert_eq!(normalized.len(), 5); // Enrichment never adds catalog entries.
+        for model in &normalized[..2] {
+            assert_eq!(model["contextWindow"], 1_000_000);
+            assert_eq!(model["contextWindowSource"], "documented");
+        }
+        for model in &normalized[2..] {
+            assert!(model.get("contextWindow").is_none());
+        }
+        for path in [
+            "contextWindow",
+            "context_window",
+            "context_length",
+            "contextLength",
+        ] {
+            let mut model = json!({"id":"MiniMax-M3.1-Flash"});
+            model[path] = json!(65_536);
+            let normalized = normalize_models_for_profile(&official, &[model]).unwrap();
+            assert_eq!(normalized[0]["contextWindow"], 65_536);
+            assert!(normalized[0].get("contextWindowSource").is_none());
+        }
+        assert!(normalize_catalog(
+            b"{\"data\":[]}",
+            &official,
+            None,
+            Instant::now() + CATALOG_TIMEOUT
+        )
+        .is_err());
+        for base in ["", "https://API.MINIMAX.IO:443/v1/"] {
+            let mut equivalent = official.clone();
+            equivalent.base_url = base.into();
+            assert_eq!(
+                documented_context_window(&equivalent, "MiniMax-M3"),
+                Some(1_000_000)
+            );
+        }
+        for provider in ["minimax", "custom", "openrouter"] {
+            let mut other = profile(provider);
+            other.base_url = "https://proxy.example/v1".into();
+            assert_eq!(
+                documented_context_window(&other, "MiniMax-M3.1-Flash"),
+                None
+            );
+            let normalized =
+                normalize_catalog(&bytes, &other, None, Instant::now() + CATALOG_TIMEOUT).unwrap();
+            assert!(normalized
+                .iter()
+                .all(|model| model.get("contextWindow").is_none()));
+        }
     }
 
     #[test]

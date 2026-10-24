@@ -82,6 +82,8 @@ export type ContextPart = { name: string; tokens: number };
 export type ContextUsage = {
   used: number;
   window: number | null;
+  /** El límite puede conocerse antes de disponer de una medición de esta conversación. */
+  measured?: boolean;
   /** Partes fijas medidas por el asistente (Claude Code); los mensajes son el resto hasta `used`. */
   parts: ContextPart[];
   /** Margen que se guarda para resumir la conversación antes de llenar la ventana. */
@@ -459,14 +461,19 @@ export const autoAllowed = (items: ChatItem[]): PermissionItem[] =>
  * conversación vacía en la ventana del modelo elegido.
  */
 export function shownUsage(state: ChatState): ContextUsage | null {
-  if (state.usage) return state.usage;
   const size = currentModel(state.models, state.model, state.modelChoice)?.contextWindow;
+  if (state.usage) return state.usage.window || !size ? state.usage : { ...state.usage, window: size };
   return size ? { used: 0, window: size, parts: [], reserve: null, total: null } : null;
 }
 
 /** Parte de la ventana de contexto en uso (0–100), si se conoce la ventana. */
 export const contextPercent = (usage: ContextUsage | null): number | null =>
-  usage?.window ? Math.min(100, Math.max(0, (usage.used / usage.window) * 100)) : null;
+  usage?.window && usage.measured !== false ? Math.min(100, Math.max(0, (usage.used / usage.window) * 100)) : null;
+
+/** Etiqueta compartida por el visor, su nombre accesible y el estado del chat. */
+export const contextTokensLabel = (usage: ContextUsage): string => usage.measured === false
+  ? usage.window ? `Límite: ${formatTokens(usage.window)} tokens` : "Límite de contexto no disponible"
+  : `${formatTokens(usage.used)}${usage.window ? ` de ${formatTokens(usage.window)}` : ""} tokens`;
 
 export const formatTokens = (count: number): string =>
   count >= 999_500 ? `${(count / 1_000_000).toLocaleString("es", { maximumFractionDigits: 1 })} M`
@@ -542,6 +549,7 @@ export type ModelInfo = {
   defaultEffort?: string;
   /** Tokens que caben en su ventana de contexto, si se conocen antes de usarlo. */
   contextWindow?: number;
+  contextWindowSource?: "remote" | "documented";
   /** Velocidad rápida, si el modelo la admite: el nivel que la activa y qué supone. */
   fast?: { tier: string; hint: string };
 };

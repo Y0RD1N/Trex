@@ -112,23 +112,47 @@ directory as private conversation data.
 
 `initialize {protocolVersion?:1}` returns
 `{protocolVersion:1,profile,models,capabilities}`. It does not issue HTTP requests.
-Its initial models array contains the configured model; call `models/list` for
-provider metadata. Capabilities include streaming, tools, permissions,
+Its initial models array contains the configured model, including a known
+context limit and `contextWindowSource` without discovery; call `models/list`
+for provider metadata. Capabilities include streaming, tools, permissions,
 interrupt, history, inbox, images, sessionRecovery, and supported modes.
 
-`models/list {}` returns `{models:[{id,name,contextWindow?,efforts?:string[],inputModalities?:string[]}]}`.
+`models/list {}` returns `{models:[{id,name,contextWindow?,contextWindowSource?,efforts?:string[],inputModalities?:string[]}]}`.
 Only actual provider metadata or documented capabilities of exact known model
 IDs are advertised. Unknown capabilities are omitted. Custom providers without
 a model endpoint fall back to the configured ID without inferred capabilities.
+Remote context metadata takes priority. Missing context is filled only for exact
+documented model IDs on their verified official provider endpoint: MiniMax
+`MiniMax-M3.1-Flash` and `MiniMax-M3` use exactly 1,000,000 tokens at
+`https://api.minimax.io/v1` (including the default endpoint). Proxies, custom
+providers, OpenRouter IDs, and similar model names do not inherit this limit.
+`contextWindowSource:"documented"` identifies that fallback; an absent source
+on a discovered context limit means remote metadata. OpenRouter uses the lower
+of root context capacity and `top_provider.context_length`, when both exist;
+`max_completion_tokens` is never a context limit. Successful catalogs are cached
+for session summaries; a failed refresh preserves the previous cache.
 
 `session/start {cwd,mode,model?,effort?,conversationId?}` returns
-`{sessionId,conversationId,model,effort,mode,items,recoveryRequired}`. `cwd` must
+`{sessionId,conversationId,model,effort,mode,items,recoveryRequired,contextWindow,contextWindowSource,usage?}`. `cwd` must
 exist. Modes: `plan`, `ask`, `full`; `auto` and `default` alias `ask`. `items` is a
 normalized ChatItem array with durable stable IDs. A live session has a fixed
 workspace and mode. A fresh process can explicitly select another mode while
 restoring the same conversation. A conversation is bound to its original
 profile name, provider, base URL, and canonical workspace; mismatches fail.
 Rotating a key or changing a profile's default model does not change that binding.
+`contextWindow:number|null` and
+`contextWindowSource:"remote"|"documented"|null` describe the selected model,
+using cached metadata and the documented fallback without another HTTP request.
+Nonempty histories also return
+`usage:{contextTokens?:number,contextWindow?:number,contextModel:string,totalTokens:number}`.
+The latest turn's valid measurement is selected using durable completion-event
+order, with timestamps/history as a fallback. A later unknown measurement clears
+an earlier one. Missing/invalid counters remain unknown: `contextTokens` is
+omitted, rather than reported as zero. `totalTokens` sums each durable turn's
+valid input/output counts once. `contextModel` and any usage `contextWindow`
+belong to the measured model and can differ from the selected model on restore.
+Existing version-1 journals remain loadable; historical missing counts are not
+estimated.
 
 On restore, omitted/null model and effort retain the persisted selection. New
 sessions use the profile defaults. An explicit model change resets the previous
@@ -177,10 +201,15 @@ Every turn notification includes `sessionId` and the local user `messageId`:
 
 Assistant block IDs and tool IDs remain stable in history. Deltas append to their
 block; thinking is separate from visible final text. Tool `output` is a JSON
-value. Usage may contain `inputTokens`, `outputTokens`, `contextTokens`, and
-`costUsd`; input/output sum provider requests within the turn, contextTokens is
-the final request's prompt usage. Cost is included only when reported upstream.
-No model price or context capacity is invented.
+value. Usage may contain `inputTokens`, `outputTokens`, `contextTokens`,
+`contextWindow`, `contextModel`, and `costUsd`; input/output sum valid provider
+request counters within the turn. `contextTokens` is the final request's input
+plus output, including cached input once and thinking already included in the
+completion count. It does not accumulate tool-chain requests. Missing final
+counters omit `contextTokens`, even when an earlier request reported usage.
+`contextModel` identifies the request model; `contextWindow` is included when
+known. Cost is included only when reported upstream. No model price or unknown
+context capacity is estimated.
 
 ## Durable inbox callback
 

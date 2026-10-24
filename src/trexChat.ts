@@ -1,6 +1,9 @@
 /** Protocolo propio de Trex CLI: la API del proveedor permanece dentro del CLI. */
-import { baseReducer, finalize, list, liveCompletion, normalizeEffortChoice, normalizeModelChoice, record, text,
-  type BaseChatAction, type ChatItem, type ChatState, type Json, type ModelInfo } from "./chatState";
+import { baseReducer, currentModel, finalize, list, liveCompletion, normalizeEffortChoice, normalizeModelChoice, record, text,
+  type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type Json, type ModelInfo } from "./chatState";
+
+const tokens = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+const windowSize = (value: unknown): number | null => { const count = tokens(value); return count && count > 0 ? count : null; };
 
 export const trexRequest = (id: string | number, method: string, params: unknown = {}): string => JSON.stringify({ jsonrpc: "2.0", id, method, params });
 export const trexResult = (id: string | number, result: unknown): string => JSON.stringify({ jsonrpc: "2.0", id, result });
@@ -13,7 +16,8 @@ export function parseTrexModels(raw: unknown): ModelInfo[] {
     seen.add(id);
     return [{ value: id, resolvedModel: id, displayName: text(model.name) || id, description: text(model.description),
       featured: index < 8, efforts: [...new Set(list(model.efforts).filter((level): level is string => typeof level === "string" && normalizeEffortChoice(level) === level))],
-      ...(typeof model.contextWindow === "number" && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}) }];
+      ...(windowSize(model.contextWindow) ? { contextWindow: windowSize(model.contextWindow)! } : {}),
+      ...(model.contextWindowSource === "remote" || model.contextWindowSource === "documented" ? { contextWindowSource: model.contextWindowSource } : {}) }];
   });
 }
 
@@ -38,8 +42,25 @@ export function trexToolInput(name: string, input: Json): Json {
 }
 
 export function trexReducer(state: ChatState, action: TrexChatAction): ChatState {
+  if (action.type === "model") {
+    const next = baseReducer(state, action);
+    if ((next.modelChoice ?? next.model) === (state.modelChoice ?? state.model)) return next;
+    return { ...next, usage: state.usage ? { ...state.usage, measured: false,
+      window: currentModel(next.models, next.model, next.modelChoice)?.contextWindow ?? null } : null };
+  }
   if (action.type === "trexReady") {
     const result = action.result;
+    const model = text(result.model) || state.modelChoice;
+    const limit = windowSize(result.contextWindow);
+    const models = action.models.map((entry): ModelInfo => entry.resolvedModel === model && limit ? { ...entry, contextWindow: limit,
+      ...(result.contextWindowSource === "remote" || result.contextWindowSource === "documented" ? { contextWindowSource: result.contextWindowSource } : {}) } : entry);
+    if (state.modelChoice && state.modelChoice !== model && !models.some(entry => entry.value === state.modelChoice)) {
+      // Conserva la elección hecha durante el reinicio aunque el catálogo nuevo
+      // ya no la incluya; no uses el modelo anterior como sustituto de su límite.
+      const chosen = state.models.find(entry => entry.value === state.modelChoice);
+      models.unshift(chosen ?? { value: state.modelChoice, resolvedModel: state.modelChoice, displayName: state.modelChoice,
+        description: "Modelo elegido", featured: true, efforts: [] });
+    }
     const items = list(result.items).filter((value): value is ChatItem => {
       const item = record(value);
       return !!item && typeof item.id === "string" && ["user", "text", "thinking", "tool", "permission", "notice", "turn"].includes(text(item.kind));
@@ -48,11 +69,20 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
     // La restauración no borra un envío reservado mientras arrancaba el proceso.
     const pending = state.items.filter(item => item.kind === "user" && state.pendingMessageIds.includes(item.id));
     const existing = new Set(items.map(item => item.id));
-    return { ...state, sessionId: text(result.sessionId), process: "ready", exitCode: null,
-      model: text(result.model) || state.modelChoice, effort: text(result.effort) || state.effortChoice,
-      permissionMode: text(result.mode) || state.permissionMode, models: action.models,
+    const previousTotal = state.sessionId === text(result.sessionId) ? state.usage?.total ?? null : null;
+    const next: ChatState = { ...state, sessionId: text(result.sessionId), process: "ready", exitCode: null,
+      model, effort: text(result.effort) || state.effortChoice,
+      permissionMode: text(result.mode) || state.permissionMode, models,
       items: [...items, ...pending.filter(item => !existing.has(item.id))], historyCount: items.length,
-      turnItemStart: pending.length ? items.length : null };
+      turnItemStart: pending.length ? items.length : null,
+      usage: previousTotal === null ? null : { used: 0, window: null, parts: [], reserve: null, total: previousTotal, measured: false } };
+    const usage = record(result.usage);
+    // Una respuesta de arranque puede llegar después de elegir otro modelo.
+    const selectedLimit = !next.modelChoice || next.modelChoice === model ? limit : null;
+    const hasHistory = items.some(item => ["user", "text", "thinking", "tool"].includes(item.kind));
+    return { ...next, usage: usage ? readUsage(usage, next, true, selectedLimit)
+      : selectedLimit || hasHistory || previousTotal !== null ? { used: 0, window: selectedLimit ?? currentModel(models, model, next.modelChoice)?.contextWindow ?? null,
+        parts: [], reserve: null, total: previousTotal, ...(hasHistory || previousTotal !== null ? { measured: false } : {}) } : null };
   }
   if (action.type === "trexFailed") {
     if (!state.pendingMessageIds.includes(action.id)) return state;
@@ -94,13 +124,24 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
     const next = finish(state, userId, status, `trex:${userId}`, text(p.error), action.now);
     const usage = record(p.usage);
     if (!usage) return next;
-    const input = typeof usage.inputTokens === "number" && usage.inputTokens >= 0 ? usage.inputTokens : 0;
-    const output = typeof usage.outputTokens === "number" && usage.outputTokens >= 0 ? usage.outputTokens : 0;
-    return { ...next, usage: { used: typeof usage.contextTokens === "number" && usage.contextTokens >= 0 ? usage.contextTokens : input, window: typeof usage.contextWindow === "number" && usage.contextWindow > 0 ? usage.contextWindow : null,
-      parts: [], reserve: null, total: (state.usage?.total ?? 0) + input + output },
-      costUsd: typeof usage.costUsd === "number" && usage.costUsd >= 0 ? (state.costUsd ?? 0) + usage.costUsd : state.costUsd };
+    return { ...next, usage: readUsage(usage, next),
+      costUsd: typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd) && usage.costUsd >= 0 ? (state.costUsd ?? 0) + usage.costUsd : state.costUsd };
   }
   return state;
+}
+
+function readUsage(raw: Json, state: ChatState, restored = false, limit: number | null = null): ContextUsage {
+  const selected = state.modelChoice ?? state.model;
+  const matches = !text(raw.contextModel) || raw.contextModel === selected;
+  // En versiones anteriores sólo se enviaba el total de entrada del turno.
+  // El protocolo actual distingue una medición ausente de un contexto vacío.
+  const used = tokens(raw.contextTokens) ?? (raw.contextModel === undefined ? tokens(raw.inputTokens) : null);
+  const total = tokens(raw.totalTokens) ?? (restored ? state.usage?.total ?? null
+    : (state.usage?.total ?? 0) + (tokens(raw.inputTokens) ?? 0) + (tokens(raw.outputTokens) ?? 0));
+  return { used: used ?? 0,
+    window: (matches ? windowSize(raw.contextWindow) : null) ?? limit ?? windowSize(state.usage?.window)
+      ?? currentModel(state.models, state.model, state.modelChoice)?.contextWindow ?? null,
+    parts: [], reserve: null, total, ...(!matches || used === null ? { measured: false } : {}) };
 }
 
 function finish(state: ChatState, userId: string, status: "completed" | "interrupted" | "failed", completionId: string, error: string, now: number): ChatState {

@@ -320,6 +320,14 @@ el catálogo y al enviar mensajes. Una clave de suscripción puede no tener acce
 al catálogo aunque sí permita usar un modelo. Véase la
 [configuración oficial de MiniMax](https://platform.minimax.io/docs/m-plan/other-tools).
 
+El visor usa el límite de contexto que publica el endpoint para el modelo elegido.
+Si MiniMax no lo incluye en el catálogo, aplica su
+[especificación oficial](https://platform.minimax.io/docs/api-reference/text-openai-api) para
+**MiniMax-M3.1-Flash** y **MiniMax-M3**: **1.000.000 de tokens**, entre entrada y
+salida. Los endpoints personalizados conservan su propio límite; si no lo informan,
+se indica que no está disponible. El contexto de la última solicitud y los tokens
+procesados en toda la conversación se muestran por separado.
+
 Cada perfil puede abrir un chat, planificar o ejecutar en un chat compartido,
 incluyendo dos modelos del mismo proveedor. El catálogo determina los esfuerzos
 disponibles. Los mensajes enviados durante un turno van a la bandeja que el agente

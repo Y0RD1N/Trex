@@ -13,7 +13,7 @@ const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => Obje
 
 function harness(t, extra = {}) {
   const slots = [], effects = [], writes = [], spawns = [], actions = [], acks = [];
-  let cursor = 0, counter = 0, handlers, active, session, holdTurn = false, holdInit = false;
+  let cursor = 0, counter = 0, handlers, active, session, holdTurn = false, holdInit = false, holdSessionStart = false;
   let receipt = { id: "receipt-1", messages: [{ id: "queued-1", text: "Preserva los archivos", images: [], previews: [], createdAt: 1 }] };
   const spawnReady = deferred();
   const hooks = {
@@ -26,8 +26,8 @@ function harness(t, extra = {}) {
   const nativeWrite = async (id, raw) => {
     const p = JSON.parse(raw); writes.push({ process: id, ...p });
     if (p.method === "initialize" && !holdInit) respond(p, { protocolVersion: 1 });
-    if (p.method === "models/list") respond(p, { models: [{ id: "deepseek", name: "DeepSeek", efforts: ["high", "max"] }, { id: "mini", efforts: ["low"] }] });
-    if (p.method === "session/start") respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery });
+    if (p.method === "models/list") respond(p, { models: [{ id: "deepseek", name: "DeepSeek", efforts: ["high", "max"], contextWindow: 1_000_000 }, { id: "mini", efforts: ["low"], contextWindow: 32_000 }] });
+    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery });
     if (p.method === "turn/start" && !holdTurn) respond(p, { accepted: true });
     if (["turn/interrupt", "permission/respond", "session/recover"].includes(p.method)) respond(p, {});
   };
@@ -44,7 +44,7 @@ function harness(t, extra = {}) {
   render();
   return { writes, spawns, actions, acks, options, line, render, spawnReady, respond, queue,
     get state() { return render().state; }, get session() { return render(); },
-    holdInitialization() { holdInit = true; }, holdTurn() { holdTurn = true; },
+    holdInitialization() { holdInit = true; }, holdTurn() { holdTurn = true; }, holdSessionStart() { holdSessionStart = true; },
     async start() { const p = session.start(); await flush(); render(); await p; render(); },
     complete(id, status = "completed") { line({ method: "turn/completed", params: { sessionId: "session", messageId: id, status } }); render(); },
     get userWrites() { return writes.filter(w => w.method === "turn/start"); },
@@ -114,4 +114,47 @@ test("Uncertain restored tools require explicit review acknowledgement before an
   h.session.runCommand("recover", ""); await flush();
   assert.equal(await h.session.send("Continue after review", [], []), true);
   h.complete(h.userWrites[0].params.messageId);
+});
+
+test("a delayed A startup followed by B and then A uses the capacity of each effective selection", async t => {
+  const h = harness(t); await h.start();
+  h.session.setMode("full"); h.holdSessionStart();
+  const sending = h.session.send("Use B after startup", [], []); await flush();
+  const start = h.writes.filter(w => w.method === "session/start").at(-1);
+  assert.equal(start.params.model, "deepseek");
+  h.session.setModel("mini");
+  h.respond(start, { sessionId: "session", mode: "full", model: "deepseek", contextWindow: 1_000_000, items: [] });
+  assert.equal(await sending, true);
+  assert.equal(h.userWrites[0].params.model, "mini");
+  h.line({ method: "turn/completed", params: { sessionId: "session", messageId: h.userWrites[0].params.messageId,
+    status: "completed", usage: { contextModel: "mini", contextTokens: 1_000, inputTokens: 800, outputTokens: 200 } } });
+  assert.equal(h.state.usage.window, 32_000);
+  h.session.setModel("deepseek");
+  assert.equal(h.state.usage.window, 1_000_000);
+  assert.equal(h.state.usage.measured, false);
+  assert.equal(await h.session.send("Return to A", [], []), true);
+  h.line({ method: "turn/completed", params: { sessionId: "session", messageId: h.userWrites[1].params.messageId,
+    status: "completed", usage: { contextModel: "deepseek", contextTokens: 2_000, inputTokens: 1_800, outputTokens: 200 } } });
+  assert.equal(h.state.usage.window, 1_000_000);
+  assert.equal(h.state.usage.used, 2_000);
+});
+
+test("same-session restart without an optional usage summary preserves the known processed total", async t => {
+  const h = harness(t); await h.start();
+  assert.equal(await h.session.send("First turn", [], []), true);
+  h.line({ method: "turn/completed", params: { sessionId: "session", messageId: h.userWrites[0].params.messageId,
+    status: "completed", usage: { contextModel: "deepseek", contextTokens: 1_000, inputTokens: 800, outputTokens: 200 } } });
+  assert.equal(h.state.usage.total, 1_000);
+  h.session.setMode("full"); h.holdSessionStart();
+  const startup = h.session.start(); await flush();
+  const start = h.writes.filter(w => w.method === "session/start").at(-1);
+  h.respond(start, { sessionId: "session", mode: "full", model: "deepseek", contextWindow: 1_000_000,
+    items: [{ kind: "user", id: "old", text: "First turn", images: 0, previews: [] }] });
+  await startup;
+  assert.equal(h.state.usage.total, 1_000);
+  assert.equal(h.state.usage.measured, false);
+  assert.equal(await h.session.send("Second turn", [], []), true);
+  h.line({ method: "turn/completed", params: { sessionId: "session", messageId: h.userWrites[1].params.messageId,
+    status: "completed", usage: { contextModel: "deepseek", contextTokens: 2_000, inputTokens: 1_800, outputTokens: 200 } } });
+  assert.equal(h.state.usage.total, 3_000);
 });

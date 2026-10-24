@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { contextPercent, formatTokens, type ContextUsage } from "../../chatState";
+import { contextPercent, contextTokensLabel, type ContextUsage } from "../../chatState";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { accountUsageWindows, headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
 import DropdownMenu from "../DropdownMenu";
@@ -48,10 +48,10 @@ export default function UsageMenu({ usage, plan, costUsd, product, busy, onCompa
   const contextLevel = contextSeverity >= 2 ? " critical" : contextSeverity >= 1 ? " high" : "";
   const level = percent !== null ? contextLevel : planSeverity >= 2 ? " critical" : planSeverity >= 1 ? " high" : "";
   const label = percent !== null ? `Contexto ${percentLabel(percent)}`
-    : showPlan ? `${limiting.label.replace(/^Sesión \(5 h\)/, "Sesión")} ${percentLabel(limiting.percent)}` : "Uso";
+    : showPlan ? `${limiting.label.replace(/^Sesión \(5 h\)/, "Sesión")} ${percentLabel(limiting.percent)}` : usage ? "Contexto" : "Uso";
   const scopedWarning = limiting && planSeverity > 0 && !visibleWindows.some(entry => entry.window?.id === limiting.id) ? limiting : null;
   const contextSummary = usage
-    ? `Contexto: ${percent === null ? "porcentaje no disponible" : percentLabel(percent)} · ${formatTokens(usage.used)}${usage.window ? ` de ${formatTokens(usage.window)}` : ""} tokens`
+    ? `Contexto: ${percent === null ? "porcentaje no disponible" : percentLabel(percent)} · ${contextTokensLabel(usage)}`
     : "Contexto: no disponible";
   const planSummary = plan?.windows.length
     ? `Uso del plan: ${plan.windows.map(window => `${window.label}: ${percentLabel(window.percent)}`).join(" · ")}`

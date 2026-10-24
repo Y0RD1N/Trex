@@ -244,6 +244,7 @@ pub fn list_sessions(profile_name: Option<&str>) -> Result<Vec<Value>> {
 
 pub struct Server {
     profile: Profile,
+    models: Mutex<Vec<Value>>,
     output: mpsc::UnboundedSender<Value>,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     permissions: Mutex<HashMap<String, oneshot::Sender<bool>>>,
@@ -255,6 +256,7 @@ impl Server {
     pub fn new(profile: Profile, output: mpsc::UnboundedSender<Value>) -> Arc<Self> {
         Arc::new(Self {
             profile,
+            models: Mutex::new(Vec::new()),
             output,
             sessions: Mutex::new(HashMap::new()),
             permissions: Mutex::new(HashMap::new()),
@@ -267,6 +269,43 @@ impl Server {
     }
     fn notification(&self, method: &str, params: Value) {
         self.send(json!({"jsonrpc":"2.0","method":method,"params":params}));
+    }
+
+    async fn context_window(&self, model: &str) -> Option<(u64, &'static str)> {
+        let models = self.models.lock().await;
+        if let Some(metadata) = models.iter().find(|entry| entry["id"] == model) {
+            if let Some(window) = metadata["contextWindow"].as_u64().filter(|n| *n > 0) {
+                let source = if metadata["contextWindowSource"] == "documented" {
+                    "documented"
+                } else {
+                    "remote"
+                };
+                return Some((window, source));
+            }
+        }
+        provider::documented_context_window(&self.profile, model)
+            .map(|window| (window, "documented"))
+    }
+
+    async fn session_summary(&self, data: &Journal) -> Value {
+        let context = self.context_window(&data.model).await;
+        let mut summary = json!({"sessionId":data.id,"conversationId":data.id,"model":data.model,"effort":data.effort,"mode":data.mode,"items":data.items,"recoveryRequired":data.recovery_required,"contextWindow":context.map(|(window, _)| window),"contextWindowSource":context.map(|(_, source)| source)});
+        if !data.turns.is_empty() || !data.items.is_empty() || !data.messages.is_empty() {
+            let (mut usage, _) = restored_usage(data);
+            // A measurement belongs to its recorded model, which can differ
+            // from an explicitly selected model on restore.
+            if usage.get("contextTokens").is_some() {
+                if let Some(model) = usage["contextModel"].as_str() {
+                    if let Some((window, source)) = self.context_window(model).await {
+                        if source == "remote" || usage.get("contextWindow").is_none() {
+                            usage["contextWindow"] = json!(window);
+                        }
+                    }
+                }
+            }
+            summary["usage"] = usage;
+        }
+        summary
     }
 
     async fn session(&self, params: &Value) -> Result<Arc<Session>> {
@@ -314,7 +353,7 @@ impl Server {
                 data.mode == requested_mode,
                 "mode is fixed for this live session; restart the process to change mode"
             );
-            return Ok(session_summary(&data));
+            return Ok(self.session_summary(&data).await);
         }
         let directory = conversation_dir()?;
         let lock = OpenOptions::new()
@@ -337,6 +376,17 @@ impl Server {
             ensure!(data.cwd == cwd, "conversation workspace differs from cwd");
             // A mode change requires a new process and an explicit session/start mode.
             data.mode = requested_mode;
+            // Preserve a legacy measurement's inferred model before a new
+            // selection is saved. Usage is extensible JSON in version 1; the
+            // request fingerprint and journal schema remain unchanged.
+            let (usage, measured_turn) = restored_usage(&data);
+            if let Some(turn) = measured_turn.and_then(|id| data.turns.get_mut(&id)) {
+                if let Some(recorded) = turn.usage.as_mut() {
+                    if recorded.get("contextModel").is_none() {
+                        recorded["contextModel"] = usage["contextModel"].clone();
+                    }
+                }
+            }
             select_model(&mut data.model, &mut data.effort, params)?;
             recover(&mut data);
             data
@@ -404,7 +454,7 @@ impl Server {
             active: Mutex::new(None),
         });
         session.persist(&mut data)?;
-        let summary = session_summary(&data);
+        let summary = self.session_summary(&data).await;
         *session.data.lock().await = data;
         sessions.insert(id, session);
         Ok(summary)
@@ -572,7 +622,7 @@ impl Server {
         .await?;
         let mut total_in = 0u64;
         let mut total_out = 0u64;
-        let mut context = 0u64;
+        let mut has_tokens = false;
         let mut actual_cost = 0.0;
         let mut has_cost = false;
         for step in 0..MAX_STEPS {
@@ -644,18 +694,16 @@ impl Server {
                 "provider response incomplete: {}",
                 completed.finish_reason
             );
+            // Missing counters do not represent a measured zero. Prompt totals
+            // already include cache hits, and completion totals include thinking.
+            let measured = completed.usage.as_ref().and_then(provider_token_counts);
+            let context = measured.map(|(input, output)| input.saturating_add(output));
+            if let Some((input, output)) = measured {
+                total_in = total_in.saturating_add(input);
+                total_out = total_out.saturating_add(output);
+                has_tokens = true;
+            }
             if let Some(usage) = &completed.usage {
-                context = usage["prompt_tokens"]
-                    .as_u64()
-                    .or_else(|| usage["input_tokens"].as_u64())
-                    .unwrap_or(0);
-                total_in = total_in.saturating_add(context);
-                total_out = total_out.saturating_add(
-                    usage["completion_tokens"]
-                        .as_u64()
-                        .or_else(|| usage["output_tokens"].as_u64())
-                        .unwrap_or(0),
-                );
                 if let Some(cost) = usage["cost"]
                     .as_f64()
                     .filter(|n| n.is_finite() && *n >= 0.0)
@@ -699,7 +747,17 @@ impl Server {
                     has_final_text,
                     "provider completed without a visible final answer"
                 );
-                let mut usage = json!({"inputTokens":total_in,"outputTokens":total_out,"contextTokens":context});
+                let mut usage = json!({"contextModel":model});
+                if has_tokens {
+                    usage["inputTokens"] = json!(total_in);
+                    usage["outputTokens"] = json!(total_out);
+                }
+                if let Some(context) = context {
+                    usage["contextTokens"] = json!(context);
+                }
+                if let Some((window, _)) = self.context_window(&model).await {
+                    usage["contextWindow"] = json!(window);
+                }
                 if has_cost {
                     usage["costUsd"] = json!(actual_cost);
                 }
@@ -1113,16 +1171,25 @@ impl Server {
                 if let Some(version) = params.get("protocolVersion") {
                     ensure!(version == 1, "unsupported protocolVersion; expected 1");
                 }
+                let mut model = json!({"id":self.profile.model,"name":self.profile.model});
+                if let Some((window, source)) = self.context_window(&self.profile.model).await {
+                    model["contextWindow"] = json!(window);
+                    model["contextWindowSource"] = json!(source);
+                }
                 Ok(
-                    json!({"protocolVersion":1,"profile":{"name":self.profile.name,"provider":self.profile.provider,"baseUrl":self.profile.base_url,"model":self.profile.model,"effort":self.profile.effort,"hasApiKey":profile::api_key(&self.profile)?.is_some()},"models":[{"id":self.profile.model,"name":self.profile.model}],"capabilities":{"streaming":true,"tools":true,"permissions":true,"interrupt":true,"history":true,"inbox":true,"images":true,"modes":["plan","ask","full"],"sessionRecovery":true}}),
+                    json!({"protocolVersion":1,"profile":{"name":self.profile.name,"provider":self.profile.provider,"baseUrl":self.profile.base_url,"model":self.profile.model,"effort":self.profile.effort,"hasApiKey":profile::api_key(&self.profile)?.is_some()},"models":[model],"capabilities":{"streaming":true,"tools":true,"permissions":true,"interrupt":true,"history":true,"inbox":true,"images":true,"modes":["plan","ask","full"],"sessionRecovery":true}}),
                 )
             }
-            "models/list" => Ok(json!({"models":provider::models(&self.profile).await?})),
+            "models/list" => {
+                let models = provider::models(&self.profile).await?;
+                *self.models.lock().await = models.clone();
+                Ok(json!({"models":models}))
+            }
             "session/start" => self.start_session(params).await,
             "session/history" => {
                 let session = self.session(params).await?;
                 let data = session.data.lock().await;
-                Ok(session_summary(&data))
+                Ok(self.session_summary(&data).await)
             }
             "sessions/list" => {
                 Ok(json!({"conversations":list_sessions(Some(&self.profile.name))?}))
@@ -1141,7 +1208,7 @@ impl Server {
                 data.recovery_required = false;
                 data.items.push(json!({"kind":"notice","id":uid(),"tone":"info","text":"Restored tool state acknowledged. Uncertain tools will not be replayed."}));
                 session.persist(&mut data)?;
-                Ok(session_summary(&data))
+                Ok(self.session_summary(&data).await)
             }
             "turn/start" => self.start_turn(params).await,
             "turn/interrupt" => {
@@ -1311,8 +1378,114 @@ impl Server {
     }
 }
 
-fn session_summary(data: &Journal) -> Value {
-    json!({"sessionId":data.id,"conversationId":data.id,"model":data.model,"effort":data.effort,"mode":data.mode,"items":data.items,"recoveryRequired":data.recovery_required})
+fn provider_token_counts(usage: &Value) -> Option<(u64, u64)> {
+    Some((
+        usage["prompt_tokens"]
+            .as_u64()
+            .or_else(|| usage["input_tokens"].as_u64())?,
+        usage["completion_tokens"]
+            .as_u64()
+            .or_else(|| usage["output_tokens"].as_u64())?,
+    ))
+}
+
+fn restored_usage(data: &Journal) -> (Value, Option<String>) {
+    let item_order = data
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item["kind"] == "user")
+        .filter_map(|(index, item)| item["id"].as_str().map(|id| (id, index)))
+        .collect::<HashMap<_, _>>();
+    let event_order = data
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| event["method"] == "turn/completed")
+        .filter_map(|(index, event)| event["params"]["messageId"].as_str().map(|id| (id, index)))
+        .collect::<HashMap<_, _>>();
+    let mut turns = data.turns.iter().collect::<Vec<_>>();
+    turns.sort_by_key(|(id, turn)| {
+        (
+            event_order.get(id.as_str()).copied(),
+            turn.started_at,
+            item_order.get(id.as_str()).copied(),
+        )
+    });
+    let mut total = 0u64;
+    let mut latest = None;
+    let mut latest_model = data.model.as_str();
+    let mut inherited_model = None;
+    for (index, (id, turn)) in turns.iter().enumerate() {
+        // A later unknown request/turn invalidates an earlier measurement,
+        // just as it does in the live client before a process restart.
+        latest = None;
+        if let Some(model) = turn.request["model"].as_str().filter(|id| !id.is_empty()) {
+            inherited_model = Some(model);
+            latest_model = model;
+        }
+        let Some(usage) = turn.usage.as_ref() else {
+            continue;
+        };
+        let recorded_model = usage["contextModel"].as_str().filter(|id| !id.is_empty());
+        if let Some(model) = recorded_model {
+            inherited_model = Some(model);
+            latest_model = model;
+        }
+        // Validate the pair before addition: a missing/invalid counter must not
+        // silently become zero and make an unknown usage look measured.
+        let (Some(input), Some(output)) = (
+            usage["inputTokens"].as_u64(),
+            usage["outputTokens"].as_u64(),
+        ) else {
+            continue;
+        };
+        total = total.saturating_add(input.saturating_add(output));
+        let Some(context) = usage["contextTokens"].as_u64() else {
+            continue;
+        };
+        // Older runtimes emitted all-zero usage even without provider counters.
+        if context == 0 && input == 0 && output == 0 && recorded_model.is_none() {
+            continue;
+        }
+        let model = recorded_model.or(inherited_model).or_else(|| {
+            // Legacy journals have no measured model. The persisted selection
+            // is safe only when no later explicit model boundary intervenes.
+            turns[index + 1..]
+                .iter()
+                .all(|(_, later)| {
+                    later.request["model"].as_str().is_none()
+                        && later
+                            .usage
+                            .as_ref()
+                            .is_none_or(|usage| usage["contextModel"].as_str().is_none())
+                })
+                .then_some(data.model.as_str())
+        });
+        if let Some(model) = model {
+            latest = Some((
+                context,
+                model,
+                usage["contextWindow"].as_u64().filter(|n| *n > 0),
+                id.as_str(),
+            ));
+        }
+    }
+    if data.turns.values().any(|turn| turn.status == "running") {
+        latest = None;
+        latest_model = data.model.as_str();
+    }
+    let mut result = json!({"contextModel":latest_model,"totalTokens":total});
+    let mut measured_turn = None;
+    if let Some((context, model, window, id)) = latest {
+        measured_turn = Some(id.to_owned());
+        result["contextTokens"] = json!(context);
+        result["contextModel"] = json!(model);
+        if let Some(window) = window {
+            result["contextWindow"] = json!(window);
+        }
+    }
+    (result, measured_turn)
 }
 
 fn system_prompt(mode: &str) -> String {
