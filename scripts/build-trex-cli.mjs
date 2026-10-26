@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, renameSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,5 +41,6 @@ if (debug && explicitTarget) {
 const payload = join(root, 'src-tauri', 'installer', 'payload', windows ? 'trex-agent.exe' : 'trex-agent');
 mkdirSync(dirname(payload), { recursive: true });
 copyFileSync(binary, `${payload}.tmp`);
+if (!windows) chmodSync(`${payload}.tmp`, 0o755);
 renameSync(`${payload}.tmp`, payload);
 console.log(`Trex CLI ${debug ? 'debug' : 'release'} payload refreshed.`);

@@ -17,7 +17,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,11 +38,74 @@ jobs:
       - name: Build frontend
         run: npm run build
       - name: Trex CLI tests
-        run: cargo +stable test --locked --manifest-path trex-cli/Cargo.toml
+        run: cargo +stable test --locked --manifest-path trex-cli/Cargo.toml -- --test-threads=4
+      - name: Browser launcher tests
+        run: cargo +stable test --locked --manifest-path trex-browser/Cargo.toml
+      - name: Browser worker dependencies
+        run: npm ci --prefix trex-browser --ignore-scripts --no-audit --no-fund
+      - name: Browser policy and MCP tests
+        run: node --test trex-browser/tests/security.test.mjs trex-browser/tests/availability.test.mjs trex-browser/tests/mcp-compatibility.test.mjs
       - name: Installer process lifecycle tests
         if: runner.os == 'Windows'
         run: pwsh -NoProfile -File scripts/test-installer-process-lifecycle.ps1
       - name: Prepare native CLI resource
         run: npm run cli:build -- --debug
+      - name: Prepare native Windows Browser resources
+        if: runner.os == 'Windows'
+        run: npm run browser:build -- --debug
       - name: Native backend tests
         run: cargo +stable test --locked --manifest-path src-tauri/Cargo.toml --lib
+
+  fedora:
+    name: Fedora 44 native components and RPM
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 3
+    steps:
+      - name: Fedora prerequisites
+        run: |
+          dnf install -y git rust cargo gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel gtk3-devel librsvg2-devel libappindicator-gtk3-devel libxdo-devel dbus-devel rpm-build patchelf file tar xz unzip findutils
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare an ordinary private build tree
+        run: |
+          mkdir -m 700 /tmp/trex-fedora-ci
+          tar --exclude=.git -cf - . | tar -xf - -C /tmp/trex-fedora-ci
+      - name: Frontend and Linux packaging tests
+        working-directory: /tmp/trex-fedora-ci
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: CLI and native Browser tests
+        working-directory: /tmp/trex-fedora-ci
+        run: |
+          cargo test --locked --manifest-path trex-cli/Cargo.toml -- --test-threads=4
+          cargo test --locked --manifest-path trex-browser/Cargo.toml
+          npm ci --prefix trex-browser --ignore-scripts --no-audit --no-fund
+          node --test trex-browser/tests/security.test.mjs trex-browser/tests/availability.test.mjs trex-browser/tests/mcp-compatibility.test.mjs
+      - name: Native app tests
+        working-directory: /tmp/trex-fedora-ci
+        run: |
+          npm run cli:build -- --debug
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+      - name: Build Fedora RPM with private Browser runtime
+        working-directory: /tmp/trex-fedora-ci
+        run: npm run tauri -- build --bundles rpm
+      - name: Verify installed RPM and app runtime discovery
+        working-directory: /tmp/trex-fedora-ci
+        run: |
+          rpm -Uvh --nodeps src-tauri/target/release/bundle/rpm/*.rpm
+          /usr/bin/trex-agent --version
+          /usr/bin/trex-browser doctor --json
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib trex_browser::tests::installed_linux_rpm_runtime_passes_app_preflight -- --exact --ignored
+          ldd /usr/bin/trex > /tmp/trex-libraries.txt
+          if grep -q 'not found' /tmp/trex-libraries.txt; then cat /tmp/trex-libraries.txt; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trex-fedora-rpm
+          path: /tmp/trex-fedora-ci/src-tauri/target/release/bundle/rpm/*.rpm

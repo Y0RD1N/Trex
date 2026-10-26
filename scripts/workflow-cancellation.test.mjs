@@ -5,7 +5,7 @@ import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 
 // Exercise the real hook and reducers; only React scheduling, timers and native IPC are fake.
-const names = ["chatMessages", "chatCommands", "chatState", "claudeChat", "messageQueue", "inboxProtocol", "workflowSafety"];
+const names = ["chatMessages", "chatCommands", "chatState", "claudeChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "agentTeam"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => ["../" + name, await load(name)])));
 const source = await readFile(new URL("../src/hooks/useClaudeChat.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, {
@@ -75,6 +75,7 @@ function harness(t, { planningOnly = true, conversationId = null } = {}) {
   const modules = {
     ...dependencies,
     react: hooks,
+    "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },
     "../api": { agentWrite: nativeWrite, claudeRewindPoint: () => rewind.promise, formatError: error => error?.message ?? String(error) },
     "../conversations": { readConversation: () => history.promise },
     "./chatSession": { localId: () => `control-${++counter}`, useAgentProcess: (_id, callbacks) => { handlers = callbacks; return agent; } },

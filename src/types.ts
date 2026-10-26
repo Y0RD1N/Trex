@@ -8,6 +8,7 @@ import type { SplitLayout } from "./splitLayout";
 import type { HandoffReference } from "./handoff";
 import type { AgentWorkflow } from "./agentWorkflow";
 import type { AgentRoom } from "./agentRoom";
+import type { AgentTeam } from "./agentTeam";
 
 /** Forma en la que el backend lanza un asistente dentro del PTY. */
 export type LaunchMode = "arg" | "inject";
@@ -67,6 +68,8 @@ export type Project = {
 };
 
 export type Settings = {
+  browserEnabled: boolean;
+  browserProfile: string;
   profiles: LauncherProfile[];
   defaultProfileId: string;
   shell: string;
@@ -138,6 +141,7 @@ export type PersistedTab = {
   handoff?: HandoffReference | null;
   workflow?: AgentWorkflow | null;
   agentRoom?: AgentRoom | null;
+  agentTeam?: AgentTeam | null;
 };
 
 export type AppConfig = {
@@ -212,6 +216,7 @@ export type SpawnRequest = {
 
 /** Pestaña viva en la interfaz (estado de React, no persistido tal cual). */
 export type TabState = SessionLaunch & {
+  agentTeam?: AgentTeam | null;
   workflow?: AgentWorkflow | null;
   agentRoom?: AgentRoom | null;
   /** Continuidad local: nunca reutiliza el id de conversación de otra cuenta. */

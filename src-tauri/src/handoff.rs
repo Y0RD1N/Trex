@@ -51,7 +51,7 @@ pub struct PreparedHandoff {
 
 // Mismo alcance que clean/sanitizeHandoffText de src/handoff.ts. Git se añade
 // después del filtrado del frontend, así que esta frontera debe ser nativa.
-fn sanitize_handoff_text(value: &str) -> String {
+pub(crate) fn sanitize_handoff_text(value: &str) -> String {
     static RULES: OnceLock<Vec<(regex::Regex, &'static str)>> = OnceLock::new();
     let rules = RULES.get_or_init(|| {
         let mut rules = vec![

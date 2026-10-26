@@ -30,12 +30,14 @@ export default function Select({ value, options, onChange, placeholder = "Elegir
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
   const [menuWidth, setMenuWidth] = useState(240);
+  const [planningMenu, setPlanningMenu] = useState(false);
   const selected = options.find(option => option.value === value);
   const label = buttonProps["aria-label"] ?? selected?.label ?? placeholder;
   const hasIcons = options.some(option => option.icon);
   const open = (): void => {
     if (!disabled && triggerRef.current) {
       setMenuWidth(triggerRef.current.getBoundingClientRect().width);
+      setPlanningMenu(!!triggerRef.current.closest(".agent-workflow-dialog"));
       setAnchor({ element: triggerRef.current });
     }
   };
@@ -64,7 +66,8 @@ export default function Select({ value, options, onChange, placeholder = "Elegir
       <ChevronIcon size={14} />
     </button>
     <DropdownMenu id={menuId} anchor={anchor} triggerRef={triggerRef} label={label} focusSelected align={align}
-      className={`select-menu ${menuClassName}`.trim()} onClose={() => setAnchor(null)}
+      minHeight={160}
+      className={`select-menu ${planningMenu ? "workflow-select-menu" : ""} ${menuClassName}`.trim()} onClose={() => setAnchor(null)}
       style={{ "--select-width": `${menuWidth}px` } as CSSProperties}>
       {options.map((option, index) => <div className="select-option-group" key={option.value}>
         {option.group && (index === 0 || options[index - 1].group !== option.group) &&

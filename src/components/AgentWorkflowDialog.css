@@ -11,6 +11,29 @@
   padding: 22px 24px;
   overscroll-behavior: contain;
 }
+.agent-workflow-dialog > .feature-content > * { flex-shrink: 0; }
+.workflow-setup-steps { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; margin: 0; padding: 13px 15px; list-style: none; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-inset, var(--bg-inset)); }
+.workflow-setup-steps li { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.workflow-setup-steps li > span { display: grid; place-items: center; width: 21px; height: 21px; flex-shrink: 0; border-radius: 50%; background: var(--accent-soft); color: var(--accent-strong); font-size: 10px; }
+.workflow-setup-steps svg { color: var(--text-dim); }
+.agent-workflow-dialog .btn { flex-shrink: 0; min-height: 34px; }
+.workflow-team-choice { display: flex; align-items: center; gap: 13px; width: 100%; min-height: 76px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-inset, var(--bg-inset)); color: var(--text); font-family: inherit; text-align: left; cursor: pointer; transition: border-color var(--dur), background var(--dur); }
+.workflow-team-choice:hover:not(:disabled) { border-color: var(--accent-dim); background: var(--accent-soft); }
+.workflow-team-choice > span:nth-child(2) { min-width: 0; display: grid; gap: 5px; flex: 1; }
+.workflow-team-choice strong { font-size: 13px; font-weight: 550; }
+.workflow-team-choice small { font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+.workflow-team-choice-icon { flex: 0 0 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-strong); }
+.workflow-team-choice > svg { flex-shrink: 0; color: var(--accent-strong); }
+.workflow-team-choice:disabled { opacity: .5; cursor: default; }
+.context-menu.select-menu.workflow-select-menu { width: max(240px, var(--select-width)); max-width: min(420px, var(--floating-max-width, calc(100vw - 24px))); max-height: min(300px, var(--floating-max-height, calc(100dvh - 24px))); padding: 6px; border-radius: 13px; scrollbar-width: thin; overscroll-behavior: contain; }
+.workflow-select-menu .select-option { min-height: 43px; padding: 10px 11px; border-radius: 8px; align-items: center; }
+.workflow-select-menu .select-option-text { gap: 4px; font-size: 12px; line-height: 1.5; }
+.workflow-select-menu .select-option-text small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 11px; line-height: 1.5; }
+.workflow-select-menu .select-group-label { padding: 9px 11px 6px; font-size: 10px; }
+.workflow-select-menu .select-check { align-self: center; }
+.agent-workflow-dialog .workflow-select { height: auto; min-height: 42px; padding: 9px 12px; }
+.agent-workflow-dialog > .modal-header, .agent-workflow-dialog > .modal-footer { flex-shrink: 0; }
+.agent-workflow-dialog > .modal-footer .btn { min-height: 38px; height: auto; padding: 10px 14px; line-height: 1.4; }
 
 .workflow-project {
   display: flex;

@@ -8,7 +8,10 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "cli:build": "node scripts/build-trex-cli.mjs",
-    "build:desktop": "node scripts/build-trex-cli.mjs && npm run build",
+    "browser:build": "node scripts/build-trex-browser.mjs",
+    "browser:installer": "node scripts/build-trex-browser.mjs --standalone",
+    "build:components": "npm run cli:build && npm run browser:build",
+    "build:desktop": "npm run build:components && npm run build",
     "preview": "vite preview",
     "tauri": "tauri"
   },

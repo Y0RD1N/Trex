@@ -87,9 +87,14 @@ import FeatureDialog from "./components/FeatureDialog";
 import HandoffDialog, { handoffTargetReason } from "./components/HandoffDialog";
 import { normalizeHandoffReference, sanitizeHandoffInstruction, type HandoffContext, type HandoffReference, type PreparedHandoff } from "./handoff";
 import AgentWorkflowDialog, { type WorkflowRequest } from "./components/AgentWorkflowDialog";
-import { IMPLEMENTATION_INSTRUCTION, PLANNING_INSTRUCTION, normalizeAgentWorkflow, planningContext, restoreAgentWorkflow, type AgentWorkflow, type WorkflowAgent } from "./agentWorkflow";
+import { IMPLEMENTATION_INSTRUCTION, normalizeAgentWorkflow, restoreAgentWorkflow, type AgentWorkflow, type WorkflowAgent } from "./agentWorkflow";
 import { claudePlanningArgs } from "./workflowSafety";
 import { normalizeAgentRoom, restoreAgentRoom, type AgentRoom, type RoomRole } from "./agentRoom";
+import { normalizeAgentTeam, restoreAgentTeam, teamConfigurationText, type AgentTeam, type TeamMember } from "./agentTeam";
+import AgentTeamView from "./components/AgentTeamView";
+import type { TeamRequest, TeamMemberChoice } from "./components/AgentTeamDialog";
+import { readQueuedMessages } from "./api";
+import { sanitizeHandoffText } from "./handoff";
 import { IS_WINDOWS } from "./platform";
 import type { PaletteCommand } from "./commandPalette";
 import { useNotificationSound } from "./hooks/useNotificationSound";
@@ -132,11 +137,11 @@ const buildTab = (
   };
 };
 
-function SessionChat({ room, onRoomChange, trexInstalled, ...props }: ChatViewProps & { room?: AgentRoom | null; trexInstalled: boolean; onRoomChange: (room: AgentRoom) => void }) {
-  if (!trexInstalled && (props.provider === "trex" || room?.planner.agent.provider === "trex" || room?.executor.agent.provider === "trex")) {
+function SessionChat({ room, agentTeam, onTeamChange, onRoomChange, trexInstalled, ...props }: ChatViewProps & { room?: AgentRoom | null; agentTeam?: AgentTeam | null; trexInstalled: boolean; onRoomChange: (room: AgentRoom) => void; onTeamChange: (team: AgentTeam) => void }) {
+  if (!trexInstalled && (props.provider === "trex" || room?.planner.agent.provider === "trex" || room?.executor.agent.provider === "trex" || agentTeam?.workers.some(member => member.agent.provider === "trex"))) {
     return <div className="project-home"><div className="project-home-content"><h2>Este chat utiliza Trex CLI</h2><p>Activa «Instalar Trex CLI» en el instalador para recuperar sus conexiones API. El historial y los perfiles se conservan. Puedes abrir Claude o Codex desde Nueva sesión.</p></div></div>;
   }
-  return room ? <AgentRoomView {...props} room={room} onRoomChange={onRoomChange} /> : <ChatView {...props} />;
+  return agentTeam ? <AgentTeamView {...props} team={agentTeam} onTeamChange={onTeamChange} /> : room ? <AgentRoomView {...props} room={room} onRoomChange={onRoomChange} /> : <ChatView {...props} />;
 }
 
 function AppShell() {
@@ -354,6 +359,7 @@ function AppShell() {
     handoff: normalizeHandoffReference(tab.handoff),
     workflow: normalizeAgentWorkflow(tab.workflow),
     agentRoom: normalizeAgentRoom(tab.agentRoom),
+    agentTeam: normalizeAgentTeam(tab.agentTeam),
     launch: { profileId: tab.profileId, profileName: tab.profileName, command: tab.command, args: tab.args,
       shell: tab.shell, launchMode: tab.launchMode, env: tab.env },
   })));
@@ -434,7 +440,7 @@ function AppShell() {
       // Recrea las pestañas de la sesión anterior (mismo proyecto y comando).
       const restored = persisted.map((tab) => {
         const launch = restoreLaunch(tab, settings);
-        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch, id:tab.id ?? newSessionId(), conversationId:tab.conversationId ?? null, chatMode: tab.chatMode ?? null, chatModel: tab.chatModel ?? null, chatEffort: tab.chatEffort ?? null, handoff: tab.handoff ?? null, handoffRestored: !!tab.handoff?.pending, workflow: restoreAgentWorkflow(tab.workflow), agentRoom: restoreAgentRoom(tab.agentRoom) };
+        return { ...buildTab(tab.projectId, launch.command ? tab.kind : "shell", tab.subtitle, settings), ...launch, id:tab.id ?? newSessionId(), conversationId:tab.conversationId ?? null, chatMode: tab.chatMode ?? null, chatModel: tab.chatModel ?? null, chatEffort: tab.chatEffort ?? null, handoff: tab.handoff ?? null, handoffRestored: !!tab.handoff?.pending, workflow: restoreAgentWorkflow(tab.workflow), agentRoom: restoreAgentRoom(tab.agentRoom), agentTeam: restoreAgentTeam(tab.agentTeam) };
       });
       setTabs(restored);
       // Proyecto activo: el persistido si tiene pestañas restauradas; si no, el de la primera.
@@ -691,7 +697,7 @@ function AppShell() {
 
   // --- Pestañas ---------------------------------------------------------------
 
-  const openTab = useCallback((projectId: string, profileId: string | null, conversation?: Conversation, handoff?: HandoffReference, model?: string | null, workflow?: AgentWorkflow, room?: AgentRoom) => {
+  const openTab = useCallback((projectId: string, profileId: string | null, conversation?: Conversation, handoff?: HandoffReference, model?: string | null, workflow?: AgentWorkflow, room?: AgentRoom, team?: AgentTeam) => {
     const currentConfig = configRef.current;
     if (!currentConfig) return;
     const settings = currentConfig.settings;
@@ -707,6 +713,12 @@ function AppShell() {
       sameKind.length === 0 ? base : `${base} ${sameKind.length + 1}`;
 
     const tab = buildTab(projectId, profile?.provider ?? "shell", subtitle, settings, profile ?? null);
+    if (team) {
+      Object.assign(tab, team.master.agent.launch);
+      tab.agentTeam = team; tab.kind = team.master.agent.provider; tab.subtitle = "Equipo delegado";
+      tab.chatModel = team.master.agent.model; tab.chatEffort = team.master.agent.effort ?? null;
+      tab.chatMode = "plan"; tab.conversationId = team.master.conversationId;
+    }
     if (room) {
       tab.agentRoom = room;
       tab.subtitle = "Chat de equipo";
@@ -872,15 +884,12 @@ function AppShell() {
         participant.profileName = sourceTab.profileName ?? participant.profileName;
       }
       const id = crypto.randomUUID();
-      const context = planningContext(request.task, { sessionId: `workflow-${id}`, provider: planner.provider,
-        profileId: planner.profileId, profileName: planner.profileName, title: "Planificación", projectId: project.id, projectName: project.name, cwd: project.path });
-      if (captured) context.content += `\n\n## Contexto del chat compartido\n\n${captured.context.content}`;
-      const prepared = await prepareHandoff(context);
-      const reference: HandoffReference = { id: prepared.id, sourceLabel: planner.profileName, pending: true, instruction: PLANNING_INSTRUCTION };
+      const inherited = captured ? await prepareHandoff(captured.context) : null;
       const room: AgentRoom = { id: `room-${id}`, planner: { agent: planner, conversationId: sourceRole === "planner" ? sourceTab!.conversationId : null, mode: "plan" },
         executor: { agent: executor, conversationId: sourceRole === "executor" ? sourceTab!.conversationId : null,
           mode: sourceRole === "executor" ? sourceTab!.chatMode : executor.provider === "claude" ? "acceptEdits" : "auto" },
-        active: "planner", phase: "planning", cycle: 1, pending: { id: prepared.id, role: "planner", reference },
+        active: "planner", phase: "idle", cycle: 0, pending: null,
+        setupContext: inherited ? { id: inherited.id, sourceLabel: inherited.sourceLabel, pending: false } : null,
         order: sourceRole ? captured!.itemIds.map(item => `${sourceRole}::${item}`) : [], plan: null, error: null };
       const surface = workflowSurfaceRef.current;
       setWorkflowProject(null);
@@ -899,6 +908,66 @@ function AppShell() {
       setWorkflowError(formatError(error));
       workflowStartingRef.current = false;
       setWorkflowSubmitting(false);
+    }
+  };
+
+  const startTeam = async (request: TeamRequest): Promise<void> => {
+    if (workflowStartingRef.current || !workflowProject) return;
+    const config = configRef.current, project = config?.projects.find(project => project.id === workflowProject.id);
+    if (!config || !project) { setWorkflowError("El proyecto ya no está disponible."); return; }
+    workflowStartingRef.current = true; setWorkflowSubmitting(true); setWorkflowError(null);
+    try {
+      const pick = (choice: TeamMemberChoice, principal = false): TeamMember => {
+        const profile = profilesForInstallation(config.settings, trexInstalledRef.current).find(profile => profile.id === choice.profileId);
+        if (!profile) throw new Error("La cuenta elegida ya no está disponible.");
+        const reason = handoffTargetReason(profile, null, config.settings);
+        if (reason) throw new Error(reason);
+        const model = normalizeModelChoice(choice.model), effort = normalizeEffortChoice(choice.effort);
+        if (choice.model !== null && !model || choice.effort !== null && !effort) throw new Error("Modelo o esfuerzo no válidos.");
+        const launch = launchForProfile(config.settings, profile);
+        if (profile.provider === "claude") launch.args = claudePlanningArgs(launch.args, IS_WINDOWS && launch.shell !== "wsl");
+        return { id: choice.id, name: sanitizeHandoffText(choice.name), role: principal ? "coordinator" : choice.role,
+          instructions: sanitizeHandoffText(choice.instructions), canWrite: !principal && choice.canWrite,
+          agent: { profileId: profile.id, profileName: profile.name, provider: profile.provider, model, effort, launch }, conversationId: null };
+      };
+      const master = pick(request.master, true), workers = request.workers.map(worker => pick(worker));
+      const captured = workflowSourceRef.current;
+      const sourceTab = captured ? tabsRef.current.find(tab => tab.id === captured.context.source.sessionId && tab.projectId === project.id) : null;
+      if (captured && (!sourceTab || sourceTab.activity !== "idle")) throw new Error("Espera a que termine este chat antes de cambiar su flujo de trabajo.");
+      const sourceMember = sourceTab ? [master,...workers].find(member => member.agent.profileId === sourceTab.profileId && member.agent.provider === sourceTab.kind) : null;
+      if (sourceTab && !sourceMember) throw new Error("Conserva la cuenta de este chat en el principal o en uno de los subagentes para mantener su historial.");
+      if (sourceTab && sourceMember) {
+        const queue = await readQueuedMessages(sourceTab.id);
+        if (queue.messages.length || queue.receipt || queue.outbox?.length) throw new Error("Resuelve los mensajes pendientes de la cola antes de convertir este chat en un equipo.");
+        sourceMember.conversationId = sourceTab.conversationId;
+        sourceMember.agent.launch = { profileId: sourceTab.profileId, profileName: sourceTab.profileName, command: sourceTab.command,
+          args: sourceTab.kind === "claude" ? claudePlanningArgs(sourceTab.args, IS_WINDOWS && sourceTab.shell !== "wsl") : sourceTab.args,
+          shell: sourceTab.shell, launchMode: sourceTab.launchMode, env: sourceTab.env };
+      }
+      const id = "team-" + crypto.randomUUID();
+      let team = normalizeAgentTeam({ id, epoch: crypto.randomUUID(), master, workers, phase: "running",
+        order: sourceMember ? captured!.itemIds.map(id => sourceMember.id + "::" + id) : [], initial: null, setup: { context: null }, error: null });
+      if (!team) throw new Error("La configuración del equipo no es válida.");
+      const inherited = captured ? await prepareHandoff(captured.context) : null;
+      team = { ...team, setup: { context: inherited ? { id: inherited.id, sourceLabel: inherited.sourceLabel, pending: false } : null } };
+      teamConfigurationText(team,inherited?.content);
+      const readyTeam = team;
+      const surface = workflowSurfaceRef.current;
+      setWorkflowProject(null);
+      requestAnimationFrame(() => waitForMotion(surface, () => requestAnimationFrame(() => {
+        if (sourceTab) {
+          const current = tabsRef.current.find(tab => tab.id === sourceTab.id);
+          if (current?.activity === "idle" && current.conversationId === sourceTab.conversationId) {
+            setTabs(previous => previous.map(tab => tab.id === sourceTab.id ? { ...tab, ...readyTeam.master.agent.launch,
+              kind: readyTeam.master.agent.provider, agentTeam: readyTeam, agentRoom: null, workflow: null, handoff: null,
+              conversationId: readyTeam.master.conversationId, chatMode: "plan", chatModel: readyTeam.master.agent.model, chatEffort: readyTeam.master.agent.effort ?? null } : tab));
+            setActiveTabId(sourceTab.id);
+          } else showToast("El chat cambió antes de iniciar el equipo. Vuelve a configurarlo.");
+        } else if (!openTab(project.id, master.agent.profileId, undefined, undefined, master.agent.model, undefined, undefined, readyTeam)) showToast("No se pudo abrir el equipo.");
+        workflowStartingRef.current = false; setWorkflowSubmitting(false);
+      })));
+    } catch (error) {
+      setWorkflowError(formatError(error)); workflowStartingRef.current = false; setWorkflowSubmitting(false);
     }
   };
 
@@ -1398,6 +1467,8 @@ function AppShell() {
                     onSingle={() => { setActiveTabId(tab.id); setExpandedPaneId(paneExpanded ? null : tab.id); }} />}
                   {tab.kind !== "shell" && (tab.kind !== "codex" || codexChatSupported(tab.args)) ? <SessionChat
                     room={tab.agentRoom}
+                    agentTeam={tab.agentTeam}
+                    onTeamChange={team => setTabs(previous => previous.map(value => value.id === tab.id && value.agentTeam?.id === team.id ? { ...value, agentTeam: team } : value))}
                     trexInstalled={trexInstalled}
                     onRoomChange={room => changeRoom(tab.id, room)}
                     projectId={project.id}
@@ -1412,7 +1483,7 @@ function AppShell() {
                     onWorkflowStatus={workflowStatus}
                     onWorkflowPeer={selectWorkflowPeer}
                     onHandoffRequest={requestHandoff}
-                    onPlanHere={tab.agentRoom ? undefined : planInChat}
+                    onPlanHere={tab.agentRoom || tab.agentTeam ? undefined : planInChat}
                     onHandoffConsumed={handoffConsumed}
                     provider={tab.kind}
                     sessionId={tab.id}
@@ -1516,6 +1587,7 @@ function AppShell() {
           entering={settingsPresence.entering}
           leaving={settingsPresence.leaving}
           settings={config.settings}
+          cwd={activeProject?.path}
           appInfo={appInfo}
           claudeInfo={claudeInfo}
           codexInfo={codexInfo}
@@ -1534,7 +1606,7 @@ function AppShell() {
       {workflowPresence.value && <AgentWorkflowDialog project={workflowPresence.value} profiles={availableProfiles}
         initialExecutor={(() => { const source = workflowSourceRef.current; const tab = source && tabs.find(item => item.id === source.context.source.sessionId);
           return tab?.profileId ? { profileId: tab.profileId, model: tab.chatModel ?? null, effort: tab.chatEffort ?? null } : undefined; })()}
-        settings={config.settings} onClose={closeWorkflow} onStart={startWorkflow} submitting={workflowSubmitting} error={workflowError}
+        settings={config.settings} onClose={closeWorkflow} onStart={startWorkflow} onStartTeam={startTeam} submitting={workflowSubmitting} error={workflowError}
         entering={workflowPresence.entering} leaving={workflowPresence.leaving} surfaceRef={workflowSurfaceRef} />}
       {handoffPresence.value && <HandoffDialog {...handoffPresence.value}
         profiles={availableProfiles} settings={config.settings} onClose={closeHandoff}

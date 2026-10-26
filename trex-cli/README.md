@@ -70,6 +70,24 @@ Desktop integrations launch `trex-agent --profile NAME app-server`. See
 [PROTOCOL.md](PROTOCOL.md) for the complete version 1 JSON-RPC wire contract,
 image/inbox receipts, profile management, recovery, and tool boundaries.
 
+Optional Trex Browser integration is explicitly enabled per app-server session:
+`session/start` accepts `browser:{enabled:true,profile:"BROWSER1",clientId:"stable-tab-or-room-id"}`.
+Omission keeps browser tools off, including after restore. The CLI discovers a
+compatible fixed sibling executable or the per-user standalone installation;
+it never searches `PATH`, installs components, starts a browser during probing,
+or changes models automatically. Native tools continue working when the optional
+component is absent. Plan, ask, and full map to broker observe, QA, and full
+policy respectively, with existing approval and recovery rules preserved.
+
+Screenshot results retain private artifact references in conversation history.
+Only a selected model whose catalog metadata or exact documented official
+MiniMax capability accepts image input gets verified image bytes in its outgoing
+request. Unknown and text-only models get
+DOM/log tools and artifact metadata with an explicit omission note. Restoring or
+switching models reprojects the saved references; missing images never cause
+the tool to repeat. Videos remain opaque broker artifact references. See the
+protocol for artifact/event fields and operation cancellation semantics.
+
 All tests use temporary workspaces and loopback mock providers. No real API key
 or paid completion is needed. Windows binary and offline transport behavior are
 tested here; Linux/macOS secure-storage runtime behavior requires their native

@@ -13,6 +13,7 @@ type Props = {
   focusSelected?: boolean;
   /** Borde del botón con el que se alinea el menú (por defecto, el final). */
   align?: "start" | "end";
+  minHeight?: number;
   /** Un popover con búsqueda o formulario conserva Tab y los atajos del campo. */
   role?: "menu" | "dialog";
   onClose: () => void;
@@ -22,7 +23,7 @@ type Props = {
 const MENU_OPEN_EVENT = "trex:menu-open";
 
 /** Una sola política de posición, cierre y teclado para todos los menús. */
-export default function DropdownMenu({ anchor, triggerRef, label, className = "", id, style, focusSelected = false, align = "end", role = "menu", onClose, children }: Props) {
+export default function DropdownMenu({ anchor, triggerRef, label, className = "", id, style, focusSelected = false, align = "end", role = "menu", onClose, children, minHeight = 0 }: Props) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -33,6 +34,7 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
   const position = useFloatingPosition(retainedAnchor, surfaceRef, {
     align: retainedAnchor && "element" in retainedAnchor ? align : "start",
     gap: retainedAnchor && "element" in retainedAnchor ? 6 : 0,
+    minHeight,
     // Al cerrar, el botón puede cambiar de ancho (nuevo valor): el menú se queda quieto mientras se desvanece.
     frozen: presence.leaving,
   });
@@ -100,8 +102,15 @@ export default function DropdownMenu({ anchor, triggerRef, label, className = ""
         close();
       }
     };
+    const openedAt = triggerRef.current?.getBoundingClientRect();
     const onScroll = (event: Event): void => {
-      if (event.target instanceof Node && event.target.contains(triggerRef.current)) close();
+      if (!(event.target instanceof Node) || !event.target.contains(triggerRef.current)) return;
+      const current = triggerRef.current?.getBoundingClientRect();
+      // A field can have been scrolled into view immediately before the click.
+      // Its queued scroll event must not close the menu that was just opened.
+      // A subsequent real move of the anchor still dismisses the menu.
+      if (!openedAt || !current || Math.abs(current.top-openedAt.top)>1 || Math.abs(current.left-openedAt.left)>1
+        || Math.abs(current.bottom-openedAt.bottom)>1 || Math.abs(current.right-openedAt.right)>1) close();
     };
     const onResize = (): void => close();
     const onOtherMenu = (event: Event): void => {

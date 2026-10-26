@@ -8,7 +8,7 @@ import { load } from "./ts-loader.mjs";
 // scheduler/JSX, DOM surfaces, queue storage and native process IPC are mocked.
 const names = ["agentRoom", "agentWorkflow", "handoff", "chatState", "chatMessages", "chatCommands", "chatQuestions",
   "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "agentNotices",
-  "visualDesign", "paste", "messageQueue", "trexChat"];
+  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));
 const sources = {
   stable: "hooks/useStableCallback.ts", workflow: "hooks/useAgentWorkflow.ts", trex: "hooks/useTrexChat.ts",
@@ -102,9 +102,9 @@ function uiModule(name) {
   } }));
   return ui.get(name);
 }
-const uiPaths = new Set(["./AgentIcon", "./Select", "./Icons", "./chat/ChatItems", "./chat/ModelMenu",
+const uiPaths = new Set(["./chat/BrowserMenu","./AgentIcon", "./Select", "./Icons", "./chat/ChatItems", "./chat/ModelMenu",
   "./chat/ComposerSettings", "./chat/UsageMenu", "./chat/SharedFiles", "./ImageViewer", "./chat/QuestionPanel",
-  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/QueuedMessages"]);
+  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/QueuedMessages", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome"]);
 function environment() {
   let counter = 0;
   const timers = new Map();
@@ -388,7 +388,7 @@ for (const boundary of ["waiting for old terminal", "replacement active"]) {
 function roomHarness(t, scenario = {}) {
   const env = environment(), roomHost = host(t), panelHost = host(t), messages = [], calls = [];
   const { ChatPanel } = panelModule(env);
-  const roomModule = evaluate("room", env, { "../api": api, "./ChatView": { ChatPanel },
+  const roomModule = evaluate("room", env, { "../api": {...api,...scenario.api}, "./ChatView": { ChatPanel },
     "../hooks/useClaudeChat": { useClaudeChat: forbidden("Claude runtime") },
     "../hooks/useCodexChat": { useCodexChat: forbidden("Codex runtime") },
     "../hooks/useTrexChat": { useTrexChat: forbidden("Trex runtime") } });
@@ -419,13 +419,27 @@ function roomHarness(t, scenario = {}) {
   panelProps = find(tree, node => node.type === ChatPanel).props;
   const renderPanel = () => { tree = panelHost.render(() => ChatPanel(panelProps)); return tree; };
   renderPanel();
-  return { calls, messages, sessions, panelProps, renderPanel,
+  return { calls, messages, sessions, get panelProps(){return panelProps;}, get room(){return room;}, renderPanel,
+    async pump(){for(let i=0;i<6;i++){await flush();renderRoom();panelProps=find(tree,node=>node.type===ChatPanel).props;renderPanel();}},
     type(value) { find(tree, node => node.type === "textarea").props.onChange({ target: { value, selectionStart: value.length } }); renderPanel(); },
     submit() { find(tree, node => node.type === "form").props.onSubmit({ preventDefault: noop }); renderPanel(); },
     get draft() { return find(tree, node => node.type === "textarea").props.value; },
   };
 }
 
+test("newly configured room stays idle until a normal chat message starts its first planning cycle",async t=>{
+  const contexts=[];const prepared=context=>({id:"first-chat-idea",content:context.content,sourceLabel:"planner",sourceProvider:"codex",sourceSessionId:"planner",createdAt:1,cwd:"D:/test",truncated:false});
+  let saved;
+  const h=roomHarness(t,{room:{phase:"idle",cycle:0},api:{prepareHandoff:async context=>{contexts.push(context);saved=prepared(context);return saved;},loadHandoff:async()=>saved}});
+  await h.pump();assert.equal(h.calls.filter(call=>call.method==="send").length,0);assert.equal(contexts.length,0);
+  h.type("Build my idea and prepare a plan");h.submit();await h.pump();
+  assert.equal(contexts.length,1);assert.match(contexts[0].content,/Build my idea/);assert.equal(h.room.cycle,1);assert.equal(h.room.phase,"planning");
+  const sends=h.calls.filter(call=>call.method==="send");assert.equal(sends.length,1);assert.equal(sends[0].role,"planner");assert.match(sends[0].args[0],/trex_plan/);assert.equal(sends[0].args[3],"Build my idea and prepare a plan");assert.equal(h.draft,"");
+});
+test("first chat preparation failure preserves the idea and inherited context without provider delivery",async t=>{
+  const h=roomHarness(t,{room:{phase:"idle",cycle:0,setupContext:{id:"prior",pending:false,sourceLabel:"Earlier"}},api:{loadHandoff:async()=>({content:"Retained earlier discussion"}),prepareHandoff:async()=>{throw new Error("Preparation unavailable");}}});
+  h.type("Keep my idea");h.submit();await h.pump();assert.equal(h.draft,"Keep my idea");assert.equal(h.calls.filter(call=>call.method==="send").length,0);assert.equal(h.room.setupContext.id,"prior");
+});
 const queued = { id: "pending-message", text: "Must remain pending", images: [], previews: [], createdAt: 1 };
 const guards = [
   ["paused room", { room: { phase: "paused" } }],

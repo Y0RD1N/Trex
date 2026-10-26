@@ -503,3 +503,36 @@ como pegado alternativo. `Ctrl+C`, `Ctrl+D` y `Ctrl+Z` se reservan para el shell
   - Windows (PowerShell): `irm https://claude.ai/install.ps1 | iex`
   - Linux/macOS: `curl -fsSL https://claude.ai/install.sh | bash`
   - Alternativa: `npm install -g @anthropic-ai/claude-code`
+
+
+## Navegador opcional para los agentes
+
+Trex Browser se instala por separado y también puede seleccionarse en el instalador de trex, independientemente de Trex CLI. Incluye su propio runtime: no necesitas instalar Node ni npm. Utiliza Chrome con perfiles privados por proyecto, `BROWSER1` a `BROWSER99`.
+
+En **Ajustes → Navegador** puedes comprobar la instalación, crear perfiles y permitir el navegador en nuevas conversaciones. Claude Code, Codex y Trex API reciben sus herramientas automáticamente cuando el componente está disponible. El planificador usa observación; los permisos de implementación determinan el acceso de pruebas o completo.
+
+El control **Navegador** del chat permite abrir una dirección, tomar capturas, grabar/detener vídeo y pausar la automatización para revisar la página. Las capturas y vídeos generados aparecen como archivos locales. Los agentes también pueden usar consola, red, trazas, perfiles de CPU y memoria, y mediciones de rendimiento.
+
+Trex prepara el servicio del navegador desde la app antes de conectar Claude o Codex, sin abrir Chrome todavía. Así puede utilizarlo un agente cuyo proceso MCP está restringido por Windows. La ventana se abre automáticamente en la primera navegación. Codex comprueba las herramientas del chat antes de enviar el primer turno; una conexión fallida no se presenta como un navegador conectado. Los chats abiertos antes de actualizar deben reiniciarse para cargar la nueva conexión.
+
+La interfaz CLI/MCP, los modos y las pruebas del componente están documentados en [trex-browser/README.md](trex-browser/README.md). Las capturas se envían como imágenes únicamente a modelos con soporte de visión confirmado; los demás conservan el acceso a DOM, consola y red. Una operación incierta requiere revisión y no se repite automáticamente.
+
+## Fedora
+
+La app, Trex CLI y Trex Browser se empaquetan juntos en un RPM. El navegador usa Chromium instalado en Fedora y un runtime privado de Node/Playwright; las claves se guardan en Secret Service. Consulta [instalación, compilación y pruebas en Fedora](docs/fedora.md), incluidos los requisitos del llavero y los límites de validación del escritorio.
+
+## Equipos con agente principal
+
+En **Nueva sesión → Configurar flujo de agentes → Trabajar con un equipo** puedes elegir un coordinador y entre uno y ocho colaboradores. Cada participante elige su cuenta, modelo, esfuerzo e instrucciones independientemente; puedes combinar Claude, Codex y conexiones API de Trex, o usar una misma cuenta con modelos diferentes. El flujo anterior de dos agentes sigue disponible.
+
+La ventana de planificación solo configura los agentes: funciones, cuentas, modelos, esfuerzo e instrucciones reutilizables. Ordena los subagentes con las flechas y pulsa **Guardar y abrir chat**. No hay que escribir una idea en esa ventana. En el nuevo chat verás el equipo guardado y podrás escribir tu idea normalmente; el trabajo empieza al enviar ese mensaje al principal. El flujo de dos agentes funciona igual: se guarda primero y el primer mensaje inicia la planificación. Al convertir un chat existente, su contexto se conserva para ese primer mensaje y no se envía automáticamente.
+
+El principal planifica, asigna tareas mediante herramientas y evalúa los informes antes de continuar. Respeta el orden inicial configurado cuando las funciones sean necesarias y puede volver a revisión o corrección según los hallazgos. No edita archivos directamente. Los colaboradores pueden implementar, revisar código, corregir errores, investigar o cumplir una función personalizada. Los revisores de solo lectura conservan restricciones nativas; los colaboradores con escritura utilizan los permisos normales de su asistente. La investigación web requiere las herramientas web del asistente o Trex Browser habilitado e instalado.
+
+El chat reúne los historiales con el nombre de su participante y conserva el destino de cada aprobación. La lista **Tareas**, arriba a la derecha, muestra el plan, responsables, progreso e informes. El principal publica el plan antes de delegar; las confirmaciones de cada delegación actualizan su estado. Dentro del chat puedes desplegar la actividad de cada subagente, su modelo y esfuerzo, instrucciones, herramientas y resultados. Las solicitudes de permiso permanecen visibles fuera de las tarjetas plegables. **Cuentas y recuperación** conserva las acciones de historial y revisión. Se ejecuta una tarea a la vez dentro del equipo; no se aíslan los cambios en worktrees ni se bloquean otros chats que utilicen el mismo proyecto.
+
+**Detener equipo** interrumpe todas sus sesiones. Al recuperar un equipo, empieza en pausa y requiere revisión explícita. Las entregas iniciadas sin confirmación permanecen inciertas: reanudar no las vuelve a ejecutar. Trex CLI puede requerir además **Confirmar revisión de operaciones** en el participante afectado. Las aclaraciones se añaden a la cola del principal.
+
+Límites por equipo: ocho colaboradores, 32 tareas por ciclo y 128 en total; tarea delegada de hasta 16 KiB e informe de hasta 32 KiB. El plan admite 32 pasos y 48 KiB en conjunto. Publicarlo no ejecuta las tareas. Los informes mayores permanecen en el historial y se solicitan más breves; no se presentan como una validación completa. Un equipo usa los modelos y servicios configurados por el usuario; cada sesión consume su cuota habitual.
+
+En chats individuales, el mismo panel muestra las tareas publicadas por Claude y Codex y los planes de Trex CLI. Puedes contraerlo para ampliar el chat. Los estados se conservan en el historial de las herramientas; un error o actualización incompleta no marca tareas como terminadas. En ventanas estrechas, la lista se coloca encima del chat y permite desplazarse sin tapar el borrador.

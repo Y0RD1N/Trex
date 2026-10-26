@@ -1,3 +1,7 @@
+import { connectBrowser } from "../browserConnection";
+import { agentTeamMcpConfig } from "../api";
+import { browserConfigForShell, BROWSER_INSTRUCTIONS } from "../browser";
+import { browserMode, type BrowserMode } from "../browser";
 /**
  * Sesión de Codex como chat: `codex app-server` por JSON-RPC.
  *
@@ -69,6 +73,32 @@ async function untilCancelled<T>(work: Promise<T>, signal?: AbortSignal): Promis
 
 type Pending = { resolve: (result: unknown) => void; reject: (error: Error) => void };
 class CodexRequestRejected extends Error {}
+class CodexBrowserPermissionsError extends Error {}
+class CodexBrowserConnectionError extends CodexBrowserPermissionsError {}
+class CodexBrowserModeMismatch extends CodexBrowserPermissionsError {
+  constructor(readonly mode: BrowserMode) { super("Los permisos confirmados de Codex requieren reconectar el navegador."); }
+}
+
+type NativePermissions = { sandbox: "read-only" | "workspace-write" | "danger-full-access"; approvalPolicy: string };
+/** Read the native acknowledgement, never infer confirmation from requested overrides. */
+function nativePermissions(response: Json): NativePermissions | null {
+  const sandbox = response.sandboxPolicy ?? response.sandbox;
+  const type = typeof sandbox === "string" ? sandbox : record(sandbox)?.type;
+  const normalized = type === "readOnly" || type === "read-only" ? "read-only"
+    : type === "workspaceWrite" || type === "workspace-write" ? "workspace-write"
+      : type === "dangerFullAccess" || type === "danger-full-access" ? "danger-full-access" : null;
+  const approvalPolicy = response.approvalPolicy;
+  return normalized && typeof approvalPolicy === "string" && ["untrusted", "on-failure", "on-request", "never"].includes(approvalPolicy)
+    ? { sandbox: normalized, approvalPolicy } : null;
+}
+
+function selectedPermissions(mode: string): NativePermissions {
+  return { sandbox: mode === "read-only" ? "read-only" : mode === "full" ? "danger-full-access" : "workspace-write",
+    approvalPolicy: mode === "full" ? "never" : "on-request" };
+}
+
+const sandboxBrowserMode = (sandbox: unknown): BrowserMode => sandbox === "read-only" ? "observe" : sandbox === "danger-full-access" ? "full" : "qa";
+const browserChoice = (mode: BrowserMode): string => mode === "observe" ? "read-only" : mode === "full" ? "full" : "auto";
 
 export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env } = options;
@@ -82,7 +112,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   stateRef.current = state;
   const callbacks = useRef(options);
   callbacks.current = options;
-  const queue = useMessageQueue(sessionId);
+  const queue = useMessageQueue(options.queueId ?? sessionId);
   const inboxRequests = useRef(new InboxRequests());
   const inboxConfigRef = useRef<Json>({});
   const isCurrentRef = useRef<(id: string) => boolean>(() => false);
@@ -114,6 +144,9 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const threadGenerationRef = useRef(0);
   const processReadyRef = useRef<Promise<void> | null>(null);
   const readyProcessRef = useRef<string | null>(null);
+  /** The immutable grant actually attached to this process, including an unfinished preflight. */
+  const browserBindingRef = useRef<{ mode: BrowserMode; pending: boolean } | null>(null);
+  const browserThreadRef = useRef<{ id: string; process: string | null; generation: number } | null>(null);
   const submissionsRef = useRef(new Map<AbortController, { id: string; issued: boolean; generation: number | null }>());
   const cancelDeferred = (): void => { for (const [controller, entry] of submissionsRef.current) if (!entry.issued) controller.abort(); };
   useEffect(() => {
@@ -126,6 +159,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       readyProcessRef.current = null;
       processReadyRef.current = null;
       activeThreadRef.current = null;
+      browserBindingRef.current = null;
+      browserThreadRef.current = null;
       cancelDeferred();
     };
   }, []);
@@ -287,6 +322,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       deliveryEpochRef.current++;
       readyProcessRef.current = null;
       processReadyRef.current = null;
+      browserBindingRef.current = null;
+      browserThreadRef.current = null;
       cancelDeferred();
       rejectPending("Codex se cerró.");
       threadRef.current = null;
@@ -314,8 +351,58 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     }
   }, [request, notice]);
 
-  const threadOverrides = useCallback((overrides: Json): Json => planningOnly ? codexPlanningThread({ ...overrides,
-    ...(choicesRef.current.model ? { model: choicesRef.current.model } : {}) }) : overrides, [planningOnly]);
+  const threadOverrides = useCallback((overrides: Json): Json => {
+    if (browserBindingRef.current) {
+      const instructions = typeof overrides.developerInstructions === "string" ? overrides.developerInstructions : "";
+      overrides = { ...overrides, developerInstructions: instructions.includes(BROWSER_INSTRUCTIONS) ? instructions : [instructions, BROWSER_INSTRUCTIONS].filter(Boolean).join("\n\n") };
+    }
+    if (planningOnly) return codexPlanningThread({ ...overrides,
+      ...(choicesRef.current.model ? { model: choicesRef.current.model } : {}) }, callbacks.current.planningInstruction);
+    const mode = choicesRef.current.mode;
+    if (!browserBindingRef.current || !mode) return overrides;
+    const permissions = selectedPermissions(mode);
+    return { ...overrides, ...permissions, config: { ...record(overrides.config),
+      sandbox_mode: permissions.sandbox, approval_policy: permissions.approvalPolicy } };
+  }, [planningOnly]);
+
+  // doctor only proves the component is installed. Verify this exact native
+  // thread received navigation tools before any user/model turn can be sent.
+  const confirmBrowserTools = useCallback(async (threadId: string, procId?: string): Promise<void> => {
+    if (!browserBindingRef.current) return;
+    const generation = threadGenerationRef.current, binding = browserThreadRef.current;
+    const assertCurrent = (): void => {
+      if (!mountedRef.current || generation !== threadGenerationRef.current || binding !== browserThreadRef.current
+        || (procId && readyProcessRef.current !== procId)) throw new DOMException("Envío cancelado.", "AbortError");
+    };
+    let response: Json;
+    try { response = await request<Json>("mcpServerStatus/list", { threadId, serverName: "trex_browser", detail: "toolsAndAuthOnly", limit: 100 }, procId); }
+    catch {
+      assertCurrent();
+      throw new CodexBrowserConnectionError("Codex no pudo confirmar la conexión con Trex Browser. Reinicia esta conversación para volver a conectarlo.");
+    }
+    assertCurrent();
+    const server = Array.isArray(response.data) ? response.data.map(record).find(server => server?.name === "trex_browser") : null;
+    const tools = record(server?.tools);
+    if (!server || server.toolsError != null || server.runtimeStatus !== undefined && server.runtimeStatus !== "connected"
+      || !tools || !["browser_navigate", "browser_snapshot", "browser_status"].every(name => record(tools[name]))) {
+      throw new CodexBrowserConnectionError("Codex no recibió las herramientas de Trex Browser. El navegador puede abrirse manualmente, pero este chat necesita reconectarlo antes de trabajar.");
+    }
+  }, [request]);
+
+  const confirmBrowserThread = useCallback((response: Json, threadId: string, procId?: string): void => {
+    const binding = browserBindingRef.current;
+    if (!binding) return;
+    const actual = nativePermissions(response);
+    if (binding.pending || !actual) throw new CodexBrowserPermissionsError("Codex no confirmó los permisos nativos del navegador. No se enviarán mensajes.");
+    const mode = choicesRef.current.mode;
+    const expected = planningOnly ? { sandbox: "read-only", approvalPolicy: "on-request" } : mode ? selectedPermissions(mode) : null;
+    if (expected && (actual.sandbox !== expected.sandbox || actual.approvalPolicy !== expected.approvalPolicy)) {
+      throw new CodexBrowserPermissionsError("Codex no confirmó los permisos elegidos para el navegador. No se enviarán mensajes.");
+    }
+    const effective = mode ? browserMode(mode, planningOnly) : sandboxBrowserMode(actual.sandbox);
+    if (binding.mode !== effective) throw new CodexBrowserModeMismatch(effective);
+    browserThreadRef.current = { id: threadId, process: procId ?? readyProcessRef.current, generation: threadGenerationRef.current };
+  }, [planningOnly]);
 
   const newThread = useCallback(async (overrides: Json, procId?: string): Promise<string> => {
     const generation = threadGenerationRef.current;
@@ -323,14 +410,16 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       config: { ...record(overrides.config), ...inboxConfigRef.current } }), procId);
     if (!mountedRef.current || threadGenerationRef.current !== generation || (procId && readyProcessRef.current !== procId)) throw new DOMException("Envío cancelado.", "AbortError");
     if (planningOnly) assertCodexPlanningThread(response);
-    dispatch({ type: "thread", response });
     const threadId = response?.thread?.id;
     if (!threadId) throw new Error("Codex no devolvió la conversación.");
-    activeThreadRef.current = threadId;
     resumeThreadRef.current = threadId;
+    confirmBrowserThread(response, threadId, procId);
+    await confirmBrowserTools(threadId, procId);
+    activeThreadRef.current = threadId;
     threadModelRef.current = text(response.model) || null;
+    dispatch({ type: "thread", response });
     return threadId;
-  }, [request, cwd, threadOverrides, planningOnly]);
+  }, [request, cwd, threadOverrides, planningOnly, confirmBrowserThread, confirmBrowserTools]);
 
   /** Abre el hilo: reanuda la conversación de la pestaña o empieza una nueva. */
   const openThread = useCallback(async (launch: NonNullable<ReturnType<typeof codexLaunch>>, procId: string): Promise<string> => {
@@ -363,8 +452,10 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         const response = await request<Json>("thread/resume", { threadId: resumeId, excludeTurns: true, ...overrides }, procId);
         assertCurrent();
         if (planningOnly) assertCodexPlanningThread(response);
-        activeThreadRef.current = resumeId;
         resumeThreadRef.current = resumeId;
+        confirmBrowserThread(response, resumeId, procId);
+        await confirmBrowserTools(resumeId, procId);
+        activeThreadRef.current = resumeId;
         threadModelRef.current = text(response.model) || null;
         dispatch({ type: "thread", response });
         await loadHistory(resumeId, true, procId);
@@ -373,6 +464,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         return resumeId;
       } catch (error) {
         assertCurrent();
+        if (error instanceof CodexBrowserPermissionsError) throw error;
         // Por ejemplo, si la conversación sigue abierta en otra ventana de Codex: al menos se ve lo que había.
         await loadHistory(resumeId, false, procId);
         assertCurrent();
@@ -383,7 +475,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     assertCurrent();
     historyLoadedRef.current = true;
     return threadId;
-  }, [request, notice, loadHistory, newThread, cwd, env, readSkills, threadOverrides, planningOnly]);
+  }, [request, notice, loadHistory, newThread, cwd, env, readSkills, threadOverrides, planningOnly, confirmBrowserThread, confirmBrowserTools]);
 
   const start = useCallback((): Promise<void> => {
     if (!mountedRef.current) return Promise.resolve();
@@ -399,15 +491,40 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     threadRef.current = null;
     activeThreadRef.current = null;
     readyProcessRef.current = null;
+    browserBindingRef.current = null;
+    browserThreadRef.current = null;
     // Un perfil que solo funciona en la terminal no llega aquí (App abre la terminal).
     const ready = (async () => {
       try {
         const parsed = codexLaunch(args);
         if (planningOnly && !parsed) throw new Error("El perfil de Codex no admite un chat de planificación. Revisa sus argumentos.");
         const launch = parsed ?? codexLaunch(null)!;
-        const config = await messageQueueMcpConfig(sessionId);
+        // Unknown global/-c permissions get an observe grant until the native thread confirms them.
+        let bindingMode = browserMode(choicesRef.current.mode ?? (launch.thread.sandbox ? browserChoice(sandboxBrowserMode(launch.thread.sandbox)) : "read-only"), planningOnly);
+        if (callbacks.current.browser?.enabled) browserBindingRef.current = { mode: bindingMode, pending: true };
+        const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId);
         if (!isCurrent()) return;
-        inboxConfigRef.current = inboxConfigForShell(config, shell);
+        for (let attempt = 0; attempt < 2; attempt++) {
+        const browser = callbacks.current.browser?.enabled ? await connectBrowser(callbacks.current.browser, cwd, browserChoice(bindingMode), planningOnly, shell, message => notice("warn", message)) : null;
+        if (!isCurrent()) return;
+        browserBindingRef.current = browser ? { mode: bindingMode, pending: false } : null;
+        inboxConfigRef.current = { ...inboxConfigForShell(config, shell), ...(browser ? {
+          "mcp_servers.trex_browser.command": browser.command,
+          "mcp_servers.trex_browser.args": browser.args,
+          "mcp_servers.trex_browser.enabled": true,
+          "mcp_servers.trex_browser.required": true,
+          "mcp_servers.trex_browser.startup_timeout_sec": 30,
+          "mcp_servers.trex_browser.tool_timeout_sec": 120,
+        } : {}) };
+        if (callbacks.current.team) {
+          const teamConfig = browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell);
+          if (!isCurrent()) return;
+          Object.assign(inboxConfigRef.current, {
+            "mcp_servers.trex_team.command": teamConfig.command, "mcp_servers.trex_team.args": teamConfig.args,
+            "mcp_servers.trex_team.enabled": true, "mcp_servers.trex_team.required": true,
+            "mcp_servers.trex_team.tool_timeout_sec": 1900, "mcp_servers.trex_team.default_tools_approval_mode": "approve",
+          });
+        }
         const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags: launch.flags, shell, env });
         if (!procId || !isCurrent() || !agent.isCurrent(procId)) return;
         readyProcessRef.current = procId;
@@ -416,9 +533,26 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         if (launch.ignored.length) notice("info", `El chat no usa estas opciones del perfil: ${launch.ignored.join(", ")}.`);
         const thread = openThread(launch, procId);
         threadRef.current = thread;
-        await thread.catch(error => {
-          if (isCurrent() && agent.isCurrent(procId)) notice("error", `No se pudo abrir la conversación de Codex: ${formatError(error)}`);
-        });
+        try { await thread; }
+        catch (error) {
+          if (!isCurrent() || !agent.isCurrent(procId)) return;
+          if (error instanceof CodexBrowserModeMismatch && attempt === 0) {
+            // No model turn has run. Replace the process and resume this exact native thread.
+            bindingMode = error.mode;
+            browserBindingRef.current = { mode: bindingMode, pending: true };
+            browserThreadRef.current = null;
+            readyProcessRef.current = null;
+            threadRef.current = null;
+            rejectPending("Codex reconectó los permisos del navegador.");
+            continue;
+          }
+          if (error instanceof CodexBrowserConnectionError) {
+            readyProcessRef.current = null; browserThreadRef.current = null;
+            dispatch({ type: "spawnFailed", message: formatError(error) });
+          } else notice("error", `No se pudo abrir la conversación de Codex: ${formatError(error)}`);
+        }
+        break;
+        }
       } catch (error) {
         if (isCurrent()) dispatch({ type: "spawnFailed", message: `No se pudo iniciar Codex: ${formatError(error)}` });
       }
@@ -444,6 +578,11 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const markIssued = (id: string, signal?: AbortSignal, turnId?: string): void => {
     signal?.throwIfAborted();
     if (stopRequestedRef.current) throw new Error("Espera a que termine el turno detenido antes de volver a enviar.");
+    if (browserBindingRef.current && (browserBindingRef.current.pending || !browserThreadRef.current
+      || browserThreadRef.current.process !== readyProcessRef.current || browserThreadRef.current.id !== activeThreadRef.current
+      || browserThreadRef.current.generation !== threadGenerationRef.current)) {
+      throw new CodexBrowserPermissionsError("Codex todavía no confirmó los permisos del navegador. No se enviarán mensajes.");
+    }
     for (const entry of submissionsRef.current.values()) if (entry.id === id) {
       entry.issued = true;
       entry.generation = threadGenerationRef.current;
@@ -473,7 +612,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     try { result = await request<typeof result>(activeTurnId ? "turn/steer" : "turn/start", {
       threadId, input: userInput(text, images, mentionedSkills(text, current.skills)), clientUserMessageId: userId,
       ...(planningOnly && !activeTurnId ? codexPlanningTurn(overrides, choicesRef.current.model ?? threadModelRef.current,
-        choicesRef.current.effort ?? current.effort) : overrides),
+        choicesRef.current.effort ?? current.effort, callbacks.current.planningInstruction ?? null) : overrides),
     }, procId!); }
     catch (error) {
       // Un rechazo RPC libera un start sin identidad o una entrega cuyo turno ya terminó.
@@ -545,7 +684,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     if (original?.kind !== "user" || !original.providerTurnId) throw new Error("No se encontró el turno original de este mensaje.");
     editingRef.current = true;
     try {
-      if (!alive) await start();
+      if (!alive || !readyProcessRef.current || !agent.isCurrent(readyProcessRef.current)) await start();
       if (epoch !== deliveryEpochRef.current) return;
       const parsed = codexLaunch(args);
       if (planningOnly && !parsed) throw new Error("El perfil de Codex no admite un chat de planificación. Revisa sus argumentos.");
@@ -560,6 +699,15 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       if (planningOnly) assertCodexPlanningThread(response);
       const newId = response.thread?.id;
       if (!newId) throw new Error("Codex no devolvió la conversación regenerada.");
+      const priorBrowserThread = browserThreadRef.current;
+      confirmBrowserThread(response, newId);
+      const forkBrowserThread = browserThreadRef.current;
+      const restoreBrowserThread = (): void => {
+        if (browserThreadRef.current === forkBrowserThread) browserThreadRef.current = priorBrowserThread;
+      };
+      try { await confirmBrowserTools(newId); }
+      catch (error) { restoreBrowserThread(); throw error; }
+      if (epoch !== deliveryEpochRef.current) { restoreBrowserThread(); return; }
       threadRef.current = Promise.resolve(newId);
       activeThreadRef.current = newId;
       resumeThreadRef.current = newId;
@@ -630,6 +778,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     freshRef.current = true;
     resumeThreadRef.current = null;
     activeThreadRef.current = null;
+    browserThreadRef.current = null;
     turnIdRef.current = null;
     stopRequestedRef.current = false; stoppedTurnRef.current = null; stoppedRequestsRef.current.clear();
     dispatch({ type: "reset" });
@@ -683,7 +832,15 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     // Codex aplica el modo, el modelo, el esfuerzo y la velocidad a partir del siguiente turno.
     setMode: mode => {
       if (planningOnly) return;
+      const reconnect = browserBindingRef.current && browserBindingRef.current.mode !== browserMode(mode);
+      if (reconnect && (stateRef.current.pendingTurns > 0 || submissionsRef.current.size > 0 || !!turnIdRef.current || editingRef.current)) {
+        notice("info", "Detén la respuesta antes de cambiar los permisos del navegador."); return;
+      }
       choicesRef.current = { ...choicesRef.current, mode };
+      if (reconnect) {
+        startupEpochRef.current++; threadGenerationRef.current++;
+        readyProcessRef.current = null; processReadyRef.current = null; threadRef.current = null;
+      }
       dispatch({ type: "mode", mode });
       // El turno en curso sigue con el modo anterior: lo que pida desde ahora se acepta aquí.
       if (allowsAll(mode)) for (const item of autoAllowed(stateRef.current.items)) answer(item, true, false);

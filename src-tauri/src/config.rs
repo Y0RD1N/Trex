@@ -50,6 +50,8 @@ pub struct LauncherProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub browser_enabled: bool,
+    pub browser_profile: String,
     pub profiles: Vec<LauncherProfile>,
     pub default_profile_id: String,
     pub shell: String,
@@ -85,6 +87,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            browser_enabled: true,
+            browser_profile: "BROWSER1".into(),
             // Vacío indica al frontend que debe migrar la instalación anterior.
             profiles: Vec::new(),
             default_profile_id: String::new(),
@@ -115,6 +119,30 @@ impl Default for Settings {
             terminal_border: true,
             motion: "system".into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod browser_preference_tests {
+    use super::*;
+    #[test]
+    fn browser_permission_and_profile_survive_native_configuration_roundtrip() {
+        for enabled in [false,true] {
+            let raw=serde_json::json!({"version":1,"projects":[],"settings":{"browserEnabled":enabled,"browserProfile":"BROWSER7"},"ui":{"lastTabs":[]}});
+            let config:AppConfig=serde_json::from_value(raw).unwrap();
+            assert_eq!(config.settings.browser_enabled,enabled);
+            assert_eq!(config.settings.browser_profile,"BROWSER7");
+            let saved=serde_json::to_value(&config).unwrap();
+            assert_eq!(saved["settings"]["browserEnabled"],enabled);
+            assert_eq!(saved["settings"]["browserProfile"],"BROWSER7");
+            let restored:AppConfig=serde_json::from_value(saved).unwrap();
+            assert_eq!(restored.settings.browser_enabled,enabled);assert_eq!(restored.settings.browser_profile,"BROWSER7");
+        }
+    }
+    #[test]
+    fn older_configuration_uses_the_frontend_browser_defaults() {
+        let config:AppConfig=serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
+        assert!(config.settings.browser_enabled);assert_eq!(config.settings.browser_profile,"BROWSER1");
     }
 }
 

@@ -16,6 +16,7 @@ import { pathName } from "../../chatFiles";
 import { KIND_LABELS, fileKind, openFile } from "../../sharedFiles";
 import { useImageViewer } from "../ImageViewer";
 import { useMessageEntry } from "./useMessageEntry";
+import { brokerArtifactId, type BrowserArtifact } from "../../browser";
 
 const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
   read: <FileIcon />, edit: <PencilIcon size={15} />, run: <TerminalIcon size={15} />, search: <SearchIcon size={15} />,
@@ -232,8 +233,8 @@ function toolDetail(item: ToolItem, cwd: string): ReactNode {
   </>;
 }
 
-export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onImplement }: {
-  item: ToolItem; cwd: string; expanded?: boolean; onImplement?: () => void;
+export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onImplement, onOpenArtifact }: {
+  item: ToolItem; cwd: string; expanded?: boolean; onImplement?: () => void; onOpenArtifact?: (artifact: BrowserArtifact) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   if (item.name === "TodoWrite" && expanded) return <TodoCard input={item.input} />;
@@ -253,8 +254,22 @@ export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onIm
       <span className="chat-tool-chevron" aria-hidden="true"><ChevronIcon size={13} /></span>
     </button>
     {open && <div className="chat-tool-detail">{toolDetail(item, cwd)}</div>}
+    {!!item.artifacts?.length && <div className="chat-browser-artifacts">{item.artifacts.map(artifact => <BrowserArtifactButton key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}</div>}
   </div>;
 });
+
+function BrowserArtifactButton({ artifact, onOpen }: { artifact: BrowserArtifact; onOpen?: (artifact: BrowserArtifact) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const image = artifact.mimeType.startsWith("image/"), video = artifact.mimeType.startsWith("video/");
+  const label = image ? "Captura" : video ? "Vídeo" : artifact.kind === "trace" ? "Traza" : "Diagnóstico";
+  const canOpen = !!onOpen && !!brokerArtifactId(artifact) && (image || video);
+  return <button type="button" className="chat-browser-artifact" disabled={!canOpen || busy} onClick={() => {
+    if (!onOpen || !canOpen || busy) return;
+    setBusy(true); void onOpen(artifact).finally(() => setBusy(false));
+  }} title={canOpen ? `Abrir ${label.toLowerCase()}` : "Archivo local del navegador"}>
+    <ImageIcon size={15} /><span>{busy ? "Abriendo…" : label}</span><small>{artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB`}</small>
+  </button>;
+}
 
 /** Opciones de "permitir siempre" que propone el propio CLI. */
 function rememberLabel(suggestions: unknown[]): string | null {

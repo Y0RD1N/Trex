@@ -8,7 +8,7 @@ import { load } from "./ts-loader.mjs";
 // process boundary and both kinds of browser timer are local, offline fakes.
 const dependencies = Object.fromEntries(await Promise.all([
   "chatMessages", "chatCommands", "chatState", "claudeChat", "codexChat", "trexChat",
-  "messageQueue", "inboxProtocol", "workflowSafety", "sharedFiles", "chatQuestions",
+  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam",
 ].map(async name => [`../${name}`, await load(name)])));
 const compiled = Object.fromEntries(await Promise.all(["Trex", "Claude", "Codex"].map(async provider => {
   const source = await readFile(new URL(`../src/hooks/use${provider}Chat.ts`, import.meta.url), "utf8");
@@ -134,6 +134,8 @@ function harness(t, provider, extra = {}) {
       case "initialize": respond(message, provider === "trex" ? { protocolVersion: 1 } : {}); break;
       case "models/list": respond(message, { models: [{ id: "offline-model", efforts: ["high", "max"] }] }); break;
       case "model/list": respond(message, { data: [] }); break;
+      case "mcpServerStatus/list": respond(message, extra.mcpStatus ?? { data: [{ name: "trex_browser", runtimeStatus: "connected", toolsError: null,
+        tools: Object.fromEntries(["browser_navigate", "browser_snapshot", "browser_status"].map(name => [name, { name, inputSchema: { type: "object", properties: {} } }])) }] }); break;
       case "skills/list": case "account/rateLimits/read": respond(message, { data: [] }); break;
       case "session/start":
         conversation = `conversation-${++conversationCounter}`;
@@ -175,7 +177,9 @@ function harness(t, provider, extra = {}) {
   const modules = {
     ...dependencies,
     react: hooks,
+    "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },
     "../api": { agentWrite: nativeWrite, formatError: error => error?.message ?? String(error),
+      agentTeamMcpConfig: async binding => { assert.ok(extra.teamConfig, "Unexpected team bridge discovery"); return typeof extra.teamConfig === "function" ? extra.teamConfig(binding) : extra.teamConfig; },
       codexContextWindows: async () => ({}), messageQueueMcpConfig: async () => ({}), claudeRewindPoint: async () => null },
     "../conversations": { readConversation: async () => [] },
     "../platform": { IS_WINDOWS: true },

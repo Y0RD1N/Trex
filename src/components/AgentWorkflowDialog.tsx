@@ -8,12 +8,12 @@ import type { AgentProvider, LauncherProfile, Project, Settings } from "../types
 import AgentIcon from "./AgentIcon";
 import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
 import { handoffTargetReason } from "./HandoffDialog";
-import { ArrowRightIcon, FolderIcon, MapIcon, ShieldIcon, WrenchIcon } from "./Icons";
+import { ArrowRightIcon, FolderIcon, ListIcon, MapIcon, ShieldIcon, WrenchIcon } from "./Icons";
 import Select, { type SelectOption } from "./Select";
 import "./AgentWorkflowDialog.css";
+import AgentTeamDialog, { type TeamRequest } from "./AgentTeamDialog";
 
 export type WorkflowRequest = {
-  task: string;
   planner: { profileId: string; model: string | null; effort: string | null };
   executor: { profileId: string; model: string | null; effort: string | null };
 };
@@ -24,6 +24,7 @@ export type AgentWorkflowDialogProps = {
   settings: Settings;
   onClose: () => void;
   onStart: (request: WorkflowRequest) => void;
+  onStartTeam?: (request: TeamRequest) => void;
   submitting: boolean;
   error: string | null;
   initialExecutor?: WorkflowRequest["executor"];
@@ -41,7 +42,7 @@ function preferredTarget(targets: Target[], provider: AgentProvider, defaultProf
 }
 
 /** Cada etapa conserva sus propias elecciones, incluso si ambas usan el mismo perfil. */
-function useWorkflowStage(targets: Target[], provider: AgentProvider, settings: Settings, cwd: string, leaving: boolean, initial?: WorkflowRequest["executor"]) {
+export function useWorkflowStage(targets: Target[], provider: AgentProvider, settings: Settings, cwd: string, leaving: boolean, initial?: WorkflowRequest["executor"]) {
   const [profileId, setProfileId] = useState(initial?.profileId ?? "");
   const [modelChoices, setModelChoices] = useState<Record<string, string>>(() => initial ? { [initial.profileId]: initial.model ?? "" } : {});
   const [effortChoices, setEffortChoices] = useState<Record<string, Record<string, string>>>(() => initial?.effort ? { [initial.profileId]: { [initial.model ?? ""]: initial.effort } } : {});
@@ -153,6 +154,7 @@ function WorkflowStageCard({ stage, role, profileOptions, disabled }: {
     <div className="workflow-field">
       <label className="workflow-field-label" id={`${id}-profile-label`} htmlFor={`${id}-profile`}>Asistente para {name}</label>
       <Select id={`${id}-profile`} aria-labelledby={`${id}-profile-label`} className="workflow-select" align="start"
+        data-autofocus={planning||undefined}
         value={stage.profileId} options={profileOptions} placeholder="Sin perfiles compatibles"
         disabled={disabled || !stage.profile} onChange={stage.setProfileId} />
     </div>
@@ -189,48 +191,46 @@ function WorkflowStageCard({ stage, role, profileOptions, disabled }: {
   </section>;
 }
 
-export default function AgentWorkflowDialog({ project, profiles, settings, onClose, onStart, submitting, error, initialExecutor, ...motion }: AgentWorkflowDialogProps) {
-  const taskId = useId();
-  const [task, setTask] = useState("");
+export default function AgentWorkflowDialog({ project, profiles, settings, onClose, onStart, onStartTeam, submitting, error, initialExecutor, ...motion }: AgentWorkflowDialogProps) {
+  const [teamMode, setTeamMode] = useState(false);
   const targets = useMemo(() => profiles.map(profile => ({ profile, reason: handoffTargetReason(profile, null, settings) })), [profiles, settings]);
   const planner = useWorkflowStage(targets, "claude", settings, project.path, !!motion.leaving);
   const executor = useWorkflowStage(targets, "codex", settings, project.path, !!motion.leaving, initialExecutor);
   const available = targets.some(target => !target.reason);
   const profileOptions: SelectOption[] = targets.map(({ profile, reason }) => ({ value: profile.id, label: profile.name,
     description: reason ?? PROVIDER_NAMES[profile.provider], disabled: !!reason, icon: <AgentIcon kind={profile.provider} size={17} /> }));
-  const ready = !!task.trim() && planner.ready && executor.ready && !submitting && !motion.leaving;
+  const ready = planner.ready && executor.ready && !submitting && !motion.leaving;
 
+  if (teamMode && onStartTeam) return <AgentTeamDialog {...motion} project={project} profiles={profiles} settings={settings} onClose={onClose}
+    onStart={onStartTeam} onBack={() => setTeamMode(false)} submitting={submitting} error={error} initialMaster={initialExecutor} />;
   return <FeatureDialog {...motion} title="Planificar e implementar" onClose={onClose} className="agent-workflow-dialog"
     footer={<>
-      <span className="feature-hint workflow-footer-hint">Dos agentes, una conversación.</span>
+      <span className="feature-hint workflow-footer-hint">La idea se escribe después, en el chat.</span>
       <button type="button" className="btn btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
       <button type="button" className="btn btn-primary workflow-start" disabled={!ready} onClick={() => {
-        if (ready) onStart({ task: task.trim(), planner: { profileId: planner.profileId, model: planner.model || null, effort: planner.effort },
+        if (ready) onStart({ planner: { profileId: planner.profileId, model: planner.model || null, effort: planner.effort },
           executor: { profileId: executor.profileId, model: executor.model || null, effort: executor.effort } });
       }}>
         {submitting ? <span className="chat-spinner" aria-hidden="true" /> : <ArrowRightIcon size={15} />}
-        {submitting ? "Iniciando flujo…" : "Iniciar flujo"}
+        {submitting ? "Guardando…" : "Guardar y abrir chat"}
       </button>
     </>}>
     <div className="workflow-project"><span className="workflow-project-icon" aria-hidden="true"><FolderIcon size={20} /></span>
       <div><span className="workflow-eyebrow">Flujo automático en</span><strong>{project.name}</strong>
         <span className="workflow-project-path" title={project.path}>{project.path}</span></div>
     </div>
-    <p className="workflow-explanation">Ambos asistentes comparten un mismo chat. Uno prepara el plan y el otro lo implementa automáticamente. Podrás volver a planificar nuevas ideas aquí, conservando modelos, esfuerzo e historial.</p>
+    <p className="workflow-explanation">Elige quién planifica y quién implementa, con su cuenta, modelo y esfuerzo. Al guardar tendrás un chat compartido donde escribir tu idea y continuar la conversación.</p>
+    <ol className="workflow-setup-steps" aria-label="Cómo empieza el flujo"><li><span>1</span>Configura los agentes</li><li><ArrowRightIcon size={13} aria-hidden="true" /><span>2</span>Escribe tu idea en el chat</li></ol>
+    {onStartTeam && <button type="button" className="workflow-team-choice" disabled={submitting} onClick={() => setTeamMode(true)}>
+      <span className="workflow-team-choice-icon"><ListIcon size={20} /></span><span><strong>Trabajar con un equipo</strong><small>Un principal que planifica y delega a los subagentes que elijas.</small></span><ArrowRightIcon size={17} />
+    </button>}
     {initialExecutor && <p className="workflow-field-hint">Este equipo continuará en tu chat actual. Conserva su perfil en una de las dos etapas para mantener la conversación.</p>}
-    <div className="workflow-field workflow-task-field">
-      <label className="workflow-field-label" htmlFor={taskId}>¿Qué quieres conseguir? <span>Obligatorio</span></label>
-      <textarea id={taskId} className="input workflow-task" data-autofocus tabIndex={0} required aria-required="true"
-        aria-describedby={`${taskId}-hint`} rows={3} value={task} disabled={submitting}
-        onChange={event => setTask(event.currentTarget.value)} placeholder="Describe la tarea, el resultado esperado y las restricciones que deben respetar…" />
-      <p className="workflow-field-hint" id={`${taskId}-hint`}>La tarea y el plan guiarán la implementación en este proyecto.</p>
-    </div>
     <div className="workflow-stages">
       <WorkflowStageCard stage={planner} role="planner" profileOptions={profileOptions} disabled={submitting} />
       <span className="workflow-direction" aria-hidden="true"><ArrowRightIcon size={17} /></span>
       <WorkflowStageCard stage={executor} role="executor" profileOptions={profileOptions} disabled={submitting} />
     </div>
-    <p className="workflow-automation-note"><ShieldIcon size={15} /><span>La implementación comienza al finalizar el plan y usa los permisos normales del asistente para editar archivos y ejecutar comandos.</span></p>
+    <p className="workflow-automation-note"><ShieldIcon size={15} /><span>Guardar la configuración no inicia ninguna tarea. Cuando envíes tu idea en el chat, el planificador preparará el plan y el ejecutor lo implementará con sus permisos habituales.</span></p>
     {!available && <p className="workflow-status" role="status">Añade en Ajustes un perfil compatible con el chat, sin opciones de reanudación ni modos especiales.</p>}
     {error && <p className="workflow-status error" role="alert">{error}</p>}
   </FeatureDialog>;

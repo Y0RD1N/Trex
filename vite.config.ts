@@ -26,7 +26,7 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. Native Rust sources and build artifacts are outside frontend HMR.
-      ignored: ["**/src-tauri/**", "**/trex-cli/**"],
+      ignored: ["**/src-tauri/**", "**/trex-cli/**", "**/trex-browser/**"],
     },
   },
 }));

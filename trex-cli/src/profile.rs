@@ -1135,6 +1135,11 @@ mod tests {
     }
 
     fn store(path: &Path) -> ProfileStore<MockCredentials> {
+        #[cfg(unix)]
+        if reject_link(path).is_ok() && path.is_dir() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
         #[cfg(windows)]
         if reject_link(path).is_ok() && path.is_dir() {
             secure_test_directory(path);
@@ -1244,6 +1249,11 @@ mod tests {
     #[test]
     fn no_key_profiles_and_unsaved_synthetic_profiles_never_open_key_store() {
         let temp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        }
         #[cfg(windows)]
         secure_test_directory(temp.path());
         let store = ProfileStore {
@@ -1396,11 +1406,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("storage");
         fs::create_dir(&directory).unwrap();
+        let store = store(&directory);
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
         let lock = directory.join("profiles.lock");
         fs::write(&lock, b"").unwrap();
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o666)).unwrap();
-        let store = store(&directory);
         assert!(store.save(input("saved")).is_err());
         assert_eq!(
             fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
@@ -1686,6 +1696,11 @@ mod tests {
     #[test]
     fn concurrent_updates_do_not_lose_profiles_or_credentials() {
         let temp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        }
         #[cfg(windows)]
         secure_test_directory(temp.path());
         let credentials = MockCredentials::default();

@@ -77,13 +77,32 @@ struct Agent {
 
 impl Agent {
     fn spawn(home: &Path, profile: &str) -> Self {
-        let mut child = command(home)
+        Self::spawn_command(command(home), profile)
+    }
+
+    fn spawn_command(mut command: Command, profile: &str) -> Self {
+        command
             .args(["--profile", profile, "app-server"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn actual trex-agent binary");
+            .stderr(Stdio::piped());
+        // Parallel Unix fixtures can briefly inherit another fixture's open
+        // executable copy until exec closes its CLOEXEC descriptor. Retry only
+        // that transient ETXTBSY condition, never an actual agent failure.
+        let spawn_deadline = Instant::now() + Duration::from_secs(1);
+        let mut child = loop {
+            match command.spawn() {
+                Ok(child) => break child,
+                Err(error)
+                    if cfg!(unix)
+                        && error.raw_os_error() == Some(26)
+                        && Instant::now() < spawn_deadline =>
+                {
+                    thread::sleep(Duration::from_millis(10))
+                }
+                Err(error) => panic!("spawn actual trex-agent binary: {error}"),
+            }
+        };
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().unwrap();
         let stderr_pipe = child.stderr.take().unwrap();
@@ -563,6 +582,47 @@ fn plan_rejects_unadvertised_write_and_shell_then_delivers_a_final_plan() {
     f.api.assert_quiet();
 }
 
+#[test]
+fn visible_plan_is_durable_and_available_without_write_permissions() {
+    let f = Fixture::new();
+    let mut agent = f.agent();
+    let started = agent.start(f.workspace.path(), "plan", None);
+    let session = started["sessionId"].as_str().unwrap().to_string();
+    agent.turn(
+        &session,
+        "visible-plan",
+        "Inspect and maintain a task list.",
+    );
+    let request = f.api.chat();
+    assert!(request.body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["function"]["name"] == "update_plan"));
+    let plan = json!({"plan":[{"step":"Inspect files","status":"completed"},{"step":"Validate the approach","status":"in_progress"}]});
+    request.completion(
+        calls(vec![tool("publish-plan", "update_plan", plan.clone())]),
+        "tool_calls",
+    );
+    f.api
+        .chat()
+        .final_text("The task list is visible; no files were modified.");
+    agent.completed("visible-plan", "completed");
+    agent.assert_no_event("permission/request");
+    let history = agent.history(&session);
+    assert!(history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["name"] == "update_plan"
+            && item["input"] == plan
+            && item["status"] == "done"));
+    drop(agent);
+    let mut restored = f.agent();
+    let summary = restored.start(f.workspace.path(), "plan", Some(&session));
+    assert_eq!(summary["items"], history["items"]);
+    f.api.assert_quiet();
+}
 #[test]
 fn ask_defers_mutation_until_permission_and_denial_does_not_write() {
     let f = Fixture::new();
@@ -1087,3 +1147,8 @@ fn inbox_rejects_partial_snapshots_and_commits_receipts_before_ack_without_doubl
     );
     f.api.assert_quiet();
 }
+
+#[path = "browser_cases/mod.rs"]
+mod browser_cases;
+#[path = "team_cases/mod.rs"]
+mod team_cases;

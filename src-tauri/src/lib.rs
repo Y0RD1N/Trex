@@ -4,6 +4,7 @@
 // Claude Code en el sistema y persistir la configuración del usuario.
 mod accounts;
 mod agent;
+mod agent_team;
 mod attachments;
 mod config;
 mod pty;
@@ -21,6 +22,7 @@ mod project_icon;
 mod shared_files;
 mod terminal_env;
 mod trex_cli;
+mod trex_browser;
 
 use agent::{AgentSpawnRequest, AgentSpawnResponse, AgentState};
 use config::AppConfig;
@@ -321,7 +323,7 @@ async fn desktop_notification(app: AppHandle, title: String, body: String) -> Re
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if queue_mcp::run_if_requested() {
+    if agent_team::run_if_requested() || queue_mcp::run_if_requested() {
         return;
     }
     tauri::Builder::default()
@@ -332,6 +334,13 @@ pub fn run() {
         .manage(PtyState::default())
         .manage(AgentState::default())
         .invoke_handler(tauri::generate_handler![
+            agent_team::agent_team_open,
+            agent_team::agent_team_poll,
+            agent_team::agent_team_snapshot,
+            agent_team::agent_team_claim,
+            agent_team::agent_team_finish,
+            agent_team::agent_team_pause,
+            agent_team::agent_team_mcp_config,
             pty_spawn,
             pty_write,
             pty_ack,
@@ -345,6 +354,12 @@ pub fn run() {
             detect_claude,
             detect_codex,
             trex_cli::trex_cli_status,
+            trex_browser::trex_browser_status,
+            trex_browser::trex_browser_mcp_config,
+            trex_browser::trex_browser_call,
+            trex_browser::trex_browser_open_artifact,
+            trex_browser::trex_browser_profiles,
+            trex_browser::trex_browser_create_profile,
             trex_cli::trex_cli_profiles,
             trex_cli::trex_cli_models,
             trex_cli::trex_cli_save_profile,

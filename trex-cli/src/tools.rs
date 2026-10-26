@@ -18,8 +18,10 @@ use serde_json::{json, Map, Value};
 use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
+    future::Future,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
+    pin::Pin,
     process::Stdio,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -41,6 +43,122 @@ const MAX_PATCH_FILES: usize = 32;
 const SKIP_DIRS: [&str; 3] = [".git", "node_modules", "target"];
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
+
+/// A deliberately small registry interface; external providers cannot dispatch
+/// arbitrary commands or bypass the session runner's approval journal.
+pub trait ToolProvider: Send + Sync {
+    fn definitions(&self, mode: &str) -> Vec<Value>;
+    fn is_mutating(&self, name: &str, input: &Value) -> bool;
+    fn execute<'a>(
+        &'a self,
+        cwd: &'a Path,
+        mode: &'a str,
+        name: &'a str,
+        input: &'a Value,
+        operation_id: &'a str,
+        cancel: CancellationToken,
+    ) -> ToolFuture<'a>;
+}
+
+pub struct NativeToolProvider;
+impl ToolProvider for NativeToolProvider {
+    fn definitions(&self, mode: &str) -> Vec<Value> {
+        definitions()
+            .into_iter()
+            .filter(|tool| {
+                mode != "plan" || !is_mutating(tool["function"]["name"].as_str().unwrap_or(""))
+            })
+            .collect()
+    }
+    fn is_mutating(&self, name: &str, _input: &Value) -> bool {
+        is_mutating(name)
+    }
+    fn execute<'a>(
+        &'a self,
+        cwd: &'a Path,
+        _mode: &'a str,
+        name: &'a str,
+        input: &'a Value,
+        _operation_id: &'a str,
+        cancel: CancellationToken,
+    ) -> ToolFuture<'a> {
+        Box::pin(execute(cwd, name, input, cancel))
+    }
+}
+
+pub struct ToolRegistry {
+    providers: Vec<Box<dyn ToolProvider>>,
+    team: Option<crate::team::TeamConfig>,
+    role_instructions: Option<String>,
+}
+impl ToolRegistry {
+    pub fn new(browser: Option<crate::browser::BrowserToolProvider>) -> Self {
+        let mut providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(NativeToolProvider)];
+        if let Some(browser) = browser {
+            providers.push(Box::new(browser));
+        }
+        Self {
+            providers,
+            team: None,
+            role_instructions: None,
+        }
+    }
+    pub fn with_team(mut self, config: Option<crate::team::TeamConfig>) -> Self {
+        if let Some(config) = config {
+            self.providers
+                .push(Box::new(crate::team::TeamToolProvider::new(config.clone())));
+            self.team = Some(config);
+        }
+        self
+    }
+    pub fn with_role_instructions(mut self, instructions: Option<String>) -> Self {
+        self.role_instructions = instructions;
+        self
+    }
+    pub fn role_instructions(&self) -> &Option<String> {
+        &self.role_instructions
+    }
+    pub fn team_config(&self) -> &Option<crate::team::TeamConfig> {
+        &self.team
+    }
+    fn provider(&self, mode: &str, name: &str) -> Option<&dyn ToolProvider> {
+        self.providers
+            .iter()
+            .find(|provider| {
+                provider
+                    .definitions(mode)
+                    .iter()
+                    .any(|tool| tool["function"]["name"] == name)
+            })
+            .map(|provider| provider.as_ref())
+    }
+    pub fn definitions(&self, mode: &str) -> Vec<Value> {
+        self.providers
+            .iter()
+            .flat_map(|provider| provider.definitions(mode))
+            .collect()
+    }
+    pub fn is_mutating(&self, mode: &str, name: &str, input: &Value) -> bool {
+        self.provider(mode, name)
+            .is_none_or(|provider| provider.is_mutating(name, input))
+    }
+    pub async fn execute(
+        &self,
+        cwd: &Path,
+        mode: &str,
+        name: &str,
+        input: &Value,
+        operation_id: &str,
+        cancel: CancellationToken,
+    ) -> Result<Value> {
+        self.provider(mode, name)
+            .context("unknown or unavailable tool")?
+            .execute(cwd, mode, name, input, operation_id, cancel)
+            .await
+    }
+}
+
 /// OpenAI Chat Completions function-tool definitions.
 pub fn definitions() -> Vec<Value> {
     let specs = [
@@ -51,6 +169,7 @@ pub fn definitions() -> Vec<Value> {
         ("apply_patch", "Apply a strict JSON patch string: {\"files\":[{\"path\":\"relative/path\",\"before\":\"exact entire current text\",\"after\":\"entire replacement text\"}]}. before:null creates a file. No deletes or directory creation. All preconditions validated before replacements. Max 32 files, 1 MiB/file, 4 MiB patch. Atomic per file; OS commit failures may partially apply a multi-file patch.", json!({"patch":{"type":"string"}}), vec!["patch"]),
         ("shell", "Run an unrestricted shell command in the workspace (PowerShell on Windows, /bin/sh elsewhere). Caller must authorize shell use. timeoutMs defaults to 60000, max 600000. Cancellation/timeout kills the process (Windows: process tree). stdout/stderr each capped at 64 KiB.", json!({"command":{"type":"string"},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000}}), vec!["command"]),
         ("trex_read_messages", "Read newly queued user messages. Handled by the server, not the native tool executor.", json!({}), vec![]),
+        ("update_plan", "Publish or update your visible task list. Keep completed work marked completed, the current step in_progress, and future steps pending. Do not mark unverified work complete. This only updates the plan; it does not execute tasks.", json!({"plan":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"step":{"type":"string","maxLength":2000},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["step","status"],"additionalProperties":false}}}), vec!["plan"]),
     ];
     specs.into_iter().map(|(name, description, properties, required)| json!({
         "type":"function", "function": {"name":name,"description":description,
@@ -62,7 +181,7 @@ pub fn definitions() -> Vec<Value> {
 pub fn is_mutating(name: &str) -> bool {
     !matches!(
         name,
-        "read_file" | "list_files" | "search" | "trex_read_messages"
+        "read_file" | "list_files" | "search" | "trex_read_messages" | "update_plan"
     )
 }
 
@@ -75,6 +194,33 @@ pub async fn execute(
     check_cancel(&cancel)?;
     // Validate tool identity before resolving cwd or touching disk.
     match name {
+        "update_plan" => {
+            fields(input, &["plan"], &["plan"])?;
+            let steps = input["plan"].as_array().context("plan must be an array")?;
+            ensure!(
+                !steps.is_empty() && steps.len() <= 64,
+                "plan needs 1 to 64 steps"
+            );
+            let mut active = 0;
+            for step in steps {
+                fields(step, &["step", "status"], &["step", "status"])?;
+                let title = step["step"].as_str().context("step must be text")?;
+                ensure!(
+                    !title.trim().is_empty()
+                        && title.len() <= 8000
+                        && title.chars().count() <= 2000,
+                    "invalid step text"
+                );
+                let status = step["status"].as_str().unwrap_or("");
+                ensure!(
+                    ["pending", "in_progress", "completed"].contains(&status),
+                    "invalid step status"
+                );
+                active += usize::from(status == "in_progress");
+            }
+            ensure!(active <= 1, "only one plan step may be in progress");
+            return Ok(json!({"plan": steps}));
+        }
         "trex_read_messages" => {
             fields(input, &[], &[])?;
             bail!("trex_read_messages must be handled by the server")
@@ -1218,6 +1364,41 @@ async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) -> Result<V
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    #[tokio::test]
+    async fn plan_updates_are_read_only_bounded_and_validated_before_acceptance() {
+        let input = json!({"plan":[{"step":"Inspect","status":"completed"},{"step":"Validate","status":"in_progress"}]});
+        let registry = ToolRegistry::new(None);
+        assert!(registry
+            .definitions("plan")
+            .iter()
+            .any(|tool| tool["function"]["name"] == "update_plan"));
+        assert!(!is_mutating("update_plan"));
+        let result = execute(
+            Path::new("nonexistent-plan-workspace"),
+            "update_plan",
+            &input,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["plan"], input["plan"]);
+        for invalid in [
+            json!({"plan":[]}),
+            json!({"plan":[{"step":"A","status":"in_progress"},{"step":"B","status":"in_progress"}]}),
+            json!({"plan":[{"step":"A","status":"completed"},null]}),
+            json!({"plan":[{"step":"A","status":"completed","command":"bad"}]}),
+            json!({"plan":[{"step":" ","status":"completed"}]}),
+        ] {
+            assert!(execute(
+                Path::new("nonexistent-plan-workspace"),
+                "update_plan",
+                &invalid,
+                CancellationToken::new()
+            )
+            .await
+            .is_err());
+        }
+    }
     fn workspace() -> (TempDir, Workspace) {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path()).unwrap();

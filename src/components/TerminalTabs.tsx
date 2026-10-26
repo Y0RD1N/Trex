@@ -85,14 +85,16 @@ export default function TerminalTabs({
     <header className="tabs-bar" data-tauri-drag-region="deep">
       <div className="workspace-title" data-tauri-drag-region>
         <span className={current?.kind === "claude" ? "workspace-mark claude" : "workspace-mark"} aria-hidden="true">
-          {current?.agentRoom ? <span className="workspace-team-mark"><AgentIcon kind={current.agentRoom.planner.agent.provider} size={12} /><AgentIcon kind={current.agentRoom.executor.agent.provider} size={12} /></span>
+          {current?.agentTeam ? <span className="workspace-team-mark"><AgentIcon kind={current.agentTeam.master.agent.provider} size={12} /><span>+{current.agentTeam.workers.length}</span></span>
+            : current?.agentRoom ? <span className="workspace-team-mark"><AgentIcon kind={current.agentRoom.planner.agent.provider} size={12} /><AgentIcon kind={current.agentRoom.executor.agent.provider} size={12} /></span>
             : current ? <AgentIcon kind={current.kind} activity={current.exited ? "idle" : current.activity} nativeIndicator={title?.nativeIndicator} /> : <FolderIcon size={15} />}
         </span>
         <span className="workspace-title-text" title={title?.label ?? projectName} data-tauri-drag-region>
           {title?.label ?? (hasProject ? projectName : "Tu espacio")}
         </span>
         {current && <span className="workspace-project" data-tauri-drag-region>{projectName}</span>}
-        {current?.agentRoom ? <span className="workspace-profile" data-tauri-drag-region>{current.agentRoom.planner.agent.profileName} + {current.agentRoom.executor.agent.profileName}</span>
+        {current?.agentTeam ? <span className="workspace-profile" data-tauri-drag-region>{current.agentTeam.master.name} · {current.agentTeam.workers.length} subagentes</span>
+          : current?.agentRoom ? <span className="workspace-profile" data-tauri-drag-region>{current.agentRoom.planner.agent.profileName} + {current.agentRoom.executor.agent.profileName}</span>
           : current?.profileName && <span className="workspace-profile" title={`Perfil: ${current.profileName} · ${current.command}`} data-tauri-drag-region>{current.profileName}</span>}
       </div>
 
@@ -132,7 +134,7 @@ export default function TerminalTabs({
             className="session-create-menu" onClose={() => setMenu(null)}>
             <ProfileMenuItems profiles={profiles} defaultProfileId={defaultProfileId} defaultShortcut={shortcuts.newClaudeTab} onOpen={profileId => { setMenu(null); onNew(profileId); }} />
             {onWorkflow && <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onWorkflow(); }}>
-              <span className="context-icon" aria-hidden="true"><MapIcon size={16} /></span>Planear y ejecutar con agentes…
+              <span className="context-icon" aria-hidden="true"><MapIcon size={16} /></span>Configurar flujo de agentes…
             </button>}
             <div className="context-sep" role="separator" />
             <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => { setMenu(null); onNewShell(); }}>

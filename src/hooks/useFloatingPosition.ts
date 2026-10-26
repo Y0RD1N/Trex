@@ -4,7 +4,7 @@ export type AnchorRect = Pick<DOMRectReadOnly, "left" | "right" | "top" | "botto
 export type FloatingAnchor = { element: HTMLElement } | { rect: AnchorRect } | { x: number; y: number };
 export type FloatingSide = "top" | "bottom";
 /** `frozen` conserva la última posición: una capa que se desvanece no debe moverse. */
-type Options = { side?: FloatingSide; align?: "start" | "center" | "end"; gap?: number; track?: boolean; frozen?: boolean };
+type Options = { side?: FloatingSide; align?: "start" | "center" | "end"; gap?: number; track?: boolean; frozen?: boolean; minHeight?: number };
 type Position = { left: number; top: number; origin: string; side: FloatingSide };
 type Measurement = { anchor: FloatingAnchor; surface: HTMLElement; position: Position };
 
@@ -12,7 +12,7 @@ type Measurement = { anchor: FloatingAnchor; surface: HTMLElement; position: Pos
 export function useFloatingPosition(
   anchor: FloatingAnchor | null,
   surfaceRef: RefObject<HTMLElement | null>,
-  { side = "bottom", align = "end", gap = 6, track = false, frozen = false }: Options = {},
+  { side = "bottom", align = "end", gap = 6, track = false, frozen = false, minHeight = 0 }: Options = {},
 ): Position | null {
   const [measurement, setMeasurement] = useState<Measurement | null>(null);
   const updateRef = useRef<(() => void) | null>(null);
@@ -35,12 +35,17 @@ export function useFloatingPosition(
         : { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y };
       // offsetWidth no incluye la escala de la animación de entrada. La altura es
       // la del contenido completo (sin el recorte de una altura máxima anterior).
+      // Measure the CSS-capped menu, without carrying a previous side's room
+      // into this measurement. scrollHeight alone made tall menus float far
+      // above the button even though their actual visible height was capped.
+      surface.style.removeProperty("--floating-max-height");
       const width = surface.offsetWidth;
-      const natural = surface.scrollHeight + surface.offsetHeight - surface.clientHeight;
+      const cssMax = Number.parseFloat(getComputedStyle(surface).maxHeight);
+      const natural = Math.min(surface.scrollHeight + surface.offsetHeight - surface.clientHeight, Number.isFinite(cssMax) ? cssMax : Infinity);
       const roomAbove = rect.top - topEdge - gap;
       const roomBelow = bottomEdge - rect.bottom - gap;
       const resolvedSide = side === "bottom"
-        ? roomBelow < natural && roomAbove > roomBelow ? "top" : "bottom"
+        ? minHeight > 0 && roomBelow >= minHeight ? "bottom" : roomBelow < natural && roomAbove > roomBelow ? "top" : "bottom"
         : roomAbove < natural && roomBelow > roomAbove ? "bottom" : "top";
       // Junto a un botón, la capa crece hasta el espacio de su lado: solo se
       // desplaza por dentro si de verdad no cabe. Junto a un punto (menú
@@ -90,7 +95,7 @@ export function useFloatingPosition(
       window.visualViewport?.removeEventListener("resize", update);
       window.visualViewport?.removeEventListener("scroll", update);
     };
-  }, [anchor, surfaceRef, side, align, gap, track, frozen]);
+  }, [anchor, surfaceRef, side, align, gap, track, frozen, minHeight]);
 
   // Recoloca el contenido de React antes de pintarlo (p. ej., al entrar en un
   // formulario). ResizeObserver cubre los cambios externos de tamaño, pero su

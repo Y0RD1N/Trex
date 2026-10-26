@@ -1,3 +1,4 @@
+import type { BrowserOptions } from "../browser";
 /**
  * Piezas comunes de las sesiones de chat (Claude Code y Codex).
  *
@@ -16,6 +17,11 @@ import type { ChatMessageQueue } from "./useMessageQueue";
 
 /** Datos de la pestaña que necesita una sesión de chat. */
 export type ChatSessionOptions = {
+  /** Identidad estable de la cola cuando el proceso de un equipo cambia de generación. */
+  queueId?: string;
+  /** Solo el principal recibe las herramientas de este equipo y generación. */
+  team?: { id: string; epoch: string };
+  browser?: BrowserOptions;
   sessionId: string;
   cwd: string;
   command: string | null;
@@ -31,6 +37,8 @@ export type ChatSessionOptions = {
   effort?: string | null;
   /** Pestaña de planificación de un workflow; no puede abandonar plan durante su vida. */
   planningOnly?: boolean;
+  /** Función de lectura del equipo; no sustituye las restricciones nativas. */
+  planningInstruction?: string;
   /**
    * La pestaña se ve. El proceso arranca la primera vez que se muestra: las
    * sesiones restauradas que no se abren no gastan memoria ni CPU.

@@ -132,7 +132,15 @@ of root context capacity and `top_provider.context_length`, when both exist;
 `max_completion_tokens` is never a context limit. Successful catalogs are cached
 for session summaries; a failed refresh preserves the previous cache.
 
-`session/start {cwd,mode,model?,effort?,conversationId?}` returns
+The same official endpoint and exact MiniMax IDs use documented
+`inputModalities:["text","image","video"]` only when the catalog omits input
+modalities. Explicit remote modalities, including text-only, take priority.
+This fallback is verified against the official
+[OpenAI-compatible multimodal input documentation](https://platform.minimax.io/docs/api-reference/text-openai-api).
+Proxies, custom providers, OpenRouter IDs, and similarly named models receive
+no inferred image support.
+
+`session/start {cwd,mode,model?,effort?,conversationId?,browser?:{enabled:boolean,profile?:string,clientId?:string}}` returns
 `{sessionId,conversationId,model,effort,mode,items,recoveryRequired,contextWindow,contextWindowSource,usage?}`. `cwd` must
 exist. Modes: `plan`, `ask`, `full`; `auto` and `default` alias `ask`. `items` is a
 normalized ChatItem array with durable stable IDs. A live session has a fixed
@@ -153,6 +161,82 @@ valid input/output counts once. `contextModel` and any usage `contextWindow`
 belong to the measured model and can differ from the selected model on restore.
 Existing version-1 journals remain loadable; historical missing counts are not
 estimated.
+
+Browser access defaults to off when omitted, including on conversation restore.
+The live session's browser configuration is immutable. `clientId` defaults to
+the conversation UUID; an application can supply a stable tab or room ID.
+The returned `browser:{enabled,available,profile,clientId}` reports the explicit
+choice and whether a compatible optional component was discovered.
+`imageSupport:true|false|null` describes the selected model using cached
+`inputModalities` or exact documented official MiniMax capabilities; unknown
+support stays unknown. These checks never invoke a
+model, switch the selected model, or launch a browser.
+
+### Optional Trex Browser provider
+
+The tool registry combines `NativeToolProvider` and an explicitly enabled
+`BrowserToolProvider`. Missing, incompatible, or unavailable browser components
+leave native tools usable. There is no arbitrary MCP connection or command
+passthrough. Discovery checks the fixed sibling `trex-browser.exe` and, on
+Windows, `HKCU`'s 64-bit `Software\\com.trex.browser\\Install` REG_SZ `InstallDir`
+plus the fixed child `trex-browser.exe`. All path components must be regular
+directories/files without symlinks or reparse points. Executables are never
+resolved through `PATH` or model arguments.
+
+Discovery invokes only `--version`, `doctor --json`, and
+`tools --json --mode observe|qa|full`. It requires broker protocol
+`2025-11-25`, filters the returned MCP schemas through the frozen `browser_*`
+allowlist, and converts them to provider function definitions. It does not
+start a browser or make an inference request. Plan mode binds `observe`, ask
+binds `qa`, and full binds `full`. The broker receives immutable policy context
+outside model-controlled tool arguments. Plan mode excludes raw JavaScript,
+CDP, routes, uploads, mouse actions, and other mutation tools. The adapter also
+rejects tab creation/closing, artifact opening, and log clearing in observe.
+Ask mode uses the ordinary permission flow for mutations, including navigation,
+clicks, typing, JavaScript, routes, uploads, captures with lifecycle changes,
+tab creation/closing, artifact opening, and clearing logs. Reading snapshots,
+screenshots, captured network metadata/bodies, and existing artifacts remains
+available without mutation approval.
+
+Calls use a bounded subprocess with JSON stdin:
+`trex-browser call --stdin-json`, with
+`{name,arguments,cwd,mode,clientId,profile?,operationId,timeoutMs:90000}`.
+The operation ID is durably saved before dispatch. Input is capped at 1 MiB,
+stdout at 8 MiB, and execution at 95 seconds including broker overhead.
+Subprocess stderr is discarded. Cancellation requests
+`browser_cancel({operationId})` with the same project/client/profile context
+and stops the adapter process; it does not close the persistent browser.
+Transport failures, malformed results, and cancelled/uncertain/manual-review
+receipts stop the turn and require explicit recovery acknowledgement. They
+never cause automatic retries or duplicate clicks.
+
+MCP tool results normalize to
+`{text,structuredContent?,artifacts:ArtifactRef[],isError?}`. Native tool JSON
+retains its existing shape. An artifact reference is
+`{id,sha256,mimeType,sizeBytes,width?,height?,kind,storage:"local"|"broker",provenance}`.
+`tool/result` includes a top-level `artifacts` array, and projected tool history
+items expose the same metadata. Image bytes are stored in the private
+`TREX_HOME/artifacts` content-addressed store. Screenshot base64 and data URLs
+never enter normalized tool results, journal messages, or events. Artifact
+references contain no host paths.
+Local images must pass MIME-matched pixel decoding before storage and on each
+rehydration. PNG validation also checks chunk CRCs, complete image data and the
+zlib stream ending. A malformed image leaves an explicit unavailable-artifact
+note and is never projected into an outgoing provider image.
+Videos and other artifacts without inline image bytes keep opaque broker IDs;
+restoring history does not fetch them.
+
+Immediately before a provider request, the CLI rehydrates verified local image
+references only when the selected model is explicitly known to accept images.
+Every tool result remains text in role `tool`; a separate user observation with
+tool IDs and provenance follows the entire consecutive tool-result batch.
+Image replay selects the newest evidence within a shared 16-image/16-MiB
+request budget while retaining original message and tool-result order.
+Text-only and unknown models receive artifact metadata and an explicit image
+omission note, so they cannot claim pixel inspection. Model changes reproject
+the original durable history without another tool call. Missing/corrupt/unsafe
+artifacts produce an explicit unavailable-evidence note and never repeat the
+originating tool.
 
 On restore, omitted/null model and effort retain the persisted selection. New
 sessions use the profile defaults. An explicit model change resets the previous
@@ -210,6 +294,11 @@ counters omit `contextTokens`, even when an earlier request reported usage.
 `contextModel` identifies the request model; `contextWindow` is included when
 known. Cost is included only when reported upstream. No model price or unknown
 context capacity is estimated.
+Completed provider responses save measured usage before tools execute. A later
+tool failure or cancellation retains those token/cost measurements in the
+terminal event and journal. Starting another provider request makes its context
+unknown until new counters arrive; earlier measured token totals remain counted
+once, including after duplicate requests or restore.
 
 ## Durable inbox callback
 
@@ -269,3 +358,49 @@ assistant reasoning is retained, including opaque reasoning fields. A crash
 during execution is journaled as uncertain, pauses resumed mutations until
 explicit acknowledgement, and never automatically replays the tool. Journals
 are exclusively locked to prevent concurrent processes opening one conversation.
+
+### Optional app-owned teams
+
+`session/start` may include immutable `team:{command:absolutePath,args:string[]}`
+and `roleInstructions:string` (up to 8 KiB). Both default to absent on every
+process, including restore. A team coordinator must use `mode:"plan"`. The
+command must be the fixed Trex app sibling of this CLI; args are exactly
+`["--trex-team-call",absoluteAppDataRoot,teamId,epoch]`. No model-selected executable,
+credential or workspace is accepted. The app supplies this configuration only to
+the principal. Success includes `teamEnabled:true` and, when instructions were
+supplied, `rolePolicyApplied:true`; neither changes the journal schema.
+
+The principal gains `trex_team_members`, `trex_delegate_task`, `trex_task_status`
+and `trex_team_plan`. Native workspace tools remain read-only. Collaborators use
+separate conversations and do not inherit the team tool provider. A stable
+`taskKey` deduplicates identical delegations across cycles; uncertain/cancelled
+work never automatically replays. Delegation waits for the app to deliver the
+task and persist its report, bounded to 30 minutes. The app maintains a live
+lease independently of provider acknowledgements. Stop, lost ownership, an
+uncertain reply or transport failure ends delegation with recovery required.
+Measurements already received remain accounted for.
+
+Task histories and provider histories are separate. Report/argument bounds and
+configured member/policy checks are enforced in the app bridge. The bridge
+inherits only the operating-system environment needed to run; provider API keys
+and `TREX_HOME` are not forwarded. A restored app team starts paused and uses a
+fresh epoch only after explicit review. No task is dispatched merely by
+restoring the provider conversation.
+
+### Visible plans
+
+`trex_team_plan({steps:[{taskKey,memberId,task}]})` publishes 1–32 assigned steps
+without enqueuing work. The entire input is bounded to 48 KiB. The app stores
+the plan atomically beside durable delegation records. A later delegation uses
+the same key, member and instructions. Published steps have no model-supplied
+completion field: progress is projected from confirmed delegation results.
+Updating a plan cannot change or hide work already issued in the current cycle.
+Missing `plan` in older app snapshots means an empty plan. Restore never issues
+unstarted plan steps automatically.
+
+Ordinary sessions expose read-only `update_plan({plan:[{step,status}]})` with
+1–64 steps, a maximum of one `in_progress` step, and statuses `pending`,
+`in_progress`, `completed`. Accepted input and result use the existing durable
+tool journal and history items. The app projects it as `TodoWrite`; a failed or
+incomplete tool call cannot replace the visible list. These are agent-reported
+task statuses, unlike team delegation results confirmed by the app.

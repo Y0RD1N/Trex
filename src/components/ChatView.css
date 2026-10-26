@@ -2527,3 +2527,10 @@ pre.chat-ask-preview-body {
 .chat-attributed-message { min-width: 0; }
 .chat-plan-here { gap: 6px; }
 .workspace-team-mark { display: flex; align-items: center; gap: 2px; color: var(--accent-strong); }
+
+.chat-browser-artifacts { display:flex; flex-wrap:wrap; gap:8px; padding:8px 12px 12px 32px; }
+.chat-browser-artifact { display:flex; align-items:center; gap:8px; max-width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:11px; background:color-mix(in srgb,var(--text) 3%,transparent); color:var(--text); font:inherit; font-size:12px; cursor:pointer; }
+.chat-browser-artifact small { color:var(--text-muted); font-size:10px; }
+.chat-browser-artifact:hover:enabled { background:color-mix(in srgb,var(--text) 6%,transparent); }
+.chat-browser-artifact:disabled { cursor:default; opacity:.65; }
+.chat-browser-artifact:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }

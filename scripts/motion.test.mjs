@@ -2,7 +2,50 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { load } from "./ts-loader.mjs";
 
-const { motionDuration, waitForMotion } = await load("motion");
+const { enterAfterPaint, motionDuration, waitForMotion } = await load("motion");
+
+function paintHarness() {
+  const timers = timerHarness(), previous = [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame];
+  const frames = new Map(); let id = 0;
+  globalThis.requestAnimationFrame = callback => { frames.set(++id, callback); return id; };
+  globalThis.cancelAnimationFrame = frame => frames.delete(frame);
+  return { timers, frames, paint() { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()); },
+    restore() { timers.restore(); [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame] = previous; } };
+}
+
+test('dialog entrance becomes visible when WebKit never delivers a paint frame', () => {
+  const h = paintHarness();
+  try {
+    let entered = 0; enterAfterPaint(() => entered++);
+    assert.equal(entered, 0); assert.equal([...h.timers.pending.values()][0].delay, 100);
+    h.timers.fire(); assert.equal(entered, 1); assert.equal(h.frames.size, 0);
+  } finally { h.restore(); }
+});
+
+test('a stalled second paint cannot keep a mounted dialog invisible', () => {
+  const h = paintHarness();
+  try {
+    let entered = 0; enterAfterPaint(() => entered++); h.paint();
+    assert.equal(entered, 0); h.timers.fire(); assert.equal(entered, 1); assert.equal(h.frames.size, 0);
+  } finally { h.restore(); }
+});
+
+test('normal dialog paint completes once and clears its fallback', () => {
+  const h = paintHarness();
+  try {
+    let entered = 0; enterAfterPaint(() => entered++); h.paint(); h.paint(); h.timers.fire();
+    assert.equal(entered, 1); assert.equal(h.timers.pending.size, 0); assert.equal(h.frames.size, 0);
+  } finally { h.restore(); }
+});
+
+test('closing or replacing a dialog cancels both entry paths and ignores a late frame', () => {
+  const h = paintHarness();
+  try {
+    let entered = 0; const cancel = enterAfterPaint(() => entered++); h.paint();
+    const late = [...h.frames.values()][0]; cancel(); late(); h.timers.fire();
+    assert.equal(entered, 0); assert.equal(h.frames.size, 0); assert.equal(h.timers.pending.size, 0);
+  } finally { h.restore(); }
+});
 
 function timerHarness() {
   const previous = globalThis.window;

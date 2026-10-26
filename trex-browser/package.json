@@ -1,0 +1,14 @@
+{
+  "name": "@trex/browser-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Trex Browser worker: no AI providers or application embedding",
+  "engines": { "node": ">=24 <25" },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "test:integration": "node --test --test-concurrency=1 tests/browser.integration.test.mjs",
+    "doctor": "node worker/worker.mjs doctor --json"
+  },
+  "dependencies": { "playwright": "1.64.1" }
+}

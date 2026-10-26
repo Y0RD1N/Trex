@@ -1,3 +1,5 @@
+import type { BrowserStatus, BrowserConfig, BrowserCall, BrowserResult, BrowserMode, BrowserProfile } from "./browser";
+import { validBrowserProfile } from "./browser";
 /**
  * Capa de acceso al backend: envoltorios de `invoke`/`listen` y utilidades
  * compartidas (ids, valores por defecto, normalización y color de acento).
@@ -15,6 +17,7 @@ import { normalizeHandoffReference, type HandoffContext, type PreparedHandoff } 
 import { normalizeEffortChoice, normalizeModelChoice } from "./chatState";
 import { normalizeAgentWorkflow } from "./agentWorkflow";
 import { normalizeAgentRoom } from "./agentRoom";
+import { normalizeAgentTeam } from "./agentTeam";
 import type {
   AgentProvider,
   AppConfig,
@@ -196,6 +199,8 @@ export const DEFAULT_FONT_FAMILY =
   '"JetBrains Mono Variable", "Hack Nerd Font Mono", "Noto Sans Symbols 2", "Noto Color Emoji", ui-monospace, "Cascadia Mono", monospace';
 
 export const DEFAULT_SETTINGS: Settings = {
+  browserEnabled: true,
+  browserProfile: "BROWSER1",
   profiles: initialProfiles({ claudeCommand: "claude", claudeArgs: "", launchMode: "arg" }),
   defaultProfileId: "claude-default",
   shell: "default",
@@ -416,6 +421,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   if (bindingError(shortcuts,pasteShortcut)) { pasteShortcut = DEFAULT_PASTE_SHORTCUT; shortcuts = normalizeShortcuts(settingsRaw.shortcuts,pasteShortcut); }
 
   const settings: Settings = {
+    browserEnabled: asBool(settingsRaw.browserEnabled, DEFAULT_SETTINGS.browserEnabled),
+    browserProfile: typeof settingsRaw.browserProfile === "string" && validBrowserProfile(settingsRaw.browserProfile) ? settingsRaw.browserProfile : "BROWSER1",
     profiles: [],
     defaultProfileId: asString(settingsRaw.defaultProfileId, DEFAULT_SETTINGS.defaultProfileId),
     shell: asString(settingsRaw.shell, DEFAULT_SETTINGS.shell),
@@ -499,7 +506,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
         chatEffort: kind === "shell" ? null : normalizeEffortChoice(rec.chatEffort),
         handoff: kind === "shell" ? null : normalizeHandoffReference(rec.handoff),
         workflow: kind === "shell" ? null : normalizeAgentWorkflow(rec.workflow),
-        agentRoom: kind === "shell" ? null : normalizeAgentRoom(rec.agentRoom) });
+        agentRoom: kind === "shell" ? null : normalizeAgentRoom(rec.agentRoom),
+        agentTeam: kind === "shell" ? null : normalizeAgentTeam(rec.agentTeam) });
     }
   }
 
@@ -536,3 +544,21 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     ui,
   };
 };
+
+export const trexBrowserStatus = (): Promise<BrowserStatus> => invoke("trex_browser_status");
+export const trexBrowserMcpConfig = (cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserConfig> => invoke("trex_browser_mcp_config", { cwd, mode, clientId, profile });
+export const trexBrowserCall = (request: BrowserCall): Promise<BrowserResult> => invoke("trex_browser_call", { request });
+export const trexBrowserOpenArtifact = (id: string, cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserResult> => invoke("trex_browser_open_artifact", { id, cwd, mode, clientId, profile });
+export const trexBrowserProfiles = (cwd: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_profiles", { cwd });
+export const trexBrowserCreateProfile = (cwd: string, profile: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_create_profile", { cwd, profile });
+
+export const agentTeamOpen = (team: import("./agentTeam").AgentTeam, cwd: string, resume = false): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_open", {
+  id: team.id, epoch: team.epoch, cwd, resume, members: team.workers.map(member => ({ id: member.id, name: member.name, role: member.role, canWrite: member.canWrite })),
+});
+export const agentTeamPoll = (binding: import("./agentTeam").TeamBinding): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_poll", binding);
+export const agentTeamSnapshot = (id: string): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_snapshot", { id });
+export const agentTeamClaim = (binding: import("./agentTeam").TeamBinding): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_claim", binding);
+export const agentTeamPause = (binding: import("./agentTeam").TeamBinding): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_pause", binding);
+export const agentTeamFinish = (binding: import("./agentTeam").TeamBinding, taskId: string, status: string, report: string | null): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_finish", { ...binding, taskId, status, report });
+export const agentTeamMcpConfig = (binding: import("./agentTeam").TeamBinding): Promise<{ command: string; args: string[]; callArgs: string[] }> => invoke("agent_team_mcp_config", binding);
+export const readQueuedMessages = (queueId: string): Promise<import("./messageQueue").QueueSnapshot> => invoke("message_queue_list", { queueId });

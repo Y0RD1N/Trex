@@ -1,3 +1,4 @@
+import { browserOptions } from "../browser";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatError, loadHandoff, prepareHandoff } from "../api";
 import { mergeRoomItems, roomConversationContext, roomQueueAddress, roomQueueSnapshot, routeRoomMessage, type AgentRoom, type RoomRole } from "../agentRoom";
@@ -52,6 +53,7 @@ const noop = (): void => undefined;
 /** Two independent provider sessions, one composer and a durable serial handoff. */
 export default function AgentRoomView(props: AgentRoomViewProps) {
   const { room } = props;
+  const browser = useRef(browserOptions(props.settings, room.id)).current;
   const latest = useRef(props);
   latest.current = props;
   const roomRef = useRef(room);
@@ -158,9 +160,10 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     try {
       const context = roomConversationContext(snapshot().items, source(before.active));
       const recovered = resume && before.pending ? await loadHandoff(before.pending.reference.id) : null;
+      const inherited = before.setupContext ? await loadHandoff(before.setupContext.id) : null;
       if (!currentOperation(token, cycle)) return false;
       const task = sanitizeHandoffText(text).trim();
-      context.content = `# Solicitud actual del usuario\n\n${task}\n\n${recovered ? `## Contexto de la entrega pendiente que se revisa\n\n${recovered.content}\n\n` : ""}${context.content}`;
+      context.content = `# Solicitud actual del usuario\n\n${task}\n\n${recovered ? `## Contexto de la entrega pendiente que se revisa\n\n${recovered.content}\n\n` : ""}${inherited ? `## Contexto anterior del chat\n\n${inherited.content}` : context.content}`;
       const prepared = await prepareHandoff(context);
       if (!currentOperation(token, cycle)) return false;
       if (role === "planner" && (newCycle || resume || original.current?.cycle !== cycle)) {
@@ -173,7 +176,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       attachments.current.set(prepared.id, { images, previews, display: task });
       if (!snapshot().items.some(item => item.kind === "user")) latest.current.onTitle(latest.current.sessionId, conversationTitle(task));
       change(current => ({ ...current, active: role, phase: role === "planner" ? "planning" : "executing",
-        pending: { id: prepared.id, role, reference }, error: null }));
+        pending: { id: prepared.id, role, reference }, ...(before.setupContext?{setupContext:null}:{}), error: null }));
       setPlanIntent(false);
       return true;
     } catch (error) {
@@ -294,8 +297,9 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       if (route.text !== text) return block("Durante el turno, envía las aclaraciones sin prefijo al agente activo.");
       return false;
     }
-    const kind = route.kind === "plan" || (route.role === "planner" && ["planning", "waiting"].includes(current.phase)) ? "plan" : route.role === "executor" ? "execute" : "message";
-    return prepareMessage(route.role, route.text, kind, route.kind === "plan", images, previews).then(accepted => accepted ? true : "blocked");
+    const firstPlan=current.phase==="idle" && route.role==="planner";
+    const kind = route.kind === "plan" || firstPlan || (route.role === "planner" && ["planning", "waiting"].includes(current.phase)) ? "plan" : route.role === "executor" ? "execute" : "message";
+    return prepareMessage(route.role, route.text, kind, route.kind === "plan"||firstPlan, images, previews).then(accepted => accepted ? true : "blocked");
   };
 
   const selectRole = (role: RoomRole): void => {
@@ -537,7 +541,8 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
   return <div className="agent-room" ref={root}>
     {ROLES.map(role => {
       const participant = room[role], launch = participant.agent.launch;
-      const options: ChatSessionOptions = { sessionId: `${room.id}-${role}`, cwd: props.cwd, ...launch,
+      const options: ChatSessionOptions = {
+      browser, sessionId: `${room.id}-${role}`, cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort,
         mode: role === "planner" ? "plan" : participant.mode ?? (participant.agent.provider === "claude" ? "default" : "auto"),
         planningOnly: role === "planner", visible: props.visible,
@@ -547,9 +552,12 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       const Runtime = participant.agent.provider === "trex" ? TrexRuntime : participant.agent.provider === "claude" ? ClaudeRuntime : CodexRuntime;
       return <Runtime key={`${room.id}-${role}-${participant.agent.profileId}`} role={role} options={options} publish={publish} />;
     })}
-    {aggregate ? <ChatPanel {...props} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}
+    {aggregate ? <ChatPanel {...props} browser={browser} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}
       profileName={room[room.active].agent.profileName} conversationId={room[room.active].conversationId}
       session={aggregate} toolbar={toolbar} composerLead={composerLead} itemLabels={itemLabels} inputLocked={lock}
+      emptyState={{title:"Tu flujo está listo",description:"Escribe tu idea en este chat. Primero se preparará el plan y después el ejecutor lo implementará; aquí podrás conversar con ambos.",
+        participants:ROLES.map(role=>({id:role,name:room[role].agent.profileName,role:role==="planner"?"Planificación · solo lectura":"Implementación",provider:room[role].agent.provider,model:room[role].agent.model,effort:room[role].agent.effort}))}}
+      composerPlaceholder={room.active==="planner"?"Escribe tu idea para preparar el plan…":"Escribe una indicación para el ejecutor…"}
       historyReadOnly planningOnly={room.active === "planner"} onBeforeSend={beforeSend}
       queuedSendReason={queuedSendReason} onQueuedSend={message => sendRoomMessage(roomQueueAddress(message.id).role, message.text, message.images, message.previews, undefined, true)}
       localCommandReason={localCommandReason}

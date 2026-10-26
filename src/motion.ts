@@ -2,6 +2,28 @@
 type MotionStyle = Pick<CSSStyleDeclaration,
   "transitionDuration" | "transitionDelay" | "animationDuration" | "animationDelay" | "animationIterationCount">;
 
+/** WebKit can throttle a second frame even while a native window is visible. */
+export function enterAfterPaint(complete: () => void, fallbackMs = 100): () => void {
+  let active = true;
+  let frame: number | undefined;
+  const finish = (): void => {
+    if (!active) return;
+    active = false;
+    window.clearTimeout(timer);
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    complete();
+  };
+  const timer = window.setTimeout(finish, fallbackMs);
+  frame = requestAnimationFrame(() => {
+    if (active) frame = requestAnimationFrame(finish);
+  });
+  return () => {
+    active = false;
+    window.clearTimeout(timer);
+    if (frame !== undefined) cancelAnimationFrame(frame);
+  };
+}
+
 const times = (value: string): number[] => value.split(",").map(part => {
   const time = Number.parseFloat(part);
   return Number.isFinite(time) ? time * (part.trim().endsWith("ms") ? 1 : 1000) : 0;

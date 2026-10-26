@@ -1,5 +1,7 @@
 //! Versioned JSON-RPC stdio transport and durable, single-turn session runner.
 use crate::{
+    artifacts,
+    browser::{BrowserConfig, BrowserToolProvider, ExecutionUncertain},
     profile::{self, Profile},
     provider::{self, ProviderDelta},
     tools,
@@ -109,6 +111,8 @@ struct Execution {
     output: Option<Value>,
     #[serde(default)]
     is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -134,6 +138,11 @@ struct Journal {
     recovery_required: bool,
     #[serde(default)]
     rejected_responses: Vec<Value>,
+    // Browser access is an explicit live-session choice, never restored authority.
+    #[serde(skip)]
+    browser: BrowserConfig,
+    #[serde(skip)]
+    browser_available: bool,
 }
 
 struct Active {
@@ -145,6 +154,7 @@ struct Session {
     _lock: File,
     data: Mutex<Journal>,
     active: Mutex<Option<Active>>,
+    tools: tools::ToolRegistry,
 }
 
 impl Session {
@@ -287,9 +297,29 @@ impl Server {
             .map(|window| (window, "documented"))
     }
 
+    async fn image_support(&self, model: &str) -> Option<bool> {
+        if let Some(metadata) = self
+            .models
+            .lock()
+            .await
+            .iter()
+            .find(|entry| entry["id"] == model)
+        {
+            if let Some(modalities) = metadata["inputModalities"].as_array() {
+                if modalities.is_empty() {
+                    return None;
+                }
+                return Some(modalities.iter().any(|value| value == "image"));
+            }
+        }
+        provider::documented_image_support(&self.profile, model)
+    }
+
     async fn session_summary(&self, data: &Journal) -> Value {
         let context = self.context_window(&data.model).await;
         let mut summary = json!({"sessionId":data.id,"conversationId":data.id,"model":data.model,"effort":data.effort,"mode":data.mode,"items":data.items,"recoveryRequired":data.recovery_required,"contextWindow":context.map(|(window, _)| window),"contextWindowSource":context.map(|(_, source)| source)});
+        summary["browser"] = json!({"enabled":data.browser.enabled,"available":data.browser_available,"profile":data.browser.profile,"clientId":data.browser.client_id.as_deref().unwrap_or(&data.id)});
+        summary["imageSupport"] = json!(self.image_support(&data.model).await);
         if !data.turns.is_empty() || !data.items.is_empty() || !data.messages.is_empty() {
             let (mut usage, _) = restored_usage(data);
             // A measurement belongs to its recorded model, which can differ
@@ -334,6 +364,19 @@ impl Server {
 
     async fn start_session(&self, params: &Value) -> Result<Value> {
         let requested_mode = mode(required(params, "mode")?)?;
+        let team = crate::team::TeamConfig::parse(params.get("team"))?;
+        ensure!(
+            team.is_none() || requested_mode == "plan",
+            "a team coordinator must use read-only plan mode"
+        );
+        let role_instructions = optional(params, "roleInstructions")?;
+        ensure!(
+            role_instructions
+                .as_ref()
+                .is_none_or(|value| value.len() <= 8192),
+            "roleInstructions exceeds 8 KiB"
+        );
+        let browser = BrowserConfig::parse(params.get("browser"))?;
         let cwd = fs::canonicalize(required(params, "cwd")?)
             .context("cwd must be an existing directory")?;
         ensure!(cwd.is_dir(), "cwd must be a directory");
@@ -353,7 +396,23 @@ impl Server {
                 data.mode == requested_mode,
                 "mode is fixed for this live session; restart the process to change mode"
             );
-            return Ok(self.session_summary(&data).await);
+            ensure!(data.browser == browser, "browser configuration is fixed for this live session; restart the process to change it");
+            ensure!(
+                session.tools.team_config() == &team,
+                "team binding is immutable for this live session; restart the process to change it"
+            );
+            ensure!(
+                session.tools.role_instructions() == &role_instructions,
+                "role instructions are immutable for this live session"
+            );
+            let mut summary = self.session_summary(&data).await;
+            if team.is_some() {
+                summary["teamEnabled"] = json!(true);
+            }
+            if role_instructions.is_some() {
+                summary["rolePolicyApplied"] = json!(true);
+            }
+            return Ok(summary);
         }
         let directory = conversation_dir()?;
         let lock = OpenOptions::new()
@@ -425,8 +484,16 @@ impl Server {
                 pending_inbox: vec![],
                 recovery_required: false,
                 rejected_responses: vec![],
+                browser: BrowserConfig::default(),
+                browser_available: false,
             }
         };
+        let browser_provider = BrowserToolProvider::discover(&browser, &id, &data.mode)
+            .await
+            .ok()
+            .flatten();
+        data.browser = browser;
+        data.browser_available = browser_provider.is_some();
         let session = Arc::new(Session {
             path,
             _lock: lock,
@@ -450,11 +517,22 @@ impl Server {
                 pending_inbox: vec![],
                 recovery_required: false,
                 rejected_responses: vec![],
+                browser: BrowserConfig::default(),
+                browser_available: false,
             }),
             active: Mutex::new(None),
+            tools: tools::ToolRegistry::new(browser_provider)
+                .with_team(team.clone())
+                .with_role_instructions(role_instructions.clone()),
         });
         session.persist(&mut data)?;
-        let summary = self.session_summary(&data).await;
+        let mut summary = self.session_summary(&data).await;
+        if team.is_some() {
+            summary["teamEnabled"] = json!(true);
+        }
+        if role_instructions.is_some() {
+            summary["rolePolicyApplied"] = json!(true);
+        }
         *session.data.lock().await = data;
         sessions.insert(id, session);
         Ok(summary)
@@ -570,6 +648,13 @@ impl Server {
         let receipts;
         {
             let mut data = session.data.lock().await;
+            // Provider responses are measured before their tools run. A later
+            // tool failure/cancellation must retain those durable measurements.
+            let usage = usage.or_else(|| {
+                data.turns
+                    .get(message_id)
+                    .and_then(|turn| turn.usage.clone())
+            });
             settle_unfinished(
                 &mut data,
                 message_id,
@@ -637,14 +722,30 @@ impl Server {
                     data.messages.clone(),
                 )
             };
-            messages.insert(0, json!({"role":"system","content":system_prompt(&mode)}));
-            let definitions = tools::definitions()
-                .into_iter()
-                .filter(|tool| {
-                    mode != "plan"
-                        || !tools::is_mutating(tool["function"]["name"].as_str().unwrap_or(""))
-                })
-                .collect::<Vec<_>>();
+            messages = provider::project_history(&messages, self.image_support(&model).await);
+            let mut policy = system_prompt(&mode);
+            if let Some(instructions) = session.tools.role_instructions() {
+                policy.push_str(
+                    "\n\nSession role instructions (the read-only tool policy still applies):\n",
+                );
+                policy.push_str(instructions);
+            }
+            messages.insert(0, json!({"role":"system","content":policy}));
+            let definitions = session.tools.definitions(&mode);
+            {
+                let mut data = session.data.lock().await;
+                let cleared = data
+                    .turns
+                    .get_mut(message_id)
+                    .and_then(|turn| turn.usage.as_mut())
+                    .and_then(Value::as_object_mut)
+                    .is_some_and(|usage| usage.remove("contextTokens").is_some());
+                if cleared {
+                    // Earlier measured requests still count, but a new request
+                    // has no context measurement until its response supplies one.
+                    session.persist(&mut data)?;
+                }
+            }
             let (tx, mut rx) = mpsc::unbounded_channel();
             let completion = provider::complete(
                 &self.profile,
@@ -712,6 +813,20 @@ impl Server {
                     has_cost = true;
                 }
             }
+            let mut usage = json!({"contextModel":model});
+            if has_tokens {
+                usage["inputTokens"] = json!(total_in);
+                usage["outputTokens"] = json!(total_out);
+            }
+            if let Some(context) = context {
+                usage["contextTokens"] = json!(context);
+            }
+            if let Some((window, _)) = self.context_window(&model).await {
+                usage["contextWindow"] = json!(window);
+            }
+            if has_cost {
+                usage["costUsd"] = json!(actual_cost);
+            }
             let calls = completed
                 .message
                 .get("tool_calls")
@@ -732,6 +847,9 @@ impl Server {
                     });
             {
                 let mut data = session.data.lock().await;
+                if let Some(turn) = data.turns.get_mut(message_id) {
+                    turn.usage = Some(usage.clone());
+                }
                 data.messages.push(completed.message);
                 for item in &mut data.items {
                     if item["id"] == format!("{message_id}:assistant:{step}:text")
@@ -747,20 +865,6 @@ impl Server {
                     has_final_text,
                     "provider completed without a visible final answer"
                 );
-                let mut usage = json!({"contextModel":model});
-                if has_tokens {
-                    usage["inputTokens"] = json!(total_in);
-                    usage["outputTokens"] = json!(total_out);
-                }
-                if let Some(context) = context {
-                    usage["contextTokens"] = json!(context);
-                }
-                if let Some((window, _)) = self.context_window(&model).await {
-                    usage["contextWindow"] = json!(window);
-                }
-                if has_cost {
-                    usage["costUsd"] = json!(actual_cost);
-                }
                 return Ok(Some(usage));
             }
             let mut ids = BTreeSet::new();
@@ -846,13 +950,14 @@ impl Server {
                             provider_id: Some(provider_id.clone()),
                             output: None,
                             is_error: false,
+                            operation_id: Some(uid()),
                         },
                     );
                     session.persist(&mut data)?;
                 }
                 self.emit(&session,"tool/start",json!({"sessionId":session_id,"messageId":message_id,"id":id,"toolName":name,"input":input})).await?;
                 if mode == "ask"
-                    && tools::is_mutating(&name)
+                    && session.tools.is_mutating(&mode, &name, &input)
                     && !self
                         .approval(
                             &session,
@@ -908,9 +1013,43 @@ impl Server {
                         }
                     }
                 } else {
-                    let result = tools::execute(&cwd, &name, &input, cancel.clone()).await;
+                    let operation_id = session.data.lock().await.executions[&id]
+                        .operation_id
+                        .clone()
+                        .context("tool operation id missing")?;
+                    let result = session
+                        .tools
+                        .execute(&cwd, &mode, &name, &input, &operation_id, cancel.clone())
+                        .await;
                     let (output, is_error) = match result {
-                        Ok(output) => (output, false),
+                        Ok(output) => {
+                            let output = if name.starts_with("browser_") {
+                                let client_id = session
+                                    .data
+                                    .lock()
+                                    .await
+                                    .browser
+                                    .client_id
+                                    .clone()
+                                    .unwrap_or_else(|| session_id.clone());
+                                artifacts::normalize_tool_result(
+                                    output,
+                                    json!({"toolName":name,"toolCallId":provider_id,"operationId":operation_id,"clientId":client_id}),
+                                )?
+                            } else {
+                                output
+                            };
+                            let is_error = output["isError"] == true;
+                            (output, is_error)
+                        }
+                        Err(error)
+                            if error.downcast_ref::<ExecutionUncertain>().is_some()
+                                || error
+                                    .downcast_ref::<crate::team::DelegationUncertain>()
+                                    .is_some() =>
+                        {
+                            return Err(error)
+                        }
                         Err(error) => (json!({"error":error.to_string()}), true),
                     };
                     self.tool_result(&session, &session_id, message_id, &id, output, is_error)
@@ -974,6 +1113,7 @@ impl Server {
                     provider_id: Some(provider_id.into()),
                     output: None,
                     is_error: true,
+                    operation_id: None,
                 },
             );
             session.persist(&mut data)?;
@@ -999,7 +1139,7 @@ impl Server {
         output: Value,
         is_error: bool,
     ) -> Result<()> {
-        let params = json!({"sessionId":session_id,"messageId":message_id,"id":id,"output":output,"isError":is_error});
+        let params = json!({"sessionId":session_id,"messageId":message_id,"id":id,"output":output,"isError":is_error,"artifacts":output.get("artifacts").cloned().unwrap_or_else(||json!([]))});
         {
             let mut data = session.data.lock().await;
             let before = data.clone();
@@ -1489,7 +1629,8 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
 }
 
 fn system_prompt(mode: &str) -> String {
-    format!("You are Trex, a coding agent working in the user's workspace. Use native tools to inspect files and make precise changes. Follow project instructions. Never claim a tool succeeded without its result. Your session mode is {mode}. Plan mode is strictly read-only: inspect and deliver a concrete plan; do not mutate files or execute shell commands. Ask mode requires user approval for each mutation or shell command. Full mode allows approved autonomous work. Use trex_read_messages to retrieve durable user or collaborator inbox messages during a long task. Finish with a clear final response describing results and relevant validation. Do not expose secrets.")
+    let task_policy = "For multi-step work, publish and maintain your task list with update_plan. Team coordinators publish assignments with trex_team_plan before delegating instead. Never mark unverified work complete.";
+    format!("You are Trex, a coding agent working in the user's workspace. Use available tools to inspect files and make precise changes. Follow project instructions. Never claim a tool succeeded without its result. {task_policy} Your session mode is {mode}. Plan mode is strictly read-only: inspect and deliver a concrete plan; do not mutate files or execute shell commands. Ask mode requires user approval for each mutation or shell command. Full mode allows approved autonomous work. Browser tools, when explicitly enabled, enforce the session policy in the broker. Browser artifact metadata alone does not establish pixel inspection: only inspect pixels when an actual image observation is present. Missing artifacts are unavailable evidence; do not repeat a tool automatically to recreate them. Uncertain operations require user review and must never be automatically replayed. Use trex_read_messages to retrieve durable user or collaborator inbox messages during a long task. Finish with a clear final response describing results and relevant validation. Do not expose secrets.")
 }
 
 fn validate_images(value: Option<&Value>) -> Result<Vec<Value>> {
@@ -1689,7 +1830,7 @@ fn project(items: &mut Vec<Value>, method: &str, params: &Value) {
             else{items.push(json!({"kind":params["kind"],"id":params["id"],"messageId":params["messageId"],"text":params["text"],"final":false}));}
         }
         "tool/start"=>items.push(json!({"kind":"tool","id":params["id"],"name":params["toolName"],"input":params["input"],"status":"running","output":null,"patch":null})),
-        "tool/result"=>{if let Some(item)=items.iter_mut().find(|item|item["kind"]=="tool"&&item["id"]==params["id"]){item["status"]=json!(if params["isError"]==true{"error"}else{"done"});item["output"]=json!(match &params["output"]{Value::String(s)=>s.clone(),value=>value.to_string()});}}
+        "tool/result"=>{if let Some(item)=items.iter_mut().find(|item|item["kind"]=="tool"&&item["id"]==params["id"]){item["status"]=json!(if params["isError"]==true{"error"}else{"done"});item["output"]=json!(match &params["output"]{Value::String(s)=>s.clone(),value=>value.to_string()});item["artifacts"]=params.get("artifacts").cloned().or_else(||params["output"].get("artifacts").cloned()).unwrap_or_else(||json!([]));}}
         "permission/request"=>items.push(json!({"kind":"permission","id":params["id"],"toolName":params["toolName"],"toolUseId":params["toolUseId"],"input":params["input"],"description":params["description"],"suggestions":[],"state":"pending","request":{"id":params["id"],"method":"permission/respond"}})),
         _=>(),
     }
@@ -1948,6 +2089,7 @@ mod tests {
             _lock: File::create(directory.path().join("lock")).unwrap(),
             data: Mutex::new(data),
             active: Mutex::new(None),
+            tools: tools::ToolRegistry::new(None),
         });
         let (tx, _rx) = mpsc::unbounded_channel();
         let server = Server::new(profile(), tx);
@@ -1995,6 +2137,7 @@ mod tests {
                 provider_id: None,
                 output: Some(json!({"content":"known result"})),
                 is_error: false,
+                operation_id: None,
             },
         );
         data.executions.insert(
@@ -2007,6 +2150,7 @@ mod tests {
                 provider_id: None,
                 output: None,
                 is_error: false,
+                operation_id: None,
             },
         );
         data.items.push(json!({"kind":"tool","id":"done","name":"read_file","input":{},"status":"running","output":null,"patch":null}));
@@ -2043,6 +2187,7 @@ mod tests {
                 message_id: "user-1".into(),
                 cancel: cancel.clone(),
             })),
+            tools: tools::ToolRegistry::new(None),
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
         let server = Server::new(profile(), tx);

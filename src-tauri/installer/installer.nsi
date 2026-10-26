@@ -1,5 +1,5 @@
 ; Based on Tauri tauri-cli-v2.12.0 (MIT), see LICENSE_TAURI_MIT.
-; Local additions: CLI options page and TrexCliInitialize; behavior lives in trex-cli.nsh.
+; Local additions: independent CLI/Browser options and initialization in trex-cli.nsh.
 Unicode true
 ManifestDPIAware true
 ; Add in `dpiAwareness` `PerMonitorV2` to manifest for Windows 10 1607+ (note this should not affect lower versions since they should be able to ignore this and pick up `dpiAware` `true` set by `ManifestDPIAware true`)
@@ -392,7 +392,7 @@ FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_DIRECTORY
 
-; Optional API CLI. Silent/passive updates preserve the last explicit choice.
+; Optional CLI and Browser. Silent/passive updates preserve independent choices.
 Page custom TrexCliPageCreate TrexCliPageLeave
 
 ; 6. Start menu shortcut page
@@ -646,11 +646,11 @@ Section WebView2
 SectionEnd
 
 Section Install
-  SetOutPath $INSTDIR
-
   !ifmacrodef NSIS_HOOK_PREINSTALL
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
+
+  SetOutPath $INSTDIR
 
   !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 

@@ -1,0 +1,16 @@
+.chat-empty.chat-start { width: 100%; max-width: 650px; margin: 0 auto; gap: 11px; padding: 8px 0 20px; }
+.chat-start-logo { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 17px; background: var(--bg-surface); }
+.chat-start .chat-start-logo .agent-icon { margin-bottom: 0; }
+.chat-start-eyebrow { color: var(--accent-strong); font-size: 11px; line-height: 1.6; }
+.chat-start h2 { font-size: 22px; line-height: 1.4; margin: 0; }
+.chat-empty .chat-start-description { max-width: 55ch; margin: 0; font-family: inherit; font-size: 13px; line-height: 1.85; color: var(--text-muted); white-space: normal; overflow: visible; text-overflow: clip; }
+.chat-start-members { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); width: 100%; gap: 9px; list-style: none; padding: 0; margin: 10px 0; text-align: left; }
+.chat-start-members li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface); }
+.chat-start .chat-start-members .agent-icon { margin: 0; flex-shrink: 0; color: var(--text-muted); }
+.chat-start-number { flex: 0 0 18px; color: var(--text-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+.chat-start-members li > span:last-child { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.chat-start-members strong { font-size: 12px; line-height: 1.5; font-weight: 550; overflow-wrap: anywhere; }
+.chat-start-members li > span:last-child > span { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.chat-start-members small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 1.5; color: var(--text-dim); }
+.chat-empty .chat-start-hint { margin: 0; font-family: inherit; font-size: 11px; color: var(--text-dim); line-height: 1.7; white-space: normal; }
+@container chat (max-width: 520px) { .chat-start-members { grid-template-columns: minmax(0,1fr); } .chat-start h2 { font-size: 19px; } .chat-empty.chat-start { padding-top: 0; } }

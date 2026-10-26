@@ -1,3 +1,4 @@
+import { browserArtifacts, browserResultArtifacts } from "./browser";
 /** Protocolo propio de Trex CLI: la API del proveedor permanece dentro del CLI. */
 import { baseReducer, currentModel, finalize, list, liveCompletion, normalizeEffortChoice, normalizeModelChoice, record, text,
   type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type Json, type ModelInfo } from "./chatState";
@@ -15,6 +16,7 @@ export function parseTrexModels(raw: unknown): ModelInfo[] {
     if (!model || !id || seen.has(id)) return [];
     seen.add(id);
     return [{ value: id, resolvedModel: id, displayName: text(model.name) || id, description: text(model.description),
+      ...(Array.isArray(model.inputModalities) ? { inputModalities: model.inputModalities.filter((value): value is string => typeof value === "string") } : {}),
       featured: index < 8, efforts: [...new Set(list(model.efforts).filter((level): level is string => typeof level === "string" && normalizeEffortChoice(level) === level))],
       ...(windowSize(model.contextWindow) ? { contextWindow: windowSize(model.contextWindow)! } : {}),
       ...(model.contextWindowSource === "remote" || model.contextWindowSource === "documented" ? { contextWindowSource: model.contextWindowSource } : {}) }];
@@ -27,9 +29,11 @@ export type TrexChatAction = BaseChatAction
   | { type: "trexFailed"; id: string; message: string };
 
 const TOOL_NAMES: Record<string, string> = { read_file: "Read", list_files: "LS", search: "Grep", write_file: "Write", apply_patch: "TrexPatch", shell: "Bash", trex_read_messages: "trex_read_messages" };
-export const trexToolName = (value: string): string => TOOL_NAMES[value] ?? value;
+export const trexToolName = (value: string): string => value === "update_plan" ? "TodoWrite" : TOOL_NAMES[value] ?? value;
 export function trexToolInput(name: string, input: Json): Json {
   const tool = trexToolName(name);
+  if (tool === "TodoWrite" && Array.isArray(input.plan)) return { todos: input.plan.map(record).filter((step): step is Json => !!step)
+    .map(step => ({ content: text(step.step), status: step.status })) };
   if (tool === "Read" || tool === "Write") return { ...input, file_path: input.file_path ?? input.path };
   if (tool === "TrexPatch" && typeof input.patch === "string") {
     try {
@@ -64,7 +68,7 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
     const items = list(result.items).filter((value): value is ChatItem => {
       const item = record(value);
       return !!item && typeof item.id === "string" && ["user", "text", "thinking", "tool", "permission", "notice", "turn"].includes(text(item.kind));
-    }).map(item => item.kind === "tool" ? { ...item, name: trexToolName(item.name), input: trexToolInput(item.name, item.input) }
+    }).map(item => item.kind === "tool" ? { ...item, name: trexToolName(item.name), artifacts: browserArtifacts(item.artifacts), input: trexToolInput(item.name, item.input) }
       : item.kind === "permission" ? { ...item, toolName: trexToolName(item.toolName), input: trexToolInput(item.toolName, item.input) } : item);
     // La restauración no borra un envío reservado mientras arrancaba el proceso.
     const pending = state.items.filter(item => item.kind === "user" && state.pendingMessageIds.includes(item.id));
@@ -112,7 +116,7 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
       input: trexToolInput(text(p.toolName), record(p.input) ?? {}), status: "running", output: null, patch: null }] };
   }
   if (action.method === "tool/result") return { ...state, items: state.items.map(item => item.kind === "tool" && item.id === p.id
-    ? { ...item, status: p.isError ? "error" : "done", output: typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? null) } : item) };
+    ? { ...item, artifacts: browserArtifacts(p.artifacts).length ? browserArtifacts(p.artifacts) : browserResultArtifacts(record(p.output)), status: p.isError ? "error" : "done", output: typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? null) } : item) };
   if (action.method === "permission/request") {
     const id = text(p.id);
     if (!id || state.items.some(item => item.id === id)) return state;

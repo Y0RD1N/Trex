@@ -1,3 +1,4 @@
+import { browserResultArtifacts, browserToolResultText } from "./browser";
 /**
  * Protocolo de Claude Code en modo chat (`claude -p` con stream-json).
  *
@@ -194,7 +195,8 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
       items[index] = { ...current, status: block.is_error === true ? "error" : "done",
         input: answers ? { ...current.input, answers, ...(response ? { response } : {}) }
           : toolResult?.type === "create" ? { ...current.input, changeKind: "add" } : current.input,
-        output: answers ? answerText(answers) : resultText(block.content),
+        output: answers ? answerText(answers) : current.name.startsWith("mcp__trex_browser__") ? browserToolResultText(block.content) : resultText(block.content),
+        ...(current.name.startsWith("mcp__trex_browser__") ? { artifacts: browserResultArtifacts({ content: block.content }) } : {}),
         patch: patchLines(toolResult?.structuredPatch) ?? current.patch };
     } else if (block.type === "text") {
       const value = text(block.text);

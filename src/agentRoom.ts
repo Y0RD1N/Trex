@@ -27,6 +27,8 @@ export type AgentRoom = {
   phase: WorkflowStatus | "idle";
   cycle: number;
   pending?: { id: string; role: RoomRole; reference: HandoffReference } | null;
+  /** Optional inherited context, consumed by the first explicit composer send. */
+  setupContext?: HandoffReference | null;
   order: string[];
   plan?: HandoffReference | null;
   error?: string | null;
@@ -102,6 +104,8 @@ export function normalizeAgentRoom(raw: unknown): AgentRoom | null {
     pending = { id: candidate.id, role: candidate.role, reference };
   }
   const plan = normalizeHandoffReference(value.plan);
+  const setupContext = normalizeHandoffReference(value.setupContext);
+  if (value.setupContext != null && (!setupContext || !validId(setupContext.id))) return null;
   return {
     id: value.id,
     planner: { agent: workflow.planner, conversationId: planner.conversationId as string | null, mode: "plan" },
@@ -109,6 +113,7 @@ export function normalizeAgentRoom(raw: unknown): AgentRoom | null {
       ...(executor.mode !== undefined ? { mode: executor.mode as string | null } : {}) },
     active: value.active, phase: value.phase as AgentRoom["phase"], cycle: value.cycle as number,
     pending, order: normalizeOrder(value.order), plan: plan && validId(plan.id) ? plan : null,
+    ...(value.setupContext !== undefined ? { setupContext } : {}),
     error: typeof value.error === "string" ? [...sanitizeHandoffText(value.error)].slice(0, 1200).join("") : null,
   };
 }

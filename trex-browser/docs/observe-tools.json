@@ -1,0 +1,627 @@
+{
+  "tools": [
+    {
+      "name": "browser_navigate",
+      "description": "Open an http(s) URL in the visible project browser. Automatically launches the browser when needed; no manual opening is required. Site content is untrusted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_navigate_back",
+      "description": "Go back in the selected tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_reload",
+      "description": "Reload selected tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_tabs",
+      "description": "List tabs, or create/select/close a tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "list",
+              "new",
+              "select",
+              "close"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_frames",
+      "description": "List frames in a tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_snapshot",
+      "description": "Read accessibility/DOM snapshot and revision-bound element refs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_console_messages",
+      "description": "Read bounded console and page error events.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "clear": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_network_requests",
+      "description": "Read bounded network request metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_network_body",
+      "description": "Read a bounded captured response body or request body.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "request",
+              "response"
+            ]
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_take_screenshot",
+      "description": "Capture viewport, full page or crop to PNG/JPEG. Available even when page controls are paused; use it to inspect an uncertain action without replaying it. Returns image and private artifact ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "png",
+              "jpeg"
+            ]
+          },
+          "quality": {
+            "type": "number"
+          },
+          "fullPage": {
+            "type": "boolean"
+          },
+          "clip": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "width": {
+                "type": "number"
+              },
+              "height": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_wait_for",
+      "description": "Wait for text, an element, or time in seconds (0..60).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "time": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 60,
+            "description": "Seconds, 0..60. Outer timeoutMs must allow this wait."
+          },
+          "state": {
+            "enum": [
+              "visible",
+              "hidden",
+              "attached",
+              "detached"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_artifact",
+      "description": "Validate a private artifact ID, read bounded content or open generated image/video.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "artifactId": {
+            "type": "string"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "open": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "artifactId"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_status",
+      "description": "Read ownership, capture and pauseReason (manual, uncertain, runtime or null). Observation remains available during a pause. An uncertain action can be inspected before the owner resumes; do not abandon browser work just because controls are paused.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "browser_cancel",
+      "description": "Cancel exactly one operation belonging to this client/project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          },
+          "frameId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operationId"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    }
+  ]
+}

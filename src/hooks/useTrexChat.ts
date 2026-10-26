@@ -1,6 +1,6 @@
 /** Trex CLI owns provider HTTP, credentials and tools; React only speaks its versioned protocol. */
 import { useEffect, useReducer, useRef } from "react";
-import { agentWrite, formatError } from "../api";
+import { agentWrite, agentTeamMcpConfig, formatError } from "../api";
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
 import { InboxRequests, INBOX_INSTRUCTIONS, type QueueSnapshot } from "../messageQueue";
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
@@ -21,7 +21,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
   const [state, dispatch] = useReducer(trexReducer, undefined, () => initialChatState(planningOnly ? "plan" : options.mode ?? "ask", options.model, options.effort));
   const stateRef = useRef(state); stateRef.current = state;
   const latest = useRef(options); latest.current = options;
-  const queue = useMessageQueue(options.sessionId);
+  const queue = useMessageQueue(options.queueId ?? options.sessionId);
   const pending = useRef(new Map<string | number, Pending>());
   const ready = useRef<Promise<void> | null>(null), processId = useRef<string | null>(null);
   const startupGeneration = useRef(0);
@@ -130,10 +130,16 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       catch (error) { assertStartup(procId); notice("warn", `No se pudo actualizar el catálogo: ${formatError(error)}`); }
       assertStartup(procId);
       const selected = choices.current;
+      const team = current.team ? await agentTeamMcpConfig(current.team) : null;
+      assertStartup(procId);
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
-        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: INBOX_INSTRUCTIONS });
+        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: INBOX_INSTRUCTIONS,
+        ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
+        ...(current.browser ? { browser: current.browser } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
       if (planningOnly && result.mode !== "plan") throw new Error("Trex CLI no confirmó el modo de planificación de solo lectura.");
+      if (team && result.teamEnabled !== true) throw new Error("Este Trex CLI no confirmó la delegación. Actualiza el CLI antes de usarlo como agente principal.");
+      if (current.planningInstruction && result.rolePolicyApplied !== true) throw new Error("Este Trex CLI no confirmó las instrucciones de la función. Actualiza el CLI antes de iniciar el equipo.");
       nativeConversation.current = text(result.sessionId);
       if (!nativeConversation.current) throw new Error("Trex CLI no devolvió el identificador de conversación.");
       recovery.current = result.recoveryRequired === true;

@@ -1,0 +1,17 @@
+{
+  "bundle": {
+    "targets": ["rpm"],
+    "linux": {
+      "rpm": {
+        "depends": ["gtk3", "webkit2gtk4.1", "libxdo", "openssl-libs"],
+        "recommends": ["chromium", "gnome-keyring"],
+        "files": {
+          "/usr/bin/trex-agent": "installer/payload/trex-agent",
+          "/usr/bin/trex-browser": "installer/payload/browser-linux/trex-browser",
+          "/usr/lib/trex/trex-browser-runtime/": "installer/payload/browser-linux/trex-browser-runtime/"
+        },
+        "compression": {"type": "zstd", "level": 9}
+      }
+    }
+  }
+}

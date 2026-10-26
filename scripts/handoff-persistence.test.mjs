@@ -4,7 +4,7 @@ import test from "node:test";
 import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 
-const helpers = { ...await load("handoff"), ...await load("agentWorkflow"), ...await load("agentRoom") };
+const helpers = { ...await load("handoff"), ...await load("agentWorkflow"), ...await load("agentRoom"), ...await load("agentTeam") };
 const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const ast = ts.createSourceFile("App.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 

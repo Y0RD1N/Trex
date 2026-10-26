@@ -1,10 +1,12 @@
+import BrowserSettings from "./BrowserSettings";
 /** Ajustes por tema, con cambios en borrador y opciones técnicas desplegables. */
-import { cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { ACCENT_PRESETS, DEFAULT_FONT_FAMILY, clamp } from "../api";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
-import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, InfoIcon, KeyboardIcon, MoonIcon, PanelIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
+import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, InfoIcon, KeyboardIcon, MaximizeIcon, MinimizeIcon, MoonIcon, PanelIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
+import { minimizeWindow, toggleMaximizeWindow } from "../window";
 import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
 import CursorSettings from "./CursorSettings";
@@ -25,6 +27,7 @@ type Props = {
   leaving: boolean;
   surfaceRef?: RefObject<HTMLDivElement | null>;
   settings: Settings;
+  cwd?: string;
   appInfo: AppInfo | null;
   claudeInfo: ClaudeInfo | null;
   codexInfo: ClaudeInfo | null;
@@ -43,12 +46,13 @@ const SECTIONS = [
   { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, description: "Personaliza las combinaciones del teclado." },
   { id: "notifications", label: "Notificaciones", icon: <BellIcon size={16} strokeWidth={1.6} />, description: "Avisos del escritorio cuando tus asistentes necesitan atención." },
   { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, description: "Perfiles independientes para Claude Code, Codex y Trex API." },
+  { id: "browser", label: "Navegador", icon: <PanelIcon size={16} />, description: "Pruebas, capturas y grabaciones con tus agentes." },
   { id: "sessions", label: "Sesiones", icon: <PanelIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
   { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
 ] as const;
 type SectionId = typeof SECTIONS[number]["id"];
 
-export default function SettingsPanel({ entering, leaving, surfaceRef, settings, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect, cliUpdates, onUpdateCli }: Props) {
+export default function SettingsPanel({ entering, leaving, surfaceRef, settings, cwd, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect, cliUpdates, onUpdateCli }: Props) {
   const dialog = useDialog();
   const id = useId();
   const [draft, setDraft] = useState<Settings>(settings);
@@ -59,7 +63,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   const [profileBusy, setProfileBusy] = useState(false);
   const profileBusyRef = useRef(false);
   const changeProfileBusy = (busy: boolean): void => { profileBusyRef.current = busy; setProfileBusy(busy); };
-  const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 680px), (max-height: 560px)").matches);
+  const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 760px), (max-height: 520px)").matches);
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const historyRef = useRef<HTMLInputElement>(null);
@@ -69,7 +73,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   savedThemeRef.current = settings;
 
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 680px), (max-height: 560px)");
+    const media = window.matchMedia("(max-width: 760px), (max-height: 520px)");
     const update = (): void => setCompact(media.matches);
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
@@ -78,7 +82,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   useLayoutEffect(() => {
     if (leaving) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    modalRef.current?.querySelector<HTMLButtonElement>(".modal-header button")?.focus({ preventScroll: true });
+    closeButtonRef.current?.focus({ preventScroll: true });
     return () => {
       if (previous?.isConnected && !previous.closest("[inert]") && previous.getClientRects().length) previous.focus({ preventScroll: true });
       else document.querySelector<HTMLButtonElement>(".sidebar:not(.collapsed) .sidebar-collapse, .sidebar.peek .sidebar-collapse, .sidebar-reopen:not([hidden])")?.focus({ preventScroll: true });
@@ -198,31 +202,45 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
       inert={leaving} aria-hidden={leaving || undefined}
       onMouseDown={event => { if (event.target === event.currentTarget) requestClose(); }}>
       <div ref={modalRef} data-motion-surface className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onKeyDown={trapFocus}>
-        <header className="modal-header">
-          <div className="modal-heading">
-            <h2 className="modal-title" id={`${id}-title`}>Ajustes</h2>
-            <p className="modal-subtitle">Personaliza tu espacio de trabajo</p>
+        <header className="modal-header" data-tauri-drag-region="deep">
+          <div className="settings-heading" data-tauri-drag-region>
+            <span className="settings-heading-icon" aria-hidden="true" data-tauri-drag-region><GearIcon size={21} /></span>
+            <div className="modal-heading" data-tauri-drag-region>
+              <h2 className="modal-title" id={`${id}-title`} data-tauri-drag-region>Ajustes</h2>
+              <p className="modal-subtitle" data-tauri-drag-region>Tu espacio, a tu manera</p>
+            </div>
           </div>
-          <button ref={closeButtonRef} type="button" className="icon-btn" disabled={profileBusy} aria-label="Cerrar ajustes" title="Cerrar (Esc)" onClick={event => requestClose(event.currentTarget)}><CloseIcon size={16} /></button>
+          <div className="settings-header-actions">
+            <button type="button" className="icon-btn settings-window-control" aria-label="Minimizar ventana" title="Minimizar ventana" onClick={minimizeWindow}><MinimizeIcon size={16} /></button>
+            <button type="button" className="icon-btn settings-window-control" aria-label="Maximizar o restaurar ventana" title="Maximizar o restaurar ventana" onClick={toggleMaximizeWindow}><MaximizeIcon size={16} /></button>
+            <span className="settings-header-divider" aria-hidden="true" />
+            <button ref={closeButtonRef} type="button" className="icon-btn" disabled={profileBusy} aria-label="Cerrar ajustes" title="Cerrar (Esc)" onClick={event => requestClose(event.currentTarget)}><CloseIcon size={17} /></button>
+          </div>
         </header>
 
         <div className="settings-layout">
           <div className="settings-sidebar">
-            <nav className="settings-nav" role="tablist" aria-label="Secciones de ajustes" aria-orientation={compact ? "horizontal" : "vertical"}>
+            {compact ? <Select className="settings-section-select" aria-label="Sección de ajustes" align="start" value={section}
+              options={SECTIONS.map(item => ({ value: item.id, label: item.label, icon: item.icon }))}
+              onChange={value => setSection(value as SectionId)} />
+            : <nav className="settings-nav" role="tablist" aria-label="Secciones de ajustes" aria-orientation="vertical">
               {SECTIONS.map((item, index) => (
-                <button key={item.id} type="button" role="tab" id={`${id}-tab-${item.id}`} aria-selected={section === item.id}
+                <Fragment key={item.id}>
+                {(index === 0 || index === 3 || index === 7) && <span className="settings-nav-section" aria-hidden="true">{index === 0 ? "Tu espacio" : index === 3 ? "Herramientas" : "Aplicación"}</span>}
+                <button type="button" role="tab" id={`${id}-tab-${item.id}`} aria-selected={section === item.id}
                   aria-controls={`${id}-panel-${item.id}`} tabIndex={section === item.id ? 0 : -1}
                   className={`settings-nav-item${section === item.id ? " active" : ""}`}
                   onClick={() => setSection(item.id)} onKeyDown={event => navigate(event, index)}>
                   <span aria-hidden="true">{item.icon}</span>{item.label}
                 </button>
+                </Fragment>
               ))}
-            </nav>
+            </nav>}
             <span className="settings-sidebar-version">trex {appInfo?.version ?? ""}</span>
           </div>
 
           <div className="settings-content">
-            {SECTIONS.map(item => <section key={item.id} hidden={section !== item.id} className={`settings-page${item.id === "terminal" || item.id === "cursor" ? " settings-terminal-page" : ""}`} role="tabpanel" tabIndex={0} id={`${id}-panel-${item.id}`} aria-labelledby={`${id}-tab-${item.id}`}>
+            {SECTIONS.map(item => <section key={item.id} hidden={section !== item.id} className={`settings-page settings-page-${item.id}${item.id === "terminal" || item.id === "cursor" ? " settings-terminal-page" : ""}`} role="tabpanel" tabIndex={0} id={`${id}-panel-${item.id}`} aria-labelledby={compact ? undefined : `${id}-tab-${item.id}`} aria-label={compact ? item.label : undefined}>
               <div className="settings-page-heading">
                 <h3>{item.label}</h3>
                 <p>{item.description}</p>
@@ -288,6 +306,8 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 appInfo={appInfo} claudeInfo={claudeInfo} codexInfo={codexInfo} onRedetect={onRedetect}
                 onBusyChange={changeProfileBusy}
                 onChange={(profiles, defaultProfileId) => patch({ profiles, defaultProfileId })} />}
+
+              {item.id === "browser" && section === "browser" && <BrowserSettings settings={draft} cwd={cwd} onChange={patch} onBusyChange={changeProfileBusy} />}
 
               {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
               {item.id === "notifications" && <NotificationsSettings settings={draft} onChange={patch} />}

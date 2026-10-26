@@ -1,6 +1,6 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
 import { useReducedMotion } from "./useReducedMotion";
-import { waitForMotion } from "../motion";
+import { enterAfterPaint, waitForMotion } from "../motion";
 
 /** Conserva una capa durante su salida; reabrirla revierte la transición actual. */
 export function usePresence<T>(value: T | null, exitMs = 160, surfaceRef?: RefObject<HTMLElement | null>) {
@@ -18,10 +18,7 @@ export function usePresence<T>(value: T | null, exitMs = 160, surfaceRef?: RefOb
         setEntered(true);
         return;
       }
-      let frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(() => setEntered(true));
-      });
-      return () => cancelAnimationFrame(frame);
+      return enterAfterPaint(() => setEntered(true));
     }
     if (retained === null) return;
     const finish = (): void => { setRetained(null); setEntered(false); };

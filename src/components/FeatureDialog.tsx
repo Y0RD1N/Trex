@@ -75,7 +75,7 @@ export default function FeatureDialog({
     if (event.key !== "Tab") return;
     const items = Array.from(
       ref.current?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]',
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
       ) ?? [],
     ).filter((element) => element.tabIndex >= 0 && element.getClientRects().length);
     if (event.shiftKey && document.activeElement === items[0]) {

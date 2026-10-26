@@ -49,6 +49,21 @@ const CLAUDE_VALUE_FLAGS = new Set([
   "--resume-session-at", "--resume-drops-turn", "--max-turns", "--max-budget-usd", "--fallback-model",
 ]);
 
+/** Effective launch mode when the chat has not made an explicit choice yet. */
+export function claudeProfilePermissionMode(profileArgs: string | null, windows: boolean): string | null {
+  let mode: string | null = null, bypass = false;
+  const tokens = argumentsOf(profileArgs ?? "", windows);
+  for (let index = 0; index < tokens.length; index++) {
+    const value = tokens[index].value, equals = value.indexOf("=");
+    const name = equals < 0 ? value : value.slice(0, equals);
+    if (name === "--") break;
+    if (name === "--dangerously-skip-permissions") bypass = true;
+    else if (name === "--permission-mode") mode = equals < 0 ? tokens[++index]?.value ?? null : value.slice(equals + 1);
+    else if (equals < 0 && (CLAUDE_VALUE_FLAGS.has(name) || name === "--mcp-config") && index + 1 < tokens.length) index++;
+  }
+  return bypass ? "bypassPermissions" : ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"].includes(mode ?? "") ? mode : null;
+}
+
 /** Quita todos los modos/permisos del perfil, manteniendo los demás argumentos y sus comillas originales. */
 export function claudePlanningArgs(profileArgs: string | null, windows: boolean, newConversation = false): string | null {
   if (profileArgs === null) return null;
@@ -93,19 +108,19 @@ export function claudePlanningFlags(flags: string[]): string[] {
 }
 
 /** Denegar ExitPlanMode mantiene el proceso en plan; el texto evita esperar una aprobación humana. */
-export const claudePlanningExitResponse = (requestId: string): string => JSON.stringify({
+export const claudePlanningExitResponse = (requestId: string, instruction = WORKFLOW_PLAN_INSTRUCTIONS): string => JSON.stringify({
   type: "control_response",
-  response: { subtype: "success", request_id: requestId, response: { behavior: "deny", message: WORKFLOW_PLAN_INSTRUCTIONS } },
+  response: { subtype: "success", request_id: requestId, response: { behavior: "deny", message: instruction } },
 });
 
 /** Se aplica al final de thread/start, resume y fork, por encima de las opciones del perfil. */
-export function codexPlanningThread(overrides: Json): Json {
+export function codexPlanningThread(overrides: Json, policy = WORKFLOW_PLAN_INSTRUCTIONS): Json {
   const config = typeof overrides.config === "object" && overrides.config !== null && !Array.isArray(overrides.config) ? overrides.config : {};
   const instructions = typeof overrides.developerInstructions === "string" ? overrides.developerInstructions : "";
   return { ...overrides, sandbox: "read-only", approvalPolicy: "on-request",
     config: { ...config, sandbox_mode: "read-only", approval_policy: "on-request", include_collaboration_mode_instructions: true },
-    developerInstructions: instructions.includes(WORKFLOW_PLAN_INSTRUCTIONS) ? instructions
-      : [instructions, WORKFLOW_PLAN_INSTRUCTIONS].filter(Boolean).join("\n\n") };
+    developerInstructions: instructions.includes(policy) ? instructions
+      : [instructions, policy].filter(Boolean).join("\n\n") };
 }
 
 /** Una reanudación ya activa puede ignorar overrides: no se le envía trabajo si no los confirmó. */
@@ -119,10 +134,10 @@ export function assertCodexPlanningThread(response: Json): void {
 }
 
 /** Planificar exige tanto el sandbox de solo lectura como el modo real de colaboración y su modelo. */
-export function codexPlanningTurn(overrides: Json, model: string | null, effort: string | null): Json {
+export function codexPlanningTurn(overrides: Json, model: string | null, effort: string | null, policy: string | null = null): Json {
   if (!model || !model.trim() || model.trim().length > 256 || /[\s\u0000-\u001f\u007f]/.test(model.trim())) {
     throw new Error("No se conoce el modelo de Codex para planificar. Selecciona un modelo antes de enviar el mensaje.");
   }
   return { ...overrides, model: model.trim(), approvalPolicy: "on-request", sandboxPolicy: { type: "readOnly", networkAccess: false },
-    collaborationMode: { mode: "plan", settings: { model: model.trim(), reasoning_effort: effort, developer_instructions: null } } };
+    collaborationMode: { mode: "plan", settings: { model: model.trim(), reasoning_effort: effort, developer_instructions: policy } } };
 }

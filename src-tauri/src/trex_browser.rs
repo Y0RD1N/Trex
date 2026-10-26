@@ -1,0 +1,632 @@
+//! Bounded management bridge to the separately installed browser companion.
+//! No PATH search, browser launch during doctor, or capability token in argv.
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+const PROTOCOL: &str = "2025-11-25";
+const INPUT_LIMIT: usize = 256 * 1024;
+const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
+const PROBE_LIMIT: usize = 1024 * 1024;
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const CALL_TIMEOUT: Duration = Duration::from_secs(100);
+const FAILED: &str = "No se pudo completar la operación de Trex Browser.";
+const INVALID: &str = "Trex Browser devolvió una respuesta no válida.";
+const MISSING: &str = "Trex Browser no está instalado. Activa su opción en el instalador o instala el componente independiente.";
+const TOOL_NAMES: &[&str] = &[
+    "browser_navigate", "browser_navigate_back", "browser_reload", "browser_tabs", "browser_frames",
+    "browser_handle_dialog", "browser_snapshot", "browser_click", "browser_hover", "browser_drag",
+    "browser_mouse", "browser_press_key", "browser_type", "browser_fill_form", "browser_select_option",
+    "browser_evaluate", "browser_resize", "browser_emulate", "browser_console_messages", "browser_network_requests",
+    "browser_network_body", "browser_route", "browser_file_upload", "browser_take_screenshot", "browser_start_video",
+    "browser_stop_video", "browser_start_trace", "browser_stop_trace", "browser_perf_start", "browser_perf_stop",
+    "browser_cpu_profile_start", "browser_cpu_profile_stop", "browser_heap_snapshot", "browser_wait_for", "browser_artifact",
+    "browser_status", "browser_pause", "browser_resume", "browser_takeover", "browser_cancel", "browser_close",
+];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserStatus {
+    installed: bool,
+    ready: bool,
+    compatible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    browsers: Option<Vec<BrowserSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capabilities: Option<std::collections::BTreeMap<String, bool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<BrowserError>,
+}
+
+#[derive(Serialize)]
+pub struct BrowserSummary {
+    id: String,
+    name: String,
+    available: bool,
+}
+
+#[derive(Serialize)]
+pub struct BrowserError {
+    code: String,
+    message: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserCallRequest {
+    name: String,
+    arguments: Value,
+    cwd: String,
+    mode: String,
+    client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct BrowserMcpConfig {
+    command: String,
+    args: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserProfile {
+    id: String,
+    name: String,
+    project_id: String,
+    created_at: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct BrowserProfiles {
+    profiles: Vec<BrowserProfile>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum BrowserContent {
+    Text { text: String },
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserCallResult {
+    content: Vec<BrowserContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    structured_content: Option<Value>,
+    #[serde(default)]
+    is_error: bool,
+}
+
+fn plain(value: &str, limit: usize) -> bool {
+    !value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control)
+}
+
+fn opaque(value: &str, limit: usize) -> bool {
+    plain(value, limit)
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte))
+}
+
+fn validate_context(cwd: &str, mode: &str, client: &str, profile: Option<&str>) -> Result<(), String> {
+    if !plain(cwd, 32768)
+        || !Path::new(cwd).is_absolute()
+        || !Path::new(cwd).is_dir()
+        || !matches!(mode, "observe" | "qa" | "full")
+        || !opaque(client, 128)
+        || client.starts_with('-')
+        || profile.is_some_and(|value| {
+            !value.starts_with("BROWSER")
+                || value.len() <= 7
+                || value.len() > 9
+                || !value[7..].bytes().all(|byte| byte.is_ascii_digit())
+                || value.as_bytes()[7] == b'0'
+        })
+    {
+        return Err("El contexto de Trex Browser no es válido.".into());
+    }
+    Ok(())
+}
+
+fn validate_request(request: &BrowserCallRequest) -> Result<(), String> {
+    validate_context(&request.cwd, &request.mode, &request.client_id, request.profile.as_deref())?;
+    // Tools can never replace the grant established by the outer app context.
+    let Some(arguments) = request.arguments.as_object() else { return Err(FAILED.into()) };
+    if !TOOL_NAMES.contains(&request.name.as_str())
+        || arguments.keys().any(|key| matches!(key.as_str(),
+            "cwd" | "mode" | "clientId" | "client" | "profile" | "home" | "token" | "capability"))
+        || request.operation_id.as_ref().is_some_and(|id| !opaque(id, 128))
+        || request.timeout_ms.is_some_and(|value| value == 0 || value > 90_000)
+    {
+        return Err("La solicitud de Trex Browser no es válida.".into());
+    }
+    Ok(())
+}
+
+fn ordinary_path(path: &Path) -> bool {
+    if !path.is_absolute() { return false; }
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        if !matches!(path.components().next(), Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+            || path.components().any(|component| matches!(component, Component::ParentDir | Component::CurDir)
+                || matches!(component, Component::Normal(name) if {
+                    let value = name.to_string_lossy();
+                    value.contains(':') || value.ends_with(['.', ' ']) || value.chars().any(char::is_control)
+                }))
+        { return false; }
+    }
+    path.ancestors().all(|part| {
+        std::fs::symlink_metadata(part).is_ok_and(|metadata| {
+            if metadata.file_type().is_symlink() { return false; }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x400 != 0 { return false; }
+            }
+            true
+        })
+    })
+}
+
+fn browser_binary(directory: &Path) -> Option<PathBuf> {
+    let binary = directory.join(if cfg!(windows) { "trex-browser.exe" } else { "trex-browser" });
+    (ordinary_path(&binary) && binary.is_file()).then(|| binary.canonicalize().ok())
+        .flatten().filter(|canonical| ordinary_path(canonical))
+}
+
+#[cfg(windows)]
+fn registered_directory() -> Option<PathBuf> {
+    use std::ffi::c_void;
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegGetValueW(key: isize, subkey: *const u16, value: *const u16,
+            flags: u32, kind: *mut u32, data: *mut c_void, bytes: *mut u32) -> i32;
+    }
+    let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let subkey = wide(r"Software\com.trex.browser\Install");
+    let name = wide("InstallDir");
+    let mut buffer = vec![0u16; 32768];
+    let mut bytes = (buffer.len() * 2) as u32;
+    // REG_SZ only, explicit 64-bit view, no expandable/environment value.
+    let result = unsafe { RegGetValueW(0x8000_0001u32 as i32 as isize,
+        subkey.as_ptr(), name.as_ptr(), 0x0001_0002, std::ptr::null_mut(),
+        buffer.as_mut_ptr().cast(), &mut bytes) };
+    if result != 0 || bytes < 4 || bytes as usize > buffer.len() * 2 || bytes % 2 != 0 { return None; }
+    buffer.truncate(bytes as usize / 2);
+    if buffer.pop() != Some(0) || buffer.contains(&0) { return None; }
+    let text = String::from_utf16(&buffer).ok()?;
+    plain(&text, 32768).then(|| PathBuf::from(text))
+}
+
+#[cfg(target_os = "linux")]
+fn registered_directory() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))?;
+    base.is_absolute().then(|| base.join("trex-browser"))
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn registered_directory() -> Option<PathBuf> { None }
+
+#[cfg(debug_assertions)]
+fn development_browser_directory() -> Option<PathBuf> {
+    Path::new(env!("CARGO_MANIFEST_DIR")).parent()
+        .map(|root| root.join("trex-browser/target/debug"))
+}
+
+/// Production uses the app sibling first, then the standalone install registry.
+/// Debug alone additionally accepts this checkout's built target/debug layout.
+pub(crate) fn installed_browser_path() -> Result<PathBuf, String> {
+    if let Some(binary) = std::env::current_exe().ok()
+        .and_then(|path| path.parent().and_then(browser_binary)) { return Ok(binary); }
+    if let Some(binary) = registered_directory().as_deref().and_then(browser_binary) { return Ok(binary); }
+    #[cfg(debug_assertions)]
+    if let Some(binary) = development_browser_directory().as_deref().and_then(browser_binary) { return Ok(binary); }
+    Err(MISSING.into())
+}
+
+fn read_output(mut output: impl Read, limit: usize) -> Result<Vec<u8>, ()> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 8192];
+    let mut overflow = false;
+    loop {
+        let count = output.read(&mut buffer).map_err(|_| ())?;
+        if count == 0 { break; }
+        if bytes.len().saturating_add(count) <= limit { bytes.extend_from_slice(&buffer[..count]); }
+        else { overflow = true; }
+    }
+    if overflow { Err(()) } else { Ok(bytes) }
+}
+
+fn browser_command(path: &Path) -> Command {
+    let mut command = Command::new(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    // The companion owns its private runtime; injected Node startup code is
+    // never inherited. Broker credentials stay in the companion's private home.
+    command.env_remove("NODE_OPTIONS").env_remove("NODE_PATH");
+    command
+}
+
+fn invoke_at(path: &Path, args: &[&str], input: Option<Vec<u8>>, timeout: Duration, limit: usize) -> Result<Vec<u8>, String> {
+    invoke_command(browser_command(path), args, input, timeout, limit)
+}
+
+fn invoke_command(mut command: Command, args: &[&str], input: Option<Vec<u8>>, timeout: Duration, limit: usize) -> Result<Vec<u8>, String> {
+    if input.as_ref().is_some_and(|bytes| bytes.len() > INPUT_LIMIT) { return Err("La solicitud de Trex Browser supera el límite permitido.".into()); }
+    command.args(args).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = command.spawn().map_err(|_| FAILED.to_string())?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill(); let _ = child.wait(); return Err(FAILED.into());
+    };
+    let (output_tx, output_rx) = mpsc::sync_channel(1);
+    thread::spawn(move || { let _ = output_tx.send(read_output(stdout, limit)); });
+    let input_rx = input.map(|bytes| {
+        let stdin = child.stdin.take();
+        let (tx, rx) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let result = stdin.ok_or(()).and_then(|mut pipe| pipe.write_all(&bytes).map_err(|_| ()));
+            let _ = tx.send(result);
+        }); rx
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(15)),
+            _ => { let _ = child.kill(); let _ = child.wait(); return Err(FAILED.into()); }
+        }
+    };
+    if let Some(rx) = input_rx {
+        rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| FAILED.to_string())?.map_err(|_| FAILED.to_string())?;
+    }
+    let bytes = output_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| FAILED.to_string())?.map_err(|_| FAILED.to_string())?;
+    if !status.success() { return Err(FAILED.into()); }
+    Ok(bytes)
+}
+
+fn status_error(installed: bool, code: &str, message: &str) -> BrowserStatus {
+    BrowserStatus { installed, ready: false, compatible: false,
+        protocol_version: None, version: None, browsers: None, capabilities: None,
+        error: Some(BrowserError { code: code.into(), message: message.into() }) }
+}
+
+fn doctor_status(bytes: &[u8]) -> Result<BrowserStatus, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Doctor {
+        version: String, protocol_version: String,
+        runtime: Runtime, browser: Browser,
+        #[serde(default)] capabilities: std::collections::BTreeMap<String, Value>,
+    }
+    #[derive(Deserialize)]
+    struct Runtime { node: bool, playwright: bool, #[serde(default)] ffmpeg: Option<bool> }
+    #[derive(Deserialize)]
+    struct Browser { available: bool, #[serde(default)] channel: Option<String> }
+    let doctor: Doctor = serde_json::from_slice(bytes).map_err(|_| INVALID.to_string())?;
+    if !plain(&doctor.version, 128) || !plain(&doctor.protocol_version, 128) || doctor.capabilities.len() > 128 { return Err(INVALID.into()); }
+    let compatible = doctor.protocol_version == PROTOCOL;
+    let runtime_ready = doctor.runtime.node && doctor.runtime.playwright && doctor.runtime.ffmpeg != Some(false);
+    let channel = doctor.browser.channel.filter(|value| matches!(value.as_str(), "chrome" | "msedge" | "edge" | "chromium"));
+    let mut status = BrowserStatus { installed: true, ready: compatible && runtime_ready && doctor.browser.available,
+        compatible, protocol_version: Some(doctor.protocol_version), version: Some(doctor.version),
+        browsers: Some(vec![BrowserSummary { id: channel.clone().unwrap_or_else(|| "chrome".into()),
+            name: match channel.as_deref() { Some("msedge" | "edge") => "Microsoft Edge", Some("chromium") => "Chromium", _ => "Google Chrome" }.into(),
+            available: doctor.browser.available }]),
+        capabilities: Some(doctor.capabilities.into_iter().filter_map(|(key, value)| {
+            (opaque(&key, 80)).then(|| value.as_bool().map(|value| (key, value))).flatten()
+        }).collect()), error: None };
+    status.error = if !compatible { Some(BrowserError { code: "incompatible".into(), message: "Actualiza Trex Browser para usar este protocolo.".into() }) }
+        else if !runtime_ready { Some(BrowserError { code: "missing_runtime".into(), message: "Faltan archivos del runtime de Trex Browser. Reinstala el componente.".into() }) }
+        else if !doctor.browser.available { Some(BrowserError { code: "missing_browser".into(), message: "Instala Chromium, Google Chrome o Microsoft Edge para usar Trex Browser.".into() }) }
+        else { None };
+    Ok(status)
+}
+
+fn probe_status(path: &Path) -> Result<BrowserStatus, String> {
+    let runtime = path.parent().ok_or_else(|| FAILED.to_string())?.join("trex-browser-runtime");
+    #[cfg(target_os = "linux")]
+    let runtime = if path.parent() == Some(Path::new("/usr/bin")) && !runtime.exists() {
+        PathBuf::from("/usr/lib/trex/trex-browser-runtime")
+    } else { runtime };
+    let required = [if cfg!(windows) { "node.exe" } else { "node" }, "worker.mjs", "package.json", "package-lock.json",
+        "node_modules/playwright/package.json", "node_modules/playwright-core/package.json"];
+    if required.iter().any(|name| {
+        let file = runtime.join(name);
+        !ordinary_path(&file) || !file.is_file()
+    }) || !ordinary_path(&runtime.join("ffmpeg")) || !runtime.join("ffmpeg").is_dir() {
+        return Ok(status_error(true, "missing_runtime", "Faltan archivos del runtime de Trex Browser. Reinstala el componente."));
+    }
+    doctor_status(&invoke_at(path, &["doctor", "--json"], None, PROBE_TIMEOUT, PROBE_LIMIT)?)
+}
+
+fn prepared_broker(bytes: &[u8]) -> Result<(), String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Prepared { ready: bool, protocol_version: String }
+    let status: Prepared = serde_json::from_slice(bytes).map_err(|_| INVALID.to_string())?;
+    if !status.ready || status.protocol_version != PROTOCOL { return Err(FAILED.into()); }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn trex_browser_status() -> Result<BrowserStatus, String> {
+    crate::blocking(|| {
+        let Ok(path) = installed_browser_path() else { return Ok(status_error(false, "not_installed", MISSING)); };
+        Ok(match probe_status(&path) {
+            Ok(status) => status,
+            Err(_) => status_error(true, "probe_failed", "No se pudo comprobar Trex Browser. Reinstala el componente o vuelve a intentarlo."),
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn trex_browser_mcp_config(cwd: String, mode: String, client_id: String, profile: Option<String>) -> Result<BrowserMcpConfig, String> {
+    crate::blocking(move || {
+        validate_context(&cwd, &mode, &client_id, profile.as_deref())?;
+        let path = installed_browser_path()?;
+        let status = probe_status(&path)?;
+        if !status.ready { return Err(status.error.map(|error| error.message).unwrap_or_else(|| FAILED.into())); }
+        // Codex/Claude may wrap MCP children in a non-breakaway Windows job.
+        // Start the broker from the app, whose manual controls can launch it,
+        // before those clients attach. This never opens a browser or profile.
+        prepared_broker(&invoke_at(&path, &["prepare", "--json"], None, Duration::from_secs(30), PROBE_LIMIT)?)?;
+        let mut args = vec!["mcp".into(), "--cwd".into(), cwd, "--mode".into(), mode, "--client".into(), client_id];
+        if let Some(profile) = profile { args.extend(["--profile".into(), profile]); }
+        Ok(BrowserMcpConfig { command: path.to_string_lossy().into_owned(), args })
+    }).await
+}
+
+fn call_result(bytes: &[u8]) -> Result<BrowserCallResult, String> {
+    if bytes.len() > OUTPUT_LIMIT { return Err(INVALID.into()); }
+    let result: BrowserCallResult = serde_json::from_slice(bytes).map_err(|_| INVALID.to_string())?;
+    if result.content.len() > 128 || result.structured_content.as_ref().is_some_and(|value| !value.is_object())
+        || result.content.iter().any(|content| match content {
+            BrowserContent::Text { text } => text.len() > OUTPUT_LIMIT,
+            BrowserContent::Image { data, mime_type } => data.len() > 6 * 1024 * 1024
+                || !matches!(mime_type.as_str(), "image/png" | "image/jpeg" | "image/webp")
+                || base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data).is_err(),
+        }) { return Err(INVALID.into()); }
+    Ok(result)
+}
+
+fn call(request: BrowserCallRequest) -> Result<BrowserCallResult, String> {
+    validate_request(&request)?;
+    let path = installed_browser_path()?;
+    let status = probe_status(&path)?;
+    if !status.compatible || status.error.as_ref().is_some_and(|error| error.code == "missing_runtime") {
+        return Err(status.error.map(|error| error.message).unwrap_or_else(|| FAILED.into()));
+    }
+    let bytes = serde_json::to_vec(&request).map_err(|_| FAILED.to_string())?;
+    call_result(&invoke_at(&path, &["call", "--stdin-json"], Some(bytes), CALL_TIMEOUT, OUTPUT_LIMIT)?)
+}
+
+fn profiles_result(bytes: &[u8]) -> Result<BrowserProfiles, String> {
+    let result: BrowserProfiles = serde_json::from_slice(bytes).map_err(|_| INVALID.to_string())?;
+    if result.profiles.len() > 1024 || result.profiles.iter().any(|profile| {
+        !opaque(&profile.id, 32) || !plain(&profile.name, 128) || !opaque(&profile.project_id, 128)
+            || !plain(&profile.created_at, 64)
+    }) { return Err(INVALID.into()); }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn trex_browser_profiles(cwd: String) -> Result<BrowserProfiles, String> {
+    crate::blocking(move || {
+        validate_context(&cwd, "observe", "settings", None)?;
+        let path = installed_browser_path()?;
+        profiles_result(&invoke_at(&path, &["profiles", "list", "--cwd", &cwd], None, PROBE_TIMEOUT, PROBE_LIMIT)?)
+    }).await
+}
+
+#[tauri::command]
+pub async fn trex_browser_create_profile(cwd: String, profile: String) -> Result<BrowserProfiles, String> {
+    crate::blocking(move || {
+        validate_context(&cwd, "observe", "settings", Some(&profile))?;
+        let path = installed_browser_path()?;
+        profiles_result(&invoke_at(&path, &["profiles", "create", "--cwd", &cwd, "--profile", &profile], None, PROBE_TIMEOUT, PROBE_LIMIT)?)
+    }).await
+}
+
+#[tauri::command]
+pub async fn trex_browser_call(request: BrowserCallRequest) -> Result<BrowserCallResult, String> {
+    crate::blocking(move || call(request)).await
+}
+
+// Artifact opening is an ID-based service operation. No WebView supplied path
+// is ever passed to the operating system's opener.
+#[tauri::command]
+pub async fn trex_browser_open_artifact(id: String, cwd: String, mode: String, client_id: String, profile: Option<String>) -> Result<BrowserCallResult, String> {
+    crate::blocking(move || {
+        if !opaque(&id, 128) { return Err("El artefacto no es válido.".into()); }
+        validate_context(&cwd, &mode, &client_id, profile.as_deref())?;
+        let path = installed_browser_path()?;
+        let input = serde_json::to_vec(&serde_json::json!({"artifactId":id,"cwd":cwd,"mode":mode,"clientId":client_id,"profile":profile}))
+            .map_err(|_| FAILED.to_string())?;
+        let mut result = call_result(&invoke_at(&path, &["artifact-open", "--stdin-json"], Some(input), PROBE_TIMEOUT, PROBE_LIMIT)?)?;
+        // Settings receives a compact receipt; image bytes are only returned by
+        // the explicit tool call path used for model/browser inspection.
+        result.content.clear();
+        Ok(result)
+    }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_preparation_requires_explicit_ready_and_matching_protocol() {
+        assert!(prepared_broker(br#"{"ready":true,"protocolVersion":"2025-11-25"}"#).is_ok());
+        for bytes in [br#"{"ready":false,"protocolVersion":"2025-11-25"}"#.as_slice(),br#"{"ready":true,"protocolVersion":"wrong"}"#.as_slice(),br#"{"ready":true}"#.as_slice(),br#"{"error":"private diagnostic"}"#.as_slice()] {
+            let error=prepared_broker(bytes).unwrap_err();assert!(!error.contains("private diagnostic"));
+        }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn development_fallback_has_no_parent_traversal_components() {
+        let directory = development_browser_directory().unwrap();
+        assert!(directory.is_absolute());
+        assert!(!directory.components().any(|part| matches!(part, std::path::Component::ParentDir)));
+        assert!(directory.ends_with("trex-browser/target/debug"));
+    }
+
+    #[test]
+    fn doctor_is_whitelisted_and_distinguishes_installation_failures() {
+        let fixture = |protocol, node, browser| serde_json::to_vec(&serde_json::json!({
+            "version":"0.1.0", "protocolVersion":protocol, "runtime":{"node":node,"playwright":true,"token":"private"},
+            "browser":{"available":browser,"channel":"chrome","executablePath":"private"},
+            "capabilities":{"screenshots":true,"secret":"private"}, "token":"private"
+        })).unwrap();
+        let ready = doctor_status(&fixture(PROTOCOL, true, true)).unwrap();
+        assert!(ready.installed && ready.ready && ready.compatible);
+        assert!(!serde_json::to_string(&ready).unwrap().contains("private"));
+        assert_eq!(doctor_status(&fixture("future", true, true)).unwrap().error.unwrap().code, "incompatible");
+        assert_eq!(doctor_status(&fixture(PROTOCOL, false, true)).unwrap().error.unwrap().code, "missing_runtime");
+        assert_eq!(doctor_status(&fixture(PROTOCOL, true, false)).unwrap().error.unwrap().code, "missing_browser");
+        assert_eq!(doctor_status(b"secret invalid output").err().unwrap(), INVALID);
+    }
+
+    #[test]
+    fn bounded_output_drains_and_does_not_return_partial_json() {
+        assert_eq!(read_output(std::io::repeat(b'x').take(100), 100).unwrap().len(), 100);
+        assert!(read_output(std::io::repeat(b'x').take(101), 100).is_err());
+    }
+
+    #[test]
+    #[ignore = "subprocess fixture, invoked by bridge_timeout_kills_and_waits_for_a_child_that_never_reads_stdin"]
+    fn fixture_blocks_stdin() {
+        std::io::stderr().write_all(b"fake-private-diagnostic").unwrap();
+        thread::sleep(Duration::from_secs(30));
+    }
+
+    #[test]
+    fn bridge_timeout_kills_and_waits_for_a_child_that_never_reads_stdin() {
+        let started = Instant::now();
+        let result = invoke_at(&std::env::current_exe().unwrap(),
+            &["--exact", "trex_browser::tests::fixture_blocks_stdin", "--ignored", "--nocapture"],
+            Some(vec![b'x'; INPUT_LIMIT]), Duration::from_millis(150), 1024);
+        assert_eq!(result.err().unwrap(), FAILED);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn call_context_rejects_policy_override_and_non_object_arguments() {
+        let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        for arguments in [serde_json::json!({"mode":"full"}), serde_json::json!({"cwd":"other"}), serde_json::json!([])] {
+            let request = BrowserCallRequest { name: "browser_snapshot".into(), arguments,
+                cwd: cwd.clone(), mode: "observe".into(), client_id: "test-client".into(), profile: Some("BROWSER1".into()),
+                operation_id: None, timeout_ms: Some(1000) };
+            assert!(validate_request(&request).is_err());
+        }
+        assert!(validate_context(&cwd, "full", "client", Some("BROWSER1")).is_ok());
+        assert!(validate_context(&cwd, "full", "client", Some("BROWSER0")).is_err());
+        assert!(validate_context(&cwd, "auto", "client", None).is_err());
+        assert!(validate_context("relative", "observe", "client", None).is_err());
+    }
+
+    #[test]
+    fn mcp_result_preserves_typed_content_and_rejects_unknown_executable_content() {
+        let result = call_result(br#"{"content":[{"type":"text","text":"ok","token":"ignored"}],"structuredContent":{"artifacts":[]},"isError":false,"token":"ignored"}"#).unwrap();
+        assert!(!serde_json::to_string(&result).unwrap().contains("ignored"));
+        assert!(call_result(br#"{"content":[{"type":"resource_link","uri":"file:///evil.exe"}]}"#).is_err());
+        assert!(call_result(br#"{"content":[{"type":"image","data":"invalid","mimeType":"image/png"}]}"#).is_err());
+    }
+
+    #[test]
+    fn one_mib_network_body_accepts_the_complete_core_result_wrapper() {
+        let body = "x".repeat(1024 * 1024);
+        let structured = serde_json::json!({
+            "ok":true,"operationId":"op","projectId":"project1","profile":"BROWSER1",
+            "generation":1,"revision":1,
+            "data":{"body":body,"bytes":1024 * 1024,"untrustedContent":true},
+            "artifacts":[],"receipt":{"status":"completed","manualReview":false,"replaySafe":false}
+        });
+        // The core repeats structuredContent as a JSON text block. Its 1 MiB
+        // body is valid even though that text block needs another 249 bytes.
+        let text = serde_json::to_string(&structured).unwrap();
+        assert_eq!(text.len(), 1_048_825);
+        let wire = serde_json::to_vec(&serde_json::json!({
+            "content":[{"type":"text","text":text}],"structuredContent":structured
+        })).unwrap();
+        assert!(wire.len() < OUTPUT_LIMIT);
+        let result = call_result(&wire).unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.structured_content.as_ref().unwrap()["data"]["body"].as_str().unwrap().len(), 1024 * 1024);
+        assert!(matches!(&result.content[0], BrowserContent::Text { text } if text.len() == 1_048_825));
+    }
+
+    #[test]
+    fn whole_response_cap_is_inclusive_and_rejects_even_extra_json_whitespace() {
+        let envelope = |text: String| serde_json::to_vec(&serde_json::json!({
+            "content":[{"type":"text","text":text}]
+        })).unwrap();
+        let overhead = envelope(String::new()).len();
+        let mut wire = envelope("x".repeat(OUTPUT_LIMIT - overhead));
+        assert_eq!(wire.len(), OUTPUT_LIMIT);
+        assert!(call_result(&wire).is_ok());
+        wire.push(b' ');
+        assert_eq!(call_result(&wire).err().unwrap(), INVALID);
+        assert!(read_output(wire.as_slice(), OUTPUT_LIMIT).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires TREX_TEST_BROWSER pointing to the assembled real launcher/runtime; doctor only"]
+    fn packaged_doctor_roundtrip_uses_an_isolated_private_home() {
+        let binary = PathBuf::from(std::env::var_os("TREX_TEST_BROWSER").expect("set TREX_TEST_BROWSER"));
+        assert!(binary.is_absolute() && binary.is_file() && ordinary_path(&binary));
+        let home = std::env::temp_dir().join(format!("trex-browser-bridge-test-{}-{}",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        assert!(!home.exists());
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        }
+        let _cleanup = Cleanup(home.clone());
+        let mut command = browser_command(&binary);
+        command.env("TREX_BROWSER_HOME", &home).env("APPDATA", home.join("roaming"))
+            .env("LOCALAPPDATA", home.join("local"));
+        let status = doctor_status(&invoke_command(command, &["doctor", "--json"], None, PROBE_TIMEOUT, PROBE_LIMIT).unwrap()).unwrap();
+        assert!(status.installed && status.compatible);
+        assert_eq!(status.protocol_version.as_deref(), Some(PROTOCOL));
+        assert!(!home.join("broker.token").exists(), "doctor must not start a broker");
+        assert!(!home.join("projects").exists(), "doctor must not create browser profiles");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires the built RPM installed in an isolated Fedora test system"]
+    fn installed_linux_rpm_runtime_passes_app_preflight() {
+        let status = probe_status(Path::new("/usr/bin/trex-browser")).unwrap();
+        assert!(status.installed && status.compatible);
+        assert_eq!(status.protocol_version.as_deref(), Some(PROTOCOL));
+        assert!(status.error.as_ref().is_none_or(|error| error.code == "missing_browser"));
+    }
+}

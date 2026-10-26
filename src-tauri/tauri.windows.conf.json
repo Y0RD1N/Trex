@@ -2,7 +2,9 @@
   "bundle": {
     "targets": ["nsis"],
     "resources": {
-      "installer/payload/trex-agent.exe": "trex-agent.payload"
+      "installer/payload/trex-agent.exe": "trex-agent.payload",
+      "installer/payload/browser/trex-browser.exe": "trex-browser.payload",
+      "installer/payload/browser/trex-browser-runtime/": "trex-browser-runtime.payload/"
     },
     "windows": {
       "nsis": {

@@ -1,3 +1,5 @@
+import BrowserMenu from "./chat/BrowserMenu";
+import { browserOptions, brokerArtifactId } from "../browser";
 /**
  * ChatView: sesión de Claude Code o de Codex como conversación.
  *
@@ -9,7 +11,7 @@
  */
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { formatError, gitBranch, listProjectFiles, readClipboard } from "../api";
+import { formatError, gitBranch, listProjectFiles, readClipboard, trexBrowserOpenArtifact } from "../api";
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
 import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from "../chatFiles";
 import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
@@ -54,13 +56,22 @@ import Suggestions from "./chat/Suggestions";
 import WorkSummary from "./chat/WorkSummary";
 import BranchMenu, { GIT_BRANCH_CHANGED } from "./chat/BranchMenu";
 import QueuedMessages from "./chat/QueuedMessages";
+import TaskPanel from "./chat/TaskPanel";
+import SubagentActivity from "./chat/AgentActivity";
+import ChatWelcome, { type ChatWelcomeContent } from "./chat/ChatWelcome";
+import { activityGroups, chatTasks, type ChatAttribution, type ChatTask } from "../chatTasks";
 import "./ChatView.css";
 import "./chat/MessageActions.css";
 
 export type ChatViewProps = ChatSessionOptions & {
   toolbar?: ReactNode;
   composerLead?: ReactNode;
-  itemLabels?: Record<string, { provider: AgentProvider; label: string }>;
+  itemLabels?: Record<string, ChatAttribution>;
+  taskPlan?: ChatTask[];
+  taskAuthor?: string;
+  tasksPaused?: boolean;
+  emptyState?: ChatWelcomeContent;
+  composerPlaceholder?: string;
   inputLocked?: boolean;
   historyReadOnly?: boolean;
   onBeforeSend?: (text: string, images: OutgoingImage[], previews: string[]) => boolean | "blocked" | Promise<true | "blocked">;
@@ -168,6 +179,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     updateDraft(draftRef.current);
   };
   const [atBottom, setAtBottom] = useState(true);
+  const [tasksOpen, setTasksOpen] = useState(!props.emptyState);
+  const hadTasks = useRef(false);
+  const taskToggle = useRef<HTMLButtonElement>(null);
   const [attachments, updateAttachments] = useState<ChatAttachment[]>([]);
   const attachmentsRef = useRef(attachments);
   const setAttachments = (value: ChatAttachment[] | ((previous: ChatAttachment[]) => ChatAttachment[])): void => {
@@ -954,13 +968,32 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   // Filas del hilo: se rehacen solo cuando cambia algo que muestran, no con cada tecla en la caja.
   const editingId = editing?.id ?? null;
   const busy = workflowLocked || preparing > 0 || handoffPending || hasQueued || !session.queue.ready;
+  const tasks = useMemo(() => props.taskPlan ?? chatTasks(state.items, props.profileName ?? agent.name), [props.taskPlan, state.items, props.profileName, agent.name]);
+  useEffect(() => { if(props.emptyState && tasks.length && !hadTasks.current)setTasksOpen(true);hadTasks.current=tasks.length>0; }, [tasks.length,props.emptyState]);
+  const showTasks = tasks.length > 0 || props.taskPlan !== undefined || props.planningOnly || mode === "plan";
+  const revealTask = (task: ChatTask): void => {
+    const matches = threadItems.filter(item => task.memberId ? props.itemLabels?.[item.id]?.memberId === task.memberId : item.id === task.sourceId);
+    const target = matches[matches.length - 1];
+    if (!target) { props.onMessage("La actividad aparecerá cuando se inicie esta tarea."); return; }
+    const index = threadItems.indexOf(target);
+    if (index < threadStart) setAnchorId(target.id);
+    stickRef.current = false;
+    requestAnimationFrame(() => {
+      const elements = rootRef.current?.querySelectorAll<HTMLElement>(task.memberId ? ".chat-agent-activity" : "[data-plan-source]");
+      const matching = elements ? [...elements].filter(element => task.memberId ? element.dataset.memberId === task.memberId : element.dataset.planSource === task.sourceId) : [];
+      const node = matching[matching.length - 1];
+      if (node instanceof HTMLDetailsElement) node.open = true;
+      node?.scrollIntoView({ block: "nearest", behavior: "auto" });
+    });
+  };
   const rows = useMemo(() => {
     // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
     const askingFor = new Set(threadItems.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
     const asked = (id: string): boolean => askingFor.has(id) || askingFor.has(id.split("#")[0]);
     const canEdit = (item: Extract<ChatItem, { kind: "user" }>): boolean =>
       !props.historyReadOnly && !item.fromQueue && (provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id));
-    return threadItems.slice(threadStart).map((item, offset) => {
+    const visibleItems = threadItems.slice(threadStart);
+    const rendered = visibleItems.map((item, offset) => {
       const animate = threadStart + offset >= enterFrom;
       const next = threadItems[threadStart + offset + 1];
       switch (item.kind) {
@@ -981,9 +1014,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             <div className="chat-message-author"><AgentIcon kind={label.provider} size={13} /><span>{label.label}</span></div>{response}</div> : response;
         }
         case "thinking": return <Thinking key={item.id} text={item.text} />;
-        case "tool": return asked(item.id) ? null : <ToolRow key={item.id} item={item} cwd={cwd}
-          expanded={item.id === latestTodos || item.id === latestPlan}
-          onImplement={item.id === latestPlan && planReady ? implementPlan : undefined} />;
+        case "tool": return asked(item.id) ? null : <div key={item.id} data-plan-source={["TodoWrite", "TaskCreate", "TaskUpdate"].includes(item.name) ? item.id : undefined}><ToolRow item={item} cwd={cwd}
+          onOpenArtifact={props.browser?.enabled ? async artifact => {
+            const id = brokerArtifactId(artifact); if (!id || !props.browser) return;
+            try { const result = await trexBrowserOpenArtifact(id, cwd, "full", props.browser.clientId, props.browser.profile);
+              if (result.isError) session.notice("warn", "No se pudo abrir el archivo. Revisa el estado del navegador.");
+            } catch { session.notice("warn", "No se pudo abrir el archivo del navegador."); }
+          } : undefined}
+          expanded={!showTasks && item.id === latestTodos || item.id === latestPlan}
+          onImplement={item.id === latestPlan && planReady ? implementPlan : undefined} /></div>;
         // Las preguntas se responden en el panel que sustituye a la caja de mensaje.
         case "permission": return item.state !== "pending" || item.toolName === "AskUserQuestion" ? null
           : <PermissionCard key={item.id} item={item} cwd={cwd} agent={agent.name} onAnswer={answer} />;
@@ -991,8 +1030,14 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         case "turn": return <WorkSummary key={item.id} summary={summaries.get(item.id)!} durationMs={item.durationMs} animate={animate} />;
       }
     });
+    return activityGroups(visibleItems, props.itemLabels).map(group => {
+      if (!group.author) return rendered[group.start];
+      const items = visibleItems.slice(group.start, group.end);
+      const live = !!group.author.busy && !visibleItems.slice(group.end).some(item => props.itemLabels?.[item.id]?.memberId === group.author!.memberId);
+      return <SubagentActivity key={items[0].id} author={group.author} items={items} live={live}>{rendered.slice(group.start, group.end).filter((_row, at) => items[at].kind !== "user")}</SubagentActivity>;
+    });
   }, [threadItems, threadStart, enterFrom, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
-    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels]);
+    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels, props.browser, props.planningOnly, mode, session, showTasks]);
   const stderrTail = state.stderr.slice(-6).join("\n");
 
   return <div ref={rootRef} className={`chat${empty ? " is-empty" : ""}${dragging ? " is-dragging" : ""}`}
@@ -1006,6 +1051,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       addDropped(Array.from(event.dataTransfer.files));
     }}>
     {props.toolbar}
+    {showTasks && <div className="chat-task-toolbar"><button ref={taskToggle} type="button" className="chat-task-toggle" aria-expanded={tasksOpen} aria-controls={tasksOpen?`tasks-${sessionId}`:undefined}
+      onClick={() => setTasksOpen(value => !value)}><MapIcon size={14} />Tareas{tasks.length>0&&<small>{tasks.filter(task => task.status === "completed").length}/{tasks.length}</small>}</button></div>}
+    <div className="chat-workspace"><div className="chat-main">
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
       <SharedFilesContext.Provider value={filesContext}>
       <div className="chat-thread" ref={threadRef}>
@@ -1032,11 +1080,11 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
             </div>
           </div>
         </div>}
-        {empty && !handoffPending && <div className="chat-empty">
+        {empty && !handoffPending && (props.emptyState ? <ChatWelcome content={props.emptyState} provider={provider} /> : <div className="chat-empty">
           <AgentIcon kind={provider} size={30} activity={activity} />
           <h2>¿En qué trabajamos en {projectName}?</h2>
           <p>{cwd}</p>
-        </div>}
+        </div>)}
         {threadStart > 0 && <button type="button" className="chat-earlier" onClick={showEarlier}>
           Mostrar mensajes anteriores
         </button>}
@@ -1145,7 +1193,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${selectedSuggestion}` : undefined}
           placeholder={running
             ? sendDuringWork === "queue" ? "Añade un mensaje a la cola…" : "Envía una indicación…"
-            : "Escribe un mensaje…"}
+            : props.composerPlaceholder??"Escribe un mensaje…"}
           onChange={event => { setDraft(event.target.value); setCaret(event.target.selectionStart); if (!event.target.value) setDismissed(null); }}
           onSelect={event => setCaret(event.currentTarget.selectionStart)}
           onScroll={event => { if (mirrorRef.current) mirrorRef.current.scrollTop = event.currentTarget.scrollTop; }}
@@ -1222,6 +1270,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         <ComposerSettings mode={mode} modes={modeOptions} onMode={session.setMode}
           levels={efforts} effort={state.effort} onEffort={session.setEffort} speed={speed} fast={state.fast} onFast={session.setFast}
           openSignal={menuSignal} />
+        {props.browser?.enabled && <BrowserMenu cwd={cwd} browser={props.browser} />}
         <span className="chat-composer-spacer" />
         {props.onPlanHere && <button type="button" className="chat-tray-chip chat-plan-here" disabled={handoffDisabled}
           onClick={event => { event.currentTarget.focus({ preventScroll: true }); planHere(); }}><MapIcon size={13} /><span>Planear aquí</span></button>}
@@ -1244,6 +1293,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       </div>
      </div>
     </div>
+    </div>
+    {showTasks && tasksOpen && <TaskPanel panelId={`tasks-${sessionId}`} tasks={tasks} author={props.taskAuthor ?? props.profileName ?? agent.name} paused={props.tasksPaused}
+      onClose={() => { setTasksOpen(false); taskToggle.current?.focus({ preventScroll: true }); }} onReveal={revealTask} />}
+    </div>
   </div>;
 }
 
@@ -1255,7 +1308,9 @@ function CodexChat(props: ChatViewProps) {
   return <ChatPanel {...props} session={useCodexChat(props)} />;
 }
 
-function ChatView(props: ChatViewProps) {
+function ChatView(input: ChatViewProps) {
+  const browser = useRef(browserOptions(input.settings, input.sessionId)).current;
+  const props = { ...input, browser };
   return props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
 }
 
