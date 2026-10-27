@@ -8,7 +8,7 @@ import { load } from "./ts-loader.mjs";
 // process boundary and both kinds of browser timer are local, offline fakes.
 const dependencies = Object.fromEntries(await Promise.all([
   "chatMessages", "chatCommands", "chatState", "claudeChat", "codexChat", "trexChat",
-  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam",
+  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks",
 ].map(async name => [`../${name}`, await load(name)])));
 const compiled = Object.fromEntries(await Promise.all(["Trex", "Claude", "Codex"].map(async provider => {
   const source = await readFile(new URL(`../src/hooks/use${provider}Chat.ts`, import.meta.url), "utf8");

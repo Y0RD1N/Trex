@@ -3,6 +3,7 @@ import { useEffect, useReducer, useRef } from "react";
 import { agentWrite, agentTeamMcpConfig, formatError } from "../api";
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
 import { InboxRequests, INBOX_INSTRUCTIONS, type QueueSnapshot } from "../messageQueue";
+import { taskInstructions } from "../chatTasks";
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
@@ -95,7 +96,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       dispatch({ type: "exit", code });
       latest.current.onExit(latest.current.sessionId, code);
     },
-  });
+  }, "trex");
   isCurrent.current = agent.isCurrent;
 
   const rpc = (procId: string, method: string, params: unknown = {}): Promise<Json> => new Promise((resolve, reject) => {
@@ -133,7 +134,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const team = current.team ? await agentTeamMcpConfig(current.team) : null;
       assertStartup(procId);
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
-        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: INBOX_INSTRUCTIONS,
+        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: `${INBOX_INSTRUCTIONS} ${taskInstructions("trex")}`,
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
         ...(current.browser ? { browser: current.browser } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
@@ -142,6 +143,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       if (current.planningInstruction && result.rolePolicyApplied !== true) throw new Error("Este Trex CLI no confirmó las instrucciones de la función. Actualiza el CLI antes de iniciar el equipo.");
       nativeConversation.current = text(result.sessionId);
       if (!nativeConversation.current) throw new Error("Trex CLI no devolvió el identificador de conversación.");
+      agent.bindTerminals?.(nativeConversation.current);
       recovery.current = result.recoveryRequired === true;
       if (!models.some(model => model.value === result.model) && typeof result.model === "string") models.unshift({ value: result.model, resolvedModel: result.model, displayName: result.model, description: "Modelo configurado en el perfil", featured: true, efforts: [] });
       dispatch({ type: "trexReady", result, models });
@@ -239,7 +241,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
   }, [options.visible]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; startupGeneration.current++; cancelDeferred(); activeTurn.current = null; rejectPending("Se cerró la sesión."); }; }, []);
 
-  return { provider: "trex", state, queue, start: async () => {
+  return { provider: "trex", state, queue, terminals: agent.terminals, start: async () => {
     if (!mounted.current) return;
     cancelDeferred();
     if (activeTurn.current) dispatch({ type: "cancelSend", id: activeTurn.current.id });

@@ -160,8 +160,8 @@ export const getSearchDecorations = (mode: ThemeMode) => {
   const palette = paletteFor(currentScheme)[mode].terminal;
   return {
     matchBackground: palette.selectionBackground!,
-    matchBorder: `${palette.blue}73`,
-    matchOverviewRuler: palette.blue!,
+    matchBorder: accent,
+    matchOverviewRuler: accent,
     activeMatchBackground: accent,
     activeMatchBorder: accent,
     activeMatchColorOverviewRuler: accent,

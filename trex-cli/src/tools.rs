@@ -61,7 +61,9 @@ pub trait ToolProvider: Send + Sync {
     ) -> ToolFuture<'a>;
 }
 
-pub struct NativeToolProvider;
+pub struct NativeToolProvider {
+    processes: std::sync::Arc<crate::processes::ProcessManager>,
+}
 impl ToolProvider for NativeToolProvider {
     fn definitions(&self, mode: &str) -> Vec<Value> {
         definitions()
@@ -80,10 +82,30 @@ impl ToolProvider for NativeToolProvider {
         _mode: &'a str,
         name: &'a str,
         input: &'a Value,
-        _operation_id: &'a str,
+        operation_id: &'a str,
         cancel: CancellationToken,
     ) -> ToolFuture<'a> {
-        Box::pin(execute(cwd, name, input, cancel))
+        Box::pin(async move {
+            check_cancel(&cancel)?;
+            match name {
+                "shell" if input["background"] == true => {
+                    self.processes.start(cwd, input, operation_id, &cancel)
+                }
+                "process_list" => {
+                    fields(input, &[], &[])?;
+                    Ok(self.processes.list())
+                }
+                "process_output" => {
+                    let obj = fields(input, &["id"], &["id"])?;
+                    self.processes.read(string(obj, "id")?)
+                }
+                "process_stop" => {
+                    let obj = fields(input, &["id"], &["id"])?;
+                    self.processes.stop(string(obj, "id")?).await
+                }
+                _ => execute(cwd, name, input, cancel).await,
+            }
+        })
     }
 }
 
@@ -91,10 +113,14 @@ pub struct ToolRegistry {
     providers: Vec<Box<dyn ToolProvider>>,
     team: Option<crate::team::TeamConfig>,
     role_instructions: Option<String>,
+    processes: std::sync::Arc<crate::processes::ProcessManager>,
 }
 impl ToolRegistry {
     pub fn new(browser: Option<crate::browser::BrowserToolProvider>) -> Self {
-        let mut providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(NativeToolProvider)];
+        let processes = std::sync::Arc::new(crate::processes::ProcessManager::default());
+        let mut providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(NativeToolProvider {
+            processes: processes.clone(),
+        })];
         if let Some(browser) = browser {
             providers.push(Box::new(browser));
         }
@@ -102,6 +128,7 @@ impl ToolRegistry {
             providers,
             team: None,
             role_instructions: None,
+            processes,
         }
     }
     pub fn with_team(mut self, config: Option<crate::team::TeamConfig>) -> Self {
@@ -118,6 +145,9 @@ impl ToolRegistry {
     }
     pub fn role_instructions(&self) -> &Option<String> {
         &self.role_instructions
+    }
+    pub fn processes(&self) -> &crate::processes::ProcessManager {
+        &self.processes
     }
     pub fn team_config(&self) -> &Option<crate::team::TeamConfig> {
         &self.team
@@ -167,7 +197,10 @@ pub fn definitions() -> Vec<Value> {
         ("search", "Search UTF-8 workspace files with a Rust regex. Skips symlinks, binary/oversized files, .git, node_modules and target. One result per matching line. maxResults defaults to 100 (max 1000); scanned bytes and output are bounded.", json!({"pattern":{"type":"string"},"path":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}}), vec!["pattern"]),
         ("write_file", "Atomically replace or create a UTF-8 workspace file (max 1 MiB). Parent directory must already exist. Symlinks and reparse points are rejected.", json!({"path":{"type":"string"},"content":{"type":"string"}}), vec!["path","content"]),
         ("apply_patch", "Apply a strict JSON patch string: {\"files\":[{\"path\":\"relative/path\",\"before\":\"exact entire current text\",\"after\":\"entire replacement text\"}]}. before:null creates a file. No deletes or directory creation. All preconditions validated before replacements. Max 32 files, 1 MiB/file, 4 MiB patch. Atomic per file; OS commit failures may partially apply a multi-file patch.", json!({"patch":{"type":"string"}}), vec!["patch"]),
-        ("shell", "Run an unrestricted shell command in the workspace (PowerShell on Windows, /bin/sh elsewhere). Caller must authorize shell use. timeoutMs defaults to 60000, max 600000. Cancellation/timeout kills the process (Windows: process tree). stdout/stderr each capped at 64 KiB.", json!({"command":{"type":"string"},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000}}), vec!["command"]),
+        ("shell", "Run an authorized shell command in the workspace (PowerShell on Windows, /bin/sh elsewhere). Foreground: timeoutMs defaults to 60000, max 600000; cancellation/timeout kills the process tree. Set background:true for servers, watches and monitoring that should continue between turns: omit timeoutMs, retain the returned id, and use process_output/process_stop. Background terminals end when this CLI session closes. stdout/stderr are bounded.", json!({"command":{"type":"string"},"background":{"type":"boolean"},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000}}), vec!["command"]),
+        ("process_list", "List this session's background terminals and their current status. Does not launch or restart commands.", json!({}), vec![]),
+        ("process_output", "Read up to the last 64 KiB of combined output from an owned background terminal.", json!({"id":{"type":"string"}}), vec!["id"]),
+        ("process_stop", "Stop exactly one owned background terminal and its descendants, preserving the chat and other terminals. Never use an OS PID.", json!({"id":{"type":"string"}}), vec!["id"]),
         ("trex_read_messages", "Read newly queued user messages. Handled by the server, not the native tool executor.", json!({}), vec![]),
         ("update_plan", "Publish or update your visible task list. Keep completed work marked completed, the current step in_progress, and future steps pending. Do not mark unverified work complete. This only updates the plan; it does not execute tasks.", json!({"plan":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"step":{"type":"string","maxLength":2000},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["step","status"],"additionalProperties":false}}}), vec!["plan"]),
     ];
@@ -181,7 +214,13 @@ pub fn definitions() -> Vec<Value> {
 pub fn is_mutating(name: &str) -> bool {
     !matches!(
         name,
-        "read_file" | "list_files" | "search" | "trex_read_messages" | "update_plan"
+        "read_file"
+            | "list_files"
+            | "search"
+            | "trex_read_messages"
+            | "update_plan"
+            | "process_list"
+            | "process_output"
     )
 }
 
@@ -1251,7 +1290,7 @@ fn kill_group(pid: Option<u32>) {
 }
 
 /// Closing the Windows job or killing the Unix group also handles dropped futures.
-struct ProcessTreeGuard {
+pub(crate) struct ProcessTreeGuard {
     pid: Option<u32>,
     #[cfg(windows)]
     job: windows_job::Job,
@@ -1262,7 +1301,7 @@ impl Drop for ProcessTreeGuard {
         kill_group(self.pid);
     }
 }
-async fn stop_process(child: &mut tokio::process::Child, guard: &mut ProcessTreeGuard) {
+pub(crate) async fn stop_process(child: &mut tokio::process::Child, guard: &mut ProcessTreeGuard) {
     #[cfg(windows)]
     if let Some(pid) = child.id() {
         if let Ok(taskkill) = system_exe("taskkill.exe") {
@@ -1285,16 +1324,11 @@ async fn stop_process(child: &mut tokio::process::Child, guard: &mut ProcessTree
     let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
     guard.pid = None;
 }
-async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) -> Result<Value> {
-    let obj = fields(input, &["command", "timeoutMs"], &["command"])?;
-    let text = string(obj, "command")?;
-    ensure!(
-        !text.trim().is_empty() && text.len() <= 32 * 1024 && !text.contains('\0'),
-        "command must contain 1..32768 bytes without NUL"
-    );
-    let timeout = number(obj, "timeoutMs", 60_000, 1, 600_000)?;
+pub(crate) fn spawn_owned_shell(
+    cwd: &Path,
+    text: &str,
+) -> Result<(tokio::process::Child, ProcessTreeGuard)> {
     let ws = Workspace::new(cwd)?;
-    check_cancel(&cancel)?;
     #[cfg(windows)]
     let mut command = {
         let mut cmd = Command::new(system_exe("WindowsPowerShell/v1.0/powershell.exe")?);
@@ -1318,14 +1352,31 @@ async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) -> Result<V
         .kill_on_drop(true);
     #[cfg(windows)]
     let job = windows_job::Job::new()?;
-    let mut child = command.spawn().context("cannot spawn shell")?;
-    let mut guard = ProcessTreeGuard {
+    let child = command.spawn().context("cannot spawn shell")?;
+    let guard = ProcessTreeGuard {
         pid: child.id(),
         #[cfg(windows)]
         job,
     };
     #[cfg(windows)]
     guard.job.attach_and_resume(&child)?;
+    Ok((child, guard))
+}
+
+async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) -> Result<Value> {
+    let obj = fields(input, &["command", "timeoutMs", "background"], &["command"])?;
+    let text = string(obj, "command")?;
+    ensure!(
+        !text.trim().is_empty() && text.len() <= 32 * 1024 && !text.contains('\0'),
+        "command must contain 1..32768 bytes without NUL"
+    );
+    ensure!(
+        obj.get("background").is_none_or(|v| v == false),
+        "background execution requires the session tool registry"
+    );
+    let timeout = number(obj, "timeoutMs", 60_000, 1, 600_000)?;
+    check_cancel(&cancel)?;
+    let (mut child, mut guard) = spawn_owned_shell(cwd, text)?;
     let stdout = child.stdout.take().context("missing stdout pipe")?;
     let stderr = child.stderr.take().context("missing stderr pipe")?;
     let result = {

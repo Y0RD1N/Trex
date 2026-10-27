@@ -9,7 +9,7 @@ import { type ChatSession, type ChatSessionOptions } from "../hooks/chatSession"
 import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
 import { useTrexChat } from "../hooks/useTrexChat";
-import { INBOX_WAKE, type QueuedMessage } from "../messageQueue";
+import { INBOX_WAKE, messageQueueId, type QueuedMessage } from "../messageQueue";
 import { localCommand } from "../chatCommands";
 import { ChatPanel, type ChatViewProps } from "./ChatView";
 import AgentIcon from "./AgentIcon";
@@ -87,7 +87,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
   const publish = useCallback((role: RoomRole, session: ChatSession): void => {
     const previous = sessionsRef.current[role];
     sessionsRef.current = { ...sessionsRef.current, [role]: session };
-    if (!previous || previous.state !== session.state || previous.queue.snapshot !== session.queue.snapshot
+    if (!previous || previous.state !== session.state || previous.terminals !== session.terminals || previous.queue.snapshot !== session.queue.snapshot
       || previous.queue.ready !== session.queue.ready || previous.queue.error !== session.queue.error) {
       setSessions(current => ({ ...current, [role]: session }));
     }
@@ -542,7 +542,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     {ROLES.map(role => {
       const participant = room[role], launch = participant.agent.launch;
       const options: ChatSessionOptions = {
-      browser, sessionId: `${room.id}-${role}`, cwd: props.cwd, ...launch,
+      browser, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort,
         mode: role === "planner" ? "plan" : participant.mode ?? (participant.agent.provider === "claude" ? "default" : "auto"),
         planningOnly: role === "planner", visible: props.visible,
@@ -554,7 +554,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     })}
     {aggregate ? <ChatPanel {...props} browser={browser} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}
       profileName={room[room.active].agent.profileName} conversationId={room[room.active].conversationId}
-      session={aggregate} toolbar={toolbar} composerLead={composerLead} itemLabels={itemLabels} inputLocked={lock}
+      terminalOwners={ROLES.flatMap(role=>{const session=sessions[role]?.terminals;return session?[{id:role,label:room[role].agent.profileName+" · "+(role==="planner"?"Planificación":"Implementación"),provider:room[role].agent.provider,session}]:[];})} session={aggregate} toolbar={toolbar} composerLead={composerLead} itemLabels={itemLabels} inputLocked={lock}
       emptyState={{title:"Tu flujo está listo",description:"Escribe tu idea en este chat. Primero se preparará el plan y después el ejecutor lo implementará; aquí podrás conversar con ambos.",
         participants:ROLES.map(role=>({id:role,name:room[role].agent.profileName,role:role==="planner"?"Planificación · solo lectura":"Implementación",provider:room[role].agent.provider,model:room[role].agent.model,effort:room[role].agent.effort}))}}
       composerPlaceholder={room.active==="planner"?"Escribe tu idea para preparar el plan…":"Escribe una indicación para el ejecutor…"}

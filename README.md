@@ -7,6 +7,9 @@ carpeta, con el asistente y el perfil que elijas.
 ## ✨ Qué hace
 
 - **Proyectos**: añades carpetas una sola vez y quedan en la barra lateral.
+- **Acciones del proyecto**: su menú contextual permite configurar un flujo de
+  agentes o abrir una terminal directamente en esa carpeta, además de elegir
+  un perfil, sin depender del proyecto activo en la barra superior.
 - **Perfiles de asistentes**: el botón `+` permite elegir Claude Code, Codex
   o cualquiera de tus perfiles personalizados, dentro de la carpeta del proyecto.
 - **Pestañas**: varias terminales por proyecto, todas vivas a la vez.
@@ -40,8 +43,13 @@ carpeta, con el asistente y el perfil que elijas.
 - **Cursor personalizable**: en Ajustes → Cursor puedes elegir estilos predefinidos,
   bloque, subrayado o barra vertical de 1 a 6 píxeles, y activar el parpadeo.
 - **Modo claro y oscuro**: tema claro, oscuro o el del sistema, con color de acento configurable (y el terminal a juego).
-- **Paletas completas con vista previa**: Grafito, Océano, Bosque y Ciruela combinan
-  la interfaz, el texto, los colores ANSI y la selección del terminal en claro y oscuro.
+- **Diseño monocromo**: superficies blancas y negras con grises neutros y un único
+  acento configurable, tanto en claro como en oscuro. Los controles, menús, chat,
+  tareas, equipos, ajustes y notificaciones comparten el mismo lenguaje visual.
+- **Colores del terminal con vista previa**: Grafito, Océano, Bosque y Ciruela
+  conservan los colores ANSI sin teñir la interfaz. El código, los diffs y los
+  errores mantienen sus colores informativos. Las preferencias guardadas siguen
+  siendo compatibles.
 - **Marco personalizable**: en Ajustes → Apariencia elige Compacto, Cómodo o
   Minimalista, o ajusta el redondeado, el margen y el borde. Los cambios se
   previsualizan en las terminales abiertas y se conservan al guardar.
@@ -193,8 +201,17 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
 `codex app-server`.
 
 - **Herramientas**: cada lectura, búsqueda, edición o comando aparece como una
-  fila; al pulsarla ves el diff o la salida. La lista de tareas se muestra
-  como una checklist.
+  fila; al pulsarla ves el diff o la salida. **Tareas**, arriba a la derecha,
+  está disponible también en chats normales con un solo agente. Para trabajos
+  con varios pasos, el agente recibe indicaciones para publicar y actualizar
+  su lista sin cambiar al modo Planificar. También puedes pedirle una lista
+  directamente en el chat. El panel se abre con la primera lista confirmada;
+  si lo contraes, las actualizaciones mantienen tu elección.
+- **Terminales del agente**: una pestaña sobre el mensaje cuenta los procesos
+  activos. Al abrirla hacia arriba puedes consultar su salida y detener cada
+  terminal por separado. Planificación y mensajes en cola usan la misma bandeja;
+  al plegarla se conservan los borradores. Los adjuntos se desplazan en una fila
+  y el texto tiene altura limitada para dejar espacio al historial.
 - **Permisos**: cuando el asistente necesita permiso, aparece una tarjeta con
   **Permitir**, la opción de permitirlo en la sesión o siempre, y **Denegar**.
   El panel **Ajustes del agente**, debajo del mensaje, cambia el modo: Preguntar, Aceptar
@@ -451,6 +468,10 @@ esas mismas comprobaciones en Windows y Ubuntu.
 npm run tauri build
 ```
 
+El icono de la app parte de `public/trex.svg`. Ejecuta
+`python scripts/make_icon.py` después de modificarlo para regenerar los PNG,
+ICO, ICNS y variantes de plataforma que utiliza el instalador.
+
 - **Windows**: genera instalador `.exe` (NSIS), con el componente CLI opcional, en
   `src-tauri/target/release/bundle/`.
 
@@ -535,4 +556,4 @@ El chat reúne los historiales con el nombre de su participante y conserva el de
 
 Límites por equipo: ocho colaboradores, 32 tareas por ciclo y 128 en total; tarea delegada de hasta 16 KiB e informe de hasta 32 KiB. El plan admite 32 pasos y 48 KiB en conjunto. Publicarlo no ejecuta las tareas. Los informes mayores permanecen en el historial y se solicitan más breves; no se presentan como una validación completa. Un equipo usa los modelos y servicios configurados por el usuario; cada sesión consume su cuota habitual.
 
-En chats individuales, el mismo panel muestra las tareas publicadas por Claude y Codex y los planes de Trex CLI. Puedes contraerlo para ampliar el chat. Los estados se conservan en el historial de las herramientas; un error o actualización incompleta no marca tareas como terminadas. En ventanas estrechas, la lista se coloca encima del chat y permite desplazarse sin tapar el borrador.
+En chats individuales, el mismo panel muestra las tareas publicadas por Claude y Codex y los planes de Trex CLI, con pendientes, trabajo en curso y tareas completadas. No hace falta configurar un equipo ni cambiar de modo. Puedes abrir **Tareas** desde el inicio o contraerlo para ampliar el chat; abrir el panel no envía mensajes al modelo. Los estados se reconstruyen a partir de los resultados de tareas que devuelve el historial del asistente; un error o actualización incompleta no marca tareas como terminadas. En ventanas estrechas, la lista se coloca encima del chat y permite desplazarse sin tapar el borrador.

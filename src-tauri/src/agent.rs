@@ -61,6 +61,7 @@ struct AgentSession {
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     pid: u32,
     alive: Arc<AtomicBool>,
+    terminal_logs: Arc<crate::agent_terminal::TerminalLogs>,
 }
 
 /// Estado compartido con Tauri.
@@ -292,10 +293,13 @@ impl AgentState {
         let stderr = child.stderr.take().ok_or("No se pudo leer los errores del asistente.")?;
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
         let alive = Arc::new(AtomicBool::new(true));
+        let log_root = req.env.as_ref().and_then(|env| env.get("CLAUDE_CODE_TMPDIR")).map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("CLAUDE_CODE_TMPDIR").map(Into::into)).unwrap_or_else(std::env::temp_dir);
+        let terminal_logs = Arc::new(crate::agent_terminal::TerminalLogs::new(log_root));
 
         self.inner.lock().map_err(|e| e.to_string())?.insert(
             req.id.clone(),
-            AgentSession { stdin, pid, alive: alive.clone() },
+            AgentSession { stdin, pid, alive: alive.clone(), terminal_logs: terminal_logs.clone() },
         );
 
         // stdout: una línea JSON por evento.
@@ -313,6 +317,7 @@ impl AgentState {
                             let line = String::from_utf8_lossy(&buffer);
                             let line = line.trim_end_matches(['\r', '\n']);
                             if !line.trim().is_empty() {
+                                terminal_logs.observe(line);
                                 emit(AgentEvent::Line(line.to_string()));
                             }
                         }
@@ -375,6 +380,11 @@ impl AgentState {
             .and_then(|_| writer.write_all(b"\n"))
             .and_then(|_| writer.flush())
             .map_err(|e| format!("No se pudo enviar el mensaje: {e}"))
+    }
+
+    pub fn terminal_output(&self, id: &str, task_id: &str) -> Result<crate::agent_terminal::Output, String> {
+        let logs = self.inner.lock().map_err(|e| e.to_string())?.get(id).map(|session| session.terminal_logs.clone()).ok_or("La sesión ya no está activa.")?;
+        logs.read(task_id)
     }
 
     pub fn kill(&self, id: &str) -> Result<(), String> {

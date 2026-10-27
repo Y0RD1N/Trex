@@ -13,6 +13,7 @@ import { ChatPanel, type ChatViewProps } from "./ChatView";
 import AgentIcon from "./AgentIcon";
 import { RotateIcon, StopIcon } from "./Icons";
 import { chatTasks, teamTasks } from "../chatTasks";
+import { messageQueueId } from "../messageQueue";
 import "./AgentRoomView.css";
 import "./AgentTeamView.css";
 
@@ -61,7 +62,7 @@ export default function AgentTeamView(props: Props) {
   const publish = useCallback((id:string, publishedEpoch:string, session:ChatSession):void => {
     if (!mounted.current || current.current.epoch!==publishedEpoch) return;
     const prior=sessionsRef.current[id]; sessionsRef.current[id]=session;
-    if (!prior || prior.state!==session.state || prior.queue.snapshot!==session.queue.snapshot || prior.queue.ready!==session.queue.ready || prior.queue.error!==session.queue.error)
+    if (!prior || prior.state!==session.state || prior.terminals!==session.terminals || prior.queue.snapshot!==session.queue.snapshot || prior.queue.ready!==session.queue.ready || prior.queue.error!==session.queue.error)
       setPublished(previous=>({epoch:publishedEpoch,sessions:{...(previous.epoch===publishedEpoch?previous.sessions:{}),[id]:session}}));
     change(value=>{
       const member=id===value.master.id?value.master:value.workers.find(member=>member.id===id);
@@ -334,7 +335,7 @@ export default function AgentTeamView(props: Props) {
       const historyOnly=paused && openedEpoch!==team.epoch;
       const readOnly=!member.canWrite || historyOnly;
       const options:ChatSessionOptions={...member.agent.launch,browser:historyOnly?{...browser,enabled:false}:browser,
-        sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:team.id+"-"+member.id,cwd:props.cwd,
+        sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
         conversationId:member.conversationId,mode:readOnly?"plan":member.agent.provider==="claude"?"default":"auto",
         model:member.agent.model,effort:member.agent.effort,planningOnly:readOnly,
         ...(readOnly?{planningInstruction:member.id===team.master.id?TEAM_COORDINATOR_POLICY:TEAM_READER_POLICY}:{}),
@@ -346,7 +347,7 @@ export default function AgentTeamView(props: Props) {
     })}
     {aggregate?<ChatPanel {...props} provider={team.master.agent.provider} session={aggregate} browser={browser}
       profileId={team.master.agent.profileId} profileName={team.master.agent.profileName} conversationId={team.master.conversationId}
-      toolbar={toolbar} itemLabels={labels} taskPlan={taskPlan} taskAuthor={team.master.name+" · Principal"} tasksPaused={paused} historyReadOnly planningOnly inputLocked={locked||preparingMessage}
+      terminalOwners={members.flatMap(member=>{const session=sessions[member.id]?.terminals;return session?[{id:member.id,label:member.name+" · "+TEAM_ROLES[member.role].name,provider:member.agent.provider,session}]:[];})} toolbar={toolbar} itemLabels={labels} taskPlan={taskPlan} taskAuthor={team.master.name+" · Principal"} tasksPaused={paused} historyReadOnly planningOnly inputLocked={locked||preparingMessage}
       emptyState={{title:paused?"Tu equipo está en pausa":"Tu equipo está listo",description:paused?"La configuración está guardada. Revisa las cuentas y el historial antes de reanudar.":`Escribe tu idea a ${team.master.name}. Preparará el plan, repartirá las tareas y revisará los resultados contigo.`,
         participants:members.map((member,index)=>({id:member.id,name:member.name,role:index===0?"Principal · planificación y coordinación":TEAM_ROLES[member.role].name,provider:member.agent.provider,model:member.agent.model,effort:member.agent.effort}))}}
       composerPlaceholder="Escribe tu idea para que el principal prepare el plan…"

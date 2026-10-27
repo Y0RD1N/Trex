@@ -1373,6 +1373,8 @@ function AppShell() {
         onAdd={() => void addProject()}
         onSelect={selectProject}
         onQuickOpen={(projectId, profileId) => openTab(projectId, profileId)}
+        onWorkflow={projectId => openWorkflow(projectId)}
+        onNewShell={projectId => openTab(projectId, null)}
         onSelectSession={(projectId, tabId) => {
           selectProject(projectId);
           setActiveTabId(tabId);

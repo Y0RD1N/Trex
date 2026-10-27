@@ -8,8 +8,8 @@ import DropdownMenu from "../DropdownMenu";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { contextPercent, contextTokensLabel, formatTokens, type ContextUsage } from "../../chatState";
 
-/** Colores de las partes fijas, en el orden en que llegan; los mensajes van con el acento. */
-const PART_COLORS = ["#8b93a7", "#5b9cf5", "#c58af9", "#4ec9b0", "#e5c07b", "#56b6c2"];
+/** Neutral shades identify fixed parts; conversation usage gets the accent. */
+const PART_COLORS = ["var(--text-muted)", "var(--text-dim)", "var(--border-strong)", "color-mix(in srgb, var(--text) 65%, var(--bg-app))", "color-mix(in srgb, var(--text) 40%, var(--bg-app))", "color-mix(in srgb, var(--text) 25%, var(--bg-app))"];
 const MESSAGES_COLOR = "var(--context-color, var(--accent))";
 
 const percentLabel = (percent: number): string => percent > 0 && percent < 1 ? "<1 %" : `${Math.round(percent)} %`;

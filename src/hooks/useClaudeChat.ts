@@ -352,7 +352,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       readyProcessRef.current = null;
       callbacks.current.onExit(sessionId, code);
     },
-  });
+  }, "claude");
   writeRef.current = agent.write;
   isCurrentRef.current = agent.isCurrent;
 
@@ -630,6 +630,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
 
   return {
     provider: "claude",
+    terminals: agent.terminals,
     state,
     queue,
     start: () => start(),

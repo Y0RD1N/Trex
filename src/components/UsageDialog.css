@@ -1,289 +1,65 @@
-/* Scoped above the shared modal, account and plan-window rules. */
-.modal.feature-dialog.usage-dialog {
-  --sheet-tint: var(--surface-panel, var(--bg-elevated));
-  --sheet-tint-alpha: 100%;
-  --sheet-edge: var(--surface-edge, var(--border));
-  --sheet-highlight: var(--surface-highlight, transparent);
-  width: min(700px, calc(100vw - 48px));
-  max-width: 700px;
-  max-height: min(850px, calc(100dvh - 48px));
-  border-color: color-mix(in srgb, var(--surface-edge, var(--border)) calc(100% * var(--sheet-fade, 1)), transparent);
-  border-radius: var(--radius-panel, 24px);
-  background: color-mix(in srgb, var(--surface-panel, var(--bg-elevated)) calc(100% * var(--sheet-fade, 1)), transparent);
-}
-
-.modal.feature-dialog.usage-dialog > .modal-header {
-  gap: 16px;
-  padding: 22px 24px 18px;
-  border-bottom: 0;
-}
-
-.modal.feature-dialog.usage-dialog .modal-title {
-  min-width: 0;
-  color: var(--text);
-  font-size: 19px;
-  font-weight: 600;
-  line-height: 1.4;
-  letter-spacing: -0.035em;
-}
-
-.modal.feature-dialog.usage-dialog > .feature-content {
-  min-height: 0;
-  padding: 0 24px 24px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.usage-dialog .usage-intro {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 20px;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.65;
-}
-
-.usage-dialog .usage-intro p { margin: 0; }
-.usage-dialog .usage-count { flex-shrink: 0; color: var(--text-dim); font-variant-numeric: tabular-nums; }
-.usage-dialog .usage-accounts { display: grid; gap: 14px; }
-
-.usage-dialog .usage-account,
-.usage-dialog .usage-no-accounts {
-  min-width: 0;
-  padding: 20px;
-  border: 1px solid var(--surface-edge, var(--border));
-  border-radius: var(--radius-section, 16px);
-  background: var(--surface-inset, var(--bg-inset));
-  box-shadow: inset 0 1px 0 var(--surface-highlight, transparent);
-}
-
-.usage-dialog .usage-account-head {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.usage-dialog .usage-account-icon {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--surface-edge, var(--border));
-  border-radius: var(--radius-control, 11px);
-  background: var(--surface-raised, var(--bg-elevated));
-}
-
-.usage-dialog .usage-account-icon .agent-icon { color: var(--text-muted); }
+/* A continuous surface, with identity and quota status carried by each card. */
+.modal.feature-dialog.usage-dialog { width: min(760px, calc(100vw - 40px)); max-width: 760px; max-height: min(900px, calc(100dvh - 40px)); border-radius: 24px; background: var(--surface-panel, var(--bg-elevated)); --sheet-tint: var(--surface-panel, var(--bg-elevated)); --sheet-tint-alpha: 100%; }
+.modal.feature-dialog.usage-dialog > .modal-header { padding: 26px 28px 8px; gap: 16px; border: 0; background: transparent; box-shadow: none; }
+.modal.feature-dialog.usage-dialog .modal-title { color: var(--text); font-size: 23px; line-height: 1.4; font-weight: 600; letter-spacing: -.75px; }
+.modal.feature-dialog.usage-dialog > .feature-content { min-height: 0; padding: 0 28px 22px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.usage-dialog .usage-intro { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 22px; }
+.usage-dialog .usage-intro > div { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.usage-dialog .usage-intro p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.usage-dialog .usage-count { color: var(--text-dim); font-size: 10.5px; line-height: 1.5; }
+.usage-dialog .usage-accounts { display: grid; gap: 12px; }
+.usage-dialog .usage-account { --usage-color: #558ca5; --usage-ink: color-mix(in srgb, var(--usage-color) 72%, var(--text)); position: relative; min-width: 0; padding: 20px; border: 0; border-radius: 18px; background: linear-gradient(125deg, color-mix(in srgb, var(--usage-color) 6%, var(--surface-inset, var(--bg-inset))), var(--surface-inset, var(--bg-inset)) 65%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--usage-color) 12%, var(--surface-edge, var(--border))); }
+.usage-dialog .usage-account--claude { --usage-color: #cd8b69; }
+.usage-dialog .usage-account--codex { --usage-color: #5b9fc4; }
+.usage-dialog .usage-account--trex { --usage-color: #a183dd; }
+.usage-dialog .usage-account-head { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; }
+.usage-dialog .usage-account-icon { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 13px; background: color-mix(in srgb, var(--usage-color) 14%, transparent); color: var(--usage-ink); }
+.usage-dialog .usage-account-icon .agent-icon { color: inherit; }
 .usage-dialog .usage-account-identity { min-width: 0; }
-.usage-dialog .usage-account-identity h3,
-.usage-dialog .usage-no-accounts h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: -0.015em;
-  overflow-wrap: anywhere;
-}
-
-.usage-dialog .usage-account-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 7px;
-  min-width: 0;
-  margin-top: 3px;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.usage-dialog .usage-command {
-  min-width: 0;
-  margin: 0;
-  color: var(--text-dim);
-  font: 10.5px/1.6 var(--font-mono);
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.usage-dialog .usage-plan {
-  justify-self: end;
-  max-width: 140px;
-  padding: 4px 9px;
-  border: 1px solid var(--surface-edge, var(--border));
-  border-radius: var(--radius-control, 11px);
-  background: var(--surface-raised, var(--bg-elevated));
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.usage-dialog .usage-account .plan-windows {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px 26px;
-  margin: 20px 0 0;
-  padding: 18px 0 0;
-  border-top: 1px solid var(--surface-edge, var(--border));
-  list-style: none;
-}
-
+.usage-dialog .usage-account-identity h3 { margin: 0; font-size: 14px; line-height: 1.5; font-weight: 600; color: var(--text); letter-spacing: -.2px; overflow-wrap: anywhere; }
+.usage-dialog .usage-account-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 7px; margin-top: 3px; color: var(--text-dim); font-size: 10.5px; line-height: 1.6; }
+.usage-dialog .usage-provider { color: var(--usage-ink); }
+.usage-dialog .usage-command { margin: 0; font: 10px/1.6 var(--font-mono); color: var(--text-dim); overflow-wrap: anywhere; }
+.usage-dialog .usage-plan { display: inline-flex; align-items: center; gap: 6px; justify-self: end; max-width: 140px; padding: 5px 9px; border-radius: 8px; background: color-mix(in srgb, var(--usage-color) 11%, transparent); color: var(--usage-ink); font-size: 10px; line-height: 1.5; font-weight: 550; overflow-wrap: anywhere; }
+.usage-dialog .usage-plan > span { width: 4px; height: 4px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+.usage-dialog .usage-account .plan-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0 0; padding: 0; list-style: none; border: 0; }
+.usage-dialog .usage-account .plan-windows:has(> .plan-window:only-child) { grid-template-columns: minmax(0, 1fr); }
 .usage-dialog .usage-account .plan-windows:empty { display: none; }
-.usage-dialog .usage-account .plan-window {
-  display: grid;
-  align-content: start;
-  gap: 9px;
-  min-width: 0;
-}
-
-.usage-dialog .usage-account .plan-window-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
+.usage-dialog .usage-account .plan-window { display: grid; align-content: start; min-width: 0; gap: 10px; padding: 15px; border: 0; border-radius: 12px; background: color-mix(in srgb, var(--surface-panel, var(--bg-elevated)) 65%, transparent); }
+.usage-dialog .usage-account .plan-window-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
 .usage-dialog .usage-account .plan-window-head > span { min-width: 0; overflow-wrap: anywhere; }
-.usage-dialog .usage-account .plan-window-head b {
-  flex-shrink: 0;
-  color: var(--text);
-  font: 500 22px/1.25 var(--font-sans);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.04em;
-  white-space: nowrap;
-}
-
-.usage-dialog .usage-account .plan-window-bar {
-  height: 5px;
-  overflow: hidden;
-  border-radius: 99px;
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.modal.usage-dialog .usage-account .plan-window .plan-window-bar i { background: var(--text-muted); }
+.usage-dialog .usage-account .plan-window-head b { color: var(--usage-ink); font: 550 24px/1.2 var(--font-sans); letter-spacing: -.7px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-dialog .usage-account .plan-window-bar { height: 6px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--usage-color) 12%, var(--surface-inset, var(--bg-inset))); }
+.modal.usage-dialog .usage-account .plan-window-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, color-mix(in srgb, var(--usage-color) 70%, var(--text)), var(--usage-color)); }
 .modal.usage-dialog .usage-account .plan-window.warning .plan-window-bar i { background: var(--warn); }
 .modal.usage-dialog .usage-account .plan-window.critical .plan-window-bar i { background: var(--danger); }
 .modal.usage-dialog .usage-account .plan-window.warning .plan-window-head b { color: var(--warn-text, var(--warn)); }
 .modal.usage-dialog .usage-account .plan-window.critical .plan-window-head b { color: var(--danger); }
-.usage-dialog .usage-account .plan-window small {
-  color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.usage-dialog .usage-account .plan-note {
-  margin: 18px 0 0;
-  padding: 13px 0 0;
-  border-top: 1px solid var(--surface-edge, var(--border));
-  color: var(--text-muted);
-  font-size: 11.5px;
-  line-height: 1.7;
-  overflow-wrap: anywhere;
-}
-
-.usage-dialog .usage-empty {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin: 18px 0 0;
-  padding: 16px 0 0;
-  border-top: 1px solid var(--surface-edge, var(--border));
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.75;
-  overflow-wrap: anywhere;
-}
-
+.usage-dialog .usage-account .plan-window small { font-size: 10px; line-height: 1.6; color: var(--text-dim); overflow-wrap: anywhere; }
+.usage-dialog .usage-account .plan-note, .usage-dialog .usage-empty { margin: 16px 0 0; padding: 0; border: 0; color: var(--text-muted); font-size: 11.5px; line-height: 1.75; overflow-wrap: anywhere; }
+.usage-dialog .usage-empty { display: flex; align-items: flex-start; gap: 8px; }
 .usage-dialog .usage-empty.error { color: var(--danger); }
-.usage-dialog .usage-empty .chat-spinner { flex-shrink: 0; margin-top: 4px; }
-.usage-dialog .chat-spinner {
-  color: var(--text-muted);
-  border-color: color-mix(in srgb, var(--text) 14%, transparent);
-  border-top-color: currentColor;
-}
-.usage-dialog .usage-no-accounts { padding: 30px 20px; text-align: center; }
-.usage-dialog .usage-no-accounts p { margin: 7px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
-
-.modal.feature-dialog.usage-dialog > .modal-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin: 0;
-  padding: 16px 24px 20px;
-  border: 0;
-  border-top: 1px solid var(--surface-edge, var(--border));
-  border-radius: 0;
-  background: transparent;
-}
-
-.modal.feature-dialog.usage-dialog > .modal-footer .feature-hint {
-  flex: 1 1 260px;
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.7;
-}
-
-.modal.feature-dialog.usage-dialog > .modal-header .icon-btn,
-.modal.feature-dialog.usage-dialog .usage-refresh {
-  flex-shrink: 0;
-  height: 36px;
-  border: 1px solid var(--surface-edge, var(--border));
-  border-radius: var(--radius-control, 11px);
-  background: var(--surface-raised, var(--bg-elevated));
-  color: var(--text-muted);
-  box-shadow: inset 0 1px 0 var(--surface-highlight, transparent);
-}
-
-.modal.feature-dialog.usage-dialog > .modal-header .icon-btn { width: 36px; padding: 0; }
-.modal.feature-dialog.usage-dialog .usage-refresh { gap: 7px; padding: 0 13px; font-size: 12px; }
-.modal.feature-dialog.usage-dialog > .modal-header .icon-btn:hover,
-.modal.feature-dialog.usage-dialog .usage-refresh:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--text) 20%, var(--surface-edge, var(--border)));
-  background: color-mix(in srgb, var(--surface-raised, var(--bg-elevated)), var(--text) 5%);
-  color: var(--text);
-}
-
-.modal.feature-dialog.usage-dialog > .modal-header .icon-btn:focus-visible,
-.modal.feature-dialog.usage-dialog .usage-refresh:focus-visible {
-  outline: 2px solid var(--text-muted);
-  outline-offset: 3px;
-}
-
-.modal.feature-dialog.usage-dialog .usage-refresh:disabled { cursor: default; opacity: 0.65; }
-
+.usage-dialog .usage-empty .chat-spinner { margin-top: 5px; flex-shrink: 0; }
+.usage-dialog .usage-no-accounts { padding: 32px 20px; border-radius: 16px; background: var(--surface-inset, var(--bg-inset)); text-align: center; }
+.usage-dialog .usage-no-accounts h3 { margin: 0; font-size: 14px; }
+.usage-dialog .usage-no-accounts p { margin: 8px 0 0; color: var(--text-muted); font-size: 12px; }
+.usage-dialog .usage-caption { display: flex; align-items: flex-start; gap: 7px; margin: 20px 2px 0; color: var(--text-dim); font-size: 10px; line-height: 1.7; }
+.usage-dialog .usage-caption svg { margin-top: 2px; flex-shrink: 0; }
+.modal.feature-dialog.usage-dialog > .modal-header .icon-btn, .modal.feature-dialog.usage-dialog .usage-refresh { display: inline-flex; justify-content: center; align-items: center; flex-shrink: 0; height: 34px; padding: 0 11px; border: 0; border-radius: 11px; background: var(--surface-raised, var(--bg-elevated)); box-shadow: inset 0 0 0 1px var(--surface-edge, var(--border)); color: var(--text-muted); font-size: 11px; gap: 7px; cursor: pointer; }
+.modal.feature-dialog.usage-dialog > .modal-header .icon-btn { width: 34px; padding: 0; }
+.modal.feature-dialog.usage-dialog :is(.icon-btn, .usage-refresh):hover:not(:disabled, [aria-disabled=true]) { background: var(--hover); color: var(--text); }
+.modal.feature-dialog.usage-dialog :is(.icon-btn, .usage-refresh):focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+.modal.feature-dialog.usage-dialog .usage-refresh[aria-disabled=true] { opacity: .6; cursor: default; }
 @media (max-width: 560px) {
-  .modal.feature-dialog.usage-dialog { width: calc(100vw - 32px); max-height: calc(100dvh - 32px); }
-  .modal.feature-dialog.usage-dialog > .modal-header { padding: 18px 18px 14px; }
-  .modal.feature-dialog.usage-dialog > .feature-content { padding: 0 18px 18px; }
-  .usage-dialog .usage-intro { flex-wrap: wrap; gap: 4px 12px; margin-bottom: 16px; }
-  .usage-dialog .usage-account { padding: 16px; }
-  .usage-dialog .usage-account-head { grid-template-columns: 36px minmax(0, 1fr); gap: 10px; }
-  .usage-dialog .usage-account-icon { width: 36px; height: 36px; }
-  .usage-dialog .usage-plan { grid-column: 2; justify-self: start; max-width: 100%; }
-  .usage-dialog .usage-account .plan-windows { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  .modal.feature-dialog.usage-dialog > .modal-footer { padding: 14px 18px 18px; gap: 12px; }
-  .modal.feature-dialog.usage-dialog > .modal-footer .feature-hint { flex-basis: 100%; }
-  .modal.feature-dialog.usage-dialog .usage-refresh { margin-left: auto; }
+ .modal.feature-dialog.usage-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); border-radius: 20px; }
+ .modal.feature-dialog.usage-dialog > .modal-header { padding: 20px 18px 10px; }
+ .modal.feature-dialog.usage-dialog > .feature-content { padding: 0 18px 18px; }
+ .usage-dialog .usage-intro { align-items: flex-start; margin-bottom: 18px; }
+ .usage-dialog .usage-account { padding: 16px; }
+ .usage-dialog .usage-account-head { grid-template-columns: 36px minmax(0, 1fr); gap: 10px; }
+ .usage-dialog .usage-account-icon { width: 36px; height: 36px; border-radius: 11px; }
+ .usage-dialog .usage-plan { grid-column: 2; justify-self: start; max-width: 100%; }
+ .usage-dialog .usage-account .plan-windows { grid-template-columns: minmax(0, 1fr); }
+ .usage-dialog .usage-account .plan-window { padding: 13px; }
+ .usage-dialog .usage-caption { font-size: 10px; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .usage-dialog .usage-account .plan-window-bar i { transition: none; }
-}
-
-:root[data-motion="reduced"] .usage-dialog .usage-account .plan-window-bar i { transition: none; }

@@ -7,6 +7,12 @@ export type ChatTask = { id: string; title: string; status: TaskState; owner: st
 export type ChatAttribution = { provider: AgentProvider; label: string; profile?: string; memberId?: string; role?: string; model?: string | null; effort?: string | null; worker?: boolean; busy?: boolean };
 export const TASK_STATES: Record<TaskState, string> = { pending: "Pendiente", in_progress: "En curso", completed: "Completada", failed: "Falló", cancelled: "Cancelada", uncertain: "Requiere revisión" };
 
+/** Task tracking is independent of the chat's permissions or planning workflow. */
+export function taskInstructions(provider: AgentProvider): string {
+  const tools = provider === "claude" ? "TodoWrite or TaskCreate/TaskUpdate" : "update_plan";
+  return `For work with multiple meaningful steps, use the available native task tools (${tools}) to publish a short task list and keep its progress current. This works in ordinary chats as well as planning chats. Mark a task in progress when you start it and completed only after verifying its result; keep unfinished work pending. Simple questions and single-step actions do not need a list. Follow the user's task-tracking preferences. Task tracking does not require switching permission modes, creating subagents, or starting a planning workflow. Respect the current permissions and any configured team workflow; use its team-plan tools for delegated work. If task tools are unavailable, say so instead of claiming a list was published.`;
+}
+
 /** Only accepted tool results can replace the visible plan. Failed/partial updates cannot finish tasks. */
 export function chatTasks(items: ChatItem[], owner: string): ChatTask[] {
   let tasks: ChatTask[] = [];

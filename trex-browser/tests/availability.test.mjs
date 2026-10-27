@@ -1,7 +1,11 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from'node:fs';import os from'node:os';import path from'node:path';
 import{BrowserService,isObservation}from'../worker/browser.mjs';import{context}from'../worker/security.mjs';
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
-function fixture(t){const home=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-availability-'));fs.mkdirSync(path.join(home,'artifacts'));t.after(()=>{assert.equal(path.dirname(home),os.tmpdir());assert.ok(path.basename(home).startsWith('trex-browser-availability-'));fs.rmSync(home,{recursive:true,force:true})});const service=new BrowserService(home),ctx=context({cwd:home,mode:'full',clientId:'owner'}),state=service.state(ctx);state.owner=ctx.clientId;return {service,ctx,state}}
+function fixture(t){
+ // Production's HTTP server keeps the broker alive while its unref'ed operation
+ // timer expires. The in-memory fixture needs its own bounded referenced handle.
+ const keepAlive=setTimeout(()=>{},15000);t.after(()=>clearTimeout(keepAlive));
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-availability-'));fs.mkdirSync(path.join(home,'artifacts'));t.after(()=>{assert.equal(path.dirname(home),os.tmpdir());assert.ok(path.basename(home).startsWith('trex-browser-availability-'));fs.rmSync(home,{recursive:true,force:true})});const service=new BrowserService(home),ctx=context({cwd:home,mode:'full',clientId:'owner'}),state=service.state(ctx);state.owner=ctx.clientId;return {service,ctx,state}}
 test('observation classification excludes navigation, tab selection, log clearing, input and opening host files',()=>{
  for(const name of ['browser_snapshot','browser_take_screenshot','browser_frames','browser_network_requests','browser_network_body','browser_wait_for'])assert.equal(isObservation(name),true);
  assert.equal(isObservation('browser_tabs',{action:'list'}),true);assert.equal(isObservation('browser_console_messages'),true);assert.equal(isObservation('browser_artifact',{read:true}),true);

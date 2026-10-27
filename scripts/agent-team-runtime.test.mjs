@@ -69,7 +69,7 @@ test("an unfinished published plan cannot be presented as a completed team",asyn
 });
 test("only principal receives delegation; participants retain distinct native models and policies",async t=>{
   const h=harness(t);await h.settle();const runtimes=nodes(h.tree).filter(node=>node.props?.options);
-  assert.equal(runtimes.length,3);for(const node of runtimes){const {id,options}=node.props;assert.equal(options.queueId,"team-test-"+id);assert.equal(options.sessionId,"team-test-"+id+"-epoch-1");assert.equal(options.planningOnly,id!=="implement");assert.equal(!!options.team,id==="principal");assert.equal(options.visible,id==="principal");}
+  assert.equal(runtimes.length,3);for(const node of runtimes){const {id,options}=node.props;assert.equal(options.queueId,"t-team-test-"+id);assert.equal(options.sessionId,"team-test-"+id+"-epoch-1");assert.equal(options.planningOnly,id!=="implement");assert.equal(!!options.team,id==="principal");assert.equal(options.visible,id==="principal");}
   assert.match(runtimes[0].props.options.planningInstruction,/coordinate/);assert.match(runtimes[2].props.options.planningInstruction,/read-only collaborator/);
 });
 test("delegation is claimed once, sends full instructions, and returns only the attributed final report",async t=>{

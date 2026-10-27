@@ -387,6 +387,32 @@ and `TREX_HOME` are not forwarded. A restored app team starts paused and uses a
 fresh epoch only after explicit review. No task is dispatched merely by
 restoring the provider conversation.
 
+### Background terminals (runtime state)
+
+Authorized `shell` calls may set `background:true` and omit `timeoutMs` to keep
+servers, watches and monitors running between turns. The result contains an
+opaque `id`, command, cwd, startedAt, status and nullable exitCode. The operation
+ID is reserved once; replay does not spawn a second process, including after the
+terminal finishes. At most 16 terminals run concurrently and 256 IDs are retained
+per live session. Plan mode does not advertise shell or process_stop.
+
+The model can use `process_list({})`, `process_output({id})` and
+`process_stop({id})`. The desktop uses the same session-owned manager directly:
+
+- `process/list({sessionId}) -> {processes:[{id,command,cwd,startedAt,status,exitCode}]}`
+- `process/read({sessionId,processId}) -> {text,truncated,status}`
+- `process/stop({sessionId,processId}) -> {terminated:boolean}`
+
+IDs are opaque, not OS PIDs. A foreign session's ID is rejected. Output is a
+bounded 64-KiB tail of combined stdout/stderr, kept only in this runtime. Stop
+waits for process-tree shutdown; repeated stop of a finished terminal returns
+false. Finishing or interrupting a model turn leaves previously started
+background terminals available. EOF, shutdown, and Unix termination signals
+cancel active turns and close background terminals. Restore starts with an
+empty process registry and never replays a background launch from history.
+Background terminals are intended for managed foreground commands such as
+`npm run dev` or test watches, not shell commands that daemonize themselves.
+
 ### Visible plans
 
 `trex_team_plan({steps:[{taskKey,memberId,task}]})` publishes 1–32 assigned steps

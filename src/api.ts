@@ -150,6 +150,8 @@ export const agentWrite = (id: string, line: string): Promise<void> =>
   invoke<void>("agent_write", { id, line });
 
 export const agentKill = (id: string): Promise<void> => invoke<void>("agent_kill", { id });
+export const agentTerminalOutput = (id: string, taskId: string): Promise<{ text: string; truncated: boolean }> =>
+  invoke("agent_terminal_output", { id, taskId });
 
 export const messageQueueMcpConfig = (queueId: string): Promise<Record<string, unknown>> =>
   invoke("message_queue_mcp_config", { queueId });

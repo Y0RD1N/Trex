@@ -4,6 +4,7 @@
 // Claude Code en el sistema y persistir la configuración del usuario.
 mod accounts;
 mod agent;
+mod agent_terminal;
 mod agent_team;
 mod attachments;
 mod config;
@@ -271,6 +272,12 @@ async fn agent_kill(state: State<'_, AgentState>, id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
+async fn agent_terminal_output(state: State<'_, AgentState>, id: String, task_id: String) -> Result<agent_terminal::Output, String> {
+    let state = state.inner().clone();
+    blocking(move || state.terminal_output(&id, &task_id)).await
+}
+
+#[tauri::command]
 async fn detect_claude() -> Result<ClaudeInfo, String> {
     blocking(|| Ok(pty::detect_claude())).await
 }
@@ -351,6 +358,7 @@ pub fn run() {
             agent_spawn,
             agent_write,
             agent_kill,
+            agent_terminal_output,
             detect_claude,
             detect_codex,
             trex_cli::trex_cli_status,

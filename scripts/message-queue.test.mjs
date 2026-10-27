@@ -4,7 +4,7 @@ import { load } from "./ts-loader.mjs";
 
 const {
   MessageQueue, InboxRequests, EMPTY_QUEUE, INBOX_TOOL, INBOX_SERVER, INBOX_INSTRUCTIONS,
-  inboxTool, inboxContent, codexInboxContent, inboxConfigForShell,
+  inboxTool, inboxContent, codexInboxContent, inboxConfigForShell, messageQueueId,
 } = await load("messageQueue");
 const { claudeInboxReply, claudeInboxInitialize, CLAUDE_INBOX_TOOL, codexInboxReceiptId } = await load("inboxProtocol");
 const { initialChatState, baseReducer } = await load("chatState");
@@ -18,6 +18,13 @@ const deferred = () => {
   const promise = new Promise(done => { resolve = done; });
   return { promise, resolve };
 };
+
+test("room and team inboxes use stable native queue IDs without renaming valid tab queues", () => {
+  assert.equal(messageQueueId("room-123-planner"), "t-room-123-planner");
+  assert.equal(messageQueueId("team-123-builder"), "t-team-123-builder");
+  assert.equal(messageQueueId("t-session"), "t-session");
+  assert.notEqual(messageQueueId("room-123-planner"), messageQueueId("room-123-executor"));
+});
 
 test("Codex confirms only successful receipts from its own MCP inbox", () => {
   const item = { type: "mcpToolCall", status: "completed", server: INBOX_SERVER, tool: INBOX_TOOL,

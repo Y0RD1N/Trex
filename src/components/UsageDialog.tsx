@@ -12,7 +12,7 @@ import type { LauncherProfile, Settings } from "../types";
 import AgentIcon from "./AgentIcon";
 import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
 import { PlanWindows } from "./chat/PlanMeter";
-import { RefreshIcon } from "./Icons";
+import { GaugeIcon, RefreshIcon } from "./Icons";
 import "./UsageDialog.css";
 
 type Reading = { status: "loading" } | { status: "ready"; usage: PlanUsage | null; at: number } | { status: "error"; message: string };
@@ -68,16 +68,12 @@ export default function UsageDialog({ settings, cwd, onClose, ...motion }: {
   }, []);
 
 
-  return <FeatureDialog {...motion} title="Uso de las cuentas" onClose={onClose} className="usage-dialog"
-    footer={<>
-      <span className="feature-hint">Lo mismo que muestra /usage en cada asistente; no gasta tokens.</span>
-      <button type="button" className="btn btn-ghost usage-refresh" disabled={pending > 0} onClick={refresh} aria-busy={pending > 0}>
+  return <FeatureDialog {...motion} title="Uso de las cuentas" onClose={onClose} className="usage-dialog">
+    <div className="usage-intro">
+      <div><p>Tu capacidad, de un vistazo.</p><span className="usage-count">{profiles.length} {profiles.length === 1 ? "perfil conectado" : "perfiles conectados"} · Porcentaje utilizado</span></div>
+      <button type="button" className="btn btn-ghost usage-refresh" aria-disabled={pending > 0} onClick={() => { if (pending === 0) refresh(); }} aria-busy={pending > 0}>
         {pending > 0 ? <span className="chat-spinner" aria-hidden="true" /> : <RefreshIcon size={14} />} {pending > 0 ? "Leyendo…" : "Actualizar"}
       </button>
-    </>}>
-    <div className="usage-intro">
-      <p>La sesión de 5 h, la semana y los límites de cada cuenta.</p>
-      <span className="usage-count">{profiles.length} {profiles.length === 1 ? "perfil" : "perfiles"}</span>
     </div>
     <div className="usage-accounts">
       {profiles.length === 0 && <div className="usage-no-accounts">
@@ -89,18 +85,18 @@ export default function UsageDialog({ settings, cwd, onClose, ...motion }: {
         const usage = reading.status === "ready" ? reading.usage : null;
         const hasUsage = usage && (usage.windows.length > 0 || extraLabel(usage.extra) !== null || usage.resetCredits > 0);
         const headingId = `usage-account-${profile.id}`;
-        return <section key={profile.id} className="usage-account" aria-labelledby={headingId} aria-busy={reading.status === "loading"}>
+        return <section key={profile.id} className={`usage-account usage-account--${profile.provider}`} aria-labelledby={headingId} aria-busy={reading.status === "loading"}>
           <header className="usage-account-head">
             <span className="usage-account-icon"><AgentIcon kind={profile.provider} size={20} /></span>
             <div className="usage-account-identity">
               <h3 id={headingId}>{profile.name}</h3>
               <div className="usage-account-meta">
-                <span>{PROVIDER_NAMES[profile.provider]}</span>
+                <span className="usage-provider">{PROVIDER_NAMES[profile.provider]}</span>
                 <span aria-hidden="true">·</span>
                 <code className="usage-command">{profile.command}</code>
               </div>
             </div>
-            {usage?.plan && <span className="usage-plan">{usage.plan}</span>}
+            {usage?.plan && <span className="usage-plan"><span aria-hidden="true" />{usage.plan}</span>}
           </header>
           {reading.status === "error" ? <p className="usage-empty error" role="status">No se pudo leer el uso: {reading.message}</p>
             : hasUsage ? <PlanWindows usage={usage} now={now} />
@@ -109,5 +105,6 @@ export default function UsageDialog({ settings, cwd, onClose, ...motion }: {
         </section>;
       })}
     </div>
+    <p className="usage-caption"><GaugeIcon size={13} />Lectura de /usage de cada asistente. No consume tokens.</p>
   </FeatureDialog>;
 }

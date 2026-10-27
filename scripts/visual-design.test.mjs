@@ -49,6 +49,21 @@ test("every palette has readable text and meaningful ANSI colors in light and da
   assert.equal(paletteFor("unknown").id,"trex");
 });
 
+test("stored palette choices keep a neutral interface and distinct terminal colors", () => {
+  assert.deepEqual(PALETTES.map(palette => palette.id), ["trex", "ocean", "forest", "rose"]);
+  for (const mode of ["light", "dark"]) {
+    const expected = PALETTES[0][mode].ui;
+    for (const palette of PALETTES) {
+      assert.deepEqual(palette[mode].ui, expected, `${palette.id}: a terminal preset cannot tint the interface`);
+      for (const [token, value] of Object.entries(palette[mode].ui)) {
+        const channels = value.slice(1).match(/../g);
+        assert.equal(new Set(channels).size, 1, `${palette.id}/${mode}/${token} must remain neutral`);
+      }
+    }
+    assert.equal(new Set(PALETTES.map(palette => palette[mode].terminal.red)).size, 4, "ANSI preset choices remain available");
+  }
+});
+
 test("favorite project sections preserve identities and each section's order", () => {
   const projects=[{id:"a"},{id:"b",favorite:true},{id:"c",favorite:true},{id:"d"}];
   const sections=projectSections(projects);

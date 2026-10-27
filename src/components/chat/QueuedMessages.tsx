@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ArrowUpIcon, CloseIcon, ListIcon, PencilIcon } from "../Icons";
 import type { ChatMessageQueue } from "../../hooks/useMessageQueue";
 import type { QueuedMessage } from "../../messageQueue";
+import ComposerPanel from "./ComposerPanel";
 
 export type QueuedMessagesProps = {
   queue: ChatMessageQueue;
@@ -13,13 +14,15 @@ export type QueuedMessagesProps = {
   onSendNow: (message: QueuedMessage) => Promise<void>;
   onRestoreDirect: (dispatchId: string) => Promise<void>;
   directDisabledReason?: (message: QueuedMessage) => string | null;
+  compact?: boolean;
+  onFocusComposer?: () => void;
 };
 
 type EditDraft = { message: QueuedMessage; text: string; expectedText: string; conflict?: string };
 type QueueRow = { message: QueuedMessage; state: "pending" | "claimed" | "outbox" | "retained"; dispatchId?: string };
 
 export default function QueuedMessages({ queue, running, busy, onRemove, onContinue, onEdit, onSendNow, onRestoreDirect,
-  directDisabledReason }: QueuedMessagesProps) {
+  directDisabledReason, compact = false, onFocusComposer }: QueuedMessagesProps) {
   const { messages, receipt, outbox = [] } = queue.snapshot;
   const claimed = receipt?.messages ?? [];
   const [edits, setEdits] = useState<Record<string, EditDraft>>({});
@@ -77,7 +80,11 @@ export default function QueuedMessages({ queue, running, busy, onRemove, onConti
   function restoreFocus(messageId: string) {
     const composer = sectionRef.current?.closest(".chat-dock")?.querySelector<HTMLTextAreaElement>(".chat-composer:not([hidden]) textarea:not(:disabled)");
     // Capture the composer before a final retained draft removes the queue from the DOM.
-    requestAnimationFrame(() => (editButtons.current.get(messageId) ?? sectionRef.current ?? composer)?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      const target = editButtons.current.get(messageId) ?? sectionRef.current ?? composer;
+      if (target?.getClientRects().length) target.focus({ preventScroll: true });
+      else onFocusComposer?.();
+    });
   }
 
   function closeEdit(messageId: string) {
@@ -96,9 +103,9 @@ export default function QueuedMessages({ queue, running, busy, onRemove, onConti
   for (const draft of Object.values(edits)) {
     if (!visibleIds.has(draft.message.id)) rows.push({ message: draft.message, state: "retained" });
   }
-  if (!rows.length && !queue.error && !Object.keys(errors).length) return null;
+  const available = !!rows.length || !!queue.error || !!Object.keys(errors).length;
 
-  return <section ref={sectionRef} tabIndex={-1} className="chat-queue" aria-label="Cola de mensajes pendientes">
+  const content = <section ref={sectionRef} tabIndex={-1} className="chat-queue" aria-label="Cola de mensajes pendientes">
     <div className="chat-queue-head">
       <ListIcon size={15} /><strong>Pendientes de lectura · {messages.length}</strong>
       <span>{messages.length > 0
@@ -199,4 +206,7 @@ export default function QueuedMessages({ queue, running, busy, onRemove, onConti
     </ol>
     <div className="chat-queue-announcement" role="status" aria-live="polite">{notice}</div>
   </section>;
+  return compact ? <ComposerPanel label="Cola" title="Mensajes pendientes" icon={<ListIcon size={13} />}
+    count={rows.length || "!"} visible={available} attention={!!queue.error || !!Object.keys(errors).length}>{content}</ComposerPanel>
+    : available ? content : null;
 }

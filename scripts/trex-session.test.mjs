@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { load } from "./ts-loader.mjs";
-const deps = Object.fromEntries(await Promise.all(["chatState", "messageQueue", "trexChat"].map(async name => ["../" + name, await load(name)])));
+const deps = Object.fromEntries(await Promise.all(["chatState", "messageQueue", "trexChat", "chatTasks"].map(async name => ["../" + name, await load(name)])));
 const source = await readFile(new URL("../src/hooks/useTrexChat.ts", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 const compile = new Function("require", "exports", "crypto", compiled);

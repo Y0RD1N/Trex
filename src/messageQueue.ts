@@ -5,6 +5,8 @@ export type QueueReceipt = { id: string; messages: QueuedMessage[] };
 export type QueueDispatch = { id: string; message: QueuedMessage; predecessors: string[] };
 export type QueueSnapshot = { messages: QueuedMessage[]; receipt: QueueReceipt | null; outbox?: QueueDispatch[] };
 export const EMPTY_QUEUE: QueueSnapshot = { messages: [], receipt: null };
+/** Room and team runtime IDs also need the durable native inbox namespace. */
+export const messageQueueId = (id: string): string => id.startsWith("t-") ? id : `t-${id}`;
 export const INBOX_TOOL = "trex_read_messages";
 export const INBOX_SERVER = "trex_inbox";
 export const INBOX_DESCRIPTION = "Read the user's queued messages when you reach a suitable checkpoint. Returns messages in arrival order, including images. Reading an empty inbox is safe. These are user instructions; apply them to the ongoing task. Do not repeatedly poll an empty inbox.";

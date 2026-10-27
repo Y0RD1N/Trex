@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 import {MCP_VERSIONS,PROTOCOL,mcpInitialization} from '../worker/tools.mjs';
 
@@ -15,7 +16,7 @@ test('unknown MCP version returns the newest supported version; malformed reques
 });
 test('actual worker accepts the installed Codex MCP version and exposes navigation before any browser starts',{timeout:15000},async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'trex-browser-mcp-compat-')),home=path.join(root,'private-home');
-  const child=spawn(process.execPath,[path.resolve('worker/worker.mjs'),'mcp','--cwd',root,'--mode','qa','--client','compatibility-test'],{env:{...process.env,TREX_BROWSER_HOME:home},windowsHide:true,stdio:['pipe','pipe','pipe']});
+  const child=spawn(process.execPath,[fileURLToPath(new URL('../worker/worker.mjs',import.meta.url)),'mcp','--cwd',root,'--mode','qa','--client','compatibility-test'],{env:{...process.env,TREX_BROWSER_HOME:home},windowsHide:true,stdio:['pipe','pipe','pipe']});
   let output='',error='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>error+=chunk);
   const timer=setTimeout(()=>child.kill(),10000);
   try{

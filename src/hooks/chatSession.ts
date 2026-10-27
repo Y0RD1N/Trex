@@ -6,14 +6,15 @@ import type { BrowserOptions } from "../browser";
  * al desmontar. Cada proveedor lo envuelve en su propio hook, que habla su
  * protocolo y devuelve una `ChatSession`: lo único que necesita la interfaz.
  */
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
-  agentKill, agentSpawn, agentWrite, listenAgentExit, listenAgentLine, listenAgentStderr, type AgentSpawnRequest,
+  agentKill, agentSpawn, agentWrite, agentTerminalOutput, listenAgentExit, listenAgentLine, listenAgentStderr, type AgentSpawnRequest,
 } from "../api";
 import type { ChatState, OutgoingImage, PermissionItem, QuestionChoice } from "../chatState";
 import type { AgentProvider } from "../types";
 import type { ChatMessageQueue } from "./useMessageQueue";
+import { AgentTerminals, type TerminalSession } from "../agentTerminals";
 
 /** Datos de la pestaña que necesita una sesión de chat. */
 export type ChatSessionOptions = {
@@ -52,6 +53,7 @@ export type ChatSession = {
   provider: AgentProvider;
   state: ChatState;
   queue: ChatMessageQueue;
+  terminals?: TerminalSession;
   /** Arranca el proceso o lo reanuda tras cerrarse. */
   start: () => Promise<void>;
   /** Envía un mensaje; `display` es lo que se ve en el hilo si no es el texto enviado. */
@@ -92,7 +94,7 @@ export type AgentProcessHandlers = {
  * Proceso del asistente. Cada arranque es una generación nueva: lo que llegue
  * de un proceso anterior se descarta.
  */
-export function useAgentProcess(sessionId: string, handlers: AgentProcessHandlers) {
+export function useAgentProcess(sessionId: string, handlers: AgentProcessHandlers, provider?: AgentProvider) {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
   const procIdRef = useRef<string | null>(null);
@@ -100,6 +102,11 @@ export function useAgentProcess(sessionId: string, handlers: AgentProcessHandler
   const unlistenRef = useRef<UnlistenFn[]>([]);
   const generationRef = useRef(0);
   const disposedRef = useRef(false);
+  const trackerRef = useRef<AgentTerminals | null>(null);
+  if (!trackerRef.current) trackerRef.current = new AgentTerminals(provider, agentWrite, agentTerminalOutput);
+  const tracker = trackerRef.current;
+  const [, redraw] = useReducer((version: number) => version + 1, 0);
+  useEffect(() => tracker.subscribe(redraw), [tracker]);
 
   const isCurrent = useCallback((procId: string): boolean => procIdRef.current === procId && !disposedRef.current, []);
 
@@ -108,14 +115,15 @@ export function useAgentProcess(sessionId: string, handlers: AgentProcessHandler
     const procId = `${sessionId}-c${++generationRef.current}`;
     const previous = procIdRef.current;
     procIdRef.current = procId;
+    tracker.attach(procId, request.cwd);
     for (const unlisten of unlistenRef.current) unlisten();
     unlistenRef.current = [];
     if (previous) void agentKill(previous).catch(() => undefined);
 
     const listeners = await Promise.all([
-      listenAgentLine(procId, line => { if (isCurrent(procId)) handlersRef.current.onLine(line, procId); }),
+      listenAgentLine(procId, line => { if (isCurrent(procId) && !tracker.observe(line, procId)) handlersRef.current.onLine(line, procId); }),
       listenAgentStderr(procId, line => { if (isCurrent(procId)) handlersRef.current.onStderr(line); }),
-      listenAgentExit(procId, code => { if (isCurrent(procId)) handlersRef.current.onExit(code); }),
+      listenAgentExit(procId, code => { if (isCurrent(procId)) { tracker.detach(); handlersRef.current.onExit(code); } }),
     ]);
     if (!isCurrent(procId)) { listeners.forEach(unlisten => unlisten()); return null; }
     unlistenRef.current = listeners;
@@ -124,7 +132,7 @@ export function useAgentProcess(sessionId: string, handlers: AgentProcessHandler
     spawnRef.current = spawned;
     await spawned;
     return isCurrent(procId) ? procId : null;
-  }, [sessionId, isCurrent]);
+  }, [sessionId, isCurrent, tracker]);
 
   const write = useCallback(async (line: string): Promise<void> => {
     const id = await (spawnRef.current ?? Promise.reject(new Error("La sesión no está activa.")));
@@ -135,10 +143,12 @@ export function useAgentProcess(sessionId: string, handlers: AgentProcessHandler
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
+      tracker.detach();
       for (const unlisten of unlistenRef.current) unlisten();
       if (procIdRef.current) void agentKill(procIdRef.current).catch(() => undefined);
     };
   }, []);
 
-  return useMemo(() => ({ spawn, write, isCurrent }), [spawn, write, isCurrent]);
+  const terminals = useMemo<TerminalSession>(() => ({ snapshot: tracker.snapshot, refresh: tracker.refresh, stop: tracker.stop, read: tracker.read }), [tracker, tracker.snapshot]);
+  return useMemo(() => ({ spawn, write, isCurrent, terminals, bindTerminals: tracker.bind }), [spawn, write, isCurrent, terminals, tracker]);
 }

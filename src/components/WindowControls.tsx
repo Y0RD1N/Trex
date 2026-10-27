@@ -1,11 +1,6 @@
 /**
- * Controles de ventana del extremo derecho de la barra de título: "⋯" (menú de
- * la aplicación), "▢/❐" (maximizar / restaurar) y "—" (minimizar).
- *
- * El menú reutiliza la estética del menú contextual de los proyectos y sus
- * entradas son: Ajustes, abrir la carpeta del proyecto activo (solo si hay
- * proyecto), salir de trex y —al final, tras un separador— cerrar la ventana
- * (la ventana no tiene bordes nativos y ya no hay botón de cerrar).
+ * Menú de la aplicación y controles de ventana dentro de la barra superior.
+ * Minimizar, maximizar/restaurar y cerrar se ocultan junto con ella.
  */
 import { useEffect, useRef, useState } from "react";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
@@ -26,7 +21,6 @@ import {
   GearIcon,
   MaximizeIcon,
   MinimizeIcon,
-  PowerIcon,
   RestoreIcon,
 } from "./Icons";
 
@@ -84,6 +78,17 @@ export default function WindowControls({ onOpenSettings, onRevealProject, autoHi
         <EllipsisIcon size={16} />
       </button>
 
+      <div className="window-actions" role="group" aria-label="Controles de ventana">
+      <button
+        type="button"
+        className="window-btn tip tip-below"
+        data-tip="Minimizar"
+        aria-label="Minimizar ventana"
+        onClick={minimizeWindow}
+      >
+        <MinimizeIcon size={16} />
+      </button>
+
       <button
         type="button"
         className="window-btn tip tip-below"
@@ -97,12 +102,14 @@ export default function WindowControls({ onOpenSettings, onRevealProject, autoHi
       <button
         type="button"
         className="window-btn tip tip-below"
-        data-tip="Minimizar"
-        aria-label="Minimizar ventana"
-        onClick={minimizeWindow}
+        data-tip="Cerrar"
+        aria-label="Cerrar ventana"
+        onClick={closeWindow}
+        data-window-action="close"
       >
-        <MinimizeIcon size={16} />
+        <CloseIcon size={16} />
       </button>
+      </div>
 
       {
         <DropdownMenu anchor={menu} triggerRef={menuButtonRef} label="Opciones de la aplicación"
@@ -151,23 +158,6 @@ export default function WindowControls({ onOpenSettings, onRevealProject, autoHi
             <span className="kbd">{MOD_LABEL} ⇧ B</span>
           </button>
 
-          <div className="context-sep" role="separator" />
-
-          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => run(closeWindow)}>
-            <span className="context-icon" aria-hidden="true">
-              <PowerIcon size={16} />
-            </span>
-            Salir de trex
-          </button>
-
-          <div className="context-sep" role="separator" />
-
-          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => run(closeWindow)}>
-            <span className="context-icon" aria-hidden="true">
-              <CloseIcon size={16} />
-            </span>
-            Cerrar ventana
-          </button>
         </DropdownMenu>
       }
     </div>

@@ -1147,14 +1147,18 @@
 
 .chat-attachments {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   margin: 0 0 10px;
+  padding: 6px 5px 5px 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 .chat-attachment {
   position: relative;
-  width: 64px;
-  height: 64px;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-inset);

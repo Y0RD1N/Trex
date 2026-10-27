@@ -1331,6 +1331,25 @@ impl Server {
                 let data = session.data.lock().await;
                 Ok(self.session_summary(&data).await)
             }
+            "process/list" => {
+                let session = self.session(params).await?;
+                Ok(session.tools.processes().list())
+            }
+            "process/read" => {
+                let session = self.session(params).await?;
+                session
+                    .tools
+                    .processes()
+                    .read(required(params, "processId")?)
+            }
+            "process/stop" => {
+                let session = self.session(params).await?;
+                session
+                    .tools
+                    .processes()
+                    .stop(required(params, "processId")?)
+                    .await
+            }
             "sessions/list" => {
                 Ok(json!({"conversations":list_sessions(Some(&self.profile.name))?}))
             }
@@ -1490,10 +1509,12 @@ impl Server {
     }
 
     async fn cancel_all(&self) {
-        for session in self.sessions.lock().await.values() {
+        let sessions: Vec<_> = self.sessions.lock().await.values().cloned().collect();
+        for session in sessions {
             if let Some(active) = session.active.lock().await.as_ref() {
                 active.cancel.cancel();
             }
+            session.tools.processes().shutdown().await;
         }
     }
 
@@ -1888,7 +1909,12 @@ pub async fn run(profile: Profile) -> Result<()> {
     });
     let mut stdin = BufReader::new(tokio::io::stdin());
     let mut requests = tokio::task::JoinSet::new();
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     loop {
+        #[cfg(unix)]
+        let input = tokio::select! { input=frame(&mut stdin)=>input, _=tokio::signal::ctrl_c()=>break, _=terminate.recv()=>break };
+        #[cfg(not(unix))]
         let input =
             tokio::select! {input=frame(&mut stdin)=>input,_=tokio::signal::ctrl_c()=>break};
         match input {
@@ -1897,7 +1923,7 @@ pub async fn run(profile: Profile) -> Result<()> {
                 if bytes.iter().all(u8::is_ascii_whitespace){continue;}
                 match serde_json::from_slice::<Value>(&bytes){
                     Ok(request)=>{
-                        if request["method"]=="models/list" {
+                        if matches!(request["method"].as_str(), Some("models/list" | "process/list" | "process/read" | "process/stop")) {
                             let server=server.clone();requests.spawn(async move{server.handle(request).await;});
                         } else {
                             // Ordered control dispatch prevents Stop from overtaking its

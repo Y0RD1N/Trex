@@ -26,6 +26,7 @@ import { useMessageQueue } from "./useMessageQueue";
 import { codexInboxContent, InboxRequests, INBOX_INSTRUCTIONS, INBOX_TOOL, inboxConfigForShell } from "../messageQueue";
 import { codexInboxReceiptId } from "../inboxProtocol";
 import { assertCodexPlanningThread, codexPlanningThread, codexPlanningTurn } from "../workflowSafety";
+import { taskInstructions } from "../chatTasks";
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
 const ANSWERED_IN_CHAT = new Set([
@@ -33,7 +34,7 @@ const ANSWERED_IN_CHAT = new Set([
 ]);
 /** Turnos de la conversación recuperada que se muestran al abrirla. */
 const HISTORY_TURNS = 40;
-const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS}`;
+const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS} ${taskInstructions("codex")}`;
 
 /** Approval must not weaken the planner's sandbox, even for a session grant. */
 function planningApprovalAllowed(method: string | undefined, input: Json): boolean {
@@ -333,7 +334,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       dispatch({ type: "exit", code });
       callbacks.current.onExit(sessionId, code);
     },
-  });
+  }, "codex");
   writeRef.current = agent.write;
   isCurrentRef.current = agent.isCurrent;
 
@@ -416,6 +417,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     confirmBrowserThread(response, threadId, procId);
     await confirmBrowserTools(threadId, procId);
     activeThreadRef.current = threadId;
+    agent.bindTerminals?.(threadId);
     threadModelRef.current = text(response.model) || null;
     dispatch({ type: "thread", response });
     return threadId;
@@ -456,6 +458,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         confirmBrowserThread(response, resumeId, procId);
         await confirmBrowserTools(resumeId, procId);
         activeThreadRef.current = resumeId;
+        agent.bindTerminals?.(resumeId);
         threadModelRef.current = text(response.model) || null;
         dispatch({ type: "thread", response });
         await loadHistory(resumeId, true, procId);
@@ -710,6 +713,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       if (epoch !== deliveryEpochRef.current) { restoreBrowserThread(); return; }
       threadRef.current = Promise.resolve(newId);
       activeThreadRef.current = newId;
+      agent.bindTerminals?.(newId);
       resumeThreadRef.current = newId;
       threadModelRef.current = response.model || null;
       freshRef.current = true;
@@ -805,6 +809,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
 
   return {
     provider: "codex",
+    terminals: agent.terminals,
     state,
     queue,
     start: async () => { deliveryEpochRef.current++; cancelDeferred(); await start(); },

@@ -15,7 +15,13 @@ const variant = (ui: SurfacePalette, foreground: string, ansi: string[], selecti
     ...Object.fromEntries(ansiKeys.map((key, index) => [key, ansi[index]])) },
 });
 
-export const PALETTES: readonly Palette[] = [
+/** Surfaces are shared by every preset; ANSI colors remain provider output. */
+export const MONOCHROME_UI: Record<"dark" | "light", SurfacePalette> = {
+  dark: { app:"#111111",sidebar:"#151515",surface:"#171717",elevated:"#1c1c1c",inset:"#1b1b1b",border:"#292929",borderStrong:"#424242",text:"#eeeeee",muted:"#aaaaaa",dim:"#969696",selected:"#242424" },
+  light: { app:"#ffffff",sidebar:"#fafafa",surface:"#ffffff",elevated:"#fafafa",inset:"#f5f5f5",border:"#e8e8e8",borderStrong:"#cecece",text:"#191919",muted:"#666666",dim:"#707070",selected:"#eeeeee" },
+};
+
+const TERMINAL_PALETTES: readonly Palette[] = [
   { id: "trex", name: "Grafito", description: "Neutro y cálido", accent: "#e8834a",
     dark: variant({ app:"#121212",sidebar:"#060606",surface:"#171717",elevated:"#1d1d1d",inset:"#0b0b0b",border:"#242424",borderStrong:"#383838",text:"#ececec",muted:"#a5a5a5",dim:"#878787",selected:"#1d1d1d" }, "#e4e7ec",
       ["#2b3340","#f2687f","#7fd962","#e6b455","#6cb6ff","#c58af9","#56d4dd","#c8ccd4","#6f7a8c","#ff8095","#9ae86e","#f5cd7c","#8ec7ff","#d8a6ff","#7ee2ea","#f2f4f8"], "#768fb8"),
@@ -37,6 +43,16 @@ export const PALETTES: readonly Palette[] = [
     light: variant({ app:"#fbf7fc",sidebar:"#f1eaf4",surface:"#ffffff",elevated:"#ffffff",inset:"#e8dfee",border:"#e3d7e9",borderStrong:"#cfbed8",text:"#3b2b46",muted:"#705c7e",dim:"#756181",selected:"#e7dced" }, "#3b2b46",
       ["#3b2b46","#b13359","#397b36","#926413","#3b5ba8","#8b459e","#24747c","#7b6c83","#6a5678","#932645","#29612a","#754e09","#2c478e","#743685","#175b63","#2a1935"], "#9c5cbb") },
 ];
+
+// Keep stored scheme IDs and all ANSI choices. Selecting a preset no longer
+// introduces a second color palette into the rest of the interface.
+export const PALETTES: readonly Palette[] = TERMINAL_PALETTES.map(palette => ({
+  ...palette,
+  dark: { ui: MONOCHROME_UI.dark, terminal: { ...palette.dark.terminal, background: MONOCHROME_UI.dark.app,
+    foreground: MONOCHROME_UI.dark.text, selectionBackground:"#ffffff30",selectionInactiveBackground:"#ffffff18" } },
+  light: { ui: MONOCHROME_UI.light, terminal: { ...palette.light.terminal, background: MONOCHROME_UI.light.app,
+    foreground: MONOCHROME_UI.light.text, selectionBackground:"#00000024",selectionInactiveBackground:"#00000012" } },
+}));
 
 export const paletteFor = (id: unknown): Palette => PALETTES.find(palette => palette.id === id) ?? PALETTES[0];
 

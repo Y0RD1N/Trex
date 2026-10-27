@@ -43,7 +43,7 @@ import { dispatchQueuedMessage, INBOX_WAKE, type QueuedMessage } from "../messag
 import { createHandoffContext, type HandoffContext, type HandoffReference } from "../handoff";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, MapIcon, PaperclipIcon, PencilIcon, RotateIcon, ShieldIcon, StopIcon } from "./Icons";
+import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, ListIcon, MapIcon, PaperclipIcon, PencilIcon, RotateIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { ModelMenu } from "./chat/ModelMenu";
 import ComposerSettings from "./chat/ComposerSettings";
@@ -62,10 +62,14 @@ import ChatWelcome, { type ChatWelcomeContent } from "./chat/ChatWelcome";
 import { activityGroups, chatTasks, type ChatAttribution, type ChatTask } from "../chatTasks";
 import "./ChatView.css";
 import "./chat/MessageActions.css";
+import BackgroundTerminals from "./chat/BackgroundTerminals";
+import ComposerPanel from "./chat/ComposerPanel";
+import type { TerminalOwner } from "../agentTerminals";
 
 export type ChatViewProps = ChatSessionOptions & {
   toolbar?: ReactNode;
   composerLead?: ReactNode;
+  terminalOwners?: TerminalOwner[];
   itemLabels?: Record<string, ChatAttribution>;
   taskPlan?: ChatTask[];
   taskAuthor?: string;
@@ -179,7 +183,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     updateDraft(draftRef.current);
   };
   const [atBottom, setAtBottom] = useState(true);
-  const [tasksOpen, setTasksOpen] = useState(!props.emptyState);
+  const [tasksOpen, setTasksOpen] = useState(props.taskPlan !== undefined && !props.emptyState);
   const hadTasks = useRef(false);
   const taskToggle = useRef<HTMLButtonElement>(null);
   const [attachments, updateAttachments] = useState<ChatAttachment[]>([]);
@@ -359,7 +363,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     input.style.overflowY = "hidden";
     input.style.height = "auto";
     const naturalHeight = Math.ceil(input.scrollHeight) + 1;
-    const maxHeight = Math.max(38, Math.floor(window.innerHeight * 0.4));
+    const maxHeight = Math.max(38, Math.min(160, Math.floor((rootRef.current?.clientHeight || window.innerHeight) * 0.22)));
     input.style.height = `${Math.min(naturalHeight, maxHeight)}px`;
     input.style.overflowY = naturalHeight > maxHeight ? "auto" : "hidden";
     // El texto visible (con las citas resaltadas) va detrás y debe partir las líneas igual.
@@ -375,16 +379,20 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     let disposed = false;
     let frame = 0;
     let observedWidth = input.clientWidth;
+    let observedHeight = rootRef.current?.clientHeight;
     const resize = (): void => { if (!disposed) resizeInput(); };
     // El alto lo ajusta resizeInput; observarlo otra vez crea un ciclo al estrechar el panel.
     const observer = new ResizeObserver(() => {
       const width = input.clientWidth;
-      if (width === observedWidth) return;
+      const height = rootRef.current?.clientHeight;
+      if (width === observedWidth && height === observedHeight) return;
       observedWidth = width;
+      observedHeight = height;
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(resize);
     });
     observer.observe(input);
+    if (rootRef.current) observer.observe(rootRef.current);
     window.addEventListener("resize", resize);
     void document.fonts.ready.then(resize);
     return () => { disposed = true; cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener("resize", resize); };
@@ -969,8 +977,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const editingId = editing?.id ?? null;
   const busy = workflowLocked || preparing > 0 || handoffPending || hasQueued || !session.queue.ready;
   const tasks = useMemo(() => props.taskPlan ?? chatTasks(state.items, props.profileName ?? agent.name), [props.taskPlan, state.items, props.profileName, agent.name]);
-  useEffect(() => { if(props.emptyState && tasks.length && !hadTasks.current)setTasksOpen(true);hadTasks.current=tasks.length>0; }, [tasks.length,props.emptyState]);
-  const showTasks = tasks.length > 0 || props.taskPlan !== undefined || props.planningOnly || mode === "plan";
+  useEffect(() => {
+    if (tasks.length && !hadTasks.current) setTasksOpen(true);
+    hadTasks.current = tasks.length > 0;
+  }, [tasks.length]);
   const revealTask = (task: ChatTask): void => {
     const matches = threadItems.filter(item => task.memberId ? props.itemLabels?.[item.id]?.memberId === task.memberId : item.id === task.sourceId);
     const target = matches[matches.length - 1];
@@ -1021,7 +1031,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
               if (result.isError) session.notice("warn", "No se pudo abrir el archivo. Revisa el estado del navegador.");
             } catch { session.notice("warn", "No se pudo abrir el archivo del navegador."); }
           } : undefined}
-          expanded={!showTasks && item.id === latestTodos || item.id === latestPlan}
+          expanded={!tasks.length && item.id === latestTodos || item.id === latestPlan}
           onImplement={item.id === latestPlan && planReady ? implementPlan : undefined} /></div>;
         // Las preguntas se responden en el panel que sustituye a la caja de mensaje.
         case "permission": return item.state !== "pending" || item.toolName === "AskUserQuestion" ? null
@@ -1037,7 +1047,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       return <SubagentActivity key={items[0].id} author={group.author} items={items} live={live}>{rendered.slice(group.start, group.end).filter((_row, at) => items[at].kind !== "user")}</SubagentActivity>;
     });
   }, [threadItems, threadStart, enterFrom, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
-    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels, props.browser, props.planningOnly, mode, session, showTasks]);
+    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels, props.browser, props.planningOnly, mode, session, tasks.length]);
   const stderrTail = state.stderr.slice(-6).join("\n");
 
   return <div ref={rootRef} className={`chat${empty ? " is-empty" : ""}${dragging ? " is-dragging" : ""}`}
@@ -1051,8 +1061,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       addDropped(Array.from(event.dataTransfer.files));
     }}>
     {props.toolbar}
-    {showTasks && <div className="chat-task-toolbar"><button ref={taskToggle} type="button" className="chat-task-toggle" aria-expanded={tasksOpen} aria-controls={tasksOpen?`tasks-${sessionId}`:undefined}
-      onClick={() => setTasksOpen(value => !value)}><MapIcon size={14} />Tareas{tasks.length>0&&<small>{tasks.filter(task => task.status === "completed").length}/{tasks.length}</small>}</button></div>}
+    <div className="chat-task-toolbar"><button ref={taskToggle} type="button" className="chat-task-toggle" aria-expanded={tasksOpen} aria-controls={tasksOpen?`tasks-${sessionId}`:undefined}
+      onClick={() => setTasksOpen(value => !value)}><ListIcon size={14} />Tareas{tasks.length>0&&<small>{tasks.filter(task => task.status === "completed").length}/{tasks.length}</small>}</button></div>
     <div className="chat-workspace"><div className="chat-main">
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
       <SharedFilesContext.Provider value={filesContext}>
@@ -1128,13 +1138,16 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     </button>}
 
     <div className="chat-composer-wrap" ref={composerRef}>
-     <div className="chat-dock">
-      {props.composerLead}
-      <QueuedMessages queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending || workflowLocked}
+     <div className="chat-composer-accessories">
+      {props.composerLead && <ComposerPanel label="Planificación" title="Planificación y ejecución" icon={<MapIcon size={13} />}>{props.composerLead}</ComposerPanel>}
+      <BackgroundTerminals owners={props.terminalOwners ?? (session.terminals ? [{ id: sessionId, label: props.profileName ?? agent.name, provider, session: session.terminals }] : [])} />
+      <QueuedMessages compact onFocusComposer={() => inputRef.current?.focus({ preventScroll: true })} queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending || workflowLocked}
         onContinue={wakeQueue} onRemove={id => { void queueAction(() => session.queue.client.remove(id)).catch(error => callbacks.current.onMessage(formatError(error))); }}
         onEdit={(id, text, expectedText) => queueAction(() => session.queue.client.update(id, text, expectedText))}
         onSendNow={sendQueuedNow} onRestoreDirect={id => queueAction(() => session.queue.client.restoreDirect(id))}
         directDisabledReason={message => hasDirectQueue ? "Revisa el envío directo pendiente antes de enviar otro mensaje." : props.queuedSendReason?.(message) ?? null} />
+     </div>
+     <div className="chat-dock">
       {showSuggestions && !question && <Suggestions id={`${sessionId}-suggestions`} items={suggestions} active={selectedSuggestion} loading={loadingSuggestions}
         loadingLabel={wantsSkills ? "Cargando skills…" : "Buscando archivos…"}
         emptyLabel={wantsSkills ? skillsError ?? (state.skills.length ? "No hay skills que coincidan con tu búsqueda." : "No hay skills disponibles en esta sesión.") : undefined}
@@ -1294,7 +1307,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
      </div>
     </div>
     </div>
-    {showTasks && tasksOpen && <TaskPanel panelId={`tasks-${sessionId}`} tasks={tasks} author={props.taskAuthor ?? props.profileName ?? agent.name} paused={props.tasksPaused}
+    {tasksOpen && <TaskPanel panelId={`tasks-${sessionId}`} tasks={tasks} author={props.taskAuthor ?? props.profileName ?? agent.name} paused={props.tasksPaused}
       onClose={() => { setTasksOpen(false); taskToggle.current?.focus({ preventScroll: true }); }} onReveal={revealTask} />}
     </div>
   </div>;

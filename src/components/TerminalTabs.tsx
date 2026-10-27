@@ -8,6 +8,7 @@
  * ver `useHoverReveal`), y se esconde de nuevo al alejarlo. Como no ocupa espacio,
  * aparecer y desaparecer nunca redimensiona el terminal; solo activar o
  * desactivar el modo lo hace, una vez y animado.
+ * Los tres controles de ventana se ocultan y aparecen con la misma barra.
  */
 import { useEffect, useRef, useState } from "react";
 import { useHoverReveal } from "../hooks/useHoverReveal";

@@ -84,7 +84,9 @@ test('foreign calls and unissued queued cancellations cannot pause the owner',as
     assert.equal(state.paused,false);await state.queue;assert.equal(state.paused,false);
   }finally{fs.rmSync(home,{recursive:true,force:true});}
 });
-test('an unfinished response body read releases the queue on cancellation',async()=>{
+test('an unfinished response body read releases the queue on cancellation',async t=>{
+  // The real broker's HTTP server supplies this liveness handle.
+  const keepAlive=setTimeout(()=>{},15000);t.after(()=>clearTimeout(keepAlive));
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-held-response-'));
   try{fs.mkdirSync(path.join(home,'artifacts'));const service=new BrowserService(home);const ctx=context({cwd:home,mode:'full',clientId:'owner'});const state=service.state(ctx);state.owner=ctx.clientId;state.browser={};state.tabs.set('fixture-tab',{});state.selected='fixture-tab';
     let bodyRead=false;state.network.set('held',{response:{headers:()=>({'content-length':'4'}),finished:()=>new Promise(()=>{}),body:()=>{bodyRead=true;return Buffer.from('test');}}});

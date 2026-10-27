@@ -104,7 +104,7 @@ function uiModule(name) {
 }
 const uiPaths = new Set(["./chat/BrowserMenu","./AgentIcon", "./Select", "./Icons", "./chat/ChatItems", "./chat/ModelMenu",
   "./chat/ComposerSettings", "./chat/UsageMenu", "./chat/SharedFiles", "./ImageViewer", "./chat/QuestionPanel",
-  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/QueuedMessages", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome"]);
+  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/QueuedMessages", "./chat/ComposerPanel", "./chat/BackgroundTerminals", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome"]);
 function environment() {
   let counter = 0;
   const timers = new Map();
@@ -411,6 +411,7 @@ function roomHarness(t, scenario = {}) {
   let tree, panelProps;
   const renderRoom = () => { tree = roomHost.render(() => roomModule.default({ ...props, room })); };
   renderRoom();
+  const runtimeQueueIds = ["planner", "executor"].map(role => find(tree, node => node.props?.role === role && !!node.props?.options).props.options.queueId);
   // Invoke the exact Runtime publish callback, without mounting any provider.
   for (const role of ["planner", "executor"]) {
     find(tree, node => typeof node.type === "function" && node.props.role === role && !!node.props.publish).props.publish(role, sessions[role]);
@@ -419,13 +420,18 @@ function roomHarness(t, scenario = {}) {
   panelProps = find(tree, node => node.type === ChatPanel).props;
   const renderPanel = () => { tree = panelHost.render(() => ChatPanel(panelProps)); return tree; };
   renderPanel();
-  return { calls, messages, sessions, get panelProps(){return panelProps;}, get room(){return room;}, renderPanel,
+  return { calls, messages, sessions, runtimeQueueIds, get panelProps(){return panelProps;}, get room(){return room;}, renderPanel,
     async pump(){for(let i=0;i<6;i++){await flush();renderRoom();panelProps=find(tree,node=>node.type===ChatPanel).props;renderPanel();}},
     type(value) { find(tree, node => node.type === "textarea").props.onChange({ target: { value, selectionStart: value.length } }); renderPanel(); },
     submit() { find(tree, node => node.type === "form").props.onSubmit({ preventDefault: noop }); renderPanel(); },
     get draft() { return find(tree, node => node.type === "textarea").props.value; },
   };
 }
+
+test("planning room participants bind distinct queues accepted by the native inbox", t => {
+  const h = roomHarness(t);
+  assert.deepEqual(h.runtimeQueueIds, ["t-offline-room-planner", "t-offline-room-executor"]);
+});
 
 test("newly configured room stays idle until a normal chat message starts its first planning cycle",async t=>{
   const contexts=[];const prepared=context=>({id:"first-chat-idea",content:context.content,sourceLabel:"planner",sourceProvider:"codex",sourceSessionId:"planner",createdAt:1,cwd:"D:/test",truncated:false});

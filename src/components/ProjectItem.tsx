@@ -7,7 +7,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { AgentActivity, LauncherProfile, Project } from "../types";
-import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, PencilIcon, StarIcon, TrashIcon } from "./Icons";
+import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, MapIcon, PencilIcon, StarIcon, TerminalIcon, TrashIcon } from "./Icons";
 import DropdownMenu from "./DropdownMenu";
 import ProfileMenuItems from "./ProfileMenuItems";
 import { useProjectIcon } from "../projectIcons";
@@ -22,6 +22,8 @@ type Props = {
   onToggleExpanded: () => void;
   onSelect: () => void;
   onQuickOpen: (profileId: string) => void;
+  onWorkflow: () => void;
+  onNewShell: () => void;
   onReveal: () => void;
   onCopyPath: () => void;
   onRename: (name: string) => void;
@@ -39,6 +41,8 @@ export default function ProjectItem({
   onToggleExpanded,
   onSelect,
   onQuickOpen,
+  onWorkflow,
+  onNewShell,
   onReveal,
   onCopyPath,
   onRename,
@@ -190,6 +194,14 @@ export default function ProjectItem({
           onClose={() => setMenu(null)}
         >
           <ProfileMenuItems profiles={profiles} onOpen={profileId => runAction(() => onQuickOpen(profileId))} />
+          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => runAction(onWorkflow)}>
+            <span className="context-icon" aria-hidden="true"><MapIcon size={16} /></span>
+            Configurar flujo de agentes…
+          </button>
+          <button type="button" role="menuitem" tabIndex={-1} className="context-item" onClick={() => runAction(onNewShell)}>
+            <span className="context-icon" aria-hidden="true"><TerminalIcon size={16} /></span>
+            Nueva terminal
+          </button>
           <div className="context-sep" role="separator" />
           <button type="button" role="menuitemcheckbox" tabIndex={-1} className="context-item" aria-checked={!!project.favorite} onClick={() => runAction(onToggleFavorite)}>
             <span className="context-icon" aria-hidden="true"><StarIcon size={16} /></span>

@@ -15,5 +15,6 @@ import "@fontsource-variable/jetbrains-mono";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import App from "./App";
+import "./monochrome.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<App />);

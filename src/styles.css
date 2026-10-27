@@ -1163,7 +1163,7 @@ body.dragging-sidebar .sidebar {
   backdrop-filter: saturate(180%) blur(20px);
   border-bottom: 1px solid var(--border);
 }
-/* Controles de ventana (⋯ ▣ —), al extremo derecho de la barra. */
+/* Menú y controles de ventana: se desplazan con la barra superior. */
 .window-controls {
   position: relative;
   flex: 0 0 auto;
@@ -1172,6 +1172,19 @@ body.dragging-sidebar .sidebar {
   gap: 2px;
   margin-left: var(--sp-1);
 }
+.window-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  width: 100px;
+  height: 32px;
+  border-radius: 7px;
+  background: transparent;
+}
+.window-actions > .window-btn { width: 32px; height: 32px; flex: 0 0 32px; color: var(--text-muted); }
+.window-actions > .window-btn:hover { color: var(--text); }
+.window-actions > .window-btn[data-window-action="close"]:hover { background: var(--danger-bg); color: var(--danger); }
 .window-btn {
   width: 28px;
   height: 28px;

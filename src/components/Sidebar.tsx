@@ -54,6 +54,8 @@ type Props = {
   onAdd: () => void;
   onSelect: (projectId: string) => void;
   onQuickOpen: (projectId: string, profileId: string) => void;
+  onWorkflow: (projectId: string) => void;
+  onNewShell: (projectId: string) => void;
   onSelectSession: (projectId: string, tabId: string) => void;
   onCloseSession: (tabId: string, trigger: HTMLElement) => void;
   onRenameSession: (tabId: string, name: string) => void;
@@ -91,6 +93,8 @@ export default function Sidebar({
   onAdd,
   onSelect,
   onQuickOpen,
+  onWorkflow,
+  onNewShell,
   onSelectSession,
   onCloseSession,
   onRenameSession,
@@ -251,6 +255,15 @@ export default function Sidebar({
                   profiles={profiles}
                   onQuickOpen={profileId => {
                     onQuickOpen(project.id, profileId);
+                    expandProject(project.id);
+                    if (peek) reveal.hide();
+                  }}
+                  onWorkflow={() => {
+                    onWorkflow(project.id);
+                    if (peek) reveal.hide();
+                  }}
+                  onNewShell={() => {
+                    onNewShell(project.id);
                     expandProject(project.id);
                     if (peek) reveal.hide();
                   }}

@@ -88,6 +88,12 @@ switching models reprojects the saved references; missing images never cause
 the tool to repeat. Videos remain opaque broker artifact references. See the
 protocol for artifact/event fields and operation cancellation semantics.
 
+Servers and watches can use `shell({command,background:true})`. They remain
+available between model turns; `process_list`, `process_output`, and
+`process_stop` inspect or stop individual owned terminals. The desktop exposes
+their count, recent output and stop control in the chat, including team members.
+Closing this CLI stops its managed terminals. Restore does not restart them.
+
 All tests use temporary workspaces and loopback mock providers. No real API key
 or paid completion is needed. Windows binary and offline transport behavior are
 tested here; Linux/macOS secure-storage runtime behavior requires their native

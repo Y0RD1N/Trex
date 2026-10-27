@@ -25,7 +25,7 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
 
   return <>
     <div className="settings-block">
-      <h4 id={`${id}-palettes`}>Paleta de colores</h4>
+      <h4 id={`${id}-palettes`}>Colores del terminal</h4>
       <div className="design-palette-grid" role="group" aria-labelledby={`${id}-palettes`}>
         {PALETTES.map(palette => {
           const variant = palette[mode];
@@ -43,7 +43,7 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
           </button>;
         })}
       </div>
-      <p className="settings-note">Cada paleta combina los fondos, el texto, la selección y los colores del terminal, en claro y oscuro.</p>
+      <p className="settings-note">La interfaz mantiene sus tonos neutros y un único acento. Estas paletas conservan los colores ANSI del terminal, en claro y oscuro.</p>
     </div>
 
     <div className="settings-block">

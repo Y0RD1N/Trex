@@ -5,8 +5,7 @@ import { ACCENT_PRESETS, DEFAULT_FONT_FAMILY, clamp } from "../api";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
-import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, InfoIcon, KeyboardIcon, MaximizeIcon, MinimizeIcon, MoonIcon, PanelIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
-import { minimizeWindow, toggleMaximizeWindow } from "../window";
+import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, InfoIcon, KeyboardIcon, MoonIcon, PanelIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
 import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
 import CursorSettings from "./CursorSettings";
@@ -202,24 +201,11 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
       inert={leaving} aria-hidden={leaving || undefined}
       onMouseDown={event => { if (event.target === event.currentTarget) requestClose(); }}>
       <div ref={modalRef} data-motion-surface className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onKeyDown={trapFocus}>
-        <header className="modal-header" data-tauri-drag-region="deep">
-          <div className="settings-heading" data-tauri-drag-region>
-            <span className="settings-heading-icon" aria-hidden="true" data-tauri-drag-region><GearIcon size={21} /></span>
-            <div className="modal-heading" data-tauri-drag-region>
-              <h2 className="modal-title" id={`${id}-title`} data-tauri-drag-region>Ajustes</h2>
-              <p className="modal-subtitle" data-tauri-drag-region>Tu espacio, a tu manera</p>
-            </div>
-          </div>
-          <div className="settings-header-actions">
-            <button type="button" className="icon-btn settings-window-control" aria-label="Minimizar ventana" title="Minimizar ventana" onClick={minimizeWindow}><MinimizeIcon size={16} /></button>
-            <button type="button" className="icon-btn settings-window-control" aria-label="Maximizar o restaurar ventana" title="Maximizar o restaurar ventana" onClick={toggleMaximizeWindow}><MaximizeIcon size={16} /></button>
-            <span className="settings-header-divider" aria-hidden="true" />
-            <button ref={closeButtonRef} type="button" className="icon-btn" disabled={profileBusy} aria-label="Cerrar ajustes" title="Cerrar (Esc)" onClick={event => requestClose(event.currentTarget)}><CloseIcon size={17} /></button>
-          </div>
-        </header>
+        <button ref={closeButtonRef} type="button" className="icon-btn settings-close" disabled={profileBusy} aria-label="Cerrar ajustes" title="Cerrar (Esc)" onClick={event => requestClose(event.currentTarget)}><CloseIcon size={18} /></button>
 
         <div className="settings-layout">
           <div className="settings-sidebar">
+            <div className="settings-sidebar-heading"><span aria-hidden="true"><GearIcon size={19} /></span><h2 id={`${id}-title`}>Ajustes</h2></div>
             {compact ? <Select className="settings-section-select" aria-label="Sección de ajustes" align="start" value={section}
               options={SECTIONS.map(item => ({ value: item.id, label: item.label, icon: item.icon }))}
               onChange={value => setSection(value as SectionId)} />
@@ -242,8 +228,16 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
           <div className="settings-content">
             {SECTIONS.map(item => <section key={item.id} hidden={section !== item.id} className={`settings-page settings-page-${item.id}${item.id === "terminal" || item.id === "cursor" ? " settings-terminal-page" : ""}`} role="tabpanel" tabIndex={0} id={`${id}-panel-${item.id}`} aria-labelledby={compact ? undefined : `${id}-tab-${item.id}`} aria-label={compact ? item.label : undefined}>
               <div className="settings-page-heading">
-                <h3>{item.label}</h3>
-                <p>{item.description}</p>
+                <div className="settings-page-title"><h3>{item.label}</h3><p>{item.description}</p></div>
+                {section === item.id && (dirty || profileBusy || profileError || shortcutError || !validHistory) && <div className="settings-inline-actions">
+                  <div className="settings-save-status" aria-live="polite">
+                    {profileBusy ? "Guardando la conexión…" : profileError ? <button type="button" className="settings-error-link" onClick={() => setSection("profiles")}>{profileError}</button>
+                      : shortcutError ? <button type="button" className="settings-error-link" onClick={() => setSection("shortcuts")}>{shortcutError}</button>
+                      : !validHistory ? <button type="button" className="settings-error-link" onClick={reviewHistory}>Revisa el historial del terminal</button>
+                      : <><span className="settings-dirty-dot" aria-hidden="true" />Cambios sin guardar</>}
+                  </div>
+                  <button type="button" className="btn btn-primary settings-save" disabled={profileBusy || !dirty || !validHistory || !!profileError || !!shortcutError} onClick={save}><CheckIcon size={15} />Guardar cambios</button>
+                </div>}
               </div>
 
               {item.id === "appearance" && <>
@@ -365,18 +359,6 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
           </div>
         </div>
 
-        <footer className="settings-footer">
-          <div className="settings-save-status" aria-live="polite">
-            {profileBusy ? "Guardando la conexión en Trex CLI…" : profileError ? <button type="button" className="settings-error-link" onClick={() => setSection("profiles")}>{profileError}</button>
-              : shortcutError ? <button type="button" className="settings-error-link" onClick={() => setSection("shortcuts")}>{shortcutError}</button>
-              : !validHistory ? <button type="button" className="settings-error-link" onClick={reviewHistory}>Revisa el historial del terminal</button>
-              : <><span className={dirty ? "settings-dirty-dot" : "settings-clean-dot"} aria-hidden="true" />{dirty ? "Cambios sin guardar" : "Sin cambios pendientes"}</>}
-          </div>
-          <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" disabled={profileBusy} onClick={event => requestClose(event.currentTarget)}>Cerrar</button>
-            <button type="button" className="btn btn-primary" disabled={profileBusy || !dirty || !validHistory || !!profileError || !!shortcutError} onClick={save}>Guardar cambios</button>
-          </div>
-        </footer>
       </div>
     </div>
   );

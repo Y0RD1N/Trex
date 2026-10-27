@@ -584,44 +584,55 @@ fn plan_rejects_unadvertised_write_and_shell_then_delivers_a_final_plan() {
 
 #[test]
 fn visible_plan_is_durable_and_available_without_write_permissions() {
-    let f = Fixture::new();
-    let mut agent = f.agent();
-    let started = agent.start(f.workspace.path(), "plan", None);
-    let session = started["sessionId"].as_str().unwrap().to_string();
-    agent.turn(
-        &session,
-        "visible-plan",
-        "Inspect and maintain a task list.",
-    );
-    let request = f.api.chat();
-    assert!(request.body["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["function"]["name"] == "update_plan"));
-    let plan = json!({"plan":[{"step":"Inspect files","status":"completed"},{"step":"Validate the approach","status":"in_progress"}]});
-    request.completion(
-        calls(vec![tool("publish-plan", "update_plan", plan.clone())]),
-        "tool_calls",
-    );
-    f.api
-        .chat()
-        .final_text("The task list is visible; no files were modified.");
-    agent.completed("visible-plan", "completed");
-    agent.assert_no_event("permission/request");
-    let history = agent.history(&session);
-    assert!(history["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["name"] == "update_plan"
-            && item["input"] == plan
-            && item["status"] == "done"));
-    drop(agent);
-    let mut restored = f.agent();
-    let summary = restored.start(f.workspace.path(), "plan", Some(&session));
-    assert_eq!(summary["items"], history["items"]);
-    f.api.assert_quiet();
+    for mode in ["plan", "ask", "full"] {
+        let f = Fixture::new();
+        let mut agent = f.agent();
+        let started = agent.start(f.workspace.path(), mode, None);
+        assert_eq!(started["mode"], mode);
+        let session = started["sessionId"].as_str().unwrap().to_string();
+        agent.turn(
+            &session,
+            "visible-plan",
+            "Inspect and maintain a task list.",
+        );
+        let request = f.api.chat();
+        assert!(request.body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "update_plan"));
+        let plan = json!({"plan":[{"step":"Inspect files","status":"completed"},{"step":"Validate the approach","status":"in_progress"}]});
+        request.completion(
+            calls(vec![tool("publish-plan", "update_plan", plan.clone())]),
+            "tool_calls",
+        );
+        let finished = json!({"plan":[{"step":"Inspect files","status":"completed"},{"step":"Validate the approach","status":"completed"}]});
+        f.api.chat().completion(
+            calls(vec![tool("finish-plan", "update_plan", finished.clone())]),
+            "tool_calls",
+        );
+        f.api
+            .chat()
+            .final_text("The task list is visible; no files were modified.");
+        agent.completed("visible-plan", "completed");
+        agent.assert_no_event("permission/request");
+        let history = agent.history(&session);
+        let updates: Vec<_> = history["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["name"] == "update_plan" && item["status"] == "done")
+            .map(|item| item["input"].clone())
+            .collect();
+        assert_eq!(updates, vec![plan, finished], "mode={mode}");
+        assert_eq!(history["mode"], mode);
+        drop(agent);
+        let mut restored = f.agent();
+        let summary = restored.start(f.workspace.path(), mode, Some(&session));
+        assert_eq!(summary["items"], history["items"]);
+        assert_eq!(summary["mode"], mode);
+        f.api.assert_quiet();
+    }
 }
 #[test]
 fn ask_defers_mutation_until_permission_and_denial_does_not_write() {
@@ -1148,6 +1159,8 @@ fn inbox_rejects_partial_snapshots_and_commits_receipts_before_ack_without_doubl
     f.api.assert_quiet();
 }
 
+#[path = "background_cases/mod.rs"]
+mod background_cases;
 #[path = "browser_cases/mod.rs"]
 mod browser_cases;
 #[path = "team_cases/mod.rs"]
