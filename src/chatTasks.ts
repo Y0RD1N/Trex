@@ -10,7 +10,26 @@ export const TASK_STATES: Record<TaskState, string> = { pending: "Pendiente", in
 /** Task tracking is independent of the chat's permissions or planning workflow. */
 export function taskInstructions(provider: AgentProvider): string {
   const tools = provider === "claude" ? "TodoWrite or TaskCreate/TaskUpdate" : "update_plan";
-  return `For work with multiple meaningful steps, use the available native task tools (${tools}) to publish a short task list and keep its progress current. This works in ordinary chats as well as planning chats. Mark a task in progress when you start it and completed only after verifying its result; keep unfinished work pending. Simple questions and single-step actions do not need a list. Follow the user's task-tracking preferences. Task tracking does not require switching permission modes, creating subagents, or starting a planning workflow. Respect the current permissions and any configured team workflow; use its team-plan tools for delegated work. If task tools are unavailable, say so instead of claiming a list was published.`;
+  return `For work with multiple meaningful steps, use the available native task tools (${tools}) to publish a short task list before starting and update it as you work. This works in ordinary chats as well as planning chats. Mark a task in progress when you start it and completed only after verifying its result; keep unfinished work pending. Review and update the list as work changes and before your final response. Simple questions and single-step actions do not need a list. Follow the user's task-tracking preferences. Task tracking does not require switching permission modes, creating subagents, or starting a planning workflow. Respect the current permissions and any configured team workflow; use its team-plan tools for delegated work. If task tools are unavailable, say so instead of claiming a list was published.`;
+}
+
+/** Native task IDs belong to one participant's session, not the shared room. */
+export function roomTasks(items: ChatItem[], names: { planner: string; executor: string }): ChatTask[] {
+  const byRole: Record<"planner" | "executor", ChatItem[]> = { planner: [], executor: [] };
+  let latest: "planner" | "executor" | null = null;
+  for (const item of items) {
+    const role = item.id.startsWith("planner::") ? "planner" : item.id.startsWith("executor::") ? "executor" : null;
+    if (!role) continue;
+    // A new request to the planner after execution begins a fresh cycle.
+    // Keep clarifications within the same planning cycle together.
+    if (role === "planner" && item.kind === "user" && byRole.executor.some(entry => entry.kind === "user" || entry.kind === "tool" && entry.status === "done" && ["TodoWrite", "TaskCreate", "TaskUpdate"].includes(entry.name))) {
+      byRole.planner = []; byRole.executor = []; latest = null;
+    }
+    byRole[role].push(item);
+    if (item.kind === "tool" && item.status === "done" && ["TodoWrite", "TaskCreate", "TaskUpdate"].includes(item.name)) latest = role;
+  }
+  if (!latest) return [];
+  return chatTasks(byRole[latest], names[latest]);
 }
 
 /** Only accepted tool results can replace the visible plan. Failed/partial updates cannot finish tasks. */

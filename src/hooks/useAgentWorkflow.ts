@@ -4,6 +4,7 @@ import { completedWorkflowPlan, workflowClarifications, PLANNING_INSTRUCTION, wo
 import type { HandoffContext, HandoffSource, PreparedHandoff } from "../handoff";
 import type { ChatSession } from "./chatSession";
 import { useStableCallback } from "./useStableCallback";
+import { chatTasks } from "../chatTasks";
 
 /** Consume únicamente resultados de envíos vivos. Recuperar historial no pone en marcha el ejecutor. */
 export function useAgentWorkflow({ workflow, session, source, original, handoffPending, busy, onPlan, onStatus }: {
@@ -28,7 +29,9 @@ export function useAgentWorkflow({ workflow, session, source, original, handoffP
     const plan = completedWorkflowPlan(session.state.items, completion);
     if (!plan) return null;
     const request = original.content.split("\n\n---\n## Estado del proyecto capturado por TREX\n")[0];
-    return workflowPlanContext(plan, `${request}\n\n## Aclaraciones del usuario\n${workflowClarifications(session.state.items) || "Sin aclaraciones adicionales."}`, source);
+    const ids = new Set(completion.itemIds);
+    const tasks = chatTasks(session.state.items.filter(item => ids.has(item.id)), source.profileName);
+    return workflowPlanContext(plan, `${request}\n\n## Aclaraciones del usuario\n${workflowClarifications(session.state.items) || "Sin aclaraciones adicionales."}`, source, tasks);
   };
 
   useEffect(() => {

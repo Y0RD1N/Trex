@@ -8,7 +8,7 @@ import { load } from "./ts-loader.mjs";
 // scheduler/JSX, DOM surfaces, queue storage and native process IPC are mocked.
 const names = ["agentRoom", "agentWorkflow", "handoff", "chatState", "chatMessages", "chatCommands", "chatQuestions",
   "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "agentNotices",
-  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks"];
+  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));
 const sources = {
   stable: "hooks/useStableCallback.ts", workflow: "hooks/useAgentWorkflow.ts", trex: "hooks/useTrexChat.ts",
@@ -421,6 +421,12 @@ function roomHarness(t, scenario = {}) {
   const renderPanel = () => { tree = panelHost.render(() => ChatPanel(panelProps)); return tree; };
   renderPanel();
   return { calls, messages, sessions, runtimeQueueIds, get panelProps(){return panelProps;}, get room(){return room;}, renderPanel,
+    publish(role, state) {
+      sessions[role] = { ...sessions[role], state };
+      renderRoom();
+      find(tree, node => typeof node.type === "function" && node.props.role === role && !!node.props.publish).props.publish(role, sessions[role]);
+      renderRoom(); panelProps = find(tree, node => node.type === ChatPanel).props; renderPanel();
+    },
     async pump(){for(let i=0;i<6;i++){await flush();renderRoom();panelProps=find(tree,node=>node.type===ChatPanel).props;renderPanel();}},
     type(value) { find(tree, node => node.type === "textarea").props.onChange({ target: { value, selectionStart: value.length } }); renderPanel(); },
     submit() { find(tree, node => node.type === "form").props.onSubmit({ preventDefault: noop }); renderPanel(); },
@@ -441,6 +447,25 @@ test("newly configured room stays idle until a normal chat message starts its fi
   h.type("Build my idea and prepare a plan");h.submit();await h.pump();
   assert.equal(contexts.length,1);assert.match(contexts[0].content,/Build my idea/);assert.equal(h.room.cycle,1);assert.equal(h.room.phase,"planning");
   const sends=h.calls.filter(call=>call.method==="send");assert.equal(sends.length,1);assert.equal(sends[0].role,"planner");assert.match(sends[0].args[0],/trex_plan/);assert.equal(sends[0].args[3],"Build my idea and prepare a plan");assert.equal(h.draft,"");
+});
+test("a completed planner transfers confirmed tasks and the executor receives instructions to maintain its own list", async t => {
+  const contexts = [], saved = new Map();
+  const h = roomHarness(t, { room: { phase: "idle", cycle: 0 }, api: {
+    prepareHandoff: async context => { const value = { id: `handoff-${contexts.length}`, ...context, sourceLabel: "planner", sourceProvider: "codex", sourceSessionId: "planner", cwd: "D:/test" }; contexts.push(context); saved.set(value.id, value); return value; },
+    loadHandoff: async id => saved.get(id),
+  } });
+  h.type("Implement the feature"); h.submit(); await h.pump();
+  const user = { kind: "user", id: "request", text: "Implement the feature", images: 0, previews: [] };
+  const tasks = { kind: "tool", id: "tasks", name: "TodoWrite", status: "done", input: { todos: [{ content: "Implement", status: "pending" }, { content: "Validate", status: "pending" }] }, output: null, patch: null };
+  const final = { kind: "text", id: "plan", messageId: "answer", text: "<trex_plan>Implement and validate.</trex_plan>", final: true };
+  const state = { ...h.sessions.planner.state, items: [user, tasks, final], lastCompletion: { id: "complete", status: "completed", messageIds: ["request"], itemIds: ["tasks", "plan"] } };
+  h.publish("planner", state); await h.pump();
+  assert.equal(contexts.length, 2);
+  assert.match(contexts[1].content, /\[pending\] Implement/);
+  assert.match(contexts[1].content, /\[pending\] Validate/);
+  const send = h.calls.find(call => call.role === "executor" && call.method === "send");
+  assert.ok(send); assert.match(send.args[0], /publica en tus herramientas de tareas/);
+  assert.deepEqual(h.panelProps.taskPlan.map(task => [task.title, task.owner]), [["Implement", "planner"], ["Validate", "planner"]]);
 });
 test("first chat preparation failure preserves the idea and inherited context without provider delivery",async t=>{
   const h=roomHarness(t,{room:{phase:"idle",cycle:0,setupContext:{id:"prior",pending:false,sourceLabel:"Earlier"}},api:{loadHandoff:async()=>({content:"Retained earlier discussion"}),prepareHandoff:async()=>{throw new Error("Preparation unavailable");}}});

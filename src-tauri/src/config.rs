@@ -50,6 +50,7 @@ pub struct LauncherProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub desktop_enabled: bool,
     pub browser_enabled: bool,
     pub browser_profile: String,
     pub profiles: Vec<LauncherProfile>,
@@ -87,6 +88,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            desktop_enabled: false,
             browser_enabled: true,
             browser_profile: "BROWSER1".into(),
             // Vacío indica al frontend que debe migrar la instalación anterior.
@@ -140,9 +142,19 @@ mod browser_preference_tests {
         }
     }
     #[test]
+    fn desktop_access_is_opt_in_and_roundtrips() {
+        for enabled in [false, true] {
+            let config: AppConfig = serde_json::from_value(serde_json::json!({"settings":{"desktopEnabled":enabled}})).unwrap();
+            assert_eq!(config.settings.desktop_enabled, enabled);
+            let saved = serde_json::to_value(config).unwrap();
+            assert_eq!(saved["settings"]["desktopEnabled"], enabled);
+        }
+    }
+    #[test]
     fn older_configuration_uses_the_frontend_browser_defaults() {
         let config:AppConfig=serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
         assert!(config.settings.browser_enabled);assert_eq!(config.settings.browser_profile,"BROWSER1");
+        assert!(!config.settings.desktop_enabled);
     }
 }
 

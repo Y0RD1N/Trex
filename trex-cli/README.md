@@ -70,6 +70,37 @@ Desktop integrations launch `trex-agent --profile NAME app-server`. See
 [PROTOCOL.md](PROTOCOL.md) for the complete version 1 JSON-RPC wire contract,
 image/inbox receipts, profile management, recovery, and tool boundaries.
 
+Trex API exposes structured GitHub CLI tools to list repositories and pull
+requests, inspect a PR, create a PR and merge a specified PR. Creating or
+merging follows the session's mutation permissions; merge requires the reviewed
+head SHA. Interrupted or uncertain writes require review before continuing.
+The user's existing `gh` authentication is used and credentials are not printed.
+
+`blender_run` executes an existing workspace Python script in a new background
+Blender process, optionally opening a workspace `.blend` file. It does not
+connect to an already-open Blender window. `hyperframes_run` uses a local or
+global installed CLI to lint, snapshot or render in the project; it does not
+install packages. Both tools require the session's normal mutation permissions
+and are unavailable in planning mode. Check the returned exit status and files.
+
+Desktop access is separately opt-in: `session/start` accepts `desktopEnabled:true`.
+The grant lasts only for that live session, and reopening without the flag revokes
+it. Capture is available in planning mode; clicks, drag, scrolling, text and key
+shortcuts follow normal mutation permissions and require confirmed model vision
+and a fresh, one-use screenshot observation. The X11 implementation is tested
+in an isolated virtual display. Wayland is explicitly rejected. Windows capture
+and input are implemented for the primary monitor but have not yet been tested
+on Windows; elevated windows and multi-monitor/DPI behavior are not guaranteed.
+Screenshots are private artifacts and are sent to the model provider when vision
+is confirmed. Close active sessions to revoke their existing desktop access.
+
+Claude Code and Codex can use a separate MCP process (`desktop-mcp --mode plan`
+or `--mode full`). Its mode is fixed at startup; the app reconnects it when the
+permission class changes. The planning mode advertises and executes only screen
+capture. Input tools use the host agent's approval policy. MCP request IDs are
+deduplicated for the lifetime of the process; screenshot bytes are not retained
+in the replay cache. A fresh screenshot is required after each input.
+
 Optional Trex Browser integration is explicitly enabled per app-server session:
 `session/start` accepts `browser:{enabled:true,profile:"BROWSER1",clientId:"stable-tab-or-room-id"}`.
 Omission keeps browser tools off, including after restore. The CLI discovers a

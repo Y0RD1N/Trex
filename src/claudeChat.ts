@@ -19,6 +19,7 @@ import { imageReference, withoutImageLabels } from "./imageReferences";
 import { questionInstructions } from "./chatQuestions";
 import { INBOX_INSTRUCTIONS } from "./messageQueue";
 import { taskInstructions } from "./chatTasks";
+import { integrationInstructions } from "./integrations";
 
 export type ChatAction =
   | BaseChatAction
@@ -51,7 +52,7 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
   if (!restricted && !/(^|\s)--(allow-)?dangerously-skip-permissions(\s|=|$)/.test(profileArgs ?? "")) flags.push("--allow-dangerously-skip-permissions");
   // Instrucciones de la interfaz, salvo que el perfil ya defina las del sistema.
   if (!/(^|\s)--(append-)?system-prompt(-file)?(\s|=|$)/.test(profileArgs ?? "")) {
-    flags.push("--append-system-prompt", `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("claude")} ${INBOX_INSTRUCTIONS} ${taskInstructions("claude")}`);
+    flags.push("--append-system-prompt", `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("claude")} ${INBOX_INSTRUCTIONS} ${taskInstructions("claude")} ${integrationInstructions("claude")}`);
   }
   const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
   if (conversationId && !choosesConversation) flags.push("--resume", conversationId);
@@ -196,8 +197,8 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
       items[index] = { ...current, status: block.is_error === true ? "error" : "done",
         input: answers ? { ...current.input, answers, ...(response ? { response } : {}) }
           : toolResult?.type === "create" ? { ...current.input, changeKind: "add" } : current.input,
-        output: answers ? answerText(answers) : current.name.startsWith("mcp__trex_browser__") ? browserToolResultText(block.content) : resultText(block.content),
-        ...(current.name.startsWith("mcp__trex_browser__") ? { artifacts: browserResultArtifacts({ content: block.content }) } : {}),
+        output: answers ? answerText(answers) : (current.name.startsWith("mcp__trex_browser__") || current.name.startsWith("mcp__trex_desktop__")) ? browserToolResultText(block.content) : resultText(block.content),
+        ...((current.name.startsWith("mcp__trex_browser__") || current.name.startsWith("mcp__trex_desktop__")) ? { artifacts: browserResultArtifacts({ content: block.content }) } : {}),
         patch: patchLines(toolResult?.structuredPatch) ?? current.patch };
     } else if (block.type === "text") {
       const value = text(block.text);

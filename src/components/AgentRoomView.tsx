@@ -4,6 +4,7 @@ import { formatError, loadHandoff, prepareHandoff } from "../api";
 import { mergeRoomItems, roomConversationContext, roomQueueAddress, roomQueueSnapshot, routeRoomMessage, type AgentRoom, type RoomRole } from "../agentRoom";
 import { completedWorkflowPlan, IMPLEMENTATION_INSTRUCTION, PLANNING_INSTRUCTION, workflowClarifications, workflowPlanContext } from "../agentWorkflow";
 import { chatActivity, conversationTitle, effortLabel, initialChatState, supportedEfforts, type ChatState, type OutgoingImage } from "../chatState";
+import { chatTasks, roomTasks } from "../chatTasks";
 import { buildHandoffPrompt, handoffAlreadySent, sanitizeHandoffText, type HandoffSource, type PreparedHandoff } from "../handoff";
 import { type ChatSession, type ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
@@ -54,6 +55,7 @@ const noop = (): void => undefined;
 export default function AgentRoomView(props: AgentRoomViewProps) {
   const { room } = props;
   const browser = useRef(browserOptions(props.settings, room.id)).current;
+  const desktopEnabled = useRef(props.settings.desktopEnabled).current;
   const latest = useRef(props);
   latest.current = props;
   const roomRef = useRef(room);
@@ -264,7 +266,8 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
           if (!request || request.cycle !== cycle) throw new Error("Falta la solicitud de este ciclo. Revisa el contexto antes de reanudar.");
           const clarifications = workflowClarifications(session.state.items.slice(request.start));
           const requestText = request.prepared.content.split("\n\n---\n## Estado del proyecto capturado por TREX\n")[0];
-          const context = workflowPlanContext(plan, `${requestText}\n\n## Aclaraciones del usuario\n${clarifications || "Sin aclaraciones adicionales."}`, source("planner"));
+          const tasks = chatTasks(session.state.items.slice(request.start), roomRef.current.planner.agent.profileName);
+          const context = workflowPlanContext(plan, `${requestText}\n\n## Aclaraciones del usuario\n${clarifications || "Sin aclaraciones adicionales."}`, source("planner"), tasks);
           const prepared = await prepareHandoff(context);
           if (!currentOperation(token, cycle) || roomRef.current.phase !== "transferring") return;
           if (anyQueued()) {
@@ -408,6 +411,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
   const itemLabels = Object.fromEntries(Object.entries(merged.owners).map(([id, owner]) => [id, {
     provider: room[owner.role].agent.provider, label: `${ROLE_NAMES[owner.role]} · ${room[owner.role].agent.profileName}`,
   }]));
+  const roomTaskPlan = roomTasks(merged.items, { planner: room.planner.agent.profileName, executor: room.executor.agent.profileName });
 
   const toolbar = <div className="agent-room-toolbar">
     <div className="agent-room-participants" aria-label="Participantes de la conversación">
@@ -542,7 +546,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     {ROLES.map(role => {
       const participant = room[role], launch = participant.agent.launch;
       const options: ChatSessionOptions = {
-      browser, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
+      browser, desktopEnabled, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort,
         mode: role === "planner" ? "plan" : participant.mode ?? (participant.agent.provider === "claude" ? "default" : "auto"),
         planningOnly: role === "planner", visible: props.visible,
@@ -554,7 +558,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     })}
     {aggregate ? <ChatPanel {...props} browser={browser} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}
       profileName={room[room.active].agent.profileName} conversationId={room[room.active].conversationId}
-      terminalOwners={ROLES.flatMap(role=>{const session=sessions[role]?.terminals;return session?[{id:role,label:room[role].agent.profileName+" · "+(role==="planner"?"Planificación":"Implementación"),provider:room[role].agent.provider,session}]:[];})} session={aggregate} toolbar={toolbar} composerLead={composerLead} itemLabels={itemLabels} inputLocked={lock}
+      terminalOwners={ROLES.flatMap(role=>{const session=sessions[role]?.terminals;return session?[{id:role,label:room[role].agent.profileName+" · "+(role==="planner"?"Planificación":"Implementación"),provider:room[role].agent.provider,session}]:[];})} session={aggregate} toolbar={toolbar} composerLead={composerLead} itemLabels={itemLabels} taskPlan={roomTaskPlan} taskAuthor={roomTaskPlan[0]?.owner ?? room[room.active].agent.profileName} inputLocked={lock}
       emptyState={{title:"Tu flujo está listo",description:"Escribe tu idea en este chat. Primero se preparará el plan y después el ejecutor lo implementará; aquí podrás conversar con ambos.",
         participants:ROLES.map(role=>({id:role,name:room[role].agent.profileName,role:role==="planner"?"Planificación · solo lectura":"Implementación",provider:room[role].agent.provider,model:room[role].agent.model,effort:room[role].agent.effort}))}}
       composerPlaceholder={room.active==="planner"?"Escribe tu idea para preparar el plan…":"Escribe una indicación para el ejecutor…"}

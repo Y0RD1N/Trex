@@ -143,6 +143,8 @@ struct Journal {
     browser: BrowserConfig,
     #[serde(skip)]
     browser_available: bool,
+    #[serde(skip)]
+    desktop_enabled: bool,
 }
 
 struct Active {
@@ -319,6 +321,7 @@ impl Server {
         let context = self.context_window(&data.model).await;
         let mut summary = json!({"sessionId":data.id,"conversationId":data.id,"model":data.model,"effort":data.effort,"mode":data.mode,"items":data.items,"recoveryRequired":data.recovery_required,"contextWindow":context.map(|(window, _)| window),"contextWindowSource":context.map(|(_, source)| source)});
         summary["browser"] = json!({"enabled":data.browser.enabled,"available":data.browser_available,"profile":data.browser.profile,"clientId":data.browser.client_id.as_deref().unwrap_or(&data.id)});
+        summary["desktopEnabled"] = json!(data.desktop_enabled);
         summary["imageSupport"] = json!(self.image_support(&data.model).await);
         if !data.turns.is_empty() || !data.items.is_empty() || !data.messages.is_empty() {
             let (mut usage, _) = restored_usage(data);
@@ -377,6 +380,11 @@ impl Server {
             "roleInstructions exceeds 8 KiB"
         );
         let browser = BrowserConfig::parse(params.get("browser"))?;
+        let desktop_enabled = match params.get("desktopEnabled") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(value)) => *value,
+            _ => bail!("desktopEnabled must be a boolean"),
+        };
         let cwd = fs::canonicalize(required(params, "cwd")?)
             .context("cwd must be an existing directory")?;
         ensure!(cwd.is_dir(), "cwd must be a directory");
@@ -396,6 +404,7 @@ impl Server {
                 data.mode == requested_mode,
                 "mode is fixed for this live session; restart the process to change mode"
             );
+            ensure!(data.desktop_enabled == desktop_enabled, "desktop configuration is fixed for this live session; restart the process to change it");
             ensure!(data.browser == browser, "browser configuration is fixed for this live session; restart the process to change it");
             ensure!(
                 session.tools.team_config() == &team,
@@ -486,12 +495,14 @@ impl Server {
                 rejected_responses: vec![],
                 browser: BrowserConfig::default(),
                 browser_available: false,
+                desktop_enabled: false,
             }
         };
         let browser_provider = BrowserToolProvider::discover(&browser, &id, &data.mode)
             .await
             .ok()
             .flatten();
+        data.desktop_enabled = desktop_enabled;
         data.browser = browser;
         data.browser_available = browser_provider.is_some();
         let session = Arc::new(Session {
@@ -519,9 +530,11 @@ impl Server {
                 rejected_responses: vec![],
                 browser: BrowserConfig::default(),
                 browser_available: false,
+                desktop_enabled: false,
             }),
             active: Mutex::new(None),
             tools: tools::ToolRegistry::new(browser_provider)
+                .with_desktop(desktop_enabled)
                 .with_team(team.clone())
                 .with_role_instructions(role_instructions.clone()),
         });
@@ -722,7 +735,8 @@ impl Server {
                     data.messages.clone(),
                 )
             };
-            messages = provider::project_history(&messages, self.image_support(&model).await);
+            let image_support = self.image_support(&model).await;
+            messages = provider::project_history(&messages, image_support);
             let mut policy = system_prompt(&mode);
             if let Some(instructions) = session.tools.role_instructions() {
                 policy.push_str(
@@ -731,7 +745,15 @@ impl Server {
                 policy.push_str(instructions);
             }
             messages.insert(0, json!({"role":"system","content":policy}));
-            let definitions = session.tools.definitions(&mode);
+            let mut definitions = session.tools.definitions(&mode);
+            // A model must be able to inspect a screenshot before it can act on it.
+            if image_support != Some(true) {
+                definitions.retain(|tool| {
+                    !tool["function"]["name"].as_str().is_some_and(|name| {
+                        name.starts_with("desktop_") && name != "desktop_screenshot"
+                    })
+                });
+            }
             {
                 let mut data = session.data.lock().await;
                 let cleared = data
@@ -1023,7 +1045,9 @@ impl Server {
                         .await;
                     let (output, is_error) = match result {
                         Ok(output) => {
-                            let output = if name.starts_with("browser_") {
+                            let output = if name.starts_with("browser_")
+                                || name == "desktop_screenshot"
+                            {
                                 let client_id = session
                                     .data
                                     .lock()
@@ -1032,10 +1056,19 @@ impl Server {
                                     .client_id
                                     .clone()
                                     .unwrap_or_else(|| session_id.clone());
-                                artifacts::normalize_tool_result(
+                                let normalized = artifacts::normalize_tool_result(
                                     output,
                                     json!({"toolName":name,"toolCallId":provider_id,"operationId":operation_id,"clientId":client_id}),
-                                )?
+                                )?;
+                                if name == "desktop_screenshot"
+                                    && normalized["artifacts"]
+                                        .as_array()
+                                        .is_none_or(|items| items.is_empty())
+                                {
+                                    // Never accept input for a capture the model could not receive.
+                                    session.tools.invalidate_observation();
+                                }
+                                normalized
                             } else {
                                 output
                             };
@@ -1044,6 +1077,18 @@ impl Server {
                         }
                         Err(error)
                             if error.downcast_ref::<ExecutionUncertain>().is_some()
+                                || error
+                                    .downcast_ref::<crate::desktop::DesktopUncertain>()
+                                    .is_some()
+                                || error
+                                    .downcast_ref::<crate::github::GithubUncertain>()
+                                    .is_some()
+                                || error
+                                    .downcast_ref::<crate::blender::BlenderUncertain>()
+                                    .is_some()
+                                || error
+                                    .downcast_ref::<crate::hyperframes::HyperframesUncertain>()
+                                    .is_some()
                                 || error
                                     .downcast_ref::<crate::team::DelegationUncertain>()
                                     .is_some() =>

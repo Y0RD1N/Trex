@@ -28,6 +28,14 @@ const base = await declarations("./queue-send-now.test.mjs", ["harness", "flush"
     ['claudeRewindPoint: async () => null },', 'claudeRewindPoint: async () => null, ...extra.api },'],
     ['extra.planningOnly ? "plan" : "default", commands:',
       'extra.nativePermissionMode ? extra.nativePermissionMode(spawns.find(spawn => spawn.id === request.process)?.request, request) : (extra.planningOnly ? "plan" : "default"), commands:'],
+    ['response: { current_permission_mode:', `response: request.request?.subtype === "mcp_status" ? (() => {
+      if (extra.desktopStatus) return extra.desktopStatus;
+      const flags=spawns.find(spawn=>spawn.id===request.process)?.request.flags ?? [], i=flags.indexOf("--mcp-config");
+      const config=i>=0?JSON.parse(flags[i+1]).mcpServers.trex_desktop:null;
+      const mode=config?.args?.at(-1);
+      const names=mode==="plan"?["desktop_screenshot"]:["desktop_screenshot","desktop_click","desktop_drag","desktop_scroll","desktop_type","desktop_key"];
+      return {mcpServers:config?[{name:"trex_desktop",status:"connected",serverInfo:{name:"trex-desktop"},config,tools:names.map(name=>({name}))}]:[]};
+    })() : { current_permission_mode:`],
     ['models: [{ id: "offline-model", efforts: ["high", "max"] }]', 'models: extra.models ?? [{ id: "offline-model", efforts: ["high", "max"] }]'],
     ['writes, spawns, actions, queueCalls, queue, clock, line, respond, controlResponse, render, unmount,',
       'options, writes, spawns, actions, queueCalls, queue, clock, line, respond, controlResponse, render, unmount,'],
@@ -929,4 +937,78 @@ test("Claude: current mode rejection still restores the prior native and browser
   const flags = h.spawns[1].request.flags;
   assert.equal(flags[flags.indexOf("--permission-mode") + 1], "default");
   assertBrowser(h, "claude", "qa");
+});
+
+for (const provider of ["claude", "codex"]) test(`${provider}: desktop MCP binds to permission mode and reconnects for planning`, async t => {
+  const calls = [];
+  const h = harness(t, provider, {
+    browser: { ...browser, enabled: false }, desktopEnabled: true,
+    api: { trexDesktopMcpConfig: async mode => { calls.push(mode); return { command: "C:\\Trex\\trex-agent.exe", args: ["desktop-mcp", "--mode", mode === "observe" ? "plan" : "full"] }; } },
+    mcpStatus: { data: [{ name: "trex_desktop", runtimeStatus: "connected", tools: Object.fromEntries(["desktop_screenshot", "desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"].map(name => [name, { name }])) }] },
+  });
+  await h.ready();
+  assert.deepEqual(calls, ["qa"]);
+  if (provider === "claude") {
+    const flags=h.spawns[0].request.flags, config=JSON.parse(flags[flags.indexOf("--mcp-config")+1]);
+    assert.deepEqual(config.mcpServers.trex_desktop.args, ["desktop-mcp", "--mode", "full"]);
+  } else {
+    const config=h.writes.find(write => write.method === "thread/start").params.config;
+    assert.equal(config["mcp_servers.trex_desktop.required"], true);
+    assert.equal(config["mcp_servers.trex_desktop.default_tools_approval_mode"], "prompt");
+    assert.ok(h.writes.some(write => write.method === "mcpServerStatus/list" && write.params.serverName === "trex_desktop"));
+  }
+  if (provider === "codex") for (const name of ["desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"]) delete h.options.mcpStatus.data[0].tools[name];
+  h.session.setMode("plan");
+  assert.equal(await send(h), true);
+  assert.deepEqual(calls, ["qa", "observe"]);
+  assert.equal(h.spawns.length, 2);
+  if (provider === "claude") {
+    const flags=h.spawns[1].request.flags, config=JSON.parse(flags[flags.indexOf("--mcp-config")+1]);
+    assert.deepEqual(config.mcpServers.trex_desktop.args, ["desktop-mcp", "--mode", "plan"]);
+  } else {
+    const config=h.writes.filter(write => ["thread/start", "thread/resume"].includes(write.method)).at(-1).params.config;
+    assert.deepEqual(config["mcp_servers.trex_desktop.args"], ["desktop-mcp", "--mode", "plan"]);
+  }
+});
+
+for (const provider of ["claude", "codex"]) test(`${provider}: desktop screenshot bytes are not exposed in the chat transcript`, async t => {
+  const h=harness(t,provider); await h.ready(); assert.equal(await send(h),true); h.render();
+  if (provider === "claude") {
+    h.line({ type:"assistant",uuid:"desktop-message",message:{id:"desktop-message",content:[{type:"tool_use",id:"desktop-tool",name:"mcp__trex_desktop__desktop_screenshot",input:{}}]}});
+    h.line({type:"user",message:{content:[{type:"tool_result",tool_use_id:"desktop-tool",content:imageResult.content}]}});
+  } else {
+    h.line({method:"item/completed",params:{threadId:h.conversation,turnId:h.turn,item:{type:"mcpToolCall",id:"desktop-tool",server:"trex_desktop",tool:"desktop_screenshot",arguments:{},status:"completed",result:imageResult}}});
+  }
+  const item=h.state.items.find(item=>item.kind==="tool"&&item.id==="desktop-tool");
+  assert.ok(item); assert.doesNotMatch(JSON.stringify(item),new RegExp(imageBytes));
+});
+
+test("Codex planner refuses a desktop server that advertises input tools", async t => {
+  const h = harness(t, "codex", { browser: { ...browser, enabled: false }, desktopEnabled: true, planningOnly: true,
+    api: { trexDesktopMcpConfig: async () => ({ command: "trex-agent", args: ["desktop-mcp", "--mode", "plan"] }) },
+    mcpStatus: { data: [{ name: "trex_desktop", runtimeStatus: "connected", tools: { desktop_screenshot: {}, desktop_click: {} } }] },
+  });
+  assert.equal(await send(h), false);
+  assert.equal(h.userWrites.length, 0);
+});
+
+test("Claude planner refuses a desktop server that advertises input tools", async t => {
+  const h=harness(t,"claude",{browser:{...browser,enabled:false},desktopEnabled:true,planningOnly:true,
+    api:{trexDesktopMcpConfig:async()=>({command:"trex-agent",args:["desktop-mcp","--mode","plan"]})},
+    desktopStatus:{mcpServers:[{name:"trex_desktop",status:"connected",serverInfo:{name:"trex-desktop"},config:{command:"trex-agent",args:["desktop-mcp","--mode","plan"]},tools:[{name:"desktop_screenshot"},{name:"desktop_click"}]}]},
+  });
+  assert.equal(await send(h),false);
+  assert.equal(h.userWrites.length,0);
+  assert.equal(h.nativeKills.length,1);
+});
+
+test("Claude refuses a desktop server from an unexpected executable", async t => {
+  const names=["desktop_screenshot","desktop_click","desktop_drag","desktop_scroll","desktop_type","desktop_key"];
+  const h=harness(t,"claude",{browser:{...browser,enabled:false},desktopEnabled:true,
+    api:{trexDesktopMcpConfig:async()=>({command:"trusted-agent",args:["desktop-mcp","--mode","full"]})},
+    desktopStatus:{mcpServers:[{name:"trex_desktop",status:"connected",serverInfo:{name:"trex-desktop"},config:{command:"different-agent",args:["desktop-mcp","--mode","full"]},tools:names.map(name=>({name}))}]},
+  });
+  assert.equal(await send(h),false);
+  assert.equal(h.userWrites.length,0);
+  assert.equal(h.nativeKills.length,1);
 });

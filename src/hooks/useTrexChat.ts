@@ -4,6 +4,7 @@ import { agentWrite, agentTeamMcpConfig, formatError } from "../api";
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
 import { InboxRequests, INBOX_INSTRUCTIONS, type QueueSnapshot } from "../messageQueue";
 import { taskInstructions } from "../chatTasks";
+import { integrationInstructions } from "../integrations";
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
@@ -134,10 +135,11 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const team = current.team ? await agentTeamMcpConfig(current.team) : null;
       assertStartup(procId);
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
-        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: `${INBOX_INSTRUCTIONS} ${taskInstructions("trex")}`,
+        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: `${INBOX_INSTRUCTIONS} ${taskInstructions("trex")} ${integrationInstructions("trex")}`,
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
-        ...(current.browser ? { browser: current.browser } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
+        desktopEnabled: current.desktopEnabled === true, ...(current.browser ? { browser: current.browser } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
+      if (current.desktopEnabled && result.desktopEnabled !== true) throw new Error("Este Trex CLI no confirmó el control de computadora. Actualiza el CLI antes de activarlo.");
       if (planningOnly && result.mode !== "plan") throw new Error("Trex CLI no confirmó el modo de planificación de solo lectura.");
       if (team && result.teamEnabled !== true) throw new Error("Este Trex CLI no confirmó la delegación. Actualiza el CLI antes de usarlo como agente principal.");
       if (current.planningInstruction && result.rolePolicyApplied !== true) throw new Error("Este Trex CLI no confirmó las instrucciones de la función. Actualiza el CLI antes de iniciar el equipo.");

@@ -17,6 +17,7 @@ mod codex_models;
 mod files;
 mod git;
 mod handoff;
+mod integrations;
 mod message_queue;
 mod queue_mcp;
 mod project_icon;
@@ -361,7 +362,10 @@ pub fn run() {
             agent_terminal_output,
             detect_claude,
             detect_codex,
+            integrations::integration_dependencies,
+            integrations::github_connection_status,
             trex_cli::trex_cli_status,
+            trex_cli::trex_desktop_mcp_config,
             trex_browser::trex_browser_status,
             trex_browser::trex_browser_mcp_config,
             trex_browser::trex_browser_call,

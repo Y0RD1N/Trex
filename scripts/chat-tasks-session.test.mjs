@@ -101,6 +101,10 @@ for (const [provider, choices] of Object.entries(modes)) for (const mode of choi
     assert.match(instructions, /ordinary chats/);
     assert.match(instructions, provider === "claude" ? /TaskCreate\/TaskUpdate/ : /update_plan/);
     assert.match(instructions, /completed only after verifying/);
+    assert.match(instructions, /Blender/);
+    assert.match(instructions, /HyperFrames/);
+    assert.match(instructions, /GitHub/);
+    assert.match(instructions, /never execute a mutation in read-only planning mode/);
     assert.equal(h.userWrites.length, 0);
     assert.equal(h.state.modeChoice, mode);
   });

@@ -7,7 +7,7 @@ import { browserMode, OBSERVE_BROWSER_TOOLS } from "../browser";
  * líneas JSON, y pide al CLI su catálogo de modelos y los ajustes en uso.
  */
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { agentKill, agentWrite, agentTeamMcpConfig, claudeRewindPoint, formatError } from "../api";
+import { agentKill, agentWrite, agentTeamMcpConfig, trexDesktopMcpConfig, claudeRewindPoint, formatError } from "../api";
 import { TEAM_TOOLS, TEAM_SERVER } from "../agentTeam";
 import { browserConfigForShell } from "../browser";
 import { withoutConversationArgs } from "../chatMessages";
@@ -27,7 +27,7 @@ import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMo
 /** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
 const USAGE_INTERVAL_MS = 60_000;
 // A shell or unknown tool approval can escape plan mode; only known readers may be approved.
-const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", CLAUDE_INBOX_TOOL, ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
+const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", CLAUDE_INBOX_TOOL, "mcp__trex_desktop__desktop_screenshot", ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
 const planningDeniedLine = (requestId: string): string => JSON.stringify({
   type: "control_response", response: { subtype: "success", request_id: requestId,
     response: { behavior: "deny", message: "Esta pestaña de planificación solo permite herramientas de lectura y preguntas; no puede conceder permisos de escritura o ejecución." } },
@@ -66,12 +66,13 @@ type Control =
   | { kind: "initialize"; ready?: (error?: string) => void; modeRevision?: number }
   | { kind: "settings" | "context" | "usage" }
   | { kind: "skills"; done: (error?: string) => void }
+  | { kind: "desktop-status"; done: (data: Record<string, unknown> | null, error?: string) => void }
   | { kind: "mode"; permissionMode: string | null; modeChoice: string | null; modeRevision?: number };
 
 export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env, conversationId } = options;
   const planningOnly = useRef(options.planningOnly === true).current;
-  const browserModeIntent = useRef(options.mode ?? (options.browser?.enabled ? claudeProfilePermissionMode(args, IS_WINDOWS && shell !== "wsl") : null));
+  const browserModeIntent = useRef(options.mode ?? ((options.browser?.enabled || options.desktopEnabled) ? claudeProfilePermissionMode(args, IS_WINDOWS && shell !== "wsl") : null));
   const browserBoundMode = useRef<ReturnType<typeof browserMode> | null>(null);
   const browserConnecting = useRef(false);
   const modeRevision = useRef(0);
@@ -161,6 +162,36 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       ? { ...pending, modeRevision: modeRevision.current } : pending);
     writeOrReport(controlLine(id, request));
   }, [writeOrReport]);
+  const confirmDesktop = useCallback(async (procId: string, mode: ReturnType<typeof browserMode>, expected: { command: string; args: string[] }, signal: AbortSignal): Promise<void> => {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      signal.throwIfAborted();
+      const data = await whileCurrent(new Promise<Record<string, unknown>>((resolve, reject) => {
+        const id = localId();
+        const timer = window.setTimeout(() => done(null, "Claude no respondió al comprobar el escritorio."), 3000);
+        const done = (value: Record<string, unknown> | null, error?: string): void => {
+          window.clearTimeout(timer); pendingControlsRef.current.delete(id);
+          if (error || !value) reject(new Error(error ?? "No se pudo comprobar el escritorio.")); else resolve(value);
+        };
+        pendingControlsRef.current.set(id, { kind: "desktop-status", done });
+        void agentWrite(procId, controlLine(id, { subtype: "mcp_status" })).catch(error => done(null, formatError(error)));
+      }), signal);
+      if (!isCurrentRef.current(procId)) throw new Error("La sesión de Claude ya no está activa.");
+      const servers = Array.isArray(data.mcpServers) ? data.mcpServers : [];
+      const server = servers.map(record).find(item => item?.name === "trex_desktop");
+      if (server?.status === "pending") { await whileCurrent(new Promise<void>(resolve => window.setTimeout(resolve, 150)), signal); continue; }
+      const tools = Array.isArray(server?.tools) ? server.tools.map(item => record(item)?.name) : [];
+      const input = ["desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"];
+      const config = record(server?.config);
+      if (server?.status !== "connected" || record(server.serverInfo)?.name !== "trex-desktop"
+        || config?.command !== expected.command || JSON.stringify(config?.args) !== JSON.stringify(expected.args) || !tools.includes("desktop_screenshot")
+        || (mode === "observe" ? input.some(name => tools.includes(name)) : !input.every(name => tools.includes(name)))) {
+        throw new Error("Claude no confirmó las herramientas y permisos del control de computadora.");
+      }
+      return;
+    }
+    throw new Error("Claude tardó demasiado en conectar el control de computadora.");
+  }, []);
   const refreshSettings = useCallback(() => control({ subtype: "get_settings" }, { kind: "settings" }), [control]);
   /** Lo mismo que mide `/context`; el CLI lo calcula al momento, sin llamar al modelo. */
   const refreshContext = useCallback(() => control({ subtype: "get_context_usage" }, { kind: "context" }), [control]);
@@ -189,7 +220,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   }, [control]);
 
   const syncBrowserMode = useCallback((mode: unknown, procId: string): boolean => {
-    if (planningOnly || readyProcessRef.current !== procId || !callbacks.current.browser?.enabled || typeof mode !== "string"
+    if (planningOnly || readyProcessRef.current !== procId || !(callbacks.current.browser?.enabled || callbacks.current.desktopEnabled) || typeof mode !== "string"
       || !["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"].includes(mode)) return false;
     if (browserModeIntent.current !== mode) modeRevision.current++;
     browserModeIntent.current = mode;
@@ -216,7 +247,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     if (reply?.request_id && pending) {
       pendingControlsRef.current.delete(reply.request_id);
       const data = reply.subtype === "success" ? reply.response ?? {} : {};
-      const staleMode = callbacks.current.browser?.enabled && (pending.kind === "initialize" || pending.kind === "mode")
+      const staleMode = (callbacks.current.browser?.enabled || callbacks.current.desktopEnabled) && (pending.kind === "initialize" || pending.kind === "mode")
         && pending.modeRevision !== undefined && pending.modeRevision !== modeRevision.current;
       if (pending.kind === "mode" && staleMode) return;
       if (pending.kind === "initialize") {
@@ -243,6 +274,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
           try { assertClaudePlanningMode(data.current_permission_mode); } catch (reason) { error = formatError(reason); }
         }
         pending.ready?.(error);
+      } else if (pending.kind === "desktop-status") {
+        pending.done(reply.subtype === "success" ? data : null, reply.subtype === "success" ? undefined : reply.error ?? "Claude rechazó el estado MCP.");
       } else if (pending.kind === "settings") {
         const applied = (data.applied ?? {}) as Record<string, unknown>;
         dispatch({ type: "applied", model: applied.model, effort: applied.effort });
@@ -379,26 +412,31 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       try {
         startup.signal.throwIfAborted();
         let browser = null;
-        browserConnecting.current = callbacks.current.browser?.enabled === true;
+        browserConnecting.current = callbacks.current.browser?.enabled === true || callbacks.current.desktopEnabled === true;
         try {
           browser = callbacks.current.browser?.enabled ? await whileCurrent(connectBrowser(callbacks.current.browser, cwd, browserModeIntent.current ?? current.modeChoice, planningOnly, shell,
             message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message })), startup.signal) : null;
         } finally { if (startupRef.current === startup) browserConnecting.current = false; }
         startup.signal.throwIfAborted();
-        const chosenMode = planningOnly ? "plan" : browser ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
-        const profileArgs = planningOnly || (browser && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", conversationOverrideRef.current)
+        const accessEnabled = !!browser || callbacks.current.desktopEnabled === true;
+        const chosenMode = planningOnly ? "plan" : accessEnabled ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
+        browserConnecting.current = callbacks.current.desktopEnabled === true;
+        let desktop = null;
+        try { desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await whileCurrent(trexDesktopMcpConfig(browserMode(chosenMode, planningOnly)), startup.signal), shell) : null; }
+        finally { if (startupRef.current === startup) browserConnecting.current = false; }
+        const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", conversationOverrideRef.current)
           : conversationOverrideRef.current ? withoutConversationArgs(args) : args;
         const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode });
-        if (browser && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
+        if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
           && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
         const teamConfig = callbacks.current.team ? browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell) : null;
         startup.signal.throwIfAborted();
-        if (browser || teamConfig) flags.push("--mcp-config", JSON.stringify({ mcpServers: {
-          ...(browser ? { trex_browser: browser } : {}), ...(teamConfig ? { trex_team: { command: teamConfig.command, args: teamConfig.args, timeout: 1900000 } } : {}),
+        if (browser || desktop || teamConfig) flags.push("--mcp-config", JSON.stringify({ mcpServers: {
+          ...(browser ? { trex_browser: browser } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(teamConfig ? { trex_team: { command: teamConfig.command, args: teamConfig.args, timeout: 1900000 } } : {}),
         } }));
         if (teamConfig) flags.push("--allowedTools", TEAM_TOOLS.map(name => `mcp__${TEAM_SERVER}__${name}`).join(","));
-        browserBoundMode.current = browser ? browserMode(chosenMode, planningOnly) : null;
-        if (browser) initialization ??= initializationWait();
+        browserBoundMode.current = accessEnabled ? browserMode(chosenMode, planningOnly) : null;
+        if (accessEnabled) initialization ??= initializationWait();
         const procId = await whileCurrent(agent.spawn({
           cwd, command: command?.trim() || "claude", profileArgs, shell, env: teamConfig ? { ...env, CLAUDE_AUTO_BACKGROUND_TASKS: "0" } : env,
           flags: planningOnly ? claudePlanningFlags(flags) : flags,
@@ -418,6 +456,11 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         void refreshSkills().catch(() => undefined);
         if (initialization) await whileCurrent(initialization.promise, startup.signal);
         startup.signal.throwIfAborted();
+        if (desktop) {
+          try { await confirmDesktop(procId, browserMode(chosenMode, planningOnly), desktop, startup.signal); }
+          catch (error) { await agentKill(procId).catch(() => undefined); throw error; }
+        }
+        startup.signal.throwIfAborted();
         return procId;
       } catch (error) {
         initialization?.ready(formatError(error));
@@ -428,7 +471,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     processReadyRef.current = ready;
     const procId = await ready;
     if (!procId && processReadyRef.current === ready) processReadyRef.current = null;
-  }, [agent, sessionId, cwd, command, args, shell, env, planningOnly, control, refreshSettings, refreshContext, refreshUsage, refreshSkills, cancelLocalRequests, invalidateIssued]);
+  }, [agent, sessionId, cwd, command, args, shell, env, planningOnly, control, refreshSettings, refreshContext, refreshUsage, refreshSkills, cancelLocalRequests, invalidateIssued, confirmDesktop]);
 
   // Arranque al mostrarse por primera vez: historial guardado (si se recupera una conversación) y proceso.
   const startedRef = useRef(false);
@@ -516,15 +559,17 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const browser = callbacks.current.browser?.enabled ? await whileCurrent(connectBrowser(callbacks.current.browser, cwd, browserModeIntent.current ?? current.modeChoice, planningOnly, shell,
         message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message })), request.signal) : null;
       request.signal.throwIfAborted();
-      const chosenMode = planningOnly ? "plan" : browser ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
-      const profileArgs = planningOnly || (browser && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", true) : withoutConversationArgs(args);
+      const accessEnabled = !!browser || callbacks.current.desktopEnabled === true;
+      const chosenMode = planningOnly ? "plan" : accessEnabled ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
+      const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await whileCurrent(trexDesktopMcpConfig(browserMode(chosenMode, planningOnly)), request.signal), shell) : null;
+      const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", true) : withoutConversationArgs(args);
       const chatFlags = claudeChatFlags(profileArgs, point ? current.sessionId : null,
         { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode });
       const flags = planningOnly ? claudePlanningFlags(chatFlags) : chatFlags;
-      if (browser && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
+      if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
         && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
-      if (browser) flags.push("--mcp-config", JSON.stringify({ mcpServers: { trex_browser: browser } }));
-      browserBoundMode.current = browser ? browserMode(chosenMode, planningOnly) : null;
+      if (browser || desktop) flags.push("--mcp-config", JSON.stringify({ mcpServers: { ...(browser ? { trex_browser: browser } : {}), ...(desktop ? { trex_desktop: desktop } : {}) } }));
+      browserBoundMode.current = accessEnabled ? browserMode(chosenMode, planningOnly) : null;
       if (point) flags.push("--resume-session-at", point, "--fork-session");
       flags.push("--session-id", newSessionId);
       for (const pending of pendingControlsRef.current.values()) {
@@ -560,6 +605,11 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       } finally { pendingControlsRef.current.delete(requestId); }
       request.signal.throwIfAborted();
       if (planningOnly) assertClaudePlanningMode(plannerModeRef.current);
+      if (desktop) {
+        try { await confirmDesktop(procId, browserMode(chosenMode, planningOnly), desktop, request.signal); }
+        catch (error) { await agentKill(procId).catch(() => undefined); throw error; }
+      }
+      request.signal.throwIfAborted();
       resolveReady(procId);
       conversationOverrideRef.current = true;
       freshRef.current = true;

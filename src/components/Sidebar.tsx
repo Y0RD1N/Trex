@@ -183,8 +183,8 @@ export default function Sidebar({
       style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
       {...reveal.handlers}
     >
-      <div className="sidebar-clip" inert={sidebarCollapsed && !peek} aria-hidden={(sidebarCollapsed && !peek) || undefined}>
-      <div className="sidebar-inner" style={{ width: sidebarWidth }}>
+      <div className="sidebar-clip" style={{ width: sidebarWidth }}>
+      <div className="sidebar-inner" style={{ width: sidebarWidth }} inert={sidebarCollapsed && !peek} aria-hidden={(sidebarCollapsed && !peek) || undefined}>
         <div className="sidebar-top" data-tauri-drag-region="deep">
           <header className="sidebar-header" data-tauri-drag-region>
             <span className="sidebar-brand" aria-hidden="true" data-tauri-drag-region>

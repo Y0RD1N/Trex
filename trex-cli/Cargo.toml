@@ -29,16 +29,19 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
+enigo = "=0.6.1"
 jpeg-decoder = { version = "=0.3.2", path = "vendor/jpeg-decoder", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Memory"] }
+xcap = "=0.9.8"
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
+x11rb = "=0.13.2"
 
 [dev-dependencies]
 tempfile = "3"

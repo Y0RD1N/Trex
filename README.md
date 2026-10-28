@@ -93,6 +93,14 @@ elegido y los permisos habituales del ejecutor. Si necesita aclaraciones,
 responde en ese mismo hilo. Cada respuesta identifica a su asistente; cada uno
 conserva su propia cuenta, conversación, modelo y esfuerzo.
 
+Para trabajos con varios pasos, el planificador recibe la indicación de publicar
+las tareas del ejecutor. Las tareas confirmadas se entregan junto con el plan;
+el ejecutor crea y actualiza su propia lista mientras trabaja. Cada participante
+conserva su lista e identificadores en su propia sesión. Si el planificador no
+publica tareas, el ejecutor puede crearlas a partir del plan. El panel muestra
+únicamente las listas que las herramientas del asistente hayan confirmado: su
+uso depende de que el agente disponga de esas herramientas y las invoque.
+
 Puedes usar **Planear aquí** desde un chat existente para añadir el segundo
 asistente conservando el historial y el perfil original en una de las etapas.
 Después, **Nueva planificación** o `/plan tu nueva idea` inicia otro ciclo con el

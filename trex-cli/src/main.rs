@@ -31,6 +31,10 @@ enum Command {
         command: Sessions,
     },
     AppServer,
+    DesktopMcp {
+        #[arg(long)]
+        mode: String,
+    },
     Chat {
         #[arg(long, default_value = "ask")]
         mode: String,
@@ -205,6 +209,7 @@ async fn run() -> Result<()> {
             }
         }
         Command::AppServer => server::run(selected(cli.profile)?).await?,
+        Command::DesktopMcp { mode } => trex_agent::desktop_mcp::serve(&mode).await?,
         Command::Chat {
             mode,
             cwd,

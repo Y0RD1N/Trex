@@ -96,6 +96,11 @@ export const normalizeText = (value: string): string =>
 
 export const loadConfig = (): Promise<AppConfig> => invoke<AppConfig>("load_config");
 
+export type IntegrationDependencies = { blender: boolean; hyperframes: boolean; hyperframesLocal: boolean; githubCli: boolean; node: boolean; ffmpeg: boolean };
+export const integrationDependencies = (cwd?: string): Promise<IntegrationDependencies> => invoke("integration_dependencies", { cwd: cwd ?? null });
+export type GitHubConnectionStatus = "connected" | "unavailable" | "timeout" | "notFound";
+export const githubConnectionStatus = (): Promise<GitHubConnectionStatus> => invoke("github_connection_status");
+
 export const saveConfig = (config: AppConfig): Promise<AppConfig> =>
   invoke<AppConfig>("save_config", { config });
 
@@ -201,6 +206,7 @@ export const DEFAULT_FONT_FAMILY =
   '"JetBrains Mono Variable", "Hack Nerd Font Mono", "Noto Sans Symbols 2", "Noto Color Emoji", ui-monospace, "Cascadia Mono", monospace';
 
 export const DEFAULT_SETTINGS: Settings = {
+  desktopEnabled: false,
   browserEnabled: true,
   browserProfile: "BROWSER1",
   profiles: initialProfiles({ claudeCommand: "claude", claudeArgs: "", launchMode: "arg" }),
@@ -423,6 +429,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   if (bindingError(shortcuts,pasteShortcut)) { pasteShortcut = DEFAULT_PASTE_SHORTCUT; shortcuts = normalizeShortcuts(settingsRaw.shortcuts,pasteShortcut); }
 
   const settings: Settings = {
+    desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
     browserEnabled: asBool(settingsRaw.browserEnabled, DEFAULT_SETTINGS.browserEnabled),
     browserProfile: typeof settingsRaw.browserProfile === "string" && validBrowserProfile(settingsRaw.browserProfile) ? settingsRaw.browserProfile : "BROWSER1",
     profiles: [],
@@ -548,6 +555,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
 };
 
 export const trexBrowserStatus = (): Promise<BrowserStatus> => invoke("trex_browser_status");
+export const trexDesktopMcpConfig = (mode: BrowserMode): Promise<BrowserConfig> => invoke("trex_desktop_mcp_config", { mode });
 export const trexBrowserMcpConfig = (cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserConfig> => invoke("trex_browser_mcp_config", { cwd, mode, clientId, profile });
 export const trexBrowserCall = (request: BrowserCall): Promise<BrowserResult> => invoke("trex_browser_call", { request });
 export const trexBrowserOpenArtifact = (id: string, cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserResult> => invoke("trex_browser_open_artifact", { id, cwd, mode, clientId, profile });

@@ -37,3 +37,33 @@ test('incremental Claude tasks retain IDs and only confirmed updates complete or
  assert.deepEqual(chatTasks([create,{...update,input:{taskId:'7',status:'deleted'}}],'Claude'),[]);
  assert.equal(chatTasks([todo('old','done',[{content:'Preserve',status:'pending'}]),todo('broken','done',[null])],'Claude')[0].title,'Preserve');
 });
+
+test('room task lists stay isolated when agents reuse native task IDs', async () => {
+ const {roomTasks}=await load('chatTasks');
+ const create=(role,title)=>({kind:'tool',id:`${role}::create`,name:'TaskCreate',status:'done',input:{subject:title},output:'Task #7 created successfully'});
+ const update=(role,status)=>({kind:'tool',id:`${role}::update`,name:'TaskUpdate',status:'done',input:{taskId:'7',status}});
+ const names={planner:'Planificador',executor:'Ejecutor'};
+ const plan=[create('planner','Implementar'),update('planner','pending')];
+ assert.deepEqual(roomTasks(plan,names).map(t=>[t.title,t.status,t.owner]),[['Implementar','pending','Planificador']]);
+ const execution=[...plan,create('executor','Implementar'),update('executor','in_progress')];
+ assert.deepEqual(roomTasks(execution,names).map(t=>[t.title,t.status,t.owner]),[['Implementar','in_progress','Ejecutor']]);
+ assert.equal(roomTasks([...execution,{...update('executor','completed'),status:'error'}],names)[0].status,'in_progress');
+ assert.equal(roomTasks([...execution,update('executor','completed')],names)[0].status,'completed');
+ assert.deepEqual(roomTasks([...execution,{kind:'tool',id:'executor::clear',name:'TodoWrite',status:'done',input:{todos:[]}}],names),[]);
+ const nextCycle=[...execution,{kind:'user',id:'planner::new-request',text:'Plan a different feature'}];
+ assert.deepEqual(roomTasks(nextCycle,names),[]);
+ assert.deepEqual(roomTasks([...nextCycle,create('planner','New feature')],names).map(t=>t.title),['New feature']);
+ assert.deepEqual(roomTasks([...plan,{kind:'user',id:'executor::handoff',text:'Implement'}, {kind:'user',id:'planner::next',text:'Plan again'}],names),[]);
+});
+
+test('handoff contains only confirmed planner tasks, with status and sanitized text', async () => {
+ const {workflowPlanContext,PLANNING_INSTRUCTION,IMPLEMENTATION_INSTRUCTION}=await load('agentWorkflow');
+ const source={sessionId:'room',provider:'claude',profileId:'a',profileName:'Planner',title:'Plan',projectId:'p',projectName:'P',cwd:'/tmp'};
+ const items=[todo('draft','done',[{content:'Implementar',status:'pending'},{content:'Validar',status:'pending'}]),todo('failed','error',[{content:'Do not transfer',status:'completed'}])];
+ const tasks=chatTasks(items,'Planner');
+ const handoff=workflowPlanContext('Plan definitivo','Solicitud',source,tasks).content;
+ assert.match(handoff,/\[pending\] Implementar/);assert.match(handoff,/\[pending\] Validar/);assert.doesNotMatch(handoff,/Do not transfer/);
+ assert.match(PLANNING_INSTRUCTION,/herramientas de tareas/);assert.match(IMPLEMENTATION_INSTRUCTION,/identificadores o estados no se comparten/);
+ assert.doesNotMatch(workflowPlanContext('Plan','Solicitud',source,[{title:'api_key=FAKE_SECRET_123456789',status:'pending'}]).content,/FAKE_SECRET/);
+ assert.doesNotMatch(workflowPlanContext('Plan','Solicitud',source).content,/Tareas publicadas/);
+});

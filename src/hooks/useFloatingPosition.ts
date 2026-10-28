@@ -21,7 +21,14 @@ export function useFloatingPosition(
     if (!anchor) { setMeasurement(null); return; }
     if (!surfaceRef.current || frozen) return;
     const surface = surfaceRef.current;
+    let lastAnchorRect: AnchorRect | null = null;
     const update = (): void => {
+      // Relaxing the height for measurement can clamp a scroller's offset,
+      // including the body of a confirmation. Restore it after the final size
+      // is applied, before this layout effect or animation frame can paint.
+      const scrollers = [surface, ...surface.querySelectorAll<HTMLElement>("*")]
+        .filter(element => element.scrollTop || element.scrollLeft)
+        .map(element => ({ element, top: element.scrollTop, left: element.scrollLeft }));
       const margin = 8;
       const viewport = window.visualViewport;
       const leftEdge = (viewport?.offsetLeft ?? 0) + margin;
@@ -33,6 +40,7 @@ export function useFloatingPosition(
         ? anchor.element.getBoundingClientRect()
         : "rect" in anchor ? anchor.rect
         : { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y };
+      lastAnchorRect = rect;
       // offsetWidth no incluye la escala de la animación de entrada. La altura es
       // la del contenido completo (sin el recorte de una altura máxima anterior).
       // Measure the CSS-capped menu, without carrying a previous side's room
@@ -66,6 +74,10 @@ export function useFloatingPosition(
         left, top, side: resolvedSide,
         origin: `${horizontalOrigin}px ${resolvedSide === "top" ? "bottom" : "top"}`,
       };
+      for (const { element, top, left } of scrollers) {
+        if (element.scrollTop !== top) element.scrollTop = top;
+        if (element.scrollLeft !== left) element.scrollLeft = left;
+      }
       setMeasurement(previous => previous?.anchor === anchor && previous.surface === surface
         && previous.position.left === next.left && previous.position.top === next.top
         && previous.position.origin === next.origin && previous.position.side === next.side
@@ -76,14 +88,27 @@ export function useFloatingPosition(
     // Las confirmaciones siguen a su botón incluso durante una transición de layout.
     let frame = 0;
     if (track && "element" in anchor) {
-      const follow = (): void => { update(); frame = requestAnimationFrame(follow); };
+      const follow = (): void => {
+        const rect = anchor.element.getBoundingClientRect();
+        // A stationary trigger needs no live remeasurement. Repeatedly
+        // expanding a scrollable card was also invalidating WebKit's layers.
+        if (!lastAnchorRect || rect.left !== lastAnchorRect.left || rect.right !== lastAnchorRect.right
+          || rect.top !== lastAnchorRect.top || rect.bottom !== lastAnchorRect.bottom) update();
+        frame = requestAnimationFrame(follow);
+      };
       frame = requestAnimationFrame(follow);
     }
+    const onScroll = (event: Event): void => {
+      // Scrolling the content cannot move its external anchor. Measuring here
+      // used to reset the scroll offset and enqueue another scroll event.
+      if (event.target instanceof Node && surface.contains(event.target)) return;
+      update();
+    };
     const observer = new ResizeObserver(update);
     observer.observe(surface);
     if ("element" in anchor) observer.observe(anchor.element);
     window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
+    window.addEventListener("scroll", onScroll, true);
     window.visualViewport?.addEventListener("resize", update);
     window.visualViewport?.addEventListener("scroll", update);
     return () => {
@@ -91,7 +116,7 @@ export function useFloatingPosition(
       observer.disconnect();
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.visualViewport?.removeEventListener("resize", update);
       window.visualViewport?.removeEventListener("scroll", update);
     };

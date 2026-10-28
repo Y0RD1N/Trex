@@ -583,6 +583,151 @@ fn plan_rejects_unadvertised_write_and_shell_then_delivers_a_final_plan() {
 }
 
 #[test]
+fn application_tools_obey_planning_and_approval_modes() {
+    for mode in ["plan", "ask"] {
+        let f = Fixture::new();
+        let mut agent = f.agent();
+        let started = agent.start(f.workspace.path(), mode, None);
+        let session = started["sessionId"].as_str().unwrap();
+        agent.turn(
+            session,
+            "app-permissions",
+            "Inspect the integration permissions.",
+        );
+        let request = f.api.chat();
+        let definitions = request.body["tools"].as_array().unwrap();
+        for name in ["github_repos", "github_prs", "github_pr_view"] {
+            assert!(definitions
+                .iter()
+                .any(|tool| tool["function"]["name"] == name));
+        }
+        for name in [
+            "github_pr_create",
+            "github_pr_merge",
+            "blender_run",
+            "hyperframes_run",
+        ] {
+            assert_eq!(
+                definitions
+                    .iter()
+                    .any(|tool| tool["function"]["name"] == name),
+                mode != "plan",
+                "{name} in {mode}"
+            );
+        }
+        request.completion(
+            calls(vec![tool(
+                "write",
+                "github_pr_merge",
+                json!({"repository":"a/b","number":1,"headSha":"a".repeat(40),"strategy":"squash"}),
+            )]),
+            "tool_calls",
+        );
+        if mode == "ask" {
+            let permission = agent.event("permission/request", "app-permissions");
+            assert_eq!(permission["params"]["toolName"], "github_pr_merge");
+            agent.rpc(
+                "permission/respond",
+                json!({"id":permission["params"]["id"],"allowed":false}),
+            );
+        }
+        let followup = f.api.chat();
+        assert!(tool_output(&followup, "write")["error"].is_string());
+        followup.final_text("No changes were made.");
+        agent.completed("app-permissions", "completed");
+        f.api.assert_quiet();
+    }
+}
+
+#[test]
+fn desktop_tools_are_opt_in_and_input_respects_permissions() {
+    for (enabled, mode) in [(false, "ask"), (true, "plan"), (true, "ask")] {
+        let f = Fixture::new();
+        let mut agent = f.agent();
+        let models = agent.request("models/list", json!({}));
+        f.api.request("GET", "/v1/models").json(
+            json!({"data":[{"id":"mock","architecture":{"input_modalities":["text","image"]}}]}),
+        );
+        agent.result(models);
+        let started = agent.rpc(
+            "session/start",
+            json!({"cwd":f.workspace.path(),"mode":mode,"desktopEnabled":enabled}),
+        );
+        assert_eq!(started["desktopEnabled"], enabled);
+        let session = started["sessionId"].as_str().unwrap();
+        agent.turn(session, "desktop-policy", "Inspect available tools.");
+        let request = f.api.chat();
+        let definitions = request.body["tools"].as_array().unwrap();
+        assert_eq!(
+            definitions
+                .iter()
+                .any(|t| t["function"]["name"] == "desktop_screenshot"),
+            enabled
+        );
+        assert_eq!(
+            definitions
+                .iter()
+                .any(|t| t["function"]["name"] == "desktop_click"),
+            enabled && mode != "plan"
+        );
+        request.completion(
+            calls(vec![tool(
+                "click",
+                "desktop_click",
+                json!({"observation":"invalid","x":0,"y":0}),
+            )]),
+            "tool_calls",
+        );
+        if enabled && mode == "ask" {
+            let permission = agent.event("permission/request", "desktop-policy");
+            assert_eq!(permission["params"]["toolName"], "desktop_click");
+            agent.rpc(
+                "permission/respond",
+                json!({"id":permission["params"]["id"],"allowed":false}),
+            );
+        }
+        let followup = f.api.chat();
+        assert!(tool_output(&followup, "click")["error"].is_string());
+        followup.final_text("No desktop input was sent.");
+        agent.completed("desktop-policy", "completed");
+        f.api.assert_quiet();
+    }
+}
+
+#[test]
+fn desktop_input_is_unavailable_without_confirmed_vision() {
+    let f = Fixture::new();
+    let mut agent = f.agent();
+    let started = agent.rpc(
+        "session/start",
+        json!({"cwd":f.workspace.path(),"mode":"full","desktopEnabled":true}),
+    );
+    let session = started["sessionId"].as_str().unwrap();
+    agent.turn(session, "no-vision", "Inspect available tools.");
+    let request = f.api.chat();
+    let definitions = request.body["tools"].as_array().unwrap();
+    assert!(definitions
+        .iter()
+        .any(|t| t["function"]["name"] == "desktop_screenshot"));
+    assert!(!definitions
+        .iter()
+        .any(|t| t["function"]["name"] == "desktop_click"));
+    request.completion(
+        calls(vec![tool(
+            "click",
+            "desktop_click",
+            json!({"observation":"invalid","x":0,"y":0}),
+        )]),
+        "tool_calls",
+    );
+    let followup = f.api.chat();
+    assert!(tool_output(&followup, "click")["error"].is_string());
+    followup.final_text("No desktop input was sent.");
+    agent.completed("no-vision", "completed");
+    f.api.assert_quiet();
+}
+
+#[test]
 fn visible_plan_is_durable_and_available_without_write_permissions() {
     for mode in ["plan", "ask", "full"] {
         let f = Fixture::new();

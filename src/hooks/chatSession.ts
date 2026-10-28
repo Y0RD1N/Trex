@@ -23,6 +23,7 @@ export type ChatSessionOptions = {
   /** Solo el principal recibe las herramientas de este equipo y generación. */
   team?: { id: string; epoch: string };
   browser?: BrowserOptions;
+  desktopEnabled?: boolean;
   sessionId: string;
   cwd: string;
   command: string | null;

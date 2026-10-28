@@ -35,6 +35,7 @@ export default function AgentTeamView(props: Props) {
   const current = useRef(team), received = useRef(team);
   if (received.current !== team) { received.current=team; current.current=team; }
   const browser = useRef(browserOptions(props.settings, team.id)).current;
+  const desktopEnabled = useRef(props.settings.desktopEnabled).current;
   const root = useRef<HTMLDivElement>(null);
   const mounted = useRef(true), generation = useRef(0), ticking = useRef(false);
   const sessionsRef = useRef<Record<string,ChatSession>>({});
@@ -218,7 +219,7 @@ export default function AgentTeamView(props: Props) {
           projectId:latest.current.projectId??"",projectName:latest.current.projectName,cwd:latest.current.cwd});
         const instructions="Realiza solo la tarea delegada. Tu función es "+TEAM_ROLES[member.role].name+". "+member.instructions
           +(member.canWrite?" Comprueba el estado actual del proyecto antes de editar. Usa tus permisos normales.":" No modifiques archivos, ejecutes implementaciones ni solicites permisos de escritura.")
-          +" Entrega un informe final con resultado, archivos/evidencias, validaciones realizadas, hallazgos y limitaciones. No delegues a otros agentes.";
+          +" Si la tarea tiene varios pasos, publica y actualiza tu propia lista con tus herramientas de tareas disponibles; marca cada paso completado solo tras verificarlo. La tarea asignada del equipo se actualiza según el resultado confirmado de tu delegación. Entrega un informe final con resultado, archivos/evidencias, validaciones realizadas, hallazgos y limitaciones. No delegues a otros agentes.";
         context.content="# Función e instrucciones de esta delegación\n\n"+instructions+"\n\n"+context.content;
         const prepared=await prepareHandoff(context);
         if(!isCurrent() || attempt.current!==issued)return;
@@ -334,7 +335,7 @@ export default function AgentTeamView(props: Props) {
     {members.map(member=>{
       const historyOnly=paused && openedEpoch!==team.epoch;
       const readOnly=!member.canWrite || historyOnly;
-      const options:ChatSessionOptions={...member.agent.launch,browser:historyOnly?{...browser,enabled:false}:browser,
+      const options:ChatSessionOptions={...member.agent.launch,desktopEnabled: !historyOnly && desktopEnabled,browser:historyOnly?{...browser,enabled:false}:browser,
         sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
         conversationId:member.conversationId,mode:readOnly?"plan":member.agent.provider==="claude"?"default":"auto",
         model:member.agent.model,effort:member.agent.effort,planningOnly:readOnly,

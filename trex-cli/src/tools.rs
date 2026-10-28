@@ -48,6 +48,7 @@ pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a
 /// A deliberately small registry interface; external providers cannot dispatch
 /// arbitrary commands or bypass the session runner's approval journal.
 pub trait ToolProvider: Send + Sync {
+    fn invalidate_observation(&self) {}
     fn definitions(&self, mode: &str) -> Vec<Value>;
     fn is_mutating(&self, name: &str, input: &Value) -> bool;
     fn execute<'a>(
@@ -118,9 +119,14 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     pub fn new(browser: Option<crate::browser::BrowserToolProvider>) -> Self {
         let processes = std::sync::Arc::new(crate::processes::ProcessManager::default());
-        let mut providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(NativeToolProvider {
-            processes: processes.clone(),
-        })];
+        let mut providers: Vec<Box<dyn ToolProvider>> = vec![
+            Box::new(NativeToolProvider {
+                processes: processes.clone(),
+            }),
+            Box::new(crate::github::GithubProvider),
+            Box::new(crate::blender::BlenderProvider),
+            Box::new(crate::hyperframes::HyperframesProvider),
+        ];
         if let Some(browser) = browser {
             providers.push(Box::new(browser));
         }
@@ -130,6 +136,13 @@ impl ToolRegistry {
             role_instructions: None,
             processes,
         }
+    }
+    pub fn with_desktop(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.providers
+                .push(Box::new(crate::desktop::DesktopProvider::default()));
+        }
+        self
     }
     pub fn with_team(mut self, config: Option<crate::team::TeamConfig>) -> Self {
         if let Some(config) = config {
@@ -145,6 +158,11 @@ impl ToolRegistry {
     }
     pub fn role_instructions(&self) -> &Option<String> {
         &self.role_instructions
+    }
+    pub fn invalidate_observation(&self) {
+        for provider in &self.providers {
+            provider.invalidate_observation();
+        }
     }
     pub fn processes(&self) -> &crate::processes::ProcessManager {
         &self.processes
@@ -221,6 +239,10 @@ pub fn is_mutating(name: &str) -> bool {
             | "update_plan"
             | "process_list"
             | "process_output"
+            | "github_repos"
+            | "github_prs"
+            | "github_pr_view"
+            | "desktop_screenshot"
     )
 }
 
@@ -1363,7 +1385,7 @@ pub(crate) fn spawn_owned_shell(
     Ok((child, guard))
 }
 
-async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) -> Result<Value> {
+pub(crate) async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) -> Result<Value> {
     let obj = fields(input, &["command", "timeoutMs", "background"], &["command"])?;
     let text = string(obj, "command")?;
     ensure!(

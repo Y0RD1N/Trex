@@ -1,5 +1,5 @@
 import { connectBrowser } from "../browserConnection";
-import { agentTeamMcpConfig } from "../api";
+import { agentTeamMcpConfig, trexDesktopMcpConfig } from "../api";
 import { browserConfigForShell, BROWSER_INSTRUCTIONS } from "../browser";
 import { browserMode, type BrowserMode } from "../browser";
 /**
@@ -27,6 +27,7 @@ import { codexInboxContent, InboxRequests, INBOX_INSTRUCTIONS, INBOX_TOOL, inbox
 import { codexInboxReceiptId } from "../inboxProtocol";
 import { assertCodexPlanningThread, codexPlanningThread, codexPlanningTurn } from "../workflowSafety";
 import { taskInstructions } from "../chatTasks";
+import { integrationInstructions } from "../integrations";
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
 const ANSWERED_IN_CHAT = new Set([
@@ -34,7 +35,7 @@ const ANSWERED_IN_CHAT = new Set([
 ]);
 /** Turnos de la conversación recuperada que se muestran al abrirla. */
 const HISTORY_TURNS = 40;
-const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS} ${taskInstructions("codex")}`;
+const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS} ${taskInstructions("codex")} ${integrationInstructions("codex")}`;
 
 /** Approval must not weaken the planner's sandbox, even for a session grant. */
 function planningApprovalAllowed(method: string | undefined, input: Json): boolean {
@@ -353,7 +354,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   }, [request, notice]);
 
   const threadOverrides = useCallback((overrides: Json): Json => {
-    if (browserBindingRef.current) {
+    if (browserBindingRef.current && callbacks.current.browser?.enabled) {
       const instructions = typeof overrides.developerInstructions === "string" ? overrides.developerInstructions : "";
       overrides = { ...overrides, developerInstructions: instructions.includes(BROWSER_INSTRUCTIONS) ? instructions : [instructions, BROWSER_INSTRUCTIONS].filter(Boolean).join("\n\n") };
     }
@@ -375,18 +376,23 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       if (!mountedRef.current || generation !== threadGenerationRef.current || binding !== browserThreadRef.current
         || (procId && readyProcessRef.current !== procId)) throw new DOMException("Envío cancelado.", "AbortError");
     };
-    let response: Json;
-    try { response = await request<Json>("mcpServerStatus/list", { threadId, serverName: "trex_browser", detail: "toolsAndAuthOnly", limit: 100 }, procId); }
-    catch {
+    const expected = [
+      ...(inboxConfigRef.current["mcp_servers.trex_browser.enabled"] === true ? [{ server: "trex_browser", tools: ["browser_navigate", "browser_snapshot", "browser_status"] }] : []),
+      ...(inboxConfigRef.current["mcp_servers.trex_desktop.enabled"] === true ? [{ server: "trex_desktop", tools: browserBindingRef.current?.mode === "observe" ? ["desktop_screenshot"] : ["desktop_screenshot", "desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"] }] : []),
+    ];
+    for (const integration of expected) {
+      const label = integration.server === "trex_browser" ? "Trex Browser" : "el control de computadora";
+      let response: Json;
+      try { response = await request<Json>("mcpServerStatus/list", { threadId, serverName: integration.server, detail: "toolsAndAuthOnly", limit: 100 }, procId); }
+      catch { assertCurrent(); throw new CodexBrowserConnectionError(`Codex no pudo confirmar la conexión con ${label}.`); }
       assertCurrent();
-      throw new CodexBrowserConnectionError("Codex no pudo confirmar la conexión con Trex Browser. Reinicia esta conversación para volver a conectarlo.");
-    }
-    assertCurrent();
-    const server = Array.isArray(response.data) ? response.data.map(record).find(server => server?.name === "trex_browser") : null;
-    const tools = record(server?.tools);
-    if (!server || server.toolsError != null || server.runtimeStatus !== undefined && server.runtimeStatus !== "connected"
-      || !tools || !["browser_navigate", "browser_snapshot", "browser_status"].every(name => record(tools[name]))) {
-      throw new CodexBrowserConnectionError("Codex no recibió las herramientas de Trex Browser. El navegador puede abrirse manualmente, pero este chat necesita reconectarlo antes de trabajar.");
+      const server = Array.isArray(response.data) ? response.data.map(record).find(server => server?.name === integration.server) : null;
+      const tools = record(server?.tools);
+      if (!server || server.toolsError != null || server.runtimeStatus !== undefined && server.runtimeStatus !== "connected"
+        || !tools || !integration.tools.every(name => record(tools[name]))
+        || integration.server === "trex_desktop" && browserBindingRef.current?.mode === "observe" && ["desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"].some(name => record(tools[name]))) {
+        throw new CodexBrowserConnectionError(`Codex no recibió las herramientas de ${label}. Reinicia esta conversación.`);
+      }
     }
   }, [request]);
 
@@ -504,13 +510,15 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         const launch = parsed ?? codexLaunch(null)!;
         // Unknown global/-c permissions get an observe grant until the native thread confirms them.
         let bindingMode = browserMode(choicesRef.current.mode ?? (launch.thread.sandbox ? browserChoice(sandboxBrowserMode(launch.thread.sandbox)) : "read-only"), planningOnly);
-        if (callbacks.current.browser?.enabled) browserBindingRef.current = { mode: bindingMode, pending: true };
+        if (callbacks.current.browser?.enabled || callbacks.current.desktopEnabled) browserBindingRef.current = { mode: bindingMode, pending: true };
         const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId);
         if (!isCurrent()) return;
         for (let attempt = 0; attempt < 2; attempt++) {
         const browser = callbacks.current.browser?.enabled ? await connectBrowser(callbacks.current.browser, cwd, browserChoice(bindingMode), planningOnly, shell, message => notice("warn", message)) : null;
         if (!isCurrent()) return;
-        browserBindingRef.current = browser ? { mode: bindingMode, pending: false } : null;
+        const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await trexDesktopMcpConfig(bindingMode), shell) : null;
+        if (!isCurrent()) return;
+        browserBindingRef.current = browser || desktop ? { mode: bindingMode, pending: false } : null;
         inboxConfigRef.current = { ...inboxConfigForShell(config, shell), ...(browser ? {
           "mcp_servers.trex_browser.command": browser.command,
           "mcp_servers.trex_browser.args": browser.args,
@@ -519,6 +527,12 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
           "mcp_servers.trex_browser.startup_timeout_sec": 30,
           "mcp_servers.trex_browser.tool_timeout_sec": 120,
         } : {}) };
+        if (desktop) Object.assign(inboxConfigRef.current, {
+          "mcp_servers.trex_desktop.command": desktop.command, "mcp_servers.trex_desktop.args": desktop.args,
+          "mcp_servers.trex_desktop.enabled": true, "mcp_servers.trex_desktop.required": true,
+          "mcp_servers.trex_desktop.tool_timeout_sec": 120,
+          "mcp_servers.trex_desktop.default_tools_approval_mode": bindingMode === "full" ? "approve" : "prompt",
+        });
         if (callbacks.current.team) {
           const teamConfig = browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell);
           if (!isCurrent()) return;

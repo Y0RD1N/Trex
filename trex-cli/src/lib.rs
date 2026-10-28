@@ -1,5 +1,10 @@
 pub mod artifacts;
+pub mod blender;
 pub mod browser;
+pub mod desktop;
+pub mod desktop_mcp;
+pub mod github;
+pub mod hyperframes;
 pub mod processes;
 pub mod profile;
 pub mod provider;

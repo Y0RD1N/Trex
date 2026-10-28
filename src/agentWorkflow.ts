@@ -3,6 +3,7 @@ import { answersOf, normalizeEffortChoice, normalizeModelChoice, questionsOf, ty
 import { normalizeHandoffReference, sanitizeHandoffText, type HandoffContext, type HandoffReference, type HandoffSource } from "./handoff";
 import { normalizeLaunch } from "./profiles";
 import type { AgentProvider, SessionLaunch } from "./types";
+import type { ChatTask } from "./chatTasks";
 
 export type WorkflowAgent = { profileId: string; profileName: string; provider: AgentProvider; model: string | null; effort?: string | null; launch: SessionLaunch };
 
@@ -23,8 +24,8 @@ export type AgentWorkflow = {
   error?: string | null;
 };
 
-export const PLANNING_INSTRUCTION = "Tu única etapa es planificar. Investiga el proyecto sin modificar archivos ni implementar. Si necesitas aclaraciones, pregunta y espera. Cuando tengas el plan definitivo, tu respuesta final debe contener solamente TODO el plan dentro de <trex_plan> y </trex_plan>, incluyendo objetivo, archivos, pasos y validación. Esas etiquetas significan que el plan está listo para implementarse automáticamente; no las uses en borradores o preguntas. Otro agente ejecutará el plan; no cambies a modo de implementación ni solicites aprobar ExitPlanMode.";
-export const IMPLEMENTATION_INSTRUCTION = "Implementa el plan definitivo transferido en este proyecto. Comprueba primero los archivos y cambios actuales, respeta las instrucciones del usuario y del proyecto, realiza los pasos necesarios y ejecuta las verificaciones apropiadas. Al finalizar explica lo implementado y los resultados de la validación. Si hay un bloqueo que cambia el alcance del plan, pregunta antes de improvisar.";
+export const PLANNING_INSTRUCTION = "Tu única etapa es planificar. Investiga el proyecto sin modificar archivos ni implementar. Si necesitas aclaraciones, pregunta y espera. Antes de entregar el plan, usa tus herramientas de tareas disponibles para publicar una lista breve de pasos concretos para el ejecutor, incluidos cambios y validación; mantenlos pendientes porque todavía no se han implementado. Si no están disponibles, incluye esos pasos en el plan e indica la limitación; no afirmes que publicaste tareas. Cuando tengas el plan definitivo, tu respuesta final debe contener solamente TODO el plan dentro de <trex_plan> y </trex_plan>, incluyendo objetivo, archivos, pasos y validación. Esas etiquetas significan que el plan está listo para implementarse automáticamente; no las uses en borradores o preguntas. Otro agente ejecutará el plan; no cambies a modo de implementación ni solicites aprobar ExitPlanMode.";
+export const IMPLEMENTATION_INSTRUCTION = "Implementa el plan definitivo transferido en este proyecto. Revisa el plan y las tareas transferidas; son de otra sesión y sus identificadores o estados no se comparten automáticamente. Antes de implementar, publica en tus herramientas de tareas disponibles una lista propia basada en ellas o, si faltan, en los pasos del plan. Comprueba primero los archivos y cambios actuales, respeta las instrucciones del usuario y del proyecto, marca cada tarea en curso al iniciarla y completada solo tras verificarla, manteniendo pendientes las demás. Actualiza la lista conforme avance el trabajo. Si no dispones de herramientas de tareas, indica la limitación y no afirmes haberlas publicado. Al finalizar explica lo implementado y los resultados de la validación. Si hay un bloqueo que cambia el alcance del plan, pregunta antes de improvisar.";
 
 const object = (value: unknown): Record<string, unknown> | null => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const id = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(value);
@@ -115,9 +116,11 @@ export function planningContext(task: string, source: HandoffSource): HandoffCon
 }
 
 /** El plan pasa completo: si no cabe, se pide reducirlo en vez de implementar un extracto. */
-export function workflowPlanContext(plan: string, original: string, source: HandoffSource): HandoffContext {
+export function workflowPlanContext(plan: string, original: string, source: HandoffSource, tasks: ChatTask[] = []): HandoffContext {
   const text = sanitizeHandoffText(plan), request = sanitizeHandoffText(original.split("\n\n---\n## Estado del proyecto capturado por TREX\n")[0]);
-  const content = `# Plan definitivo para implementar\n\n${text}\n\n## Solicitud original y estado del proyecto\n\n${request}`;
+  const list = tasks.map(task => `- [${task.status}] ${sanitizeHandoffText(task.title)}`).join("\n");
+  const transferred = list ? `\n\n## Tareas publicadas por el planificador\n\n${list}\n\nSon registros de la sesión de planificación; verifica el trabajo antes de darlo por completado y publica tu propia lista.` : "";
+  const content = `# Plan definitivo para implementar\n\n${text}${transferred}\n\n## Solicitud original y estado del proyecto\n\n${request}`;
   if (!text || new TextEncoder().encode(content).length > 64 * 1024)
     throw new Error("El plan y su contexto superan 64 KiB. Pide al planificador una versión más breve antes de implementar.");
   return { source, content, createdAt: Date.now(), messageCount: 2, truncated: false, imagesOmitted: 0 };

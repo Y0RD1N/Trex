@@ -68,6 +68,7 @@ export type Project = {
 };
 
 export type Settings = {
+  desktopEnabled: boolean;
   browserEnabled: boolean;
   browserProfile: string;
   profiles: LauncherProfile[];

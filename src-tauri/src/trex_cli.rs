@@ -724,3 +724,16 @@ mod tests {
         assert!(after.is_empty());
     }
 }
+
+/// Bind desktop access to a fresh MCP process. The mode cannot be changed by a tool call.
+#[tauri::command]
+pub async fn trex_desktop_mcp_config(mode: String) -> Result<serde_json::Value, String> {
+    let fixed_mode = match mode.as_str() {
+        "observe" => "plan",
+        "qa" | "full" => "full",
+        _ => return Err("Modo de escritorio no válido.".into()),
+    };
+    let binary = installed_cli_path()?;
+    let command = binary.to_str().ok_or("La ruta del agente no es UTF-8 válida.")?;
+    Ok(serde_json::json!({"command":command,"args":["desktop-mcp","--mode",fixed_mode]}))
+}

@@ -101,7 +101,7 @@ export function browserToolResultText(raw: unknown): string {
     if (Array.isArray(item)) return item.slice(0, 128).map(entry => scrub(entry, depth + 1));
     const obj = item as Record<string, unknown>;
     if (obj.type === "image" || (obj.type === "base64" && typeof obj.data === "string") || (typeof obj.mimeType === "string" && obj.mimeType.startsWith("image/") && typeof obj.data === "string")) {
-      return { type: "image", mimeType: obj.mimeType ?? "image/*", text: "[Imagen del navegador]" };
+      return { type: "image", mimeType: obj.mimeType ?? "image/*", text: "[Imagen de herramienta]" };
     }
     return Object.fromEntries(Object.entries(obj).map(([key, entry]) => [key, scrub(entry, depth + 1)]));
   };

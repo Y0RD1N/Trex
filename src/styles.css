@@ -624,42 +624,37 @@ body.dragging-sidebar .sidebar {
   display: none;
 }
 
-/* Sin recorte: al colapsar, el contenido se desliza a la izquierda en sincronía
-   con el ancho (misma duración y curva), así que nunca sobra ni falta nada. Y
-   colapsada, la capa flotante sobresale de esta caja de ancho 0. */
+/* La capa que se desplaza mantiene siempre el ancho completo y su propia
+   composición. El estado inerte se aplica al contenido, no a esta capa: así
+   WebKit no reconstruye la superficie que está animando en cada cambio. */
 .sidebar-clip {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  width: 100%;
   display: flex;
   overflow: visible;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  will-change: transform;
+  transition: transform var(--dur-layout) var(--ease-layout);
+}
+.sidebar.collapsed .sidebar-clip {
+  transform: translate3d(-100%, 0, 0);
+  pointer-events: none;
+}
+.sidebar.collapsed.peek .sidebar-clip {
+  transform: translate3d(0, 0, 0);
+  pointer-events: auto;
 }
 .sidebar-inner {
   flex: 0 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* Fondo propio: colapsada, el <aside> mide 0 y no lo aporta; sin esto la capa
-     flotante sería transparente y dejaría ver el terminal. */
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
-  opacity: 1;
-  transform: none;
-  transition: opacity var(--dur) var(--ease-out), transform var(--dur-layout) var(--ease-layout),
-    background-color var(--dur) var(--ease-out);
-}
-/* Oculta: fuera de la ventana por la izquierda. Solo se anima el transform: un
-   fundido de opacidad dejaría ver el terminal a través del panel mientras se
-   desliza, y eso se percibe como parpadeo. */
-.sidebar.collapsed .sidebar-inner {
-  opacity: 1;
-  transform: translateX(-100%);
-  pointer-events: none;
-  will-change: transform;
-  transition: transform var(--dur-layout) var(--ease-layout),
-    box-shadow 200ms var(--ease-out), background-color var(--dur) var(--ease-out);
+  transition: background-color var(--dur) var(--ease-out);
 }
 
 /* Franja superior: hueco arrastrable + cabecera. Es la barra de título de la
@@ -2735,14 +2730,10 @@ body.dragging-sidebar .sidebar {
 /* --- Barra lateral flotante ------------------------------------------------------
    Colapsada, el cursor en el borde izquierdo la trae de vuelta (ver
    useHoverReveal) como una capa por encima del terminal. No toca el layout: el terminal no se
-   redimensiona. Entra con un muelle suave y sale más rápido y sin rebote. */
-.sidebar.collapsed.peek .sidebar-inner {
-  transform: translateX(0);
-  pointer-events: auto;
+   redimensiona. La misma transición permite invertir el movimiento sin saltos. */
+.sidebar.collapsed .sidebar-inner {
   border-right-color: var(--border-strong);
   box-shadow: 28px 0 60px -20px rgba(0, 0, 0, 0.62), 10px 0 24px -14px rgba(0, 0, 0, 0.4);
-  transition: transform 460ms cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 360ms var(--ease-out), background-color var(--dur) var(--ease-out);
 }
 
 /* --- Barra superior autoocultable (modo inmersivo) -------------------------------
@@ -2786,7 +2777,7 @@ body.dragging-sidebar .sidebar {
   transition: transform 380ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 300ms var(--ease-out);
 }
 /* Tema claro: sombras más suaves y cálidas. */
-:root[data-theme="light"] .sidebar.collapsed.peek .sidebar-inner {
+:root[data-theme="light"] .sidebar.collapsed .sidebar-inner {
   box-shadow: 24px 0 48px -22px rgba(60, 45, 30, 0.3), 8px 0 18px -14px rgba(60, 45, 30, 0.22);
 }
 :root[data-theme="light"] .bar-slot.auto-hide.shown .tabs-bar {
@@ -2828,7 +2819,7 @@ body.dragging-sidebar .sidebar {
   -webkit-backdrop-filter: blur(24px) saturate(125%);
   backdrop-filter: blur(24px) saturate(125%);
 }
-:root[data-theme="dark"] .sidebar.collapsed.peek .sidebar-inner {
+:root[data-theme="dark"] .sidebar.collapsed .sidebar-inner {
   border-right-color: rgba(255, 255, 255, 0.07);
 }
 
@@ -3168,6 +3159,9 @@ body.dragging-sidebar .sidebar {
   background-clip: padding-box;
   clip-path: inset(0 round var(--window-radius));
 }
+/* El borde y overflow ya recortan el marco. Evita combinar un clip-path de
+   pantalla completa con la capa móvil en WebKit cuando la barra está oculta. */
+.app:has(> .sidebar.collapsed) { clip-path: none; }
 .sidebar-inner {
   border-top-left-radius: max(0px, calc(var(--window-radius) - 1px));
   border-bottom-left-radius: max(0px, calc(var(--window-radius) - 1px));

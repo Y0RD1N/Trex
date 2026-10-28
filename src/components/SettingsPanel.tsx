@@ -1,4 +1,5 @@
 import BrowserSettings from "./BrowserSettings";
+import IntegrationSettings from "./IntegrationSettings";
 /** Ajustes por tema, con cambios en borrador y opciones técnicas desplegables. */
 import { Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { ACCENT_PRESETS, DEFAULT_FONT_FAMILY, clamp } from "../api";
@@ -46,6 +47,7 @@ const SECTIONS = [
   { id: "notifications", label: "Notificaciones", icon: <BellIcon size={16} strokeWidth={1.6} />, description: "Avisos del escritorio cuando tus asistentes necesitan atención." },
   { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, description: "Perfiles independientes para Claude Code, Codex y Trex API." },
   { id: "browser", label: "Navegador", icon: <PanelIcon size={16} />, description: "Pruebas, capturas y grabaciones con tus agentes." },
+  { id: "integrations", label: "Integraciones", icon: <PanelIcon size={16} />, description: "Estado de las aplicaciones y el control de computadora." },
   { id: "sessions", label: "Sesiones", icon: <PanelIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
   { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
 ] as const;
@@ -302,6 +304,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 onChange={(profiles, defaultProfileId) => patch({ profiles, defaultProfileId })} />}
 
               {item.id === "browser" && section === "browser" && <BrowserSettings settings={draft} cwd={cwd} onChange={patch} onBusyChange={changeProfileBusy} />}
+              {item.id === "integrations" && section === "integrations" && <IntegrationSettings cwd={cwd} desktopEnabled={draft.desktopEnabled} onDesktopChange={desktopEnabled => patch({ desktopEnabled })} />}
 
               {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
               {item.id === "notifications" && <NotificationsSettings settings={draft} onChange={patch} />}
