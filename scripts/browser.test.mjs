@@ -55,6 +55,35 @@ const options = Object.freeze({ enabled: true, profile: "BROWSER27", clientId: "
 const ready = Object.freeze({ installed: true, ready: true, compatible: true });
 const nativeConfig = Object.freeze({ command: "C:\\Program Files\\Trex\\trex-browser.exe",
   args: Object.freeze(["mcp", "--cwd", "D:\\work\\with spaces", "--profile", "BROWSER27", "literal;$() --flag"]) });
+
+offlineTest("ordinary chats allocate a private persistent profile before constructing the native MCP grant", async () => {
+  const h = nativeHarness((command,args) => {
+    if(command === "trex_browser_status") return {...ready,capabilities:{spaces:true}};
+    if(command === "trex_browser_spaces") return {spaces:[{...args.members[0],profile:args.members[0].clientId === "first" ? "BROWSER2" : "BROWSER3"}]};
+    assert.equal(command,"trex_browser_mcp_config");return {command:"browser.exe",args:["--profile",args.profile]};
+  });
+  for(const clientId of ["first","second"]) {
+    const requested=browserOptions({browserEnabled:true,browserProfile:"BROWSER1"},clientId,"Codex · "+clientId);
+    const config=await h.connect(requested);
+    assert.deepEqual(config.args,["--profile",clientId === "first" ? "BROWSER2" : "BROWSER3"]);
+  }
+  assert.equal(h.calls.filter(call=>call.command==="trex_browser_spaces").length,2);
+  assert.ok(h.calls.every(call=>call.command!=="trex_browser_call"));
+});
+
+offlineTest("failed or foreign automatic bindings never fall back to a shared profile or take control", async () => {
+  for(const response of [null,{spaces:[]},{spaces:[{clientId:"foreign",profile:"BROWSER2"}]},{spaces:[{clientId:"own",profile:"BROWSER1"}]}]) {
+    const h=nativeHarness(command=>command==="trex_browser_status"?{...ready,capabilities:{spaces:true}}:response);
+    await assert.rejects(h.connect(browserOptions({browserEnabled:true,browserProfile:"BROWSER1"},"own")));
+    assert.ok(!h.calls.some(call=>call.command==="trex_browser_mcp_config"||call.command==="trex_browser_call"));
+  }
+});
+
+offlineTest("automatic space labels respect native UTF-8 limits without splitting Unicode characters",()=>{
+  const value=browserOptions({browserEnabled:true,browserProfile:"BROWSER1"},"own","🦖".repeat(100));
+  assert.equal(value.label,"🦖".repeat(25));assert.equal(new TextEncoder().encode(value.label).length,100);
+  assert.equal(browserOptions({browserEnabled:true,browserProfile:"BROWSER1"},"own","\n\r").label,"Agente");
+});
 const sha256 = "0123456789abcdef".repeat(4);
 const core = Object.freeze({ artifactId: "A0b1c2d3-1234-4567-8910-AbCdEf012345", sha256,
   mimeType: "image/png", bytes: 2048, width: 640, height: 480, kind: "screenshot",
@@ -177,11 +206,11 @@ offlineTest("browser options retain the client and enabled flag while normalizin
   for (const enabled of [true, false]) {
     for (const profile of ["BROWSER1", "BROWSER27", "BROWSER99"]) {
       assert.deepEqual(browserOptions({ browserEnabled: enabled, browserProfile: profile }, "client-original"),
-        { enabled, profile, clientId: "client-original" });
+        { enabled, profile, clientId: "client-original", automatic:true, label:"Agente" });
     }
     for (const profile of ["", "BROWSER0", "BROWSER01", "BROWSER100", "browser2", "BROWSER2\n"]) {
       assert.deepEqual(browserOptions({ browserEnabled: enabled, browserProfile: profile }, "client-original"),
-        { enabled, profile: "BROWSER1", clientId: "client-original" });
+        { enabled, profile: "BROWSER1", clientId: "client-original", automatic:true, label:"Agente" });
     }
   }
 });

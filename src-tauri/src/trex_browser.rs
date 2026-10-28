@@ -106,6 +106,16 @@ pub struct BrowserSpace { client_id: String, label: String, profile: String }
 pub struct BrowserSpaces { spaces: Vec<BrowserSpace> }
 
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserSpaceOverview {
+    client_id: String, label: String, profile: String,
+    running: bool, paused: bool, active: bool, tab_count: usize,
+    current_tool: Option<String>, url: String,
+}
+#[derive(Deserialize, Serialize)]
+pub struct BrowserSpaceInventory { spaces: Vec<BrowserSpaceOverview> }
+
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum BrowserContent {
     Text { text: String },
@@ -486,6 +496,29 @@ pub async fn trex_browser_spaces(cwd: String, members: Vec<BrowserSpaceMember>) 
     }).await
 }
 
+fn space_inventory(bytes: &[u8], cwd: &str) -> Result<BrowserSpaceInventory, String> {
+    if bytes.len()>PROBE_LIMIT {return Err(INVALID.into());}
+    let result: BrowserSpaceInventory = serde_json::from_slice(bytes).map_err(|_| INVALID.to_string())?;
+    if result.spaces.len() > 99 { return Err(INVALID.into()); }
+    let mut profiles=std::collections::HashSet::new();
+    for space in &result.spaces {
+        validate_context(cwd,"observe",&space.client_id,Some(&space.profile))?;
+        if !plain(&space.label,400) || space.label.chars().any(char::is_control) || !profiles.insert(&space.profile)
+            || space.tab_count > 10000 || space.url.len() > 4096 || space.url.chars().any(char::is_control)
+            || space.current_tool.as_ref().is_some_and(|name| !TOOL_NAMES.contains(&name.as_str())) { return Err(INVALID.into()); }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn trex_browser_list_spaces(cwd: String) -> Result<BrowserSpaceInventory, String> {
+    crate::blocking(move || {
+        validate_context(&cwd,"observe","host-spaces",None)?;
+        let output=invoke_at(&installed_browser_path()?, &["spaces","list","--cwd",&cwd,"--json"],None,PROBE_TIMEOUT,PROBE_LIMIT)?;
+        space_inventory(&output,&cwd)
+    }).await
+}
+
 #[tauri::command]
 pub async fn trex_browser_call(request: BrowserCallRequest) -> Result<BrowserCallResult, String> {
     crate::blocking(move || call(request)).await
@@ -660,5 +693,20 @@ mod tests {
         assert!(status.installed && status.compatible);
         assert_eq!(status.protocol_version.as_deref(), Some(PROTOCOL));
         assert!(status.error.as_ref().is_none_or(|error| error.code == "missing_browser"));
+    }
+
+    #[test]
+    fn project_space_inventory_is_bounded_and_keeps_legacy_and_allocated_profiles_distinct() {
+        let cwd=std::env::temp_dir().to_string_lossy().into_owned();
+        let first=serde_json::json!({"clientId":"same-client","label":"Manual","profile":"BROWSER1","running":true,"paused":false,"active":true,"tabCount":1,"currentTool":"browser_snapshot","url":"http://127.0.0.1:5176/vender"});
+        let mut second=first.clone();second["profile"]=serde_json::json!("BROWSER2");second["label"]=serde_json::json!("Codex");
+        let decode=|spaces:Value|space_inventory(&serde_json::to_vec(&serde_json::json!({"spaces":spaces})).unwrap(),&cwd);
+        assert_eq!(decode(serde_json::json!([first,second])).unwrap().spaces.len(),2);
+        assert!(decode(serde_json::json!([first,first])).is_err());
+        for (field,value) in [("currentTool",serde_json::json!("shell")),("profile",serde_json::json!("../other")),("url",serde_json::json!("http://localhost/\ninvalid")),("tabCount",serde_json::json!(-1))] {
+            let mut invalid=first.clone();invalid[field]=value;assert!(decode(serde_json::json!([invalid])).is_err());
+        }
+        assert!(decode(serde_json::json!(vec![first;100])).is_err());
+        assert!(space_inventory(&vec![b' ';PROBE_LIMIT+1],&cwd).is_err());
     }
 }

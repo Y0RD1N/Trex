@@ -54,6 +54,7 @@ trex-browser --version
 trex-browser doctor --json
 trex-browser tools --json --mode observe|qa|full
 trex-browser spaces --stdin-json
+trex-browser spaces list --cwd C:\absolute\project --json
 trex-browser profiles list --cwd C:\absolute\project
 trex-browser profiles create --cwd C:\absolute\project --profile BROWSER1
 trex-browser mcp --cwd C:\absolute\project --mode qa --client opaque-client-id --profile BROWSER1
@@ -107,13 +108,21 @@ Ownership is project/profile plus a logical client and monotonically changing ge
 ### Spaces, tabs and parallelism
 
 The desktop host reserves a stable persistent profile and client identity for
-**each team member**, including the coordinator. `spaces --stdin-json` accepts
+**each ordinary chat, planner, executor and team member**, including the coordinator. `spaces --stdin-json` accepts
 `{cwd,members:[{clientId,label}]}` and returns `{spaces:[{clientId,label,profile}]}`.
 Allocation is broker-serialized, validates the complete request first, preserves
 existing manual profiles, and never launches Chrome. BROWSER1 remains available
-for manually selected chat profiles; at most 98 allocated spaces fit a project.
+for explicit manual clients; ordinary chats no longer implicitly share the
+global profile preference. At most 98 allocated spaces fit a project.
 Repeated allocation recovers the same bindings after restart. The command and
 management endpoint are host APIs, not model-facing tools.
+
+`spaces list --cwd ABS --json` returns all saved instances in that project,
+including live legacy/manual profiles. Each entry includes its client/label,
+profile, running/paused/activity state, tab count, current tool and selected URL.
+This overview does not create browser contexts, join their input queues or
+change ownership. The app panel polls it while open, so other chats and teams
+remain visible and each human control targets the selected instance only.
 
 Ownership still covers a whole project/profile. Independent clients cannot
 create tabs in another owner's profile; shared identities serialize page inputs.

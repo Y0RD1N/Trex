@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { BrowserService } from '../worker/browser.mjs';
-import { ensureSpaces } from '../worker/spaces.mjs';
+import { ensureSpaces, listSpaces } from '../worker/spaces.mjs';
 import { context } from '../worker/security.mjs';
 import { tools, validateArguments } from '../worker/tools.mjs';
 
@@ -31,6 +31,21 @@ test('invalid or oversized allocations do not partially reserve profiles',t=>{
   for(let i=2;i<99;i++)service.createProfile({...ctx,profile:`BROWSER${i}`});
   assert.throws(()=>ensureSpaces(service,ctx,[{clientId:'one',label:'A'},{clientId:'two',label:'B'}]),/No free browser profiles/);
   assert.equal(service.profiles(ctx).length,97);assert.ok(!service.profiles(ctx).some(profile=>profile.id==='BROWSER99'));
+});
+
+test('the project overview reports all allocated and live manual instances without changing their owners',t=>{
+  const {service,ctx}=fixture(t);
+  const bindings=ensureSpaces(service,ctx,[{clientId:'one',label:'Codex · Chat'},{clientId:'two',label:'Claude · Review'}]).spaces;
+  const a=service.state({...ctx,profile:bindings[0].profile,clientId:'one'});a.owner='one';a.browser={};a.selected='page';a.tabs.set('page',{url:()=> 'http://127.0.0.1:5176/vender'});
+  const controller=new AbortController();service.operations.set('working',{ctx:{...ctx,profile:bindings[0].profile,clientId:'one'},name:'browser_snapshot',started:true,controller});
+  service.createProfile({...ctx,profile:'BROWSER1'});const manual=service.state({...ctx,profile:'BROWSER1'});manual.owner='one';manual.browser={};
+  const before=service.sessions.size,result=listSpaces(service,ctx);
+  assert.equal(result.spaces.length,3);assert.equal(service.sessions.size,before);
+  const working=result.spaces.find(space=>space.profile===bindings[0].profile);
+  assert.equal(working.active,true);assert.equal(working.currentTool,'browser_snapshot');assert.equal(working.url,'http://127.0.0.1:5176/vender');assert.equal(working.tabCount,1);
+  assert.equal(result.spaces.find(space=>space.profile===bindings[1].profile).running,false);
+  assert.equal(a.owner,'one');assert.equal(a.paused,false);assert.equal(manual.owner,'one');
+  assert.deepEqual(listSpaces(service,{...ctx,projectId:'other-project'}),{spaces:[]});
 });
 test('batch validation preserves bound policy and rejects every later nested input before dispatch',()=>{
   assert.equal(tools('full').find(tool=>tool.name==='browser_batch').annotations.readOnlyHint,false);

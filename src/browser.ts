@@ -1,6 +1,6 @@
 /** Trusted browser context lives outside model-supplied tool arguments. */
 export type BrowserMode = "observe" | "qa" | "full";
-export type BrowserOptions = { enabled: boolean; profile: string; clientId: string };
+export type BrowserOptions = { enabled: boolean; profile: string; clientId: string; automatic?: boolean; label?: string };
 export type BrowserStatus = {
   installed: boolean; ready: boolean; compatible: boolean; version?: string; protocolVersion?: string;
   browsers?: { id: string; name: string; available: boolean }[];
@@ -8,7 +8,7 @@ export type BrowserStatus = {
   error?: { code: string; message: string };
 };
 export type BrowserConfig = { command: string; args: string[] };
-export const BROWSER_INSTRUCTIONS = "Trex Browser is connected as the trex_browser MCP server. For browser work use its browser_navigate tool with the app's http(s) URL; this automatically opens the visible project browser, without the user opening it first. Start the application's dev server with normal workspace tools when necessary. Use browser_batch for ordered typed steps under the same permission; never replay a partial batch. Snapshot refs are page-scoped: retain tabId and revision. Inspect the page with browser_snapshot, screenshots, console, network and other permitted browser tools. Desktop/computer-use integrations control a different browser; their failures do not mean Trex Browser is unavailable. Report Trex Browser errors accurately and respect its bound permissions and manual-review requirements.";
+export const BROWSER_INSTRUCTIONS = "Trex Browser is connected as the trex_browser MCP server. Each app chat has an independently assigned browser space; other agents can work in their own spaces at the same time. Use your bound space; never take over another client's profile without the user's explicit request. For browser work use its browser_navigate tool with the app's http(s) URL; this automatically opens the visible project browser, without the user opening it first. Start the application's dev server with normal workspace tools when necessary. Use browser_batch for ordered typed steps under the same permission; never replay a partial batch. Snapshot refs are page-scoped: retain tabId and revision. Inspect the page with browser_snapshot, screenshots, console, network and other permitted browser tools. Desktop/computer-use integrations control a different browser; their failures do not mean Trex Browser is unavailable. Report Trex Browser errors accurately and respect its bound permissions and manual-review requirements.";
 export type BrowserResult = {
   content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
   structuredContent?: Record<string, unknown>; isError: boolean;
@@ -17,7 +17,7 @@ export type BrowserCall = {
   name: string; arguments: Record<string, unknown>; cwd: string; mode: BrowserMode; clientId: string;
   profile?: string; operationId?: string; timeoutMs?: number;
 };
-export type BrowserSpace = { clientId: string; profile: string; label: string; active?: boolean };
+export type BrowserSpace = { clientId: string; profile: string; label: string; active?: boolean; running?: boolean; paused?: boolean; tabCount?: number; currentTool?: string | null; pageTitle?: string; url?: string };
 export type BrowserProfile = { id: string; name: string; projectId: string; createdAt: string };
 export type BrowserArtifact = {
   id: string; sha256: string; mimeType: string; sizeBytes: number; width?: number; height?: number;
@@ -33,8 +33,14 @@ export function browserMode(mode: string | null | undefined, planningOnly = fals
   return mode === "full" || mode === "bypassPermissions" ? "full" : "qa";
 }
 export const validBrowserProfile = (value: string): boolean => /^BROWSER[1-9][0-9]?$/.test(value) && value.trim() === value;
-export function browserOptions(settings: { browserEnabled: boolean; browserProfile: string }, clientId: string): BrowserOptions {
-  return { enabled: settings.browserEnabled, profile: validBrowserProfile(settings.browserProfile) ? settings.browserProfile : "BROWSER1", clientId };
+export function browserSpaceLabel(value: string): string {
+  let result="", bytes=0;const encoder=new TextEncoder();
+  for(const char of value.replace(/[\x00-\x1f\x7f]/g," ").trim()) { const size=encoder.encode(char).length;if(bytes+size>100)break;result+=char;bytes+=size; }
+  return result || "Agente";
+}
+export function browserOptions(settings: { browserEnabled: boolean; browserProfile: string }, clientId: string, label = "Agente"): BrowserOptions {
+  return { enabled: settings.browserEnabled, profile: validBrowserProfile(settings.browserProfile) ? settings.browserProfile : "BROWSER1", clientId,
+    automatic: true, label: browserSpaceLabel(label) };
 }
 export function browserConfigForShell(config: BrowserConfig, shell: string): BrowserConfig {
   const match = /^(?:\\\\\?\\)?([a-z]):[\\/](.*)$/i.exec(config.command);

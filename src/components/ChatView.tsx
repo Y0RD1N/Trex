@@ -1326,7 +1326,8 @@ function CodexChat(props: ChatViewProps) {
 }
 
 function ChatView(input: ChatViewProps) {
-  const browser = useRef(browserOptions(input.settings, input.sessionId)).current;
+  const browser = useRef(browserOptions(input.settings, input.sessionId,
+    [input.profileName ?? (input.provider === "claude" ? "Claude Code" : input.provider === "codex" ? "Codex" : "Trex CLI"),input.sessionTitle].filter(Boolean).join(" · "))).current;
   const desktopEnabled = useRef(input.settings.desktopEnabled).current;
   const props = { ...input, browser, desktopEnabled };
   return props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;

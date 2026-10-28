@@ -943,6 +943,39 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     const foreign=await cli(['spaces','--stdin-json'],{cwd:workspace,members:[{clientId:'space-gamma',label:'Third'}]});
     assert.ok(!result.spaces.some(space=>space.profile===foreign.spaces[0].profile));
   });
+
+  it('ordinary chats allocate concurrently and the host overview stays live while another agent is working', {timeout:120_000}, async()=>{
+    const members=[{clientId:'ordinary-claude',label:'Claude · Revisión'},{clientId:'ordinary-codex',label:'Codex · Implementación'}];
+    const allocated=await Promise.all(members.map(member=>cli(['spaces','--stdin-json'],{cwd:workspace,members:[member]})));
+    const spaces=allocated.map(result=>result.spaces[0]);assert.notEqual(spaces[0].profile,spaces[1].profile);assert.ok(spaces.every(space=>space.profile!=='BROWSER1'));
+    const a=mcpSession('full',spaces[0]),b=mcpSession('full',spaces[1]);const gate=randomUUID();let held;
+    try{
+      await Promise.all([initializeMcp(a),initializeMcp(b)]);
+      success(await mcpTool(a,2,'browser_navigate',{url:fixture.url+'/'}));
+      held=mcpTool(a,3,'browser_evaluate',{function:'async route => { await fetch(route); return true; }',arg:`/gate/${gate}`});
+      await eventually(async()=>fixture.isGateHeld(gate),Boolean,'First ordinary chat did not hold its action');
+      success(await mcpTool(b,2,'browser_navigate',{url:fixture.url+'/'}));
+      success(await mcpTool(b,3,'browser_tabs',{action:'new',url:fixture.url+'/'}));
+      success(await mcpTool(b,4,'browser_click',{selector:'#increment'}));
+      const capture=success(await mcpTool(b,5,'browser_take_screenshot'));assert.equal(capture.artifacts[0].profile,spaces[1].profile);
+      const overview=await cli(['spaces','list','--cwd',workspace,'--json']);
+      const owner=overview.spaces.find(space=>space.profile===spaces[0].profile),peer=overview.spaces.find(space=>space.profile===spaces[1].profile);
+      assert.equal(owner.clientId,members[0].clientId);assert.equal(owner.active,true);assert.equal(owner.paused,false);assert.equal(owner.currentTool,'browser_evaluate');
+      assert.equal(peer.clientId,members[1].clientId);assert.equal(peer.running,true);assert.equal(peer.tabCount,2);assert.equal(peer.url,fixture.url+'/');
+      assert.equal(fixture.isGateHeld(gate),true);
+      await ok('browser_pause',{}, {clientId:spaces[1].clientId,profile:spaces[1].profile});
+      success(await mcpTool(b,6,'browser_close'));
+      const closed=await cli(['spaces','list','--cwd',workspace,'--json']);
+      assert.equal(closed.spaces.find(space=>space.profile===spaces[1].profile).running,false);
+      assert.equal(closed.spaces.find(space=>space.profile===spaces[0].profile).active,true);
+      assert.equal(fixture.isGateHeld(gate),true);
+      concurrencyResult('ordinary-chats-automatic-spaces',{allocatedIndependently:true,peerNavigationClickCapture:true,overviewLiveDuringOwnerAction:true,closingPeerLeavesOwnerRunning:true});
+    }finally{
+      fixture.releaseGate(gate);if(held)success(await held);
+      await mcpTool(a,4,'browser_close').catch(()=>{});await mcpTool(b,7,'browser_close').catch(()=>{});
+      a.child.stdin.end();b.child.stdin.end();assert.equal((await a.closed).code,0);assert.equal((await b.closed).code,0);
+    }
+  });
   it('typed batches return ordered durable receipts and reject invalid later steps before any input',async()=>{
     await navigate();
     failure(await call('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}},{tool:'browser_fill_form',arguments:{fields:[null]}}]}),'BROWSER_ERROR');

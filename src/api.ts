@@ -1,5 +1,5 @@
-import type { BrowserStatus, BrowserConfig, BrowserCall, BrowserResult, BrowserMode, BrowserProfile } from "./browser";
-import { validBrowserProfile } from "./browser";
+import type { BrowserStatus, BrowserConfig, BrowserCall, BrowserResult, BrowserMode, BrowserProfile, BrowserOptions, BrowserSpace } from "./browser";
+import { validBrowserProfile, browserSpaceLabel } from "./browser";
 /**
  * Capa de acceso al backend: envoltorios de `invoke`/`listen` y utilidades
  * compartidas (ids, valores por defecto, normalización y color de acento).
@@ -563,6 +563,20 @@ export const trexBrowserCall = (request: BrowserCall): Promise<BrowserResult> =>
 export const trexBrowserOpenArtifact = (id: string, cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserResult> => invoke("trex_browser_open_artifact", { id, cwd, mode, clientId, profile });
 export const trexBrowserProfiles = (cwd: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_profiles", { cwd });
 export const trexBrowserSpaces = (cwd: string, members: {clientId:string;label:string}[]): Promise<{spaces: import("./browser").BrowserSpace[]}> => invoke("trex_browser_spaces", {cwd,members});
+export const trexBrowserListSpaces = (cwd: string): Promise<{spaces: BrowserSpace[]}> => invoke("trex_browser_list_spaces", {cwd});
+/** Resolve a host-owned identity before creating any model grant; never take over another profile. */
+export async function trexBrowserResolveSpace(cwd: string, options: BrowserOptions, knownStatus?: BrowserStatus): Promise<BrowserOptions> {
+  const base = {enabled: options.enabled, clientId: options.clientId, profile: options.profile};
+  if (!options.enabled || !options.automatic) return base;
+  const status = knownStatus ?? await trexBrowserStatus();
+  if (!status.installed || !status.ready || !status.compatible) return {...base,enabled:false};
+  if (!status.capabilities?.spaces) throw new Error("Actualiza Trex Browser para habilitar un espacio independiente por agente.");
+  const result = await trexBrowserSpaces(cwd,[{clientId:options.clientId,label:browserSpaceLabel(options.label ?? "Agente")}]);
+  const space = result?.spaces?.[0];
+  if (result?.spaces?.length !== 1 || space?.clientId !== options.clientId || !validBrowserProfile(space.profile) || space.profile === "BROWSER1")
+    throw new Error("No se pudo confirmar el espacio independiente de este agente. No se usará un perfil compartido.");
+  return {...base,profile:space.profile};
+}
 export const trexBrowserCreateProfile = (cwd: string, profile: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_create_profile", { cwd, profile });
 
 export const agentTeamOpen = (team: import("./agentTeam").AgentTeam, cwd: string, resume = false): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_open", {

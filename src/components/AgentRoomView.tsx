@@ -54,7 +54,8 @@ const noop = (): void => undefined;
 /** Two independent provider sessions, one composer and a durable serial handoff. */
 export default function AgentRoomView(props: AgentRoomViewProps) {
   const { room } = props;
-  const browser = useRef(browserOptions(props.settings, room.id)).current;
+  const browsers = useRef(Object.fromEntries(ROLES.map(role=>[role,browserOptions(props.settings,`${room.id}-${role}`,`${ROLE_NAMES[role]} · ${room[role].agent.profileName}`)])) as Record<RoomRole,ReturnType<typeof browserOptions>>).current;
+  const browser = browsers[room.active];
   const desktopEnabled = useRef(props.settings.desktopEnabled).current;
   const latest = useRef(props);
   latest.current = props;
@@ -546,7 +547,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     {ROLES.map(role => {
       const participant = room[role], launch = participant.agent.launch;
       const options: ChatSessionOptions = {
-      browser, desktopEnabled, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
+      browser: browsers[role], desktopEnabled, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort,
         mode: role === "planner" ? "plan" : participant.mode ?? (participant.agent.provider === "claude" ? "default" : "auto"),
         planningOnly: role === "planner", visible: props.visible,

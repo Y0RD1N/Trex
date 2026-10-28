@@ -1,13 +1,18 @@
 # Espacios del navegador por agente
 
-Al iniciar un equipo con Trex Browser habilitado, el principal y cada
-colaborador reciben un perfil persistente propio. La asignación se conserva al
-reanudar el equipo, y no usa los perfiles que ya hayas creado manualmente.
+Con Trex Browser habilitado, cada chat normal, planificador, ejecutor y miembro
+de un equipo recibe un perfil persistente propio antes de conectar sus
+herramientas. Dos chats del mismo proyecto ya no comparten el perfil elegido en
+Ajustes. La asignación se conserva al reanudar la conversación y no usa los
+perfiles que ya hayas creado manualmente.
 Crear estos espacios no abre ventanas: cada navegador aparece cuando su agente
 navega por primera vez.
 
-En el botón **Espacios**, junto al campo de mensaje, puedes elegir un integrante,
-ver sus pestañas, traer una al frente, abrir otra, tomar capturas y grabar vídeo.
+En el botón **Espacios**, junto al campo de mensaje, puedes ver las instancias
+de todos los chats del proyecto, incluidos otros equipos y perfiles manuales.
+Cada fila muestra el agente, la página, las pestañas y si está trabajando,
+disponible o pausado. Al elegir una instancia puedes ver sus pestañas, traer una
+al frente, abrir otra, tomar capturas y grabar vídeo.
 **Pausar para revisar** detiene las entradas de ese espacio y mantiene disponibles
 las capturas. **Cerrar este espacio** pausa primero sus entradas y cierra solo
 su perfil. El agente puede volver a abrirlo si aún tiene una tarea activa.
@@ -74,3 +79,10 @@ cambios de propietario, administración de capturas ni subidas de archivos.
 Los perfiles de distintos integrantes tienen almacenamiento separado. Cada
 perfil sigue teniendo un propietario y una cola de entradas; varias pestañas
 de un mismo perfil no equivalen a varios agentes independientes.
+
+El inventario `trex-browser spaces list --cwd ABS --json` es un comando del host,
+no una herramienta del modelo: consultar las instancias no abre navegadores ni
+cambia propietarios. Pausar o cerrar una instancia desde el panel no detiene las
+demás. Un chat que estaba conectado a un perfil compartido antes de actualizar
+debe reconectarse para recibir su asignación independiente. El perfil anterior y
+sus datos permanecen disponibles en el panel; no se toma su control automáticamente.

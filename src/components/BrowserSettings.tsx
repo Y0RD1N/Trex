@@ -43,7 +43,7 @@ export default function BrowserSettings({ settings, cwd, onChange, onBusyChange 
   return <div className="browser-settings">
     <div className="browser-settings-card">
       <div className="browser-settings-heading"><span className="browser-settings-badge" aria-hidden="true">◎</span>
-        <div><h4>Trex Browser</h4><p>Un navegador compartido con tus agentes.</p></div>
+        <div><h4>Trex Browser</h4><p>Un espacio independiente para cada agente.</p></div>
         <span className={`browser-settings-status${status?.ready ? " is-ready" : ""}`}>{label}</span>
       </div>
       <p className="settings-hint">Prueba tu aplicación con ratón y teclado, revisa consola y red, toma capturas y graba vídeos cuando lo necesites.</p>
@@ -57,9 +57,9 @@ export default function BrowserSettings({ settings, cwd, onChange, onBusyChange 
       </div>
     </div>
     <div className="browser-settings-card"><h4>Perfil de navegación</h4>
-      <p className="settings-hint">Cada perfil conserva sus sesiones dentro del proyecto. Tus perfiles personales de Chrome permanecen separados.</p>
+      <p className="settings-hint">Los chats reciben su propio perfil automáticamente y pueden navegar en paralelo. Aquí puedes crear perfiles manuales; no sustituyen los espacios de otros agentes. Tus perfiles personales de Chrome permanecen separados.</p>
       <div className="browser-settings-field">
-        <label htmlFor={profileId}>Perfil elegido</label>
+        <label htmlFor={profileId}>Perfil manual</label>
         <Select id={profileId} value={settings.browserProfile} disabled={creating} align="start"
           menuClassName="browser-profile-menu" onChange={browserProfile => onChange({ browserProfile })}
           options={[...new Set([...profiles.map(profile => profile.id), settings.browserProfile])].map(profile => ({

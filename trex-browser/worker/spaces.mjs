@@ -17,7 +17,7 @@ export function ensureSpaces(service, ctx, members) {
   const planned = members.map(member => {
     const owned = profiles.find(profile => profile.space?.clientId === member.clientId);
     const profile = owned?.id || available.shift();
-    if (!profile) throw new Error('No free browser profiles remain in this project; close/archive unused spaces before creating more');
+    if (!profile) throw new Error('No free browser profiles remain in this project; existing profiles are preserved');
     return {...member, profile};
   });
   for (const space of planned) {
@@ -27,4 +27,22 @@ export function ensureSpaces(service, ctx, members) {
     writePrivate(file, JSON.stringify({...manifest,space:{clientId:space.clientId,label:space.label}}));
   }
   return {spaces:planned};
+}
+
+/** Project-scoped host overview. It never creates sessions, launches Chrome, or changes ownership. */
+export function listSpaces(service, ctx) {
+  const live = new Map();
+  for (const operation of service.operations.values()) if (operation.ctx.projectId === ctx.projectId && operation.started && !operation.finishedAt && !operation.controller.signal.aborted) live.set(operation.ctx.profile, operation);
+  return {spaces:service.profiles(ctx).flatMap(profile => {
+    const state=service.sessions.get(service.key({...ctx,profile:profile.id}));
+    const member=profile.space;
+    const clientId=member?.clientId ?? state?.owner ?? `manual-${profile.id}`;
+    if (typeof clientId !== 'string' || !clientId.length) return [];
+    const page=state?.tabs.get(state.selected),operation=live.get(profile.id);
+    const capture=state?.capture?.kind;
+    return [{clientId,profile:profile.id,label:member?.label ?? `Manual · ${profile.id}`,
+      running:!!state?.browser,paused:state?.paused===true,active:!!operation||!!capture,tabCount:state?.tabs.size??0,
+      currentTool:operation?.name ?? (capture==='video'?'browser_start_video':null),
+      url:String(page?.url()??'').slice(0,1024)}];
+  })};
 }

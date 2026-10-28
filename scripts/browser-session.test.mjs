@@ -64,6 +64,10 @@ function harness(t, provider, extra = {}) {
   const calls = [], nativeKills = [], status = extra.status ?? { installed: true, ready: true, compatible: true };
   const native = {
     async trexBrowserStatus() { calls.push({ method: "status" }); return typeof status === "function" ? status() : status; },
+    async trexBrowserResolveSpace(_cwd, options) {
+      calls.push({method:"space",clientId:options.clientId});
+      return {enabled:options.enabled,clientId:options.clientId,profile:options.clientId.endsWith("-planner")?"BROWSER2":options.clientId.endsWith("-executor")?"BROWSER3":"BROWSER4"};
+    },
     async trexBrowserMcpConfig(...args) {
       calls.push({ method: "config", args });
       if (extra.configWait) await extra.configWait.promise;
@@ -95,7 +99,7 @@ function harness(t, provider, extra = {}) {
       return offset >= 0 ? launch.flags[offset + 1]
         : dependencies["../workflowSafety"].claudeProfilePermissionMode(launch?.profileArgs ?? null, launch?.shell !== "wsl") ?? "default";
     },
-    api: { messageQueueMcpConfig: async () => inbox, agentKill: async procId => { nativeKills.push(procId); }, ...extra.api } });
+    api: { messageQueueMcpConfig: async () => inbox, agentKill: async procId => { nativeKills.push(procId); }, trexBrowserResolveSpace:native.trexBrowserResolveSpace, ...extra.api } });
   return Object.assign(h, { browserCalls: calls, nativeKills });
 }
 
@@ -110,10 +114,10 @@ function browserConfig(h, provider, index = -1) {
   assert.equal(config["mcp_servers.trex_inbox.command"], inbox["mcp_servers.trex_inbox.command"], "browser preserves the existing inbox server");
   return { command: config["mcp_servers.trex_browser.command"], args: config["mcp_servers.trex_browser.args"] };
 }
-function assertBrowser(h, provider, mode, index = -1) {
+function assertBrowser(h, provider, mode, index = -1, binding=browser) {
   const config = browserConfig(h, provider, index);
   assert.equal(config.command, "C:\\Trex Browser\\trex-browser.exe");
-  assert.deepEqual(config.args, ["mcp", "--cwd", cwd, "--mode", mode, "--client-id", browser.clientId, "--profile", browser.profile]);
+  assert.deepEqual(config.args, ["mcp", "--cwd", cwd, "--mode", mode, "--client-id", binding.clientId, "--profile", binding.profile]);
 }
 const send = h => h.session.send("Offline browser request", [], []);
 
@@ -335,7 +339,7 @@ for (const provider of ["claude", "codex", "trex"]) {
     const module = components.panelModule(env);
     const props = { ...components.baseProps(), provider, settings: { browserEnabled: true, browserProfile: "BROWSER23" } };
     const first = host.render(() => module.default(props));
-    assert.deepEqual(first.props.browser, { enabled: true, profile: "BROWSER23", clientId: props.sessionId });
+    assert.deepEqual(first.props.browser, { enabled: true, profile: "BROWSER23", clientId: props.sessionId,automatic:true,label:provider==="claude"?"Claude Code":provider==="codex"?"Codex":"Trex CLI" });
     const second = host.render(() => module.default({ ...props, settings: { browserEnabled: false, browserProfile: "BROWSER99" } }));
     assert.equal(second.props.browser, first.props.browser);
     assert.equal(second.props.browser.enabled, true);
@@ -344,7 +348,7 @@ for (const provider of ["claude", "codex", "trex"]) {
 }
 
 for (const [plannerProvider, executorProvider] of [["claude", "codex"], ["codex", "claude"]]) {
-  test(`AgentRoom: ${plannerProvider} planner + ${executorProvider} executor pin shared context and enforce their browser classes`, async t => {
+  test(`AgentRoom: ${plannerProvider} planner + ${executorProvider} executor pin independent contexts and enforce their browser classes`, async t => {
     const env = components.environment(), host = components.host(t);
     const { ChatPanel } = components.panelModule(env);
     const forbid = () => assert.fail("Runtime hooks must be mounted through the offline provider harness");
@@ -362,21 +366,31 @@ for (const [plannerProvider, executorProvider] of [["claude", "codex"], ["codex"
     assert.equal(initial.length, 2);
     const planner = initial.find(node => node.props.role === "planner").props.options;
     const executor = initial.find(node => node.props.role === "executor").props.options;
-    assert.equal(planner.browser, executor.browser);
-    assert.deepEqual(planner.browser, browser);
+    assert.notEqual(planner.browser, executor.browser);
+    assert.equal(planner.browser.clientId,props.room.id+"-planner");
+    assert.equal(executor.browser.clientId,props.room.id+"-executor");
+    assert.equal(planner.browser.automatic,true);assert.equal(executor.browser.automatic,true);
     assert.equal(planner.mode, "plan"); assert.equal(planner.planningOnly, true);
     assert.equal(executor.mode, executorProvider === "claude" ? "bypassPermissions" : "full"); assert.equal(executor.planningOnly, false);
     assert.notEqual(planner.sessionId, executor.sessionId);
     const changed = runtimes(render({ ...props, settings: { browserEnabled: false, browserProfile: "BROWSER99" } }));
-    for (const node of changed) assert.equal(node.props.options.browser, planner.browser);
+    for (const node of changed) assert.equal(node.props.options.browser, node.props.role==="planner"?planner.browser:executor.browser);
     for (const [provider, options, mode] of [[plannerProvider, planner, "observe"], [executorProvider, executor, "full"]]) {
       const h = harness(t, provider, options); await h.ready();
-      assertBrowser(h, provider, mode);
+      assertBrowser(h, provider, mode,-1,{clientId:options.browser.clientId,profile:options.planningOnly?"BROWSER2":"BROWSER3"});
       assert.equal(await send(h), true);
     }
     t.after(() => env.timers.clear());
   });
 }
+
+for(const provider of ["claude","codex","trex"])test(`${provider}: automatic chat startup binds the allocated space without serializing frontend-only options`,async t=>{
+  const requested={enabled:true,automatic:true,label:provider,profile:"BROWSER1",clientId:"ordinary-"+provider};
+  const h=harness(t,provider,{browser:requested});await h.ready();
+  if(provider==="trex")assert.deepEqual(h.writes.find(write=>write.method==="session/start").params.browser,{enabled:true,clientId:requested.clientId,profile:"BROWSER4"});
+  else assertBrowser(h,provider,"qa",-1,{clientId:requested.clientId,profile:"BROWSER4"});
+  assert.equal(await send(h),true);assert.ok(h.browserCalls.some(call=>call.method==="space"));
+});
 
 const imageBytes = "OFFLINE_SECRET_BASE64_IMAGE_BYTES";
 const artifact = { id: "opaque_Broker_id-7", sha256: "a".repeat(64), mimeType: "image/png", sizeBytes: 42,

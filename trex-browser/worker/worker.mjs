@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { privateHome, readPrivate, writePrivate, jsonRead, context, MAX_JSON, safePath, sha256, childEnvironment } from './security.mjs';
 import { BrowserService, detectBrowser, isObservation } from './browser.mjs';
-import { ensureSpaces } from './spaces.mjs';
+import { ensureSpaces, listSpaces } from './spaces.mjs';
 import { VERSION, PROTOCOL, tools, MODES, mcpInitialization } from './tools.mjs';
 
 const entry=fileURLToPath(import.meta.url);
@@ -76,7 +76,7 @@ async function daemon(){
     try{let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>1024*1024)throw new Error('Input exceeds 1 MiB');}const body=JSON.parse(raw||'{}');
       if(req.url==='/health'){send(200,{ok:true,version:VERSION,pid:process.pid});return;}
       if(req.url==='/grant'){const ctx=context(body);const grantId=crypto.randomBytes(32).toString('hex');grants.set(grantId,{ctx,expires:Date.now()+120000});if(grants.size>2000)for(const [id,g] of grants)if(g.expires<Date.now())grants.delete(id);send(200,{grantId});return;}
-      if(req.url==='/spaces'){const ctx=context(body);send(200,ensureSpaces(service,ctx,body.members));return;}
+      if(req.url==='/spaces'){const ctx=context(body);send(200,body.action==='list'?listSpaces(service,ctx):ensureSpaces(service,ctx,body.members));return;}
       if(req.url==='/profiles'){const ctx=context(body);if(body.action==='create')service.createProfile(ctx);send(200,{profiles:service.profiles(ctx)});return;}
       if(req.url==='/shutdown'){send(200,{stopping:true});setImmediate(()=>shutdown());return;}
       if(req.url!=='/call'){send(404,{error:'Unknown route'});return;}
@@ -131,7 +131,7 @@ async function main(){const args=argMap(process.argv.slice(2));const command=arg
   if(command==='mcp'){await mcp(args);return;}
   if(command==='call'){if(!args['stdin-json'])throw new Error('call requires --stdin-json');emit(await doCall(await stdinJson()));return;}
   if(command==='artifact-open'){const input=await stdinJson();emit(await doCall({...input,name:'browser_artifact',arguments:{artifactId:input.artifactId,open:true}}));return;}
-  if(command==='spaces'){if(!args['stdin-json'])throw new Error('spaces requires --stdin-json');const input=await stdinJson(),ctx=context({...input,mode:'observe',clientId:'host-spaces'}),home=privateHome();await ensureBroker(home);emit(await ipc(home,'/spaces',{...ctx,members:input.members}));return;}
+  if(command==='spaces'){const listing=args._[1]==='list';if(!listing&&!args['stdin-json'])throw new Error('spaces requires --stdin-json');const input=listing?{cwd:args.cwd}:await stdinJson(),ctx=context({...input,mode:'observe',clientId:'host-spaces'}),home=privateHome();await ensureBroker(home);emit(await ipc(home,'/spaces',{...ctx,...(listing?{action:'list'}:{members:input.members})}));return;}
   if(command==='profiles'){const ctx=boundArgs(args);const home=privateHome();await ensureBroker(home);emit(await ipc(home,'/profiles',{...ctx,action:args._[1]||'list'}));return;}
   if(['pause','resume','stop','status','takeover'].includes(command)){const home=privateHome();if(command==='stop'&&!args.cwd){if(!await running(home)){emit({stopping:false,running:false});return;}emit(await ipc(home,'/shutdown',{}));return;}emit(await doCall({...boundArgs(args),name:`browser_${command==='stop'?'close':command}`,arguments:{}}));return;}
   throw new Error('Commands: --version, doctor --json, prepare --json, tools --json, profiles list|create --cwd ABS, mcp --cwd ABS --mode observe|qa|full --client ID, call --stdin-json, artifact-open --stdin-json, pause|resume|status|takeover|stop');
