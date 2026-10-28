@@ -17,7 +17,7 @@ const compiled=new Function("require","exports","window","requestAnimationFrame"
 const agent=(provider)=>({profileId:provider,profileName:provider,provider,model:"model-"+provider,effort:"high",launch:{profileId:provider,profileName:provider,command:provider,args:null,shell:"powershell",launchMode:"arg",env:null}});
 const member=(id,provider,role,canWrite=false)=>({id,name:id,role,canWrite,instructions:"Verify the task",agent:agent(provider),conversationId:null});
 function nodes(node){if(!node||typeof node!=="object")return [];if(Array.isArray(node))return node.flatMap(nodes);return [node,...nodes(node.props?.children),...nodes(node.props?.toolbar)];}
-function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,initial=null,restoredHistory=false,setup}={}){
+function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,initial=null,restoredHistory=false,setup,settings={}}={}){
   let team={id:"team-test",epoch:"epoch-1",phase,master:member("principal","claude","coordinator"),workers:[member("implement","trex","implementation",true),member("review","codex","review")],order:[],initial,error:null};
   if(setup!==undefined)team.setup=setup;
   if(restoredHistory)for(const member of [team.master,...team.workers])member.conversationId="550e8400-e29b-41d4-a716-446655440000";
@@ -49,7 +49,7 @@ function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,
     if(name==="./AgentIcon")return {default:"AgentIcon"};if(name==="./Icons")return {RotateIcon:"RotateIcon",StopIcon:"StopIcon"};
     throw new Error("Unexpected TeamView dependency "+name);
   },exports,env.window,env.requestAnimationFrame,{randomUUID:()=>"epoch-"+(++timer)});
-  const props={sessionId:"tab",cwd:"D:/test",settings:{},projectName:"Test",projectId:"project",visible:true,focused:true,onTeamChange:next=>{team=next;},onMessage:text=>notices.push(text),onRunning(){},onExit(){}};
+  const props={sessionId:"tab",cwd:"D:/test",settings,projectName:"Test",projectId:"project",visible:true,focused:true,onTeamChange:next=>{team=next;},onMessage:text=>notices.push(text),onRunning(){},onExit(){}};
   const render=()=>{tree=h.render(()=>exports.default({...props,team}));return tree;};
   const publish=()=>{render();for(const node of nodes(tree).filter(node=>node.props?.options&&node.props?.publish))node.props.publish(node.props.id,node.props.epoch,{...sessions[node.props.id]});render();};
   const settle=async()=>{for(let i=0;i<6;i++){await component.flush();publish();}};
@@ -75,6 +75,18 @@ test("only principal receives delegation; participants retain distinct native mo
 test("delegation is claimed once, sends full instructions, and returns only the attributed final report",async t=>{
   const h=harness(t);await h.settle();h.queue();await h.tick();assert.equal(h.delivered.length,1);assert.equal(h.delivered[0].member,"implement");assert.match(h.delivered[0].text,/Implement the specific change/);assert.match(h.delivered[0].text,/Verify the task/);assert.equal(h.snapshot.tasks[0].status,"running");
   await h.tick();assert.equal(h.delivered.length,1);h.complete("implement");h.publish();await h.tick();assert.equal(h.snapshot.tasks[0].status,"completed");assert.equal(h.snapshot.tasks[0].report,"Implementation verified");
+});
+test("the current team shares one browser identity and dispatches workers serially",async t=>{
+  const h=harness(t,{settings:{browserEnabled:true,browserProfile:"BROWSER1"}});await h.settle();
+  const runtimes=nodes(h.tree).filter(node=>node.props?.options);
+  for(const runtime of runtimes)assert.deepEqual(runtime.props.options.browser,{enabled:true,profile:"BROWSER1",clientId:"team-test"});
+  h.queue();h.snapshot.tasks.push({id:"review-task",epoch:"epoch-1",key:"review-key",memberId:"review",instruction:"Review after implementation",status:"queued",report:null,createdAt:2,updatedAt:2});
+  await h.tick();await h.tick();await h.tick();
+  assert.deepEqual(h.delivered.map(item=>item.member),["implement"]);
+  assert.equal(h.snapshot.tasks[1].status,"queued");
+  h.complete("implement");h.publish();await h.tick();await h.tick();
+  assert.deepEqual(h.delivered.map(item=>item.member),["implement","review"]);
+  assert.equal(h.snapshot.tasks[0].status,"completed");assert.equal(h.snapshot.tasks[1].status,"running");
 });
 test("Stop during context preparation prevents provider delivery and preserves uncertainty",async t=>{
   const wait=deferred(),h=harness(t,{prepareWait:wait});await h.settle();h.queue();await h.tick();h.panel().session.interrupt();wait.resolve();await h.settle();

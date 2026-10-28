@@ -761,10 +761,9 @@ impl Policy {
             validate_name(&entry.file_name())?;
             let child = path.join(entry.file_name());
             let browser_data = chromium_managed_data_child(home, &child);
-            let handle = open_checked(
-                &child,
-                FILE_READ_ATTRIBUTES | READ_CONTROL | if browser_data { WRITE_DAC } else { 0 },
-            )?;
+            let Some(handle) = open_tree_entry(home, &child)? else {
+                continue;
+            };
             let directory =
                 file_information(&handle)?.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
             let checked_acl = self.verify_acl(
@@ -880,6 +879,29 @@ impl Policy {
                 .context("could not restrict imported component cache permissions");
         }
         Ok(())
+    }
+}
+
+fn open_tree_entry(home: &Path, child: &Path) -> Result<Option<OwnedHandle>> {
+    let managed = chromium_managed_data_child(home, child);
+    match open_checked(
+        child,
+        FILE_READ_ATTRIBUTES | READ_CONTROL | if managed { WRITE_DAC } else { 0 },
+    ) {
+        Ok(handle) => Ok(Some(handle)),
+        // Chrome rotates cache and journal files while other clients join the
+        // broker. An entry gone before it can be opened has no object to audit.
+        // This exception never covers the profile root, tokens or artifacts;
+        // existing entries still pass the same handle, link and ACL checks.
+        Err(error)
+            if managed
+                && error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -1043,6 +1065,44 @@ mod tests {
         drop(first);
         let second = PrivateHome::at(&test.0).unwrap();
         assert_eq!(second.path(), test.0);
+    }
+
+    #[test]
+    fn a_rotated_chromium_child_can_disappear_between_enumeration_and_open() {
+        let test = TestHome::new();
+        let home = PrivateHome::at(&test.0).unwrap();
+        let directory = home
+            .path()
+            .join("projects/0123456789abcdef01234567/BROWSER1/user-data/Default/Cache");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("rotating-entry"), b"cache").unwrap();
+        let entry = checked_absolute_path(
+            &fs::read_dir(&directory)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path(),
+        )
+        .unwrap();
+        fs::remove_file(&entry).unwrap();
+        assert!(open_tree_entry(home.path(), &entry).unwrap().is_none());
+        for relative in [
+            "broker.token",
+            "artifacts/missing",
+            "projects/0123456789abcdef01234567/BROWSER1/profile.json",
+            "projects/0123456789abcdef01234567/BROWSER2/user-data",
+            "projects/short/BROWSER1/user-data/missing",
+        ] {
+            assert!(
+                open_tree_entry(
+                    home.path(),
+                    &checked_absolute_path(&home.path().join(relative)).unwrap()
+                )
+                .is_err(),
+                "{relative}"
+            );
+        }
     }
 
     #[test]

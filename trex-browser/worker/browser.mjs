@@ -67,6 +67,7 @@ export class BrowserService {
     const browser=detectBrowser();if(!browser.available)throw new Error('Install Google Chrome (or Microsoft Edge) before opening a browser');
     this.createProfile(ctx);const userData=path.join(this.profileDir(ctx),'user-data');safePath(userData,{allowMissing:true});
     s.startupStage='launch';s.browser=await chromium.launchPersistentContext(userData,{executablePath:browser.executablePath,headless:process.env.TREX_BROWSER_HEADLESS==='1',chromiumSandbox:true,acceptDownloads:true,viewport:{width:1280,height:800},timeout:20000,args:['--disable-component-update'],downloadsPath:path.join(this.home,'artifacts'),env:childEnvironment()});
+    s.cdps=new Map();s.networkConditions=new WeakMap();s.emulationOffline=false;
     // A single owner owns Playwright/CDP. Never attach to a user's existing browser.
     try{s.guard=await guardBrowser(s.browser,browser.executablePath,phase=>{s.startupStage=phase;},error=>{s.supervisorError=error.message;this.pause(s,'runtime',s.active);s.active?.controller.abort();});s.supervisorError=null;}catch(e){const failed=s.browser;s.browser=null;this.pause(s,'runtime');failed.browser().close().catch(()=>{});throw Object.assign(new Error(`Owned browser supervisor could not establish control (${s.startupStage}); inspect the browser before resuming`),{code:'UNCERTAIN'});}
     s.browser.setDefaultTimeout(10000);s.browser.setDefaultNavigationTimeout(15000);
@@ -188,7 +189,25 @@ export class BrowserService {
       case 'browser_select_option':await (await this.locator(s,a)).selectOption(a.values,{timeout:10000});actionDone();return out({selected:true});
       case 'browser_evaluate':{if(a.function.length>32768)throw new Error('JavaScript limit 32 KiB');const data=await this.frame(s,a).evaluate(({source,arg})=>{const fn=(0,eval)(`(${source})`);if(typeof fn!=='function')throw new Error('function must be a JavaScript function expression');return fn(arg);},{source:a.function,arg:a.arg});actionDone();if(JSON.stringify(data)?.length>65536)throw new Error('Evaluation result exceeds 64 KiB');return out({value:data,untrustedContent:true});}
       case 'browser_resize':await p.setViewportSize({width:bounded(a.width,200,3840,1280),height:bounded(a.height,200,2160,800)});return out({viewport:p.viewportSize()});
-      case 'browser_emulate':{if(a.colorScheme)await p.emulateMedia({colorScheme:a.colorScheme});if(a.offline!==undefined)await s.browser.setOffline(a.offline);const c=await this.cdp(s,p);if(a.cpuRate!==undefined)await c.send('Emulation.setCPUThrottlingRate',{rate:bounded(a.cpuRate,1,20,1)});if([a.latency,a.downloadThroughput,a.uploadThroughput].some(v=>v!==undefined))await c.send('Network.emulateNetworkConditions',{offline:a.offline||false,latency:bounded(a.latency,0,10000,0),downloadThroughput:bounded(a.downloadThroughput,-1,1e9,-1),uploadThroughput:bounded(a.uploadThroughput,-1,1e9,-1)});return out({emulated:true});}
+      case 'browser_emulate':{
+        if(a.colorScheme)await p.emulateMedia({colorScheme:a.colorScheme});
+        if(a.offline!==undefined){await s.browser.setOffline(a.offline);s.emulationOffline=a.offline;}
+        const c=await this.cdp(s,p);if(a.cpuRate!==undefined)await c.send('Emulation.setCPUThrottlingRate',{rate:bounded(a.cpuRate,1,20,1)});
+        if(a.offline!==undefined||[a.latency,a.downloadThroughput,a.uploadThroughput].some(v=>v!==undefined)){
+          s.networkConditions||=new WeakMap();
+          const previous=s.networkConditions.get(p)||{latency:0,downloadThroughput:-1,uploadThroughput:-1};
+          const next={latency:bounded(a.latency,0,10000,previous.latency),downloadThroughput:bounded(a.downloadThroughput,-1,1e9,previous.downloadThroughput),uploadThroughput:bounded(a.uploadThroughput,-1,1e9,previous.uploadThroughput)};
+          s.networkConditions.set(p,next);
+          // Context offline mode and custom CDP throttling are separate control
+          // sessions. Keep them in agreement on every previously throttled tab;
+          // otherwise navigator.onLine can be false while fetch still succeeds.
+          for(const page of a.offline!==undefined?s.browser.pages():[p]){
+            const conditions=s.networkConditions.get(page),session=page===p?c:s.cdps?.get(page);
+            if(conditions&&session)await session.send('Network.emulateNetworkConditions',{...conditions,offline:s.emulationOffline===true});
+          }
+        }
+        return out({emulated:true});
+      }
       case 'browser_console_messages':{const events=s.events.slice(-bounded(a.limit,1,300,100));if(a.clear)s.events=[];return out({events,untrustedContent:true});}
       case 'browser_network_requests':return out({requests:[...s.network.values()].slice(-bounded(a.limit,1,300,100)).map(x=>x.meta),untrustedContent:true});
       case 'browser_network_body':{const entry=s.network.get(a.requestId);if(!entry)throw new Error('Request ID expired');let body;if(a.kind==='request'){body=entry.request.postDataBuffer()||Buffer.alloc(0);}else{if(!entry.response)throw new Error('Response unavailable');const headers=entry.response.headers();const len=Number(headers['content-length']);if(!Number.isFinite(len)||len<0||len>1024*1024||headers['content-encoding']&&headers['content-encoding']!=='identity')throw new Error('Response body requires uncompressed Content-Length <= 1 MiB');await abortableRead(entry.response.finished(),signal);if(signal.aborted)throw new Error('Read cancelled');body=await abortableRead(entry.response.body(),signal);}if(body.length>1024*1024)throw new Error('Body exceeds 1 MiB');return out({body:body.toString('utf8'),bytes:body.length,untrustedContent:true});}

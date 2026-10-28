@@ -160,8 +160,8 @@ async function brokerRequest(route, body = {}, options = {}) {
   });
 }
 
-function mcpSession(mode = 'full') {
-  const child = spawn(commandExecutable, [...workerArgs, 'mcp', '--cwd', workspace, '--mode', mode, '--client', 'test', '--profile', 'BROWSER1'], { cwd: runtime, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+function mcpSession(mode = 'full', binding = {}) {
+  const child = spawn(commandExecutable, [...workerArgs, 'mcp', '--cwd', workspace, '--mode', mode, '--client', binding.clientId || 'test', '--profile', binding.profile || 'BROWSER1'], { cwd: runtime, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   children.add(child);
   let stdout = '', stderr = '';
   child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
@@ -183,6 +183,34 @@ async function initializeMcp(session) {
   session.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'integration', version: '1' } } });
   const messages = await eventually(async () => session.messages(), values => values.some(value => value.id === 1), 'MCP adapter failed to initialize');
   assert.equal(messages.find(value => value.id === 1).result.protocolVersion, '2025-11-25');
+}
+
+async function mcpTool(session, id, name, args = {}) {
+  session.send({ jsonrpc:'2.0', id, method:'tools/call', params:{name,arguments:args} });
+  const messages = await eventually(async () => session.messages(), values => values.some(value => value.id === id), `MCP ${name} did not finish`, 35_000);
+  const reply = messages.find(value => value.id === id);
+  assert.equal(reply.error, undefined, `MCP ${name} failed at the transport boundary`);
+  return reply.result;
+}
+
+async function gatedAction() {
+  const gate = randomUUID(), operationId = randomUUID();
+  const pending = call('browser_evaluate', { function:'async route => { await fetch(route); return "gate released"; }', arg:`/gate/${gate}` }, {operationId,timeoutMs:60_000});
+  try { await eventually(async () => fixture.isGateHeld(gate), Boolean, 'Owner action never reached the loopback gate'); }
+  catch (error) { fixture.releaseGate(gate); throw error; }
+  return {gate,operationId,pending};
+}
+
+async function waitForReservation(operationId) {
+  const file = path.join(home,'receipts',`${sha256(operationId)}.json`);
+  return eventually(async () => {
+    try { return JSON.parse(await fs.readFile(file,'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  }, value => value?.operationId === operationId, 'Queued operation never reached the real broker');
+}
+
+function concurrencyResult(scenario, result) {
+  console.info(`TREX_CONCURRENCY_RESULT ${JSON.stringify({scenario,...result})}`);
 }
 
 async function receiptNames() { return new Set(await fs.readdir(path.join(home, 'receipts'))); }
@@ -313,7 +341,12 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       } finally {
         for (const child of children) child.kill();
         if (fixture) await fixture.close();
-        if (root) await fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        if (root) {
+          const resolved = await fs.realpath(root), temporary = await fs.realpath(os.tmpdir());
+          assert.equal(path.dirname(resolved), temporary, 'Cleanup must stay in the isolated temporary parent');
+          assert.match(path.basename(resolved), /^trex-browser-integration-/);
+          await fs.rm(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        }
       }
     }
   });
@@ -415,6 +448,48 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     failure(await call('browser_file_upload', { selector: '#upload', paths: [path.join(root, 'outside.txt')] }), 'BROWSER_ERROR', /outside workspace/);
     failure(await call('browser_file_upload', { selector: '#upload', paths: ['..' + path.sep + 'outside.txt'] }), 'BROWSER_ERROR', /outside workspace/);
     assert.equal(await evaluate(() => document.querySelector('#upload').files[0].name), 'upload.txt');
+  });
+
+  it('controls hover, drag, low-level pointer input and wheel', async () => {
+    await ok('browser_navigate',{url:`${fixture.url}/controls`});
+    await ok('browser_hover',{selector:'#hover-target'});
+    assert.equal(await evaluate(()=>document.querySelector('#hover-state').textContent),'Hovered');
+    await ok('browser_drag',{source:{selector:'#drag-source'},destination:{selector:'#drag-target'}});
+    assert.equal(await evaluate(()=>document.querySelector('#drag-target').textContent),'Dropped fixture payload');
+    const point=await evaluate(()=>{const r=document.querySelector('#low-click').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};});
+    await ok('browser_mouse',{action:'move',...point,steps:5});
+    await ok('browser_mouse',{action:'down',button:'left'});
+    await ok('browser_mouse',{action:'up',button:'left'});
+    assert.equal(await evaluate(()=>document.querySelector('#low-count').textContent),'1');
+    await ok('browser_mouse',{action:'click',...point,button:'left'});
+    assert.equal(await evaluate(()=>document.querySelector('#low-count').textContent),'2');
+    const scroll=await evaluate(()=>{const r=document.querySelector('#scroll-panel').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};});
+    await ok('browser_mouse',{action:'move',...scroll});
+    await ok('browser_mouse',{action:'wheel',deltaY:280,deltaX:0});
+    await ok('browser_wait_for',{text:'Scrolled',time:3});
+    assert.ok(await evaluate(()=>document.querySelector('#scroll-panel').scrollTop>0));
+  });
+
+  it('emulates color scheme, CPU, network throttling and offline mode together', async () => {
+    await ok('browser_navigate',{url:`${fixture.url}/controls`});
+    const before=await ok('browser_tabs',{action:'list'}),first=before.data.tabs.find(tab=>tab.selected).tabId;
+    let second;
+    const probe=tabId=>ok('browser_evaluate',{tabId,function:'async()=>{const online=navigator.onLine;try{await fetch("/api/echo");return {online,fetchSucceeded:true};}catch{return {online,fetchSucceeded:false};}}'});
+    try {
+      await ok('browser_emulate',{colorScheme:'dark',cpuRate:2,latency:15,downloadThroughput:1_000_000,uploadThroughput:1_000_000});
+      assert.equal(await evaluate(()=>matchMedia('(prefers-color-scheme: dark)').matches),true);
+      const added=await ok('browser_tabs',{action:'new',url:`${fixture.url}/controls`});
+      second=added.data.tabs.find(tab=>!before.data.tabs.some(old=>old.tabId===tab.tabId)).tabId;
+      await ok('browser_emulate',{tabId:second,latency:25});
+      await ok('browser_emulate',{tabId:first,offline:true});
+      for(const tabId of [first,second])assert.deepEqual((await probe(tabId)).data.value,{online:false,fetchSucceeded:false},'Offline mode must override earlier throttling on every affected tab');
+      await ok('browser_emulate',{tabId:second,uploadThroughput:9000});
+      assert.deepEqual((await probe(second)).data.value,{online:false,fetchSucceeded:false},'A partial throttle update must preserve offline mode');
+    } finally {
+      await ok('browser_emulate',{tabId:first,colorScheme:'light',offline:false,cpuRate:1,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+      if(second){assert.deepEqual((await probe(second)).data.value,{online:true,fetchSucceeded:true});await ok('browser_tabs',{action:'close',tabId:second});}
+    }
+    assert.deepEqual((await probe(first)).data.value,{online:true,fetchSucceeded:true});
   });
 
   it('addresses iframe elements with frameId and manages tabs and history', async () => {
@@ -761,6 +836,97 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     assert.equal(await evaluate(() => document.querySelector('#count').textContent), '0');
     await ok('browser_click', { selector: '#increment' });
     assert.equal(await evaluate(() => document.querySelector('#count').textContent), '1');
+  });
+
+  it('independent clients cannot create a tab or steal control while the profile owner is working', {timeout:90_000}, async () => {
+    await navigate();
+    const before=await ok('browser_tabs',{action:'list'}), action=await gatedAction();
+    try {
+      const started=performance.now();
+      failure(await call('browser_tabs',{action:'new',url:`${fixture.url}/next`},{clientId:'parallel-foreign'}),'OWNERSHIP');
+      const rejectedMs=performance.now()-started;
+      const status=await ok('browser_status');
+      assert.equal(status.data.pendingAction.operationId,action.operationId);
+      assert.equal(status.data.paused,false);
+      assert.equal((await ok('browser_status',{}, {clientId:'parallel-foreign'})).data.owner,'other');
+      assert.equal(fixture.isGateHeld(action.gate),true);
+      assert.deepEqual((await ok('browser_tabs',{action:'list'})).data.tabs.map(tab=>tab.tabId),before.data.tabs.map(tab=>tab.tabId));
+      assert.equal((await ok('browser_take_screenshot')).artifacts[0].kind,'screenshot');
+      concurrencyResult('independent-clients-same-profile',{result:'OWNERSHIP',rejectedMs:Math.round(rejectedMs),ownerStillRunning:true,ownerPaused:false,observationStillAvailable:true});
+    } finally { fixture.releaseGate(action.gate); success(await action.pending); }
+  });
+
+  it('a shared workflow identity can queue a new tab but page actions remain serialized', {timeout:90_000}, async () => {
+    await navigate();
+    const before=await ok('browser_tabs',{action:'list'}), action=await gatedAction(), operationId=randomUUID();
+    let settled=false;
+    const queued=call('browser_tabs',{action:'new',url:`${fixture.url}/next`},{operationId,timeoutMs:60_000}).then(value=>{settled=true;return value;});
+    try {
+      await waitForReservation(operationId);
+      await delay(200);
+      assert.equal(settled,false,'A new-tab mutation must not jump the existing action queue');
+      const status=await ok('browser_status');
+      assert.equal(status.data.pendingAction.operationId,action.operationId);
+      assert.equal(status.data.tabs,before.data.tabs.length);
+      assert.equal(fixture.isGateHeld(action.gate),true);
+    } finally { fixture.releaseGate(action.gate); success(await action.pending); }
+    const result=success(await queued);
+    const created=result.data.tabs.find(tab=>!before.data.tabs.some(old=>old.tabId===tab.tabId));
+    assert.ok(created);assert.equal(created.url,`${fixture.url}/next`);
+    await ok('browser_tabs',{action:'close',tabId:created.tabId});
+    concurrencyResult('shared-workflow-same-profile',{result:'queued-then-completed',newTabWaitedForOwner:true,independentActionQueues:false});
+  });
+
+  it('a separate MCP client creates and controls tabs in another profile while the first agent remains busy', {timeout:120_000}, async () => {
+    await navigate();
+    await evaluate(()=>{localStorage.setItem('parallel-isolation','owner-a');return true;});
+    const before=await ok('browser_tabs',{action:'list'}), session=mcpSession('full',{clientId:'parallel-agent-b',profile:'BROWSER2'});
+    let action,closed=false;
+    try {
+      await initializeMcp(session);
+      action=await gatedAction();
+      const started=performance.now();
+      success(await mcpTool(session,2,'browser_navigate',{url:`${fixture.url}/`}));
+      const tabResult=success(await mcpTool(session,3,'browser_tabs',{action:'new',url:`${fixture.url}/`}));
+      assert.equal(tabResult.data.tabs.length,2);
+      success(await mcpTool(session,4,'browser_click',{selector:'#increment'}));
+      const page=success(await mcpTool(session,5,'browser_evaluate',{function:'() => ({count:document.querySelector("#count").textContent,storage:localStorage.getItem("parallel-isolation")})'}));
+      assert.equal(page.data.value.count,'1');assert.equal(page.data.value.storage,null);
+      const screenshot=success(await mcpTool(session,6,'browser_take_screenshot'));
+      await checkArtifact(screenshot.artifacts[0],'screenshot','image/png',{profile:'BROWSER2'});
+      const workMs=performance.now()-started;
+      const owner=await ok('browser_status');
+      assert.equal(owner.data.pendingAction.operationId,action.operationId);
+      assert.equal(owner.data.paused,false);
+      assert.equal(fixture.isGateHeld(action.gate),true);
+      assert.deepEqual((await ok('browser_tabs',{action:'list'})).data.tabs.map(tab=>tab.tabId),before.data.tabs.map(tab=>tab.tabId));
+      success(await mcpTool(session,7,'browser_close'));closed=true;
+      assert.equal((await ok('browser_status')).data.pendingAction.operationId,action.operationId,'Closing the peer must leave the first agent active');
+      concurrencyResult('independent-clients-separate-profiles',{result:'parallel-completed',newTabs:1,clickVerified:true,screenshotVerified:true,isolatedStorage:true,ownerStillRunning:true,peerColdLaunchAndWorkMs:Math.round(workMs)});
+    } finally {
+      if(action){fixture.releaseGate(action.gate);success(await action.pending);}
+      if(!closed)await mcpTool(session,8,'browser_close').catch(()=>{});
+      session.child.stdin.end();assert.equal((await session.closed).code,0);
+    }
+    assert.equal(await evaluate(()=>localStorage.getItem('parallel-isolation')),'owner-a');
+    assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'0');
+  });
+
+  it('tab-targeted actions work but snapshot references are shared across tabs in a profile', async () => {
+    await navigate();
+    const before=await ok('browser_tabs',{action:'list'}), first=before.data.tabs.find(tab=>tab.selected).tabId;
+    const added=await ok('browser_tabs',{action:'new',url:`${fixture.url}/`});
+    const second=added.data.tabs.find(tab=>!before.data.tabs.some(old=>old.tabId===tab.tabId)).tabId;
+    try {
+      const snapshot=await ok('browser_snapshot',{tabId:first});
+      const button=snapshot.data.elements.find(element=>element.tag==='button'&&element.name==='Increment counter');assert.ok(button);
+      await ok('browser_snapshot',{tabId:second});
+      failure(await call('browser_click',{tabId:first,ref:button.ref,revision:snapshot.data.revision}),'STALE_SNAPSHOT');
+      await ok('browser_click',{tabId:first,selector:'#increment'});
+      assert.equal((await ok('browser_evaluate',{tabId:first,function:'() => document.querySelector("#count").textContent'})).data.value,'1');
+      assert.equal((await ok('browser_evaluate',{tabId:second,function:'() => document.querySelector("#count").textContent'})).data.value,'0');
+      concurrencyResult('tabs-within-one-profile',{result:'explicit-tab-targeting-works',snapshotReferences:'profile-wide',laterSnapshotInvalidatesEarlierRefs:true});
+    } finally { await ok('browser_tabs',{action:'close',tabId:second}); }
   });
 
   it('requires explicit ownership takeover and increments generation for pause/resume/takeover', async () => {

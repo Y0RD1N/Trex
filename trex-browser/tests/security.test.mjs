@@ -7,6 +7,32 @@ import { context, workspaceFile, safePath, Artifacts, sha256, childEnvironment }
 import { tools, validateArguments } from '../worker/tools.mjs';
 import { BrowserService } from '../worker/browser.mjs';
 
+test('offline state stays consistent with CDP throttling across tabs and partial updates',async()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-network-emulation-'));
+  try{
+    fs.mkdirSync(path.join(home,'artifacts'));const service=new BrowserService(home),ctx=context({cwd:home,mode:'full',clientId:'owner'}),state=service.state(ctx);
+    const a={},b={},sent=new Map([[a,[]],[b,[]]]),offline=[];
+    state.owner=ctx.clientId;state.browser={pages:()=>[a,b],setOffline:async value=>offline.push(value)};
+    state.tabs.set('a',a);state.tabs.set('b',b);state.selected='a';
+    state.cdps=new Map([a,b].map(page=>[page,{send:async(method,args)=>sent.get(page).push({method,args})}]));
+    const emulate=(args,id)=>service.call(ctx,'browser_emulate',args,id,1000);
+    await emulate({latency:120,downloadThroughput:10000},'throttle-a');
+    await emulate({tabId:'b',latency:20},'throttle-b');
+    await emulate({offline:true},'offline-all');
+    assert.deepEqual(offline,[true]);
+    assert.deepEqual(sent.get(a).at(-1).args,{latency:120,downloadThroughput:10000,uploadThroughput:-1,offline:true});
+    assert.equal(sent.get(b).at(-1).args.offline,true);assert.equal(sent.get(b).at(-1).args.latency,20);
+    await emulate({tabId:'b',uploadThroughput:9000},'partial-b');
+    assert.deepEqual(sent.get(b).at(-1).args,{latency:20,downloadThroughput:-1,uploadThroughput:9000,offline:true});
+    await emulate({offline:false},'online-all');
+    assert.deepEqual(offline,[true,false]);assert.equal(sent.get(a).at(-1).args.offline,false);assert.equal(sent.get(b).at(-1).args.offline,false);
+    assert.equal(sent.get(b).at(-1).args.uploadThroughput,9000);
+  }finally{
+    const resolved=fs.realpathSync(home);assert.equal(path.dirname(resolved),fs.realpathSync(os.tmpdir()));assert.match(path.basename(resolved),/^trex-browser-network-emulation-/);
+    fs.rmSync(resolved,{recursive:true,force:true});
+  }
+});
+
 test('observe tools are a fixed narrow subset; outer policy cannot be overridden',()=>{
   assert.deepEqual(tools('observe').map(t=>t.name),['browser_navigate','browser_navigate_back','browser_reload','browser_tabs','browser_frames','browser_snapshot','browser_console_messages','browser_network_requests','browser_network_body','browser_take_screenshot','browser_wait_for','browser_artifact','browser_status','browser_cancel']);
   for(const name of ['browser_click','browser_evaluate','browser_file_upload','browser_start_video','browser_emulate','browser_takeover'])assert.throws(()=>validateArguments(name,{},'observe'));

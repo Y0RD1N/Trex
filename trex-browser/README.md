@@ -103,6 +103,35 @@ The broker listens only on IPv4 loopback, requires an exact Host header, rejects
 
 Ownership is project/profile plus a logical client and monotonically changing generation. Another client must explicitly take over. `browser_status` distinguishes `pauseReason: manual | uncertain | runtime | null` and reports the uncertain operation ID/tool without arguments. Normal agent work must not call `browser_pause`. An explicit human pause is preserved until the owner resumes it.
 
+### Tabs, agents and actual parallelism
+
+- The browser owner covers the whole project/profile, not an individual tab.
+  An independent client cannot create a new tab in an already-owned profile:
+  it receives `OWNERSHIP` before dispatch, without pausing the owner's action.
+- Adapters sharing one logical workflow client can create tabs, but page actions
+  use one profile-wide queue. A new-tab action waits for the active action.
+  The selected tab and snapshot-reference revision are also profile-wide.
+  Use explicit `tabId` targeting and fresh snapshots; reading a second tab
+  invalidates references from an earlier snapshot of the first tab.
+- Separate profiles have independent browsers, storage and action queues.
+  Real native/MCP tests hold an action in BROWSER1 while a different client cold
+  launches BROWSER2, creates a tab, clicks, captures and closes BROWSER2.
+  BROWSER1 remains active and its page and storage remain unchanged.
+- The current desktop team shares one browser identity/profile for all members
+  and dispatches one worker delegation at a time. It does not automatically
+  allocate independent browser profiles or run workers concurrently. The browser
+  engine's parallel-profile support does not imply parallel team scheduling.
+
+QA and full expose the same 41 browser tools; observe exposes 14 tools with
+runtime restrictions on tab creation, page input, JavaScript and captures.
+These are web-page/browser controls, not native desktop or Chrome-settings UI
+controls. Model-facing arguments cannot change their bound client or profile.
+
+Network throttling is tracked per tab. Profile-wide offline changes are also
+applied to every CDP session with network conditions, preserving that tab's
+throttling values. Updating only latency or throughput preserves offline mode.
+Real HTTP tests verify that `navigator.onLine` and request failures agree.
+
 Only page actions share the serialized action queue. Screenshots, snapshots, frame/tab listings, logs, bounded network reads, artifact reads and waits remain available during a pause and while an action is pending. Navigation, tab switching, log clearing, arbitrary JavaScript and mouse/keyboard input are not observations. A timed-out observation returns `READ_TIMEOUT` with no manual-review requirement and never pauses page controls; a cancelled observation likewise leaves the profile available. Late cancelled snapshots cannot replace newer refs. Shared browser startup remains single-flight. Observation still enforces project/profile/client ownership and the immutable mode.
 
 Status and an owner's dialog response operate outside the action queue, so a synchronous alert can be handled while its initiating action waits. Cancel identifies one exact operation in the same project/client/profile. A cancelled or timed-out page action whose effects cannot be established pauses controls with an uncertain manual-review receipt. The agent can inspect its outcome using screenshots/snapshots, then explicitly call `browser_resume` before a new action; it must never replay the previous action automatically. If `pendingAction.cancelRequested` remains true, `browser_resume` returns `RECOVERY_PENDING` immediately instead of waiting behind the stuck execution. After inspection, the owner can use `browser_close` to discard that execution and cancel its queued inputs, then explicitly navigate again. Another full/QA client may explicitly take over for this recovery without resuming the old action. The dedicated profile is preserved; neither the old action nor its URL is reopened automatically. Capture finalization and explicit profile close remain possible during a pause. Locator action waits are bounded at ten seconds. Unissued queued calls return a cancelled receipt and do not pause another operation; foreign calls are rejected before dispatch. Cancellation does not close the profile. Durable operation reservations survive broker restarts and reject duplicate IDs while retained. Runtime-supervisor failures require component recovery rather than silently disabling supervision.
