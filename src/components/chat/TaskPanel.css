@@ -20,10 +20,10 @@
 .chat-task-list li { margin: 3px 0 0; }
 .chat-task-list button { display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 11px 8px; border: 0; border-radius: 9px; background: transparent; color: var(--text); text-align: left; font-family: inherit; cursor: pointer; }
 .chat-task-list button:hover, .chat-task-list button[aria-current="step"] { background: var(--bg-elevated); }
-.chat-task-mark { flex: 0 0 15px; height: 15px; display: grid; place-items: center; margin-top: 2px; border: 1px solid var(--text-dim); border-radius: 50%; color: var(--text-dim); font-size: 10px; }
+.chat-task-mark { flex: 0 0 16px; width: 16px; height: 16px; display: grid; place-items: center; margin-top: 2px; border: 1px solid var(--text-dim); border-radius: 50%; color: var(--text-dim); font-size: 10px; line-height: 1; }
+.chat-task-mark > svg { display: block; }
 .chat-task-list [data-status="completed"] .chat-task-mark { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
-.chat-task-list [data-status="in_progress"] .chat-task-mark { border-color: var(--accent); }
-.chat-task-list [data-status="in_progress"] .chat-task-mark::after { content: ""; height: 5px; width: 5px; background: var(--accent); border-radius: 50%; }
+.chat-task-list [data-status="in_progress"] .chat-task-mark { border: 0; color: var(--accent); }
 .chat-task-list :is([data-status="failed"], [data-status="uncertain"]) .chat-task-mark { border-color: var(--warn); color: var(--warn); }
 .chat-task-copy { min-width: 0; flex: 1; }
 .chat-task-copy strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font-size: 12px; line-height: 1.6; font-weight: 500; overflow-wrap: anywhere; white-space: pre-line; }

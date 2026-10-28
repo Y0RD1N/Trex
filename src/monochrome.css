@@ -180,7 +180,6 @@
   background: var(--bg-surface);
   box-shadow: 0 2px 12px rgb(0 0 0 / .025);
 }
-:root[data-theme] .chat-dock:has(textarea:focus-visible) { border-color: var(--accent-strong); }
 :root[data-theme] .chat-composer { padding: 10px 13px 6px 17px; }
 :root[data-theme] .chat-controls { padding: 3px 8px 7px; margin: 0 7px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 :root[data-theme] .chat-controls .chat-tray-chip, :root[data-theme] .chat-controls .input.chat-tray-chip { border-color: transparent; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text-muted); }
