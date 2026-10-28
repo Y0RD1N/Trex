@@ -27,7 +27,7 @@ function harness(t, extra = {}) {
     const p = JSON.parse(raw); writes.push({ process: id, ...p });
     if (p.method === "initialize" && !holdInit) respond(p, { protocolVersion: 1 });
     if (p.method === "models/list") respond(p, { models: [{ id: "deepseek", name: "DeepSeek", efforts: ["high", "max"], contextWindow: 1_000_000 }, { id: "mini", efforts: ["low"], contextWindow: 32_000 }] });
-    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery });
+    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true });
     if (p.method === "turn/start" && !holdTurn) respond(p, { accepted: true });
     if (["turn/interrupt", "permission/respond", "session/recover"].includes(p.method)) respond(p, {});
   };
@@ -45,7 +45,7 @@ function harness(t, extra = {}) {
   return { writes, spawns, actions, acks, options, line, render, spawnReady, respond, queue,
     get state() { return render().state; }, get session() { return render(); },
     holdInitialization() { holdInit = true; }, holdTurn() { holdTurn = true; }, holdSessionStart() { holdSessionStart = true; },
-    async start() { const p = session.start(); await flush(); render(); await p; render(); },
+    async start() { const p = session.start(); void p.catch(() => undefined); await flush(); render(); await p; render(); },
     complete(id, status = "completed") { line({ method: "turn/completed", params: { sessionId: "session", messageId: id, status } }); render(); },
     get userWrites() { return writes.filter(w => w.method === "turn/start"); },
   };
@@ -59,6 +59,13 @@ test("Trex initializes without a model turn and forwards the exact profile, mode
   assert.equal(await h.session.send("Implementa esto", [], []), true);
   assert.equal(h.userWrites[0].params.model, "deepseek"); assert.equal(h.userWrites[0].params.effort, "high");
   h.complete(h.userWrites[0].params.messageId); assert.equal(h.state.pendingTurns, 0);
+});
+
+for (const acknowledgement of [undefined,null,false]) test(`Trex refuses unconfirmed tool instructions (${acknowledgement}) before sending a user turn`, async t => {
+  const h=harness(t,{instructionsAck:acknowledgement});
+  await assert.rejects(h.start(),/no confirmó las instrucciones/);
+  assert.equal(await h.session.send("Control Windows",[],[]),false);
+  assert.equal(h.userWrites.length,0);
 });
 
 test("Stopping before initialization settles an unsent message promptly and never delivers it later", async t => {
@@ -123,7 +130,7 @@ test("a delayed A startup followed by B and then A uses the capacity of each eff
   const start = h.writes.filter(w => w.method === "session/start").at(-1);
   assert.equal(start.params.model, "deepseek");
   h.session.setModel("mini");
-  h.respond(start, { sessionId: "session", mode: "full", model: "deepseek", contextWindow: 1_000_000, items: [] });
+  h.respond(start, { sessionId: "session", mode: "full", model: "deepseek", contextWindow: 1_000_000, items: [], instructionsApplied:true });
   assert.equal(await sending, true);
   assert.equal(h.userWrites[0].params.model, "mini");
   h.line({ method: "turn/completed", params: { sessionId: "session", messageId: h.userWrites[0].params.messageId,
@@ -148,7 +155,7 @@ test("same-session restart without an optional usage summary preserves the known
   h.session.setMode("full"); h.holdSessionStart();
   const startup = h.session.start(); await flush();
   const start = h.writes.filter(w => w.method === "session/start").at(-1);
-  h.respond(start, { sessionId: "session", mode: "full", model: "deepseek", contextWindow: 1_000_000,
+  h.respond(start, { sessionId: "session", mode: "full", model: "deepseek", contextWindow: 1_000_000, instructionsApplied:true,
     items: [{ kind: "user", id: "old", text: "First turn", images: 0, previews: [] }] });
   await startup;
   assert.equal(h.state.usage.total, 1_000);

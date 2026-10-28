@@ -1,5 +1,6 @@
 import { record, type Json } from "./chatState";
 import { INBOX_SERVER, INBOX_TOOL, inboxContent, inboxTool, type QueueReceipt, type QueueSnapshot } from "./messageQueue";
+import { integrationInstructions } from "./integrations";
 
 export const claudeInboxInitialize = { subtype: "initialize", sdkMcpServers: [INBOX_SERVER] };
 export const CLAUDE_INBOX_TOOL = `mcp__${INBOX_SERVER}__${INBOX_TOOL}`;
@@ -25,7 +26,8 @@ export async function claudeInboxReply(requestId: string, request: Json, read: (
   if (message.method === "initialize") {
     const versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
     result = { protocolVersion: versions.includes(String(params.protocolVersion)) ? params.protocolVersion : versions[versions.length - 1],
-      capabilities: { tools: {} }, serverInfo: { name: INBOX_SERVER, version: "1.0.0" } };
+      capabilities: { tools: {} }, serverInfo: { name: INBOX_SERVER, version: "1.0.0" },
+      instructions: integrationInstructions("claude") };
   } else if (message.method === "tools/list") result = { tools: [inboxTool] };
   else if (message.method === "tools/call") {
     if (params.name !== INBOX_TOOL) error = { code: -32602, message: "Unknown trex inbox tool." };

@@ -139,6 +139,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
         desktopEnabled: current.desktopEnabled === true, ...(current.browser ? { browser: current.browser } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
+      if (result.instructionsApplied !== true) throw new Error("Trex CLI no confirmó las instrucciones de las herramientas. Actualiza el CLI antes de iniciar esta conversación.");
       if (current.desktopEnabled && result.desktopEnabled !== true) throw new Error("Este Trex CLI no confirmó el control de computadora. Actualiza el CLI antes de activarlo.");
       if (planningOnly && result.mode !== "plan") throw new Error("Trex CLI no confirmó el modo de planificación de solo lectura.");
       if (team && result.teamEnabled !== true) throw new Error("Este Trex CLI no confirmó la delegación. Actualiza el CLI antes de usarlo como agente principal.");

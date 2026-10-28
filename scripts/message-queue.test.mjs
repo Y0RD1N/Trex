@@ -10,6 +10,7 @@ const { claudeInboxReply, claudeInboxInitialize, CLAUDE_INBOX_TOOL, codexInboxRe
 const { initialChatState, baseReducer } = await load("chatState");
 const { chatReducer, claudeChatFlags, controlLine } = await load("claudeChat");
 const { codexReducer, resultLine } = await load("codexChat");
+const { integrationInstructions } = await load("integrations");
 
 const message = (id, extra = {}) => ({ id, text: `instrucción ${id}`, images: [], previews: [], createdAt: 100, ...extra });
 const batch = (id, messages) => ({ messages: [], receipt: { id, messages } });
@@ -317,6 +318,7 @@ for (const protocolVersion of ["2024-11-05", "2025-03-26", "2025-06-18", "2025-1
     assert.equal(outer.response.request_id, "outer-initialize");
     assert.deepEqual(mcp, { jsonrpc: "2.0", id: 7, result: {
       protocolVersion, capabilities: { tools: {} }, serverInfo: { name: INBOX_SERVER, version: "1.0.0" },
+      instructions: integrationInstructions("claude"),
     } });
     assert.equal(reply.receipt, null);
     assert.equal(reads, 0);

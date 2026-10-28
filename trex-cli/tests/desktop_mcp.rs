@@ -59,6 +59,13 @@ fn planning_is_fixed_and_requests_are_deduplicated() {
     let mut server = Server::start("plan");
     let init=server.call(1,"initialize",json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}));
     assert_eq!(init["result"]["serverInfo"]["name"], "trex-desktop");
+    let guidance = init["result"]["instructions"].as_str().unwrap();
+    assert!(
+        guidance.contains("desktop_status")
+            && guidance.contains("desktop_monitors")
+            && guidance.contains("read-only")
+            && guidance.contains("trex_browser")
+    );
     let listing = server.call(2, "tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 4);

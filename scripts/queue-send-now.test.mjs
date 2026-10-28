@@ -139,7 +139,7 @@ function harness(t, provider, extra = {}) {
       case "skills/list": case "account/rateLimits/read": respond(message, { data: [] }); break;
       case "session/start":
         conversation = `conversation-${++conversationCounter}`;
-        respond(message, { sessionId: conversation, mode: message.params.mode, model: "offline-model", items: [], recoveryRequired: !!extra.recovery });
+        respond(message, { sessionId: conversation, mode: message.params.mode, model: "offline-model", items: [], recoveryRequired: !!extra.recovery, instructionsApplied: extra.instructionsAck !== false });
         break;
       case "thread/start": case "thread/resume":
         conversation = `thread-${++conversationCounter}`;

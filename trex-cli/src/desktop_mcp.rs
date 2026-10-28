@@ -79,6 +79,14 @@ fn result(value: Result<Value>) -> Value {
         }
     }
 }
+fn instructions(mode: &str) -> String {
+    let permissions = if mode == "plan" {
+        "This process is read-only: status, monitors, screenshots and waits only. Input is unavailable."
+    } else {
+        "Input tools are available subject to the host agent's permission policy. Use their schemas for pointer motion, double clicks, gradual drag, vertical or horizontal scroll, typing and shortcuts."
+    };
+    format!("Trex desktop controls the real computer and Windows applications; it is separate from the trex_browser project browser. When the user requests computer control, prefer this server's desktop_* tools. Start with desktop_status and desktop_monitors, then take desktop_screenshot for the selected monitor and inspect screen and focus before input. Coordinates are physical screenshot pixels. Every input consumes its one-use observation; it expires after 30 seconds. Capture again after focus or display changes. {permissions} Never claim an unadvertised capability. If unavailable, explain the diagnostic rather than silently switching control systems. Never automatically replay uncertain input. For websites requested in Trex Browser, use its connected browser_navigate tool instead of treating a desktop-control failure as a browser failure.")
+}
 pub async fn serve(mode: &str) -> Result<()> {
     ensure!(
         matches!(mode, "plan" | "full"),
@@ -137,7 +145,7 @@ pub async fn serve(mode: &str) -> Result<()> {
                 let Some(id) = request.get("id").filter(|id| id.is_string() || id.is_number()).cloned() else { continue; };
                 let method = request["method"].as_str().unwrap_or("");
                 let response = if request["jsonrpc"] != "2.0" { error(id.clone(), -32600, "Invalid request") }
-                else if method == "initialize" { json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"trex-desktop","version":"0.1.0"}}}) }
+                else if method == "initialize" { json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"trex-desktop","version":"0.1.0"},"instructions":instructions(mode)}}) }
                 else if method == "ping" { json!({"jsonrpc":"2.0","id":id,"result":{}}) }
                 else if method == "tools/list" {
                     let tools: Vec<Value> = provider.definitions(mode).into_iter().map(|v| {

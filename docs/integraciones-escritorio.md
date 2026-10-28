@@ -15,6 +15,29 @@ Blender, HyperFrames y GitHub en Windows y Linux. La configuración, detección,
 permisos y estado deben presentarse en TREX, sin pedir al usuario que configure
 manualmente servidores MCP para cada asistente.
 
+## Cómo reciben las funciones los agentes
+
+Claude y Codex reciben el catálogo MCP de `trex_desktop` y confirman su conexión
+antes del primer envío. La inicialización MCP incluye instrucciones de uso y
+el modo real de permisos. El puente MCP de la app también entrega a Claude la
+guía de integraciones cuando el perfil personaliza el prompt del sistema, sin
+reemplazar ese prompt. Codex recibe la guía en `developerInstructions` al abrir,
+reanudar o bifurcar el hilo.
+
+Trex CLI anuncia las herramientas nativas en cada petición al proveedor. Aplica
+las `instructions` enviadas por la app y devuelve `instructionsApplied:true`;
+la app bloquea el envío si un CLI antiguo no confirma esa aplicación. Las pruebas
+de proceso comprueban el mensaje de sistema y el catálogo que llega al proveedor
+simulado, además de los límites, la restauración y los permisos. El modo de chat
+de terminal también contiene guía básica para sus herramientas anunciadas.
+
+La guía distingue control de Windows/escritorio, Trex Browser y los CLI de GitHub,
+Blender e HyperFrames. Las herramientas de escritorio requieren activación en
+Ajustes para un chat nuevo. El catálogo del modo plan excluye entrada; Trex API
+excluye entrada si no se ha confirmado visión del modelo. Recibir el catálogo y
+las instrucciones no garantiza que un modelo elija siempre la herramienta correcta;
+no se sustituye esta verificación por una afirmación de uso real de modelos de pago.
+
 ## Arquitectura
 
 - El ejecutable `trex-agent` ofrece un servidor MCP de escritorio por proceso,

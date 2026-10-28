@@ -640,6 +640,120 @@ fn application_tools_obey_planning_and_approval_modes() {
 }
 
 #[test]
+fn session_guidance_reaches_the_actual_provider_and_is_immutable_only_while_live() {
+    let f = Fixture::new();
+    let mut agent = f.agent();
+    let guidance = "DISCOVERY_GUIDANCE_V1: For computer requests use desktop_status then desktop_screenshot. For applications prefer github_*, blender_run and hyperframes_run when advertised.";
+    let start = agent.rpc("session/start",json!({"cwd":f.workspace.path(),"mode":"plan","instructions":guidance,"desktopEnabled":true}));
+    assert_eq!(start["instructionsApplied"], true);
+    let session = start["sessionId"].as_str().unwrap();
+    let duplicate=agent.rpc("session/start",json!({"cwd":f.workspace.path(),"mode":"plan","instructions":guidance,"desktopEnabled":true,"conversationId":session}));
+    assert_eq!(duplicate["instructionsApplied"], true);
+    let changed=agent.request("session/start",json!({"cwd":f.workspace.path(),"mode":"plan","instructions":"different","desktopEnabled":true,"conversationId":session}));
+    assert!(agent.response(changed).get("error").is_some());
+    agent.turn(session, "discovery-v1", "What tools can you use?");
+    let request = f.api.chat();
+    let policy = request.body["messages"][0]["content"].as_str().unwrap();
+    assert_eq!(request.body["messages"][0]["role"], "system");
+    assert!(policy.contains(guidance));
+    assert!(policy.contains("Plan mode is strictly read-only"));
+    for name in ["desktop_status", "desktop_screenshot", "github_repos"] {
+        assert!(request.body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == name));
+    }
+    assert!(!request.body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["function"]["name"] == "desktop_click"));
+    request.completion(
+        calls(vec![tool(
+            "forbidden",
+            "write_file",
+            json!({"path":"must-not-exist.txt","content":"forbidden"}),
+        )]),
+        "tool_calls",
+    );
+    let next = f.api.chat();
+    assert!(tool_output(&next, "forbidden")["error"].is_string());
+    assert!(!f.workspace.path().join("must-not-exist.txt").exists());
+    next.final_text("Tools are available subject to plan permissions.");
+    agent.completed("discovery-v1", "completed");
+    assert!(!f
+        .journal(session)
+        .to_string()
+        .contains("DISCOVERY_GUIDANCE_V1"));
+    drop(agent);
+    let mut restored = f.agent();
+    let restarted=restored.rpc("session/start",json!({"cwd":f.workspace.path(),"mode":"plan","instructions":"DISCOVERY_GUIDANCE_V2: restored client instructions","conversationId":session,"desktopEnabled":true}));
+    assert_eq!(restarted["instructionsApplied"], true);
+    restored.turn(
+        session,
+        "discovery-v2",
+        "Continue with the current guidance.",
+    );
+    let request = f.api.chat();
+    let policy = request.body["messages"][0]["content"].as_str().unwrap();
+    assert!(policy.contains("DISCOVERY_GUIDANCE_V2"));
+    assert!(!policy.contains("DISCOVERY_GUIDANCE_V1"));
+    request.final_text("Current guidance received.");
+    restored.completed("discovery-v2", "completed");
+    f.api.assert_quiet();
+}
+
+#[test]
+fn session_guidance_is_bounded_and_standalone_sessions_have_tool_guidance() {
+    let f = Fixture::new();
+    let mut agent = f.agent();
+    for invalid in [
+        json!(""),
+        json!(" "),
+        json!("text\0hidden"),
+        json!({"bad":true}),
+        json!("x".repeat(32769)),
+    ] {
+        let id = agent.request(
+            "session/start",
+            json!({"cwd":f.workspace.path(),"mode":"plan","instructions":invalid}),
+        );
+        assert!(agent.response(id).get("error").is_some());
+    }
+    assert_eq!(
+        agent.rpc(
+            "session/start",
+            json!({"cwd":f.workspace.path(),"mode":"plan","instructions":"x".repeat(32768)})
+        )["instructionsApplied"],
+        true
+    );
+    let start = agent.start(f.workspace.path(), "plan", None);
+    assert_eq!(start["instructionsApplied"], false);
+    let session = start["sessionId"].as_str().unwrap();
+    agent.turn(
+        session,
+        "builtin-guidance",
+        "Which applications can you use?",
+    );
+    let request = f.api.chat();
+    let policy = request.body["messages"][0]["content"].as_str().unwrap();
+    for name in [
+        "GitHub",
+        "Blender",
+        "HyperFrames",
+        "desktop_status",
+        "desktop_screenshot",
+        "browser_navigate",
+    ] {
+        assert!(policy.contains(name));
+    }
+    request.final_text("Only advertised capabilities are available.");
+    agent.completed("builtin-guidance", "completed");
+    f.api.assert_quiet();
+}
+
+#[test]
 fn desktop_tools_are_opt_in_and_input_respects_permissions() {
     for (enabled, mode) in [(false, "ask"), (true, "plan"), (true, "ask")] {
         let f = Fixture::new();

@@ -140,14 +140,21 @@ This fallback is verified against the official
 Proxies, custom providers, OpenRouter IDs, and similarly named models receive
 no inferred image support.
 
-`session/start {cwd,mode,model?,effort?,conversationId?,browser?:{enabled:boolean,profile?:string,clientId?:string}}` returns
-`{sessionId,conversationId,model,effort,mode,items,recoveryRequired,contextWindow,contextWindowSource,usage?}`. `cwd` must
+`session/start {cwd,mode,model?,effort?,conversationId?,instructions?,browser?:{enabled:boolean,profile?:string,clientId?:string}}` returns
+`{sessionId,conversationId,model,effort,mode,items,recoveryRequired,contextWindow,contextWindowSource,usage?,instructionsApplied}`. `cwd` must
 exist. Modes: `plan`, `ask`, `full`; `auto` and `default` alias `ask`. `items` is a
 normalized ChatItem array with durable stable IDs. A live session has a fixed
 workspace and mode. A fresh process can explicitly select another mode while
 restoring the same conversation. A conversation is bound to its original
 profile name, provider, base URL, and canonical workspace; mismatches fail.
 Rotating a key or changing a profile's default model does not change that binding.
+Optional `instructions` supplies nonempty client guidance (maximum 32 KiB UTF-8,
+no NUL). It is inserted into the actual provider's system message for every
+request; `instructionsApplied:true` acknowledges that binding. It cannot change
+while the session is live and cannot alter tool permissions. It is not persisted
+in the conversation journal: a restoring client must explicitly send current
+guidance again. Omission returns `instructionsApplied:false`. The desktop app
+requires a positive acknowledgement before sending user work.
 `contextWindow:number|null` and
 `contextWindowSource:"remote"|"documented"|null` describe the selected model,
 using cached metadata and the documented fallback without another HTTP request.

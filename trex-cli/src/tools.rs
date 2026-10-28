@@ -114,6 +114,7 @@ pub struct ToolRegistry {
     providers: Vec<Box<dyn ToolProvider>>,
     team: Option<crate::team::TeamConfig>,
     role_instructions: Option<String>,
+    session_instructions: Option<String>,
     processes: std::sync::Arc<crate::processes::ProcessManager>,
 }
 impl ToolRegistry {
@@ -134,6 +135,7 @@ impl ToolRegistry {
             providers,
             team: None,
             role_instructions: None,
+            session_instructions: None,
             processes,
         }
     }
@@ -158,6 +160,13 @@ impl ToolRegistry {
     }
     pub fn role_instructions(&self) -> &Option<String> {
         &self.role_instructions
+    }
+    pub fn with_session_instructions(mut self, instructions: Option<String>) -> Self {
+        self.session_instructions = instructions;
+        self
+    }
+    pub fn session_instructions(&self) -> &Option<String> {
+        &self.session_instructions
     }
     pub fn invalidate_observation(&self) {
         for provider in &self.providers {

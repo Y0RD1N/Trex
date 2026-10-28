@@ -189,7 +189,7 @@ function trexWorkflow(t, role = "executor", { holdInitialize = false } = {}) {
     const request = JSON.parse(raw); writes.push(request); trace.push(request.method);
     const responses = {
       initialize: { protocolVersion: 1 }, "models/list": { models: [] },
-      "session/start": { sessionId: "offline-conversation", mode: role === "planner" ? "plan" : "ask", model: "offline-model", items: [] },
+      "session/start": { sessionId: "offline-conversation", mode: role === "planner" ? "plan" : "ask", model: "offline-model", items: [], instructionsApplied: true },
       "turn/start": { accepted: true }, "turn/interrupt": {},
     };
     assert.ok(Object.hasOwn(responses, request.method), `Unexpected native RPC: ${request.method}`);

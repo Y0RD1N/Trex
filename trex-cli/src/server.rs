@@ -373,6 +373,15 @@ impl Server {
             "a team coordinator must use read-only plan mode"
         );
         let role_instructions = optional(params, "roleInstructions")?;
+        let instructions = match params.get("instructions") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(text))
+                if !text.trim().is_empty() && text.len() <= 32 * 1024 && !text.contains('\0') =>
+            {
+                Some(text.clone())
+            }
+            _ => bail!("instructions must be nonempty text of at most 32 KiB"),
+        };
         ensure!(
             role_instructions
                 .as_ref()
@@ -414,7 +423,10 @@ impl Server {
                 session.tools.role_instructions() == &role_instructions,
                 "role instructions are immutable for this live session"
             );
+            ensure!(session.tools.session_instructions() == &instructions,
+                "session instructions are immutable for this live session; restart the process to change them");
             let mut summary = self.session_summary(&data).await;
+            summary["instructionsApplied"] = json!(instructions.is_some());
             if team.is_some() {
                 summary["teamEnabled"] = json!(true);
             }
@@ -536,10 +548,12 @@ impl Server {
             tools: tools::ToolRegistry::new(browser_provider)
                 .with_desktop(desktop_enabled)
                 .with_team(team.clone())
+                .with_session_instructions(instructions.clone())
                 .with_role_instructions(role_instructions.clone()),
         });
         session.persist(&mut data)?;
         let mut summary = self.session_summary(&data).await;
+        summary["instructionsApplied"] = json!(instructions.is_some());
         if team.is_some() {
             summary["teamEnabled"] = json!(true);
         }
@@ -738,6 +752,10 @@ impl Server {
             let image_support = self.image_support(&model).await;
             messages = provider::project_history(&messages, image_support);
             let mut policy = system_prompt(&mode);
+            if let Some(instructions) = session.tools.session_instructions() {
+                policy.push_str("\n\nClient session guidance (the session's tool permission policy still applies):\n");
+                policy.push_str(instructions);
+            }
             if let Some(instructions) = session.tools.role_instructions() {
                 policy.push_str(
                     "\n\nSession role instructions (the read-only tool policy still applies):\n",
@@ -1696,7 +1714,8 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
 
 fn system_prompt(mode: &str) -> String {
     let task_policy = "For multi-step work, publish and maintain your task list with update_plan. Team coordinators publish assignments with trex_team_plan before delegating instead. Never mark unverified work complete.";
-    format!("You are Trex, a coding agent working in the user's workspace. Use available tools to inspect files and make precise changes. Follow project instructions. Never claim a tool succeeded without its result. {task_policy} Your session mode is {mode}. Plan mode is strictly read-only: inspect and deliver a concrete plan; do not mutate files or execute shell commands. Ask mode requires user approval for each mutation or shell command. Full mode allows approved autonomous work. Browser tools, when explicitly enabled, enforce the session policy in the broker. Browser artifact metadata alone does not establish pixel inspection: only inspect pixels when an actual image observation is present. Missing artifacts are unavailable evidence; do not repeat a tool automatically to recreate them. Uncertain operations require user review and must never be automatically replayed. Use trex_read_messages to retrieve durable user or collaborator inbox messages during a long task. Finish with a clear final response describing results and relevant validation. Do not expose secrets.")
+    let integration_policy = "For GitHub, Blender and HyperFrames requests, prefer advertised github_*, blender_run and hyperframes_run tools. Check installed dependencies, honor the session permissions and inspect the actual results; do not silently install missing programs. Blender scripts run in a new background process, not an existing window. For computer or Windows control use advertised desktop_* tools: desktop_status, desktop_monitors and a fresh desktop_screenshot before each input. If input tools are absent, explain the required opt-in, permissions or vision capability instead of claiming access. For websites prefer advertised browser_* tools, starting with browser_navigate; they are separate from desktop control. Use only the tools actually advertised for this turn.";
+    format!("You are Trex, a coding agent working in the user's workspace. Use available tools to inspect files and make precise changes. Follow project instructions. Never claim a tool succeeded without its result. {task_policy} {integration_policy} Your session mode is {mode}. Plan mode is strictly read-only: inspect and deliver a concrete plan; do not mutate files or execute shell commands. Ask mode requires user approval for each mutation or shell command. Full mode allows approved autonomous work. Browser tools, when explicitly enabled, enforce the session policy in the broker. Browser artifact metadata alone does not establish pixel inspection: only inspect pixels when an actual image observation is present. Missing artifacts are unavailable evidence; do not repeat a tool automatically to recreate them. Uncertain operations require user review and must never be automatically replayed. Use trex_read_messages to retrieve durable user or collaborator inbox messages during a long task. Finish with a clear final response describing results and relevant validation. Do not expose secrets.")
 }
 
 fn validate_images(value: Option<&Value>) -> Result<Vec<Value>> {
