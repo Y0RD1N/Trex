@@ -348,14 +348,14 @@ fn read_messages(data_dir: &Path, queue_id: &str) -> Value {
             return json!({
                 "content": [{"type": "text", "text": error}],
                 "isError": true,
-                "structuredContent": {"receiptId": null}
+                "_meta": {"trex/receiptId": null}
             });
         }
     };
     let Some(receipt) = snapshot.receipt else {
         return json!({
             "content": [{"type": "text", "text": "No hay mensajes del usuario en cola."}],
-            "structuredContent": {"receiptId": null}
+            "_meta": {"trex/receiptId": null}
         });
     };
     let mut content = vec![json!({
@@ -371,7 +371,10 @@ fn read_messages(data_dir: &Path, queue_id: &str) -> Value {
                 .push(json!({"type": "image", "mimeType": image.media_type, "data": image.data}));
         }
     }
-    json!({"content": content, "structuredContent": {"receiptId": receipt.id}})
+    // Codex sends structuredContent INSTEAD OF content to the model when it is
+    // present. Keep our delivery bookkeeping in client-only MCP metadata so
+    // both the queued instructions and native image blocks reach the model.
+    json!({"content": content, "_meta": {"trex/receiptId": receipt.id}})
 }
 
 #[cfg(test)]
@@ -533,9 +536,10 @@ mod tests {
         let dir = TestDir::new();
         let replies = exchange(&dir.0, &[call(json!(1))]);
         assert_eq!(
-            replies[0]["result"]["structuredContent"],
-            json!({"receiptId": null})
+            replies[0]["result"]["_meta"],
+            json!({"trex/receiptId": null})
         );
+        assert!(replies[0]["result"].get("structuredContent").is_none());
         assert_eq!(replies[0]["result"]["content"][0]["type"], "text");
         assert!(!dir.0.join("message-queues").exists());
     }
@@ -546,9 +550,7 @@ mod tests {
         let mut cache = HashMap::new();
         enqueue_in(&dir.0, QUEUE, message("first")).unwrap();
         let first = cached_request(call(json!(7)), &dir.0, QUEUE, &mut cache).unwrap();
-        let receipt = first["result"]["structuredContent"]["receiptId"]
-            .as_str()
-            .unwrap();
+        let receipt = first["result"]["_meta"]["trex/receiptId"].as_str().unwrap();
         crate::message_queue::ack_in(&dir.0, QUEUE, receipt).unwrap();
         enqueue_in(&dir.0, QUEUE, message("later")).unwrap();
         assert_eq!(
@@ -557,10 +559,7 @@ mod tests {
         );
         assert_eq!(list_in(&dir.0, QUEUE).unwrap().messages[0].id, "later");
         let distinct = cached_request(call(json!("7")), &dir.0, QUEUE, &mut cache).unwrap();
-        assert_ne!(
-            distinct["result"]["structuredContent"]["receiptId"],
-            receipt
-        );
+        assert_ne!(distinct["result"]["_meta"]["trex/receiptId"], receipt);
         assert_eq!(
             list_in(&dir.0, QUEUE).unwrap().receipt.unwrap().messages[0].id,
             "later"
@@ -584,14 +583,28 @@ mod tests {
     fn receipt_replays_images_and_text_without_acknowledging_or_claiming_later_messages() {
         let dir = TestDir::new();
         let mut first = message("first");
+        first.text.push_str(
+            "\n\nArchivos adjuntos:\n[Archivo 1]: C:\\Usuarios\\Ana\\informe final ñ.csv",
+        );
         first.images.push(QueueImage {
             media_type: "image/png".into(),
             data: "AQID".into(),
         });
         enqueue_in(&dir.0, QUEUE, first.clone()).unwrap();
+        let mut image_only = message("image-only");
+        image_only.text.clear();
+        image_only.images = first.images.clone();
+        enqueue_in(&dir.0, QUEUE, image_only.clone()).unwrap();
+        let mut file_only = message("file-only");
+        file_only.text = "Archivos adjuntos:\n[Archivo 1]: /home/ana/datos de prueba.json".into();
+        enqueue_in(&dir.0, QUEUE, file_only.clone()).unwrap();
         let initial = exchange(&dir.0, &[call(json!(1))]);
         let result = &initial[0]["result"];
-        let receipt_id = result["structuredContent"]["receiptId"].as_str().unwrap();
+        let receipt_id = result["_meta"]["trex/receiptId"].as_str().unwrap();
+        assert!(
+            result.get("structuredContent").is_none(),
+            "A structured receipt would hide the text and images from Codex"
+        );
         assert!(result["content"][0]["text"]
             .as_str()
             .unwrap()
@@ -604,6 +617,12 @@ mod tests {
             result["content"][2],
             json!({"type": "image", "mimeType": "image/png", "data": "AQID"})
         );
+        assert_eq!(result["content"][3], result["content"][2]);
+        assert_eq!(
+            result["content"][4],
+            json!({"type":"text","text":file_only.text})
+        );
+        assert_eq!(result["content"].as_array().unwrap().len(), 5);
         let later = message("later");
         enqueue_in(&dir.0, QUEUE, later.clone()).unwrap();
         let replay = exchange(&dir.0, &[call(json!(2))]);
@@ -612,7 +631,7 @@ mod tests {
         assert_eq!(snapshot.messages, vec![later]);
         let receipt = snapshot.receipt.unwrap();
         assert_eq!(receipt.id, receipt_id);
-        assert_eq!(receipt.messages, vec![first]);
+        assert_eq!(receipt.messages, vec![first, image_only, file_only]);
     }
 
     #[test]
@@ -671,7 +690,7 @@ mod tests {
             ],
         );
         assert_eq!(replies[0]["result"]["protocolVersion"], PROTOCOL_VERSION);
-        assert!(replies[1]["result"]["structuredContent"]["receiptId"].is_null());
+        assert!(replies[1]["result"]["_meta"]["trex/receiptId"].is_null());
     }
 
     #[test]
@@ -717,10 +736,7 @@ mod tests {
         let receipt = list_in(&dir.0, QUEUE).unwrap().receipt.unwrap();
         assert_eq!(receipt.messages, vec![item]);
         let replay = exchange(&dir.0, &[call(json!(2))]);
-        assert_eq!(
-            replay[0]["result"]["structuredContent"]["receiptId"],
-            receipt.id
-        );
+        assert_eq!(replay[0]["result"]["_meta"]["trex/receiptId"], receipt.id);
     }
 
     #[test]

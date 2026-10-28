@@ -8,13 +8,18 @@ export { MCP_TASK_TOOL } from "./taskTools";
 export const claudeInboxInitialize = { subtype: "initialize", sdkMcpServers: [INBOX_SERVER] };
 export const CLAUDE_INBOX_TOOL = `mcp__${INBOX_SERVER}__${INBOX_TOOL}`;
 
-/** Only a successful completion from this tab's own MCP inbox confirms a receipt. */
+/** Receipt metadata must not replace the model-visible text/images. Codex gives
+ * non-null structuredContent priority over content, so it cannot carry an ack. */
 export function codexInboxReceiptId(raw: unknown): string | null {
   const item = record(raw), result = record(item?.result);
   if (item?.type !== "mcpToolCall" || item.server !== INBOX_SERVER || item.tool !== INBOX_TOOL
     || item.status !== "completed" || item.error || result?.isError === true) return null;
-  const id = record(result?.structuredContent)?.receiptId;
-  return typeof id === "string" && /^[a-z0-9-]{1,128}$/i.test(id) ? id : null;
+  if (result?.structuredContent != null || !Array.isArray(result?.content) || result.content.length < 2) return null;
+  const id = record(result?._meta)?.["trex/receiptId"];
+  if (typeof id !== "string" || !/^[a-z0-9-]{1,128}$/i.test(id)) return null;
+  const header = record(result.content[0]);
+  return header?.type === "text"
+    && header.text === `Mensajes del usuario en cola. Recibo: ${id}. Procesa este recibo una sola vez.` ? id : null;
 }
 
 /** Implements the SDK MCP bridge over Claude's existing control channel. */

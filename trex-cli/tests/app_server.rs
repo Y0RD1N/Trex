@@ -1418,6 +1418,85 @@ fn inbox_rejects_partial_snapshots_and_commits_receipts_before_ack_without_doubl
     f.api.assert_quiet();
 }
 
+#[test]
+fn inbox_delivers_images_and_attached_file_references_as_user_content_once() {
+    let f = Fixture::new();
+    // TempDir can use an 8.3 alias on Windows. Match the canonical paths that
+    // the native session advertises to its tools, without a verbatim prefix.
+    let root = fs::canonicalize(f.workspace.path()).unwrap();
+    let root = root.to_string_lossy();
+    let attachment =
+        PathBuf::from(root.strip_prefix(r"\\?\").unwrap_or(&root)).join("informe con ñ.csv");
+    let file_content = "producto,total\ncafé,42\n";
+    fs::write(&attachment, file_content).unwrap();
+    let text = format!("Revisa [Imagen 1] y [Archivo 1]. Última línea: fotografía 🦖\n\nArchivos adjuntos:\n[Archivo 1]: {}", attachment.display());
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    let image = json!({"mediaType":"image/png","data":png});
+    let mut agent = f.agent();
+    let models = agent.request("models/list", json!({}));
+    f.api
+        .request("GET", "/v1/models")
+        .json(json!({"data":[{"id":"mock","architecture":{"input_modalities":["text","image"]}}]}));
+    agent.result(models);
+    let summary = agent.start(f.workspace.path(), "full", None);
+    let session = summary["sessionId"].as_str().unwrap();
+    agent.turn(
+        session,
+        "queued-attachments",
+        "Read the queued user request.",
+    );
+    f.api.chat().completion(
+        calls(vec![tool(
+            "inbox-attachments",
+            "trex_read_messages",
+            json!({}),
+        )]),
+        "tool_calls",
+    );
+    let callback = agent.event("inbox/read", "queued-attachments");
+    let receipt = json!({"receiptId":"receipt-attachments","messages":[
+        {"id":"queued-text-file","text":text,"images":[image]},
+        {"id":"queued-image-only","text":"","images":[image]}
+    ]});
+    agent.send(json!({"jsonrpc":"2.0","id":callback["id"],"result":receipt}));
+    agent.event("inbox/consumed", "queued-attachments");
+    let delivered = f.api.chat();
+    let expected = json!({"role":"user","content":[{"type":"text","text":text},{"type":"image_url","image_url":{"url":format!("data:image/png;base64,{png}")}}]});
+    assert_eq!(
+        messages(&delivered)
+            .iter()
+            .filter(|message| **message == expected)
+            .count(),
+        1,
+        "{}",
+        delivered.body
+    );
+    assert!(messages(&delivered).iter().any(|message| *message == json!({"role":"user","content":[{"type":"text","text":""},{"type":"image_url","image_url":{"url":format!("data:image/png;base64,{png}")}}]})));
+    delivered.completion(
+        calls(vec![tool(
+            "read-attachment",
+            "read_file",
+            json!({"path":attachment}),
+        )]),
+        "tool_calls",
+    );
+    let verified = f.api.chat();
+    assert_eq!(
+        tool_output(&verified, "read-attachment")["content"],
+        file_content,
+        "{}",
+        tool_output(&verified, "read-attachment")
+    );
+    verified.final_text("The attachment and both queued images were received.");
+    agent.completed("queued-attachments", "completed");
+    assert_eq!(
+        f.journal(session)["receipts"]["receipt-attachments"]["committed"],
+        true
+    );
+    assert_eq!(fs::read_to_string(attachment).unwrap(), file_content);
+    f.api.assert_quiet();
+}
+
 #[path = "background_cases/mod.rs"]
 mod background_cases;
 #[path = "browser_cases/mod.rs"]

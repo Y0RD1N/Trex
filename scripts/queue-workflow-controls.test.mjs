@@ -12,7 +12,7 @@ const names = ["agentRoom", "agentWorkflow", "handoff", "chatState", "chatMessag
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));
 const sources = {
   stable: "hooks/useStableCallback.ts", workflow: "hooks/useAgentWorkflow.ts", trex: "hooks/useTrexChat.ts",
-  panel: "components/ChatView.tsx", room: "components/AgentRoomView.tsx",
+  panel: "components/ChatView.tsx", room: "components/AgentRoomView.tsx", motion: "motion.ts",
 };
 const compiled = Object.fromEntries(await Promise.all(Object.entries(sources).map(async ([name, path]) => {
   const source = await readFile(new URL(`../src/${path}`, import.meta.url), "utf8");
@@ -148,7 +148,7 @@ const api = { formatError: error => error?.message ?? String(error),
 function panelModule(env, overrides = {}) {
   const stable = evaluate("stable", env);
   const workflow = evaluate("workflow", env, { "../api": api, "./useStableCallback": stable });
-  return evaluate("panel", env, { "../api": api, "../hooks/useStableCallback": stable, "../hooks/useAgentWorkflow": workflow,
+  return evaluate("panel", env, { "../api": api, "../motion": evaluate("motion", env), "../hooks/useStableCallback": stable, "../hooks/useAgentWorkflow": workflow,
     "../hooks/useHandoffDelivery": { useHandoffDelivery: () => ({ prepared: { content: "Original request" }, loading: false, sending: false }) },
     "../hooks/useClaudeChat": { useClaudeChat: forbidden("Claude hook") },
     "../hooks/useCodexChat": { useCodexChat: forbidden("Codex hook") },

@@ -25,11 +25,13 @@ const deferred = () => {
 };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const waiting = Symbol("still pending");
+const { withAttachedFiles, splitAttachedFiles } = await load("imageReferences");
+const attachedPaths = ["C:\\Users\\Ana\\Documentos\\informe final ñ.csv", "/home/ana/documentos/datos de prueba.json"];
 const outcome = promise => Promise.race([promise, flush().then(() => waiting)]);
 const cancelled = async promise => assert.equal(await outcome(promise), false, "cancellation must settle promptly with false");
 const sameDeps = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
 const payload = {
-  text: "Complete request\nincluding its final paragraph and unicode: fotografía 🦖",
+  text: withAttachedFiles("Complete request\nincluding its final paragraph and unicode: fotografía 🦖", attachedPaths),
   images: [{ mediaType: "image/png", data: "cG5nLWZpcnN0" }, { mediaType: "image/jpeg", data: "anBlZy1zZWNvbmQ=" }],
   previews: ["data:image/png;base64,preview-one", "data:image/jpeg;base64,preview-two"],
   display: "Readable queue entry",
@@ -104,6 +106,7 @@ function harness(t, provider, extra = {}) {
   const nativeWrite = async (process, raw) => {
     const message = { process, ...JSON.parse(raw) };
     writes.push(message);
+    if (extra.beforeWrite) await extra.beforeWrite(message);
     if (held.has("turn-steer-ipc") && message.method === "turn/steer") {
       const pending = deferred(); ipcWaiters.push(pending); await pending.promise;
     }
@@ -243,6 +246,7 @@ function sendNow(h, value = payload) {
   return result;
 }
 function assertPayload(h, write = h.userWrites.at(-1)) {
+  assert.deepEqual(splitAttachedFiles(payload.text).files, attachedPaths);
   assert.ok(write, "a native user message was issued");
   if (write.method === "turn/start" && "text" in write.params) {
     assert.equal(write.params.text, payload.text);
@@ -1400,4 +1404,91 @@ test("Codex first send binds its issued generation after startup so Stop still t
   h.complete(h.turn); await h.pump();
   assert.equal(h.state.pendingTurns, 0);
   assertQueueUntouched(h);
+});
+
+function inboxRequest(provider, h) {
+  if (provider === "claude") return { type: "control_request", request_id: "queue-read", request: {
+    subtype: "mcp_message", server_name: "trex_inbox", message: { jsonrpc: "2.0", id: "inner-read", method: "tools/call", params: { name: "trex_read_messages", arguments: {} } },
+  } };
+  if (provider === "codex") return { jsonrpc: "2.0", id: "queue-read", method: "item/tool/call", params: { threadId: h.conversation, tool: "trex_read_messages", arguments: {} } };
+  return { jsonrpc: "2.0", id: "queue-read", method: "inbox/read", params: { sessionId: h.conversation, messageId: h.userWrites.at(-1).params.messageId } };
+}
+const deliveryReply = (provider, value) => provider === "claude" ? value.response?.request_id === "queue-read" : value.id === "queue-read" && !value.method;
+const deliveryResult = (provider, value) => provider === "claude" ? value.response.response.mcp_response.result : value.result;
+const fixtureReceipt = () => ({ id: "r-delivery-test", messages: [{ id: "queued-attachments", text: payload.text, images: payload.images, previews: payload.previews, createdAt: 1 }] });
+
+for (const provider of ["claude", "codex", "trex"]) {
+  test(`${provider}: queued text, file paths and images survive a pending delivery, receipt retry and later arrivals`, async t => {
+    const gate = deferred();
+    const h = harness(t, provider, { beforeWrite: message => deliveryReply(provider, message) ? gate.promise : undefined });
+    await h.ready(); await h.session.send("Original work", [], []); h.render();
+    const receipt = fixtureReceipt(); let reads = 0, stored = { messages: [], receipt };
+    h.queue.client.read = async () => { reads++; return stored; };
+    const request = inboxRequest(provider, h); h.line(request); await h.pump();
+    assert.ok(h.writes.some(value => deliveryReply(provider, value)));
+    assert.ok(!h.queueCalls.some(call => call.name === "ack"), "a pending IPC write cannot confirm delivery");
+    assert.ok(!h.state.items.some(item => item.id === "queued-attachments"));
+    gate.resolve(); await h.pump(); await h.pump();
+    const result = deliveryResult(provider, h.writes.find(value => deliveryReply(provider, value)));
+    if (provider === "trex") {
+      assert.deepEqual(result.messages, receipt.messages);
+      assert.ok(!h.queueCalls.some(call => call.name === "ack"));
+      h.line({ method: "inbox/consumed", params: { sessionId: h.conversation, messageId: h.userWrites.at(-1).params.messageId, receiptId: receipt.id } });
+      await h.pump();
+    } else {
+      const content = provider === "claude" ? result.content : result.contentItems;
+      const text = content.filter(part => ["text", "inputText"].includes(part.type)).map(part => part.text).join("\n");
+      assert.ok(text.includes(payload.text));
+      assert.deepEqual(splitAttachedFiles(text).files, attachedPaths);
+      assert.equal(content.filter(part => ["image", "inputImage"].includes(part.type)).length, payload.images.length);
+      assert.ok(!JSON.stringify(content).includes("preview-one"));
+      assert.equal(result.structuredContent, undefined);
+    }
+    assert.ok(h.queueCalls.some(call => call.name === "ack" && call.args[0] === receipt.id));
+    const shown = h.state.items.filter(item => item.id === "queued-attachments");
+    assert.equal(shown.length, 1); assert.equal(shown[0].text, payload.text); assert.deepEqual(shown[0].previews, payload.previews);
+    stored = { messages: [], receipt: { id: "r-later", messages: [{ ...receipt.messages[0], id: "later-message" }] } };
+    h.line(request); await h.pump(); await h.pump();
+    assert.equal(reads, 1, "replaying the same request must not read later arrivals");
+    assert.equal(h.state.items.filter(item => item.id === "queued-attachments").length, 1);
+    assert.ok(!h.state.items.some(item => item.id === "later-message"));
+    assert.ok(!h.queueCalls.some(call => call.name === "ack" && call.args[0] === "r-later"));
+  });
+
+  test(`${provider}: a failed queue reply leaves the receipt unacknowledged and can retry the original attachments`, async t => {
+    let rejectWrite = true;
+    const h = harness(t, provider, { beforeWrite: message => {
+      if (rejectWrite && deliveryReply(provider, message)) throw new Error("offline pipe failure");
+    } });
+    await h.ready(); await h.session.send("Original work", [], []); h.render();
+    const receipt = fixtureReceipt(); let reads = 0;
+    h.queue.client.read = async () => { reads++; return { messages: [], receipt }; };
+    const request = inboxRequest(provider, h); h.line(request); await h.pump(); await h.pump();
+    assert.ok(!h.queueCalls.some(call => call.name === "ack"));
+    assert.ok(!h.state.items.some(item => item.id === "queued-attachments"));
+    rejectWrite = false; h.line(request); await h.pump(); await h.pump();
+    assert.equal(reads, 1, "a pipe failure must retry its original durable receipt");
+    const reply = h.writes.findLast(value => deliveryReply(provider, value));
+    assert.ok(JSON.stringify(deliveryResult(provider, reply)).includes("informe final ñ.csv"));
+    if (provider === "trex") {
+      h.line({ method: "inbox/consumed", params: { sessionId: h.conversation, messageId: h.userWrites.at(-1).params.messageId, receiptId: receipt.id } }); await h.pump();
+    }
+    assert.ok(h.queueCalls.some(call => call.name === "ack" && call.args[0] === receipt.id));
+    assert.equal(h.state.items.filter(item => item.id === "queued-attachments").length, 1);
+  });
+}
+
+test("Codex native MCP confirms model-visible text/images and never a structured receipt that hides the payload", async t => {
+  const h = harness(t, "codex"); await h.ready();
+  const receipt = fixtureReceipt();
+  h.queue.client.load = async () => ({ messages: [], receipt });
+  const item = { type: "mcpToolCall", id: "native-read", server: "trex_inbox", tool: "trex_read_messages", status: "completed",
+    result: { content: dependencies["../messageQueue"].inboxContent(receipt), _meta: { "trex/receiptId": receipt.id } } };
+  h.line({ method: "item/completed", params: { threadId: h.conversation, item: { ...item, result: { ...item.result, structuredContent: { receiptId: receipt.id } } } } }); await h.pump();
+  assert.ok(!h.queueCalls.some(call => call.name === "ack"));
+  assert.ok(!h.state.items.some(entry => entry.id === "queued-attachments"));
+  h.line({ method: "item/completed", params: { threadId: h.conversation, item } }); await h.pump(); await h.pump();
+  assert.ok(h.queueCalls.some(call => call.name === "ack" && call.args[0] === receipt.id));
+  const shown = h.state.items.find(entry => entry.id === "queued-attachments");
+  assert.equal(shown.text, payload.text); assert.equal(shown.images, payload.images.length);
 });

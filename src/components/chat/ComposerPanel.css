@@ -1,4 +1,5 @@
-.chat-composer-accessories { display: flex; align-items: end; gap: 5px; max-width: var(--chat-width); margin: 0 auto; padding: 0 12px; pointer-events: auto; }
+.chat-composer-accessories { display: flex; align-items: end; gap: 5px; max-width: var(--chat-width); margin: 0 auto; padding: 0 12px; pointer-events: none; }
+.chat-composer-accessories > * { pointer-events: auto; }
 .chat-composer-accessories:empty { display: none; }
 .composer-tab { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; min-height: 31px; padding: 6px 11px 7px; margin-bottom: -1px; border: 1px solid var(--border); border-bottom: 0; border-radius: 9px 9px 0 0; background: var(--bg-surface); color: var(--text-muted); font: 500 11px/1.5 var(--font-ui); cursor: pointer; }
 .composer-tab > svg { flex-shrink: 0; }

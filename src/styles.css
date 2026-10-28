@@ -3170,6 +3170,7 @@ body.dragging-sidebar .sidebar {
 .sidebar.collapsed .sidebar-inner { border-radius: 0 22px 22px 0; }
 .terminal-host { isolation: isolate; background-clip: padding-box; }
 .terminal-host > .chat, .terminal-host > .terminal-view { border-radius: 0; }
+.terminal-host.chat-host:not(.split-pane) { inset: 0; border: 0; border-radius: 0; box-shadow: none; }
 .modal-backdrop, .dialog-overlay, .image-viewer { border-radius: var(--window-radius); }
 .image-viewer { overflow: hidden; clip-path: inset(0 round var(--window-radius)); }
 
@@ -3202,7 +3203,6 @@ body.dragging-sidebar .sidebar {
 .sidebar-reopen:hover { color: var(--accent-strong); background: var(--surface-panel); }
 .sidebar-reopen:active { transform: scale(.94); }
 .main:has(> .sidebar-reopen:not([hidden])) .tabs-bar { padding-left: 62px; }
-.main:has(> .sidebar-reopen:not([hidden])):has(> .bar-slot.auto-hide) .chat-thread { padding-top: 52px; }
 
 /* Cabecera y controles: la misma escala que los controles de la barra. */
 .tabs-bar { border-bottom-color: color-mix(in srgb, var(--text) 5%, transparent); }

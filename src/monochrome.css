@@ -122,6 +122,18 @@
 :root[data-theme] .tabs-bar { background: var(--bg-app); box-shadow: none; border-color: var(--border); }
 :root[data-theme] .tabs-bar .agent-icon { color: var(--text-muted); }
 
+/* The chat scrolls behind small header surfaces, without a full-width shelf. */
+.main.chat-canvas { --chat-header-space: calc(var(--header-h) + 8px); }
+.main.chat-canvas > .bar-slot { height: 0; transition: none; }
+:root[data-theme] .main.chat-canvas .tabs-bar { gap: 6px; padding-right: 12px; border: 0; background: transparent; box-shadow: none; pointer-events: none; }
+:root[data-theme] .main.chat-canvas .tabs-bar > :is(.workspace-title, .session-create, .window-controls, button) { pointer-events: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-surface); box-shadow: 0 3px 12px -8px rgb(0 0 0 / .25); }
+:root[data-theme] .main.chat-canvas .workspace-title { flex: 0 1 auto; max-width: min(60%, 720px); height: 34px; padding: 0 10px; overflow: hidden; }
+:root[data-theme] .main.chat-canvas .workspace-title-text { flex: 1; min-width: 0; }
+:root[data-theme] .main.chat-canvas .workspace-profile { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-theme] .main.chat-canvas .session-create { margin-left: auto; padding: 1px; }
+:root[data-theme] .main.chat-canvas .window-controls { padding: 1px; }
+:root[data-theme] .main.chat-canvas .tabs-bar > button { width: 34px; height: 34px; }
+
 /* Menus and dialogs remain opaque, including light mode and nested menus. */
 :root[data-theme] .context-menu.floating-surface, :root[data-theme] .context-menu:not(.chat-glass-menu),
 :root[data-theme] .context-menu.chat-glass-menu {
@@ -178,7 +190,7 @@
   border: 1px solid var(--border);
   border-radius: 13px;
   background: var(--bg-surface);
-  box-shadow: 0 2px 12px rgb(0 0 0 / .025);
+  box-shadow: 0 10px 30px -12px rgb(0 0 0 / .22);
 }
 :root[data-theme] .chat-composer { padding: 10px 13px 6px 17px; }
 :root[data-theme] .chat-controls { padding: 3px 8px 7px; margin: 0 7px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
@@ -202,6 +214,8 @@
 /* Tasks, agents and tools use names, icons and status text for identity. */
 :root[data-theme] .chat-task-toggle { min-height: 32px; padding: 5px 10px; border-color: transparent; border-radius: 6px; background: transparent; box-shadow: none; }
 :root[data-theme] .chat-task-toggle:hover, :root[data-theme] .chat-task-toggle[aria-expanded="true"] { background: var(--hover); }
+:root[data-theme] .chat-task-toolbar .chat-task-toggle { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); box-shadow: 0 4px 16px -10px rgb(0 0 0 / .24); }
+:root[data-theme] .chat-task-toolbar .chat-task-toggle:is(:hover, [aria-expanded="true"]) { background: var(--bg-elevated); }
 :root[data-theme] .chat-task-panel { border-radius: 10px; border-color: var(--border); background: var(--bg-surface); box-shadow: none; }
 :root[data-theme] .chat-task-list button, :root[data-theme] .chat-task-list button[aria-current="step"] { border-radius: 6px; }
 :root[data-theme] .chat-task-list [data-status="completed"] .chat-task-mark { background: var(--bg-inset); color: var(--text-muted); border-color: var(--border); }

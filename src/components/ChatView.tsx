@@ -32,6 +32,7 @@ import { applySuggestion, buildSuggestions, findTrigger, localCommand, parseComm
 import type { AgentActivity, AgentNoticeKind, AgentProvider, Settings } from "../types";
 import { MIN_WORK_MS } from "../agentNotices";
 import { reducedMotion } from "../visualDesign";
+import { enterAfterPaint } from "../motion";
 import type { ChatSession, ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
@@ -188,6 +189,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const [tasksOpen, setTasksOpen] = useState(props.taskPlan !== undefined && !props.emptyState);
   const hadTasks = useRef(false);
   const taskToggle = useRef<HTMLButtonElement>(null);
+  const revealingTask = useRef(false);
+  const cancelTaskReveal = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelTaskReveal.current?.(), []);
   const [attachments, updateAttachments] = useState<ChatAttachment[]>([]);
   const attachmentsRef = useRef(attachments);
   const setAttachments = (value: ChatAttachment[] | ((previous: ChatAttachment[]) => ChatAttachment[])): void => {
@@ -242,6 +246,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const mirrorRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
 
   // Una pestaña oculta no repinta su hilo: conserva lo último que se vio y se
   // pone al día al mostrarse. Las que nunca se abrieron no pintan su historial.
@@ -312,7 +317,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   const onScroll = (): void => {
     const element = scrollRef.current;
-    if (!element) return;
+    if (!element || revealingTask.current) return;
     const bottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     stickRef.current = bottom;
     setAtBottom(bottom);
@@ -345,16 +350,21 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     return () => observer.disconnect();
   }, []);
 
-  // La caja flota sobre el hilo: el hilo deja debajo el hueco que ocupa la caja.
+  // Los controles flotan sobre el hilo. Sus medidas solo reservan los extremos
+  // del contenido; no recortan la superficie por la que se desplazan los mensajes.
   useLayoutEffect(() => {
-    const composer = composerRef.current, root = rootRef.current;
-    if (!composer || !root) return;
-    const observer = new ResizeObserver(() => {
+    const composer = composerRef.current, toolbar = toolbarRef.current, root = rootRef.current;
+    if (!composer || !toolbar || !root) return;
+    const measure = (): void => {
       root.style.setProperty("--composer-space", `${composer.offsetHeight}px`);
+      root.style.setProperty("--chat-toolbar-space", `${toolbar.offsetHeight}px`);
       const scroller = scrollRef.current;
       if (scroller && stickRef.current) scroller.scrollTop = scroller.scrollHeight;
-    });
+    };
+    const observer = new ResizeObserver(measure);
     observer.observe(composer);
+    observer.observe(toolbar);
+    measure();
     return () => observer.disconnect();
   }, []);
 
@@ -987,15 +997,26 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     const matches = threadItems.filter(item => task.memberId ? props.itemLabels?.[item.id]?.memberId === task.memberId : item.id === task.sourceId);
     const target = matches[matches.length - 1];
     if (!target) { props.onMessage("La actividad aparecerá cuando se inicie esta tarea."); return; }
+    cancelTaskReveal.current?.();
+    revealingTask.current = true;
     const index = threadItems.indexOf(target);
     if (index < threadStart) setAnchorId(target.id);
+    if ((rootRef.current?.clientWidth ?? Infinity) <= 760) {
+      setTasksOpen(false);
+      taskToggle.current?.focus({ preventScroll: true });
+    }
     stickRef.current = false;
-    requestAnimationFrame(() => {
+    setAtBottom(false);
+    // Prepending older rows can emit a scroll event at the former bottom.
+    // Retain the requested window until its activity is mounted and positioned.
+    cancelTaskReveal.current = enterAfterPaint(() => {
+      cancelTaskReveal.current = null;
       const elements = rootRef.current?.querySelectorAll<HTMLElement>(task.memberId ? ".chat-agent-activity" : "[data-plan-source]");
       const matching = elements ? [...elements].filter(element => task.memberId ? element.dataset.memberId === task.memberId : element.dataset.planSource === task.sourceId) : [];
       const node = matching[matching.length - 1];
       if (node instanceof HTMLDetailsElement) node.open = true;
       node?.scrollIntoView({ block: "nearest", behavior: "auto" });
+      revealingTask.current = false;
     });
   };
   const rows = useMemo(() => {
@@ -1064,7 +1085,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       setDragging(false);
       addDropped(Array.from(event.dataTransfer.files));
     }}>
-    {props.toolbar}
+    <div className="chat-floating-toolbar" ref={toolbarRef}>{props.toolbar}</div>
     <div className="chat-task-toolbar"><button ref={taskToggle} type="button" className="chat-task-toggle" aria-expanded={tasksOpen} aria-controls={tasksOpen?`tasks-${sessionId}`:undefined}
       onClick={() => setTasksOpen(value => !value)}><ListIcon size={14} />Tareas{tasks.length>0&&<small>{tasks.filter(task => task.status === "completed").length}/{tasks.length}</small>}</button></div>
     <div className="chat-workspace"><div className="chat-main">

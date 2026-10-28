@@ -47,6 +47,8 @@
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
+  scroll-padding-top: calc(var(--chat-header-space, 0px) + var(--chat-toolbar-space, 0px) + 52px);
+  scroll-padding-bottom: calc(var(--composer-space, 120px) + 16px);
   transition: opacity var(--dur) var(--ease-out);
 }
 
@@ -56,9 +58,14 @@
   gap: 10px;
   max-width: var(--chat-width);
   margin: 0 auto;
-  /* El final del hilo queda por encima de la caja flotante. */
-  padding: 28px 28px calc(var(--composer-space, 120px) + 16px);
+  /* El espacio inicial y final viaja con los mensajes, por debajo de las capas
+     flotantes; el área de desplazamiento conserva toda la altura del chat. */
+  padding: calc(var(--chat-header-space, 0px) + var(--chat-toolbar-space, 0px) + 52px) 28px calc(var(--composer-space, 120px) + 16px);
 }
+
+.chat-floating-toolbar { position: absolute; z-index: 4; top: var(--chat-header-space, 0px); right: 0; left: 0; max-height: min(35%, 280px); overflow-y: auto; scrollbar-width: thin; }
+.chat-floating-toolbar:empty { display: none; }
+.chat-floating-toolbar > .agent-room-toolbar { margin: 12px 16px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface); }
 
 /* --- Estado vacío ------------------------------------------------------- */
 .chat.is-empty .chat-thread {
@@ -1637,19 +1644,6 @@ pre.chat-ask-preview-body {
   padding: 0 24px 16px;
   pointer-events: none;
 }
-/* El hilo se desvanece en el fondo antes de pasar por debajo de la caja: el
-   cristal queda sobre el color del chat y no sobre texto cortado. */
-.chat-composer-wrap::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: -24px 0 0;
-  background: linear-gradient(180deg,
-    color-mix(in srgb, var(--term-bg) 0%, transparent) 0,
-    color-mix(in srgb, var(--term-bg) 96%, transparent) 24px,
-    var(--term-bg) 100%);
-  pointer-events: none;
-}
 /* Grafito suave: escritura elevada y controles en una repisa interior. */
 .chat-dock {
   --composer-rim: color-mix(in srgb, var(--text) 15%, transparent);
@@ -2347,7 +2341,7 @@ pre.chat-ask-preview-body {
 
 /* Paneles estrechos (vista dividida). */
 @container (max-width: 520px) {
-  .chat-thread { padding: 20px 16px calc(var(--composer-space, 120px) + 12px); }
+  .chat-thread { padding-inline: 16px; padding-bottom: calc(var(--composer-space, 120px) + 12px); }
   .chat-composer-wrap { padding: 0 12px 12px; }
   .chat-working-hint { display: none; }
   .chat-empty { padding-bottom: 0; }

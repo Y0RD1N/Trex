@@ -144,6 +144,9 @@ function SessionChat({ room, agentTeam, onTeamChange, onRoomChange, trexInstalle
   return agentTeam ? <AgentTeamView {...props} team={agentTeam} onTeamChange={onTeamChange} /> : room ? <AgentRoomView {...props} room={room} onRoomChange={onRoomChange} /> : <ChatView {...props} />;
 }
 
+const usesChatView = (tab: TabState): tab is TabState & { kind: AgentProvider } =>
+  tab.kind !== "shell" && (tab.kind !== "codex" || codexChatSupported(tab.args));
+
 function AppShell() {
   useWindowFrame();
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -1331,6 +1334,9 @@ function AppShell() {
   const standardClaude = preferredProfile.provider === "claude" && preferredProfile.command === "claude";
   const claudeMissing = standardClaude && claudeInfo !== null && !claudeInfo.found;
   const hasProjects = config.projects.length > 0;
+  const selectedTab = projectTabs.find(tab => tab.id === activeTabId);
+  const chatCanvas = !split && !!selectedTab && usesChatView(selectedTab)
+    && !(hasProjects && claudeMissing && !bannerDismissed);
   // Las claves conservan cada PTY; el orden del DOM sigue el orden visual para Tab.
   const terminalTabs = split ? [...tabs].sort((a,b) => {
     const position = (tab: TabState): number => tab.projectId === activeProjectId && split.panes.includes(tab.id) ? split.panes.indexOf(tab.id) : 4;
@@ -1396,7 +1402,7 @@ function AppShell() {
         onDismissUpdate={dismissCliUpdate}
       />
 
-      <main className="main">
+      <main className={`main${chatCanvas ? " chat-canvas" : ""}`}>
         <button type="button" className="sidebar-reopen tip tip-below" hidden={!config.ui.sidebarCollapsed}
           aria-label="Mostrar barra lateral" aria-controls="workspace-sidebar" aria-expanded="false"
           data-tip={`Mostrar barra lateral (${shortcutLabel(config.settings.shortcuts.toggleSidebar)})`} onClick={toggleSidebar}>
@@ -1455,10 +1461,11 @@ function AppShell() {
               const paneIndex = split?.panes.indexOf(tab.id) ?? -1;
               const isVisible = tab.projectId === activeProjectId && (displayedSplit ? paneIndex !== -1 : isActive);
               const paneStyle = displayedSplit && isVisible ? splitPaneStyle(displayedSplit, paneIndex) : {};
+              const chat = usesChatView(tab);
               return (
                 <div
                   key={tab.id}
-                  className={`terminal-host${split && isVisible ? " split-pane" : ""}${isActive ? " focused-pane" : ""}`}
+                  className={`terminal-host${chat ? " chat-host" : ""}${split && isVisible ? " split-pane" : ""}${isActive ? " focused-pane" : ""}`}
                   style={{ display: isVisible ? "block" : "none",...paneStyle }}
                   onPointerDownCapture={() => { if(isVisible) setActiveTabId(tab.id); }}
                 >
@@ -1467,7 +1474,7 @@ function AppShell() {
                     onSelect={id => selectPaneSession(paneIndex,id)} onNew={profileId => newPaneSession(paneIndex,profileId)}
                     onRotate={() => changeSplit(split.direction === "columns" ? "rows" : "columns")}
                     onSingle={() => { setActiveTabId(tab.id); setExpandedPaneId(paneExpanded ? null : tab.id); }} />}
-                  {tab.kind !== "shell" && (tab.kind !== "codex" || codexChatSupported(tab.args)) ? <SessionChat
+                  {chat ? <SessionChat
                     room={tab.agentRoom}
                     agentTeam={tab.agentTeam}
                     onTeamChange={team => setTabs(previous => previous.map(value => value.id === tab.id && value.agentTeam?.id === team.id ? { ...value, agentTeam: team } : value))}

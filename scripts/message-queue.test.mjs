@@ -30,15 +30,28 @@ test("room and team inboxes use stable native queue IDs without renaming valid t
 });
 
 test("Codex confirms only successful receipts from its own MCP inbox", () => {
+  const content = inboxContent({ id: "r-delivered-1", messages: [message("queued")] });
   const item = { type: "mcpToolCall", status: "completed", server: INBOX_SERVER, tool: INBOX_TOOL,
-    result: { structuredContent: { receiptId: "r-delivered-1" } } };
+    result: { content, _meta: { "trex/receiptId": "r-delivered-1" } } };
   assert.equal(codexInboxReceiptId(item), "r-delivered-1");
   for (const altered of [null, {}, { ...item, status: "inProgress" }, { ...item, status: "failed" },
     { ...item, server: "another_server" }, { ...item, tool: "another_tool" }, { ...item, error: { message: "failed" } },
-    { ...item, result: { ...item.result, isError: true } }, { ...item, result: { structuredContent: { receiptId: null } } },
-    { ...item, result: { structuredContent: { receiptId: "../another-tab" } } }]) {
+    { ...item, result: { ...item.result, isError: true } }, { ...item, result: { content, _meta: { "trex/receiptId": null } } },
+    { ...item, result: { content, _meta: { "trex/receiptId": "../another-tab" } } },
+    { ...item, result: { ...item.result, structuredContent: { receiptId: "r-delivered-1" } } },
+    { ...item, result: { ...item.result, content: [] } },
+    { ...item, result: { ...item.result, content: content.slice(0, 1) } },
+    { ...item, result: { ...item.result, content: [{ type: "text", text: "unrelated" }, content[1]] } },
+    { ...item, result: { content, _meta: { "trex/receiptId": "another-receipt" } } },
+    { ...item, result: { content, structuredContent: { receiptId: "r-delivered-1" } } }]) {
     assert.equal(codexInboxReceiptId(altered), null);
   }
+});
+
+test("Codex can confirm image-only deliveries without exposing receipt metadata as model output", () => {
+  const content = inboxContent({ id: "r-image", messages: [message("image-only", { text: "", images: [{ mediaType: "image/png", data: "AQID" }] })] });
+  assert.equal(codexInboxReceiptId({ type: "mcpToolCall", status: "completed", server: INBOX_SERVER, tool: INBOX_TOOL,
+    result: { content, structuredContent: null, _meta: { "trex/receiptId": "r-image" } } }), "r-image");
 });
 
 test("WSL bridge launches through interop while keeping native storage arguments intact", () => {
