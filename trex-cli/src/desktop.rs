@@ -2,16 +2,31 @@
 use crate::tools::{ToolFuture, ToolProvider};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+#[cfg(not(windows))]
+use enigo::Coordinate;
+use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use image::GenericImageView;
 use serde_json::{json, Value};
 use std::{
     io::Cursor,
     path::Path,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+#[cfg(windows)]
+mod windows;
+// Input from different chat sessions must never interleave modifier/button state.
+static DESKTOP_ACCESS: Mutex<()> = Mutex::new(());
+
+pub fn read_only(name: &str) -> bool {
+    matches!(
+        name,
+        "desktop_screenshot" | "desktop_status" | "desktop_monitors" | "desktop_wait"
+    )
+}
 
 #[derive(Debug)]
 pub struct DesktopUncertain;
@@ -29,6 +44,11 @@ struct Observation {
     height: u32,
     origin_x: i32,
     origin_y: i32,
+    captured_at: Instant,
+    #[cfg(windows)]
+    monitor: u32,
+    #[cfg(windows)]
+    focus: Option<(usize, u32)>,
 }
 #[derive(Default)]
 pub struct DesktopProvider {
@@ -43,17 +63,21 @@ impl ToolProvider for DesktopProvider {
     }
     fn definitions(&self, mode: &str) -> Vec<Value> {
         let specs = [
-            ("desktop_screenshot", "Capture the desktop. The returned one-use observation token is required for the next input. Screens and focus can change independently; inspect before acting.", json!({}), vec![]),
-            ("desktop_click", "Click a point in the latest desktop screenshot. Coordinates are screenshot pixels.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"type":"string","enum":["left","right","middle"]}}), vec!["observation","x","y"]),
-            ("desktop_scroll", "Scroll at a point in the latest desktop screenshot; positive amount scrolls down.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"amount":{"type":"integer","minimum":-20,"maximum":20}}), vec!["observation","x","y","amount"]),
+            ("desktop_status", "Check desktop backend and availability without taking a screenshot or sending input.", json!({}), vec![]),
+            ("desktop_monitors", "List screens with physical-pixel origins, dimensions and IDs. Windows screenshots can select a monitor by ID.", json!({}), vec![]),
+            ("desktop_wait", "Wait for the desktop to settle, in milliseconds (0 to 10000). Capture again afterwards before input.", json!({"milliseconds":{"type":"integer","minimum":0,"maximum":10000}}), vec!["milliseconds"]),
+            ("desktop_screenshot", "Capture a screen, defaulting to the primary monitor. Optional monitor ID comes from desktop_monitors. The returned one-use observation expires after 30 seconds and is required for the next input. Inspect screen and focus before acting.", json!({"monitor":{"type":"integer","minimum":0}}), vec![]),
+            ("desktop_move", "Move the pointer to a point in the latest screenshot without clicking. Coordinates are screenshot pixels.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0}}), vec!["observation","x","y"]),
+            ("desktop_click", "Click a point in the latest desktop screenshot. Coordinates are screenshot pixels. Use clicks:2 for a double click.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"type":"string","enum":["left","right","middle"]},"clicks":{"type":"integer","minimum":1,"maximum":2}}), vec!["observation","x","y"]),
+            ("desktop_scroll", "Scroll at a point in the latest screenshot. Positive amount scrolls down (vertical) or right (horizontal).", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"amount":{"type":"integer","minimum":-20,"maximum":20},"axis":{"type":"string","enum":["vertical","horizontal"]}}), vec!["observation","x","y","amount"]),
             ("desktop_type", "Type text into the currently focused control. Verify focus from a fresh screenshot first.", json!({"observation":{"type":"string"},"text":{"type":"string","maxLength":4000}}), vec!["observation","text"]),
             ("desktop_key", "Press a key or keyboard shortcut in the focused control. Keys: enter, tab, escape, backspace, delete, arrows, home, end, pageup, pagedown, space, or one character. Modifiers: ctrl, alt, shift, meta.", json!({"observation":{"type":"string"},"key":{"type":"string"},"modifiers":{"type":"array","maxItems":4,"items":{"type":"string","enum":["ctrl","alt","shift","meta"]}}}), vec!["observation","key"]),
             ("desktop_drag", "Drag between points in the latest desktop screenshot using the left button.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"toX":{"type":"integer","minimum":0},"toY":{"type":"integer","minimum":0}}), vec!["observation","x","y","toX","toY"]),
         ];
-        specs.into_iter().filter(|(name,_,_,_)| mode != "plan" || *name == "desktop_screenshot").map(|(name,description,properties,required)| json!({"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
+        specs.into_iter().filter(|(name,_,_,_)| mode != "plan" || read_only(name)).map(|(name,description,properties,required)| json!({"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
     }
     fn is_mutating(&self, name: &str, _: &Value) -> bool {
-        name != "desktop_screenshot"
+        !read_only(name)
     }
     fn execute<'a>(
         &'a self,
@@ -67,13 +91,25 @@ impl ToolProvider for DesktopProvider {
         Box::pin(async move {
             ensure!(!cancel.is_cancelled(), "cancelled before desktop operation");
             ensure!(
-                mode != "plan" || name == "desktop_screenshot",
+                mode != "plan" || read_only(name),
                 "plan mode forbids desktop input"
             );
+            if name == "desktop_wait" {
+                validate_fields(input, &["milliseconds"], &["milliseconds"])?;
+                let milliseconds = input["milliseconds"]
+                    .as_u64()
+                    .filter(|n| *n <= 10000)
+                    .context("milliseconds must be 0..10000")?;
+                self.invalidate_observation();
+                tokio::select! {
+                    _ = cancel.cancelled() => bail!("cancelled before desktop wait completed"),
+                    _ = tokio::time::sleep(Duration::from_millis(milliseconds)) => return Ok(json!({"completed":true,"milliseconds":milliseconds})),
+                }
+            }
             let input = input.clone();
             let name = name.to_string();
             let state = self.observation.clone();
-            tokio::task::spawn_blocking(move || run(&state, &name, &input))
+            tokio::task::spawn_blocking(move || run(&state, &name, &input, &cancel))
                 .await
                 .context("desktop worker failed")?
         })
@@ -128,18 +164,58 @@ fn key(value: &str) -> Result<Key> {
         }
     })
 }
-fn run(state: &Mutex<Option<Observation>>, name: &str, input: &Value) -> Result<Value> {
+fn run(
+    state: &Mutex<Option<Observation>>,
+    name: &str,
+    input: &Value,
+    cancel: &CancellationToken,
+) -> Result<Value> {
+    let _access = DESKTOP_ACCESS
+        .lock()
+        .map_err(|_| anyhow::anyhow!("desktop input unavailable"))?;
+    ensure!(!cancel.is_cancelled(), "cancelled before desktop operation");
+    #[cfg(windows)]
+    let _dpi = windows::DpiScope::enter()?;
     let mut state = state
         .lock()
         .map_err(|_| anyhow::anyhow!("desktop session unavailable"))?;
-    if name == "desktop_screenshot" {
+    ensure!(!cancel.is_cancelled(), "cancelled before desktop operation");
+    if name == "desktop_status" || name == "desktop_monitors" {
         validate_fields(input, &[], &[])?;
+        return if name == "desktop_status" {
+            status()
+        } else {
+            monitors()
+        };
+    }
+    if name == "desktop_screenshot" {
+        validate_fields(input, &["monitor"], &[])?;
+        let monitor = input
+            .get("monitor")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .context("invalid monitor ID")
+            })
+            .transpose()?;
         *state = None;
-        let (image, x, y) = capture()?;
+        #[cfg(windows)]
+        let captured_focus = windows::focus();
+        let (image, x, y, monitor) = capture(monitor)?;
         let (width, height) = image.dimensions();
         let mut bytes = Cursor::new(Vec::new());
         image.write_to(&mut bytes, image::ImageFormat::Png)?;
         let bytes = bytes.into_inner();
+        ensure!(
+            !cancel.is_cancelled(),
+            "cancelled before screenshot delivery"
+        );
+        #[cfg(windows)]
+        ensure!(
+            windows::focus() == captured_focus,
+            "foreground changed while capturing; take a fresh screenshot"
+        );
         ensure!(
             bytes.len() <= 4 * 1024 * 1024,
             "screenshot exceeds artifact size limit"
@@ -151,20 +227,26 @@ fn run(state: &Mutex<Option<Observation>>, name: &str, input: &Value) -> Result<
             height,
             origin_x: x,
             origin_y: y,
+            captured_at: Instant::now(),
+            #[cfg(windows)]
+            monitor,
+            #[cfg(windows)]
+            focus: captured_focus,
         });
         return Ok(
-            json!({"content":[{"type":"text","text":format!("Screenshot {width}x{height}; observation {token}. Input consumes this observation; capture again before the next input.")},{"type":"image","mimeType":"image/png","data":STANDARD.encode(bytes)}],"structuredContent":{"observation":token,"width":width,"height":height}}),
+            json!({"content":[{"type":"text","text":format!("Screenshot {width}x{height}; observation {token}. Input consumes this observation; capture again before the next input.")},{"type":"image","mimeType":"image/png","data":STANDARD.encode(bytes)}],"structuredContent":{"observation":token,"width":width,"height":height,"originX":x,"originY":y,"monitor":monitor,"coordinateSpace":"physicalPixels","expiresInMs":30000}}),
         );
     }
     let (allowed, required): (&[&str], &[&str]) = match name {
         "desktop_click" => (
-            &["observation", "x", "y", "button"],
+            &["observation", "x", "y", "button", "clicks"],
             &["observation", "x", "y"],
         ),
         "desktop_scroll" => (
-            &["observation", "x", "y", "amount"],
+            &["observation", "x", "y", "amount", "axis"],
             &["observation", "x", "y", "amount"],
         ),
+        "desktop_move" => (&["observation", "x", "y"], &["observation", "x", "y"]),
         "desktop_drag" => (
             &["observation", "x", "y", "toX", "toY"],
             &["observation", "x", "y", "toX", "toY"],
@@ -185,15 +267,24 @@ fn run(state: &Mutex<Option<Observation>>, name: &str, input: &Value) -> Result<
         input["observation"].as_str() == Some(&observation.token),
         "stale desktop observation; take a new screenshot"
     );
+    if observation.captured_at.elapsed() > Duration::from_secs(30) {
+        *state = None;
+        bail!("desktop observation expired; take a fresh screenshot");
+    }
     // Validate every argument before connecting to the desktop or consuming the token.
     let mut points = None;
     let mut end = None;
     let mut button = Button::Left;
     let mut amount = 0;
+    let mut axis = Axis::Vertical;
+    let mut clicks = 1;
     let mut typed = "";
     let mut pressed_key = Key::Return;
     let mut modifiers = Vec::new();
-    if matches!(name, "desktop_click" | "desktop_scroll" | "desktop_drag") {
+    if matches!(
+        name,
+        "desktop_click" | "desktop_scroll" | "desktop_drag" | "desktop_move"
+    ) {
         points = Some(point(input, "x", "y", &observation)?);
     }
     if name == "desktop_drag" {
@@ -206,6 +297,12 @@ fn run(state: &Mutex<Option<Observation>>, name: &str, input: &Value) -> Result<
             Some(Some("middle")) => Button::Middle,
             _ => bail!("invalid button"),
         };
+        if let Some(value) = input.get("clicks") {
+            clicks = value
+                .as_u64()
+                .filter(|n| (1..=2).contains(n))
+                .context("clicks must be 1 or 2")?;
+        }
     }
     if name == "desktop_scroll" {
         amount = input["amount"].as_i64().context("invalid amount")?;
@@ -213,6 +310,12 @@ fn run(state: &Mutex<Option<Observation>>, name: &str, input: &Value) -> Result<
             (-20..=20).contains(&amount) && amount != 0,
             "invalid scroll amount"
         );
+        axis = match input.get("axis").and_then(Value::as_str) {
+            Some("horizontal") => Axis::Horizontal,
+            Some("vertical") => Axis::Vertical,
+            None if !input.as_object().unwrap().contains_key("axis") => Axis::Vertical,
+            _ => bail!("invalid scroll axis"),
+        };
     }
     if name == "desktop_type" {
         typed = input["text"].as_str().context("invalid text")?;
@@ -240,33 +343,59 @@ fn run(state: &Mutex<Option<Observation>>, name: &str, input: &Value) -> Result<
         }
     }
     check_platform()?;
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| anyhow::anyhow!("desktop input unavailable: {e}"))?;
-    // Avoid mapping physical capture pixels onto DPI-virtualized input coordinates.
     #[cfg(windows)]
     {
-        let (width, height) = enigo.main_display()?;
-        ensure!(
-            observation.origin_x == 0
-                && observation.origin_y == 0
-                && width == observation.width as i32
-                && height == observation.height as i32,
-            "display scaling or geometry differs from the screenshot; input is disabled"
-        );
+        windows::ensure_interactive()?;
+        windows::validate_monitor(
+            observation.monitor,
+            observation.origin_x,
+            observation.origin_y,
+            observation.width,
+            observation.height,
+        )?;
+        if matches!(name, "desktop_key" | "desktop_type") {
+            ensure!(
+                observation.focus.is_some() && windows::focus() == observation.focus,
+                "foreground window changed; take a fresh screenshot before typing"
+            );
+        }
     }
+    ensure!(!cancel.is_cancelled(), "cancelled before desktop input");
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| anyhow::anyhow!("desktop input unavailable: {e}"))?;
+    ensure!(!cancel.is_cancelled(), "cancelled before desktop input");
     *state = None;
     let result = (|| -> Result<()> {
         if let Some((x, y)) = points {
-            enigo.move_mouse(x, y, Coordinate::Abs)?;
+            move_pointer(&mut enigo, x, y)?;
         }
+        ensure!(!cancel.is_cancelled(), "cancelled after pointer motion");
         match name {
-            "desktop_click" => enigo.button(button, Direction::Click)?,
-            "desktop_scroll" => enigo.scroll(amount as i32, Axis::Vertical)?,
+            "desktop_move" => (),
+            "desktop_click" => {
+                for _ in 0..clicks {
+                    ensure!(!cancel.is_cancelled(), "cancelled during click");
+                    enigo.button(button, Direction::Click)?;
+                }
+            }
+            "desktop_scroll" => enigo.scroll(amount as i32, axis)?,
             "desktop_type" => enigo.text(typed)?,
             "desktop_drag" => {
                 enigo.button(Button::Left, Direction::Press)?;
-                let (x, y) = end.unwrap();
-                let moved = enigo.move_mouse(x, y, Coordinate::Abs);
+                let (from_x, from_y) = points.unwrap();
+                let (to_x, to_y) = end.unwrap();
+                let moved = (|| -> Result<()> {
+                    for step in 1..=16 {
+                        ensure!(!cancel.is_cancelled(), "cancelled during drag");
+                        let x =
+                            i64::from(from_x) + (i64::from(to_x) - i64::from(from_x)) * step / 16;
+                        let y =
+                            i64::from(from_y) + (i64::from(to_y) - i64::from(from_y)) * step / 16;
+                        move_pointer(&mut enigo, x as i32, y as i32)?;
+                        std::thread::sleep(Duration::from_millis(6));
+                    }
+                    Ok(())
+                })();
                 let released = enigo.button(Button::Left, Direction::Release);
                 moved?;
                 released?;
@@ -275,9 +404,11 @@ fn run(state: &Mutex<Option<Observation>>, name: &str, input: &Value) -> Result<
                 let mut held = Vec::new();
                 let result = (|| -> Result<()> {
                     for modifier in &modifiers {
+                        ensure!(!cancel.is_cancelled(), "cancelled during shortcut");
                         enigo.key(*modifier, Direction::Press)?;
                         held.push(*modifier);
                     }
+                    ensure!(!cancel.is_cancelled(), "cancelled during shortcut");
                     enigo.key(pressed_key, Direction::Click)?;
                     Ok(())
                 })();
@@ -310,14 +441,97 @@ fn check_platform() -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn move_pointer(_: &mut Enigo, x: i32, y: i32) -> Result<()> {
+    windows::move_pointer(x, y)
+}
+#[cfg(not(windows))]
+fn move_pointer(enigo: &mut Enigo, x: i32, y: i32) -> Result<()> {
+    enigo.move_mouse(x, y, Coordinate::Abs)?;
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn normalize_virtual_point(x: i32, y: i32, bounds: [i32; 4]) -> Result<(i32, i32)> {
+    let [left, top, width, height] = bounds;
+    let (x, y) = (
+        i64::from(x) - i64::from(left),
+        i64::from(y) - i64::from(top),
+    );
+    ensure!(
+        width > 1
+            && height > 1
+            && x >= 0
+            && x < i64::from(width)
+            && y >= 0
+            && y < i64::from(height),
+        "point outside virtual desktop"
+    );
+    let normalize =
+        |p: i64, size: i32| ((p * 65535 + i64::from(size - 1) / 2) / i64::from(size - 1)) as i32;
+    Ok((normalize(x, width), normalize(y, height)))
+}
+
+/// No screenshot, input, credential store or private application state is read.
+pub fn status() -> Result<Value> {
+    let backend = if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "x11"
+    } else {
+        "unsupported"
+    };
+    match monitors() {
+        Ok(value) => Ok(
+            json!({"available":true,"backend":backend,"monitors":value["monitors"],"coordinateSpace":"physicalPixels","reason":null}),
+        ),
+        Err(_) => Ok(
+            json!({"available":false,"backend":backend,"monitors":[],"coordinateSpace":"physicalPixels","reason":
+            if cfg!(target_os = "linux") && (std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var("XDG_SESSION_TYPE").ok().as_deref() == Some("wayland")) { "waylandUnsupported" }
+            else if cfg!(windows) { "interactiveDesktopUnavailable" } else { "displayUnavailable" }}),
+        ),
+    }
+}
+
+#[cfg(windows)]
+fn monitors() -> Result<Value> {
+    let _dpi = windows::DpiScope::enter()?;
+    windows::ensure_interactive()?;
+    windows::bounds()?;
+    let values: Vec<Value> = xcap::Monitor::all()?.into_iter().map(|monitor| -> Result<Value> {
+        Ok(json!({"id":monitor.id()?,"name":monitor.name()?,"primary":monitor.is_primary()?,"x":monitor.x()?,"y":monitor.y()?,"width":monitor.width()?,"height":monitor.height()?,"scaleFactor":windows::scale_factor(monitor.id()?)?}))
+    }).collect::<Result<_>>()?;
+    ensure!(!values.is_empty(), "no monitors available");
+    Ok(json!({"monitors":values}))
+}
+
 #[cfg(target_os = "linux")]
-fn capture() -> Result<(image::DynamicImage, i32, i32)> {
+fn monitors() -> Result<Value> {
+    use x11rb::connection::Connection;
+    check_platform()?;
+    let (connection, primary) = x11rb::connect(None).context("X11 display unavailable")?;
+    let values: Vec<Value> = connection.setup().roots.iter().enumerate().map(|(id, screen)| json!({"id":id,"name":format!("X11 screen {id}"),"primary":id==primary,"x":0,"y":0,"width":screen.width_in_pixels,"height":screen.height_in_pixels,"scaleFactor":1})).collect();
+    ensure!(!values.is_empty(), "no X11 screen available");
+    Ok(json!({"monitors":values}))
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn monitors() -> Result<Value> {
+    bail!("desktop control is not available on this platform")
+}
+
+#[cfg(target_os = "linux")]
+fn capture(monitor: Option<u32>) -> Result<(image::DynamicImage, i32, i32, u32)> {
     use x11rb::{
         connection::Connection,
         protocol::xproto::{ConnectionExt, ImageFormat, ImageOrder},
     };
     check_platform()?;
     let (conn, screen_id) = x11rb::connect(None).context("X11 display unavailable")?;
+    ensure!(
+        monitor.is_none() || monitor == Some(screen_id as u32),
+        "only the current X11 root screen supports input"
+    );
     let setup = conn.setup();
     let screen = &setup.roots[screen_id];
     let (w, h) = (screen.width_in_pixels, screen.height_in_pixels);
@@ -383,15 +597,26 @@ fn capture() -> Result<(image::DynamicImage, i32, i32)> {
             );
         }
     }
-    Ok((image::DynamicImage::ImageRgba8(image), 0, 0))
+    Ok((
+        image::DynamicImage::ImageRgba8(image),
+        0,
+        0,
+        screen_id as u32,
+    ))
 }
 #[cfg(windows)]
-fn capture() -> Result<(image::DynamicImage, i32, i32)> {
+fn capture(selected: Option<u32>) -> Result<(image::DynamicImage, i32, i32, u32)> {
+    windows::ensure_interactive()?;
     let monitors = xcap::Monitor::all()?;
     let monitor = monitors
         .into_iter()
-        .find(|m| m.is_primary().unwrap_or(false))
-        .context("primary monitor unavailable")?;
+        .find(|m| {
+            selected.map_or_else(
+                || m.is_primary().unwrap_or(false),
+                |id| m.id().ok() == Some(id),
+            )
+        })
+        .context("selected monitor unavailable; use desktop_monitors")?;
     let x = monitor.x()?;
     let y = monitor.y()?;
     let image = monitor.capture_image()?;
@@ -399,33 +624,44 @@ fn capture() -> Result<(image::DynamicImage, i32, i32)> {
         u64::from(image.width()) * u64::from(image.height()) <= 16_000_000,
         "desktop dimensions unsupported"
     );
-    Ok((image::DynamicImage::ImageRgba8(image), x, y))
+    Ok((image::DynamicImage::ImageRgba8(image), x, y, monitor.id()?))
 }
 #[cfg(not(any(target_os = "linux", windows)))]
-fn capture() -> Result<(image::DynamicImage, i32, i32)> {
+fn capture(_: Option<u32>) -> Result<(image::DynamicImage, i32, i32, u32)> {
     bail!("desktop control is not available on this platform")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn definitions_obey_read_only_and_validation_is_strict() {
-        let provider = DesktopProvider::default();
-        assert_eq!(provider.definitions("plan").len(), 1);
-        assert_eq!(
-            provider.definitions("plan")[0]["function"]["name"],
-            "desktop_screenshot"
-        );
-        assert!(!provider.is_mutating("desktop_screenshot", &json!({})));
-        assert!(provider.is_mutating("desktop_click", &json!({})));
-        let state = Mutex::new(Some(Observation {
+    fn run(state: &Mutex<Option<Observation>>, name: &str, input: &Value) -> Result<Value> {
+        super::run(state, name, input, &CancellationToken::new())
+    }
+    fn observation() -> Observation {
+        Observation {
             token: "one".into(),
             width: 100,
             height: 100,
             origin_x: 0,
             origin_y: 0,
-        }));
+            captured_at: Instant::now(),
+            #[cfg(windows)]
+            monitor: 0,
+            #[cfg(windows)]
+            focus: None,
+        }
+    }
+    #[test]
+    fn definitions_obey_read_only_and_validation_is_strict() {
+        let provider = DesktopProvider::default();
+        assert_eq!(provider.definitions("plan").len(), 4);
+        assert_eq!(
+            provider.definitions("plan")[0]["function"]["name"],
+            "desktop_status"
+        );
+        assert!(!provider.is_mutating("desktop_screenshot", &json!({})));
+        assert!(provider.is_mutating("desktop_click", &json!({})));
+        let state = Mutex::new(Some(observation()));
         assert!(run(
             &state,
             "desktop_click",
@@ -445,6 +681,83 @@ mod tests {
         )
         .is_err());
         assert!(state.lock().unwrap().is_some());
+    }
+    #[test]
+    fn physical_virtual_coordinates_cover_negative_and_scaled_monitors() {
+        let bounds = [-1920, -200, 4480, 1640];
+        assert_eq!(
+            normalize_virtual_point(-1920, -200, bounds).unwrap(),
+            (0, 0)
+        );
+        assert_eq!(
+            normalize_virtual_point(2559, 1439, bounds).unwrap(),
+            (65535, 65535)
+        );
+        let (x, y) = normalize_virtual_point(0, 0, bounds).unwrap();
+        assert!(x > 28000 && x < 29000 && y > 7900 && y < 8100);
+        assert!(normalize_virtual_point(-1921, 0, bounds).is_err());
+        assert!(normalize_virtual_point(2560, 0, bounds).is_err());
+        assert!(normalize_virtual_point(0, 0, [0, 0, 1, 1080]).is_err());
+        // Screenshot coordinates remain physical pixels at 125%, 150% or 200%.
+        let mut o = observation();
+        o.origin_x = -1920;
+        o.origin_y = -200;
+        o.width = 1920;
+        o.height = 1080;
+        assert_eq!(
+            point(&json!({"x":1919,"y":1079}), "x", "y", &o).unwrap(),
+            (-1, 879)
+        );
+    }
+    #[test]
+    fn expired_or_invalid_input_never_connects_to_the_desktop() {
+        let mut old = observation();
+        old.captured_at = Instant::now() - Duration::from_secs(31);
+        let state = Mutex::new(Some(old));
+        assert!(run(
+            &state,
+            "desktop_click",
+            &json!({"observation":"one","x":1,"y":2})
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("expired"));
+        assert!(state.lock().unwrap().is_none());
+        for (name, input) in [
+            (
+                "desktop_click",
+                json!({"observation":"one","x":1,"y":2,"clicks":3}),
+            ),
+            (
+                "desktop_scroll",
+                json!({"observation":"one","x":1,"y":2,"amount":1,"axis":null}),
+            ),
+            ("desktop_move", json!({"observation":"one","x":1,"y":100})),
+        ] {
+            let state = Mutex::new(Some(observation()));
+            assert!(run(&state, name, &input).is_err());
+            assert!(state.lock().unwrap().is_some());
+        }
+    }
+    #[test]
+    fn cancellation_is_rechecked_after_waiting_for_other_sessions() {
+        let held = DESKTOP_ACCESS.lock().unwrap();
+        let cancel = CancellationToken::new();
+        let token = cancel.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            send.send(()).unwrap();
+            super::run(&Mutex::new(None), "invalid-tool", &json!({}), &token)
+        });
+        receive.recv().unwrap();
+        cancel.cancel();
+        drop(held);
+        assert!(worker
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .starts_with("cancelled"));
     }
     #[cfg(target_os = "linux")]
     #[test]

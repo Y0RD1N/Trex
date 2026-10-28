@@ -38,6 +38,15 @@ impl Server {
         self.output.read_line(&mut line).unwrap();
         serde_json::from_str(&line).unwrap()
     }
+    fn notify(&mut self, method: &str, params: Value) {
+        writeln!(
+            self.input,
+            "{}",
+            json!({"jsonrpc":"2.0","method":method,"params":params})
+        )
+        .unwrap();
+        self.input.flush().unwrap();
+    }
 }
 impl Drop for Server {
     fn drop(&mut self) {
@@ -52,8 +61,11 @@ fn planning_is_fixed_and_requests_are_deduplicated() {
     assert_eq!(init["result"]["serverInfo"]["name"], "trex-desktop");
     let listing = server.call(2, "tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "desktop_screenshot");
+    assert_eq!(tools.len(), 4);
+    assert!(tools.iter().any(|t| t["name"] == "desktop_screenshot"));
+    assert!(tools
+        .iter()
+        .all(|t| t["annotations"]["readOnlyHint"] == true));
     let params = json!({"name":"desktop_click","arguments":{"observation":"invalid","x":0,"y":0}});
     let first = server.call(3, "tools/call", params.clone());
     assert_eq!(first["result"]["isError"], true);
@@ -62,6 +74,117 @@ fn planning_is_fixed_and_requests_are_deduplicated() {
         server.call(3, "tools/call", json!({"name":"desktop_screenshot"}))["error"]["code"],
         -32600
     );
+}
+
+#[test]
+fn cancellation_and_ping_are_processed_during_a_running_operation() {
+    let mut server = Server::start("full");
+    let wait = json!({"name":"desktop_wait","arguments":{"milliseconds":10000}});
+    writeln!(
+        server.input,
+        "{}",
+        json!({"jsonrpc":"2.0","id":100,"method":"tools/call","params":wait})
+    )
+    .unwrap();
+    server.input.flush().unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(server.call(101, "ping", json!({}))["id"], 101);
+    let busy=server.call(102,"tools/call",json!({"name":"desktop_type","arguments":{"observation":"missing","text":"must never type"}}));
+    assert_eq!(busy["error"]["code"], -32001);
+    server.notify("notifications/cancelled", json!({"requestId":100}));
+    let mut line = String::new();
+    server.output.read_line(&mut line).unwrap();
+    let canceled: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(canceled["id"], 100);
+    assert_eq!(
+        canceled["result"]["structuredContent"]["error"]["code"],
+        "CANCELLED"
+    );
+    assert_eq!(
+        canceled["result"]["structuredContent"]["manualReview"],
+        false
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(server.call(100, "tools/call", wait), canceled);
+    assert_eq!(
+        server.call(
+            103,
+            "tools/call",
+            json!({"name":"desktop_wait","arguments":{"milliseconds":0}})
+        )["result"]["isError"],
+        false
+    );
+}
+
+#[test]
+fn eof_cancels_pending_work_and_exits_without_waiting_for_the_tool() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_trex-agent"))
+        .args(["desktop-mcp", "--mode", "plan"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    writeln!(input,"{}",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"desktop_wait","arguments":{"milliseconds":10000}}})).unwrap();
+    drop(input);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("MCP retained work after owner EOF");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn invalid_frames_and_waits_do_not_break_the_session() {
+    let mut server = Server::start("plan");
+    writeln!(server.input, "{}", "x".repeat(65537)).unwrap();
+    server.input.flush().unwrap();
+    let mut line = String::new();
+    server.output.read_line(&mut line).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["error"]["code"],
+        -32700
+    );
+    assert_eq!(
+        server.call(
+            1,
+            "tools/call",
+            json!({"name":"desktop_wait","arguments":{"milliseconds":10001}})
+        )["result"]["isError"],
+        true
+    );
+    assert_eq!(
+        server.call(
+            2,
+            "tools/call",
+            json!({"name":"desktop_move","arguments":{}})
+        )["result"]["isError"],
+        true
+    );
+    assert_eq!(server.call(3, "ping", json!({}))["result"], json!({}));
+}
+
+#[test]
+fn desktop_doctor_is_available_without_a_profile_or_capture() {
+    let output = Command::new(env!("CARGO_BIN_EXE_trex-agent"))
+        .args(["desktop-doctor", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(status["available"].is_boolean());
+    assert!(status["monitors"].is_array());
+    assert_eq!(status["coordinateSpace"], "physicalPixels");
+    assert!(status.get("content").is_none());
 }
 #[test]
 #[ignore = "requires a dedicated virtual X11 display"]

@@ -35,6 +35,11 @@ enum Command {
         #[arg(long)]
         mode: String,
     },
+    /// Inspect desktop availability without capturing the screen or sending input.
+    DesktopDoctor {
+        #[arg(long)]
+        json: bool,
+    },
     Chat {
         #[arg(long, default_value = "ask")]
         mode: String,
@@ -210,6 +215,7 @@ async fn run() -> Result<()> {
         }
         Command::AppServer => server::run(selected(cli.profile)?).await?,
         Command::DesktopMcp { mode } => trex_agent::desktop_mcp::serve(&mode).await?,
+        Command::DesktopDoctor { json: _ } => print_json(&trex_agent::desktop::status()?)?,
         Command::Chat {
             mode,
             cwd,

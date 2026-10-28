@@ -27,7 +27,7 @@ import { codexInboxContent, InboxRequests, INBOX_INSTRUCTIONS, INBOX_TOOL, inbox
 import { codexInboxReceiptId } from "../inboxProtocol";
 import { assertCodexPlanningThread, codexPlanningThread, codexPlanningTurn } from "../workflowSafety";
 import { taskInstructions } from "../chatTasks";
-import { integrationInstructions } from "../integrations";
+import { integrationInstructions, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
 const ANSWERED_IN_CHAT = new Set([
@@ -378,7 +378,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     };
     const expected = [
       ...(inboxConfigRef.current["mcp_servers.trex_browser.enabled"] === true ? [{ server: "trex_browser", tools: ["browser_navigate", "browser_snapshot", "browser_status"] }] : []),
-      ...(inboxConfigRef.current["mcp_servers.trex_desktop.enabled"] === true ? [{ server: "trex_desktop", tools: browserBindingRef.current?.mode === "observe" ? ["desktop_screenshot"] : ["desktop_screenshot", "desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"] }] : []),
+      ...(inboxConfigRef.current["mcp_servers.trex_desktop.enabled"] === true ? [{ server: "trex_desktop", tools: browserBindingRef.current?.mode === "observe" ? [...DESKTOP_READ_TOOLS] : [...DESKTOP_READ_TOOLS, ...DESKTOP_INPUT_TOOLS] }] : []),
     ];
     for (const integration of expected) {
       const label = integration.server === "trex_browser" ? "Trex Browser" : "el control de computadora";
@@ -390,7 +390,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       const tools = record(server?.tools);
       if (!server || server.toolsError != null || server.runtimeStatus !== undefined && server.runtimeStatus !== "connected"
         || !tools || !integration.tools.every(name => record(tools[name]))
-        || integration.server === "trex_desktop" && browserBindingRef.current?.mode === "observe" && ["desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"].some(name => record(tools[name]))) {
+        || integration.server === "trex_desktop" && browserBindingRef.current?.mode === "observe" && DESKTOP_INPUT_TOOLS.some(name => record(tools[name]))) {
         throw new CodexBrowserConnectionError(`Codex no recibió las herramientas de ${label}. Reinicia esta conversación.`);
       }
     }

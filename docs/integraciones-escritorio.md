@@ -50,6 +50,32 @@ actual cubre la pantalla principal en Windows y la pantalla raíz X11 en Linux;
 Wayland se rechaza explícitamente, sin usar XWayland como sustituto. Se probó
 en una pantalla X11 virtual; Windows y múltiples monitores siguen sin verificar.
 
+### Diagnóstico y acciones de Windows
+
+Ajustes muestra la disponibilidad real del escritorio y las pantallas detectadas,
+con resolución y escala. La comprobación ejecuta `trex-agent desktop-doctor --json`:
+no captura la pantalla, no envía entrada y no necesita perfil ni credenciales.
+También está disponible para el agente como `desktop_status`.
+
+`desktop_monitors` devuelve los identificadores que acepta el argumento opcional
+`monitor` de `desktop_screenshot`. Las coordenadas de entrada son píxeles de esa
+captura. Windows aplica un contexto DPI por hilo, que se restaura al terminar,
+y normaliza el movimiento sobre el escritorio virtual; permite pantallas con
+orígenes negativos y evita usar el tamaño lógico de la pantalla principal.
+Se vuelve a comprobar la geometría antes de actuar. La normalización, el contexto
+DPI y el diagnóstico tienen pruebas en Windows; la entrada real con múltiples
+monitores y las aplicaciones elevadas no se han validado en este dispositivo.
+
+El agente dispone además de `desktop_move`, doble clic mediante `clicks:2`,
+desplazamiento horizontal mediante `axis:"horizontal"`, arrastre gradual y
+`desktop_wait` (milisegundos, máximo 10000). Cada entrada consume su observación,
+que caduca a los 30 segundos. Cambiar la ventana enfocada obliga a capturar de
+nuevo antes de escribir. Los agentes se serializan para no mezclar botones ni
+modificadores. El servidor MCP atiende cancelación y EOF mientras ejecuta una
+operación: cancela trabajo no emitido y no reproduce una entrada ya iniciada.
+Los diagnósticos y la espera siguen disponibles en modo planificación; la entrada
+se excluye del inventario y se rechaza de nuevo en el ejecutor.
+
 
 Ofrecer captura de pantallas, lista y selección de ventanas, clic, movimiento y
 arrastre, teclado, desplazamiento y espera. Definir coordenadas con monitor,

@@ -243,6 +243,9 @@ pub fn is_mutating(name: &str) -> bool {
             | "github_prs"
             | "github_pr_view"
             | "desktop_screenshot"
+            | "desktop_status"
+            | "desktop_monitors"
+            | "desktop_wait"
     )
 }
 

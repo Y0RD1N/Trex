@@ -89,17 +89,25 @@ it. Capture is available in planning mode; clicks, drag, scrolling, text and key
 shortcuts follow normal mutation permissions and require confirmed model vision
 and a fresh, one-use screenshot observation. The X11 implementation is tested
 in an isolated virtual display. Wayland is explicitly rejected. Windows capture
-and input are implemented for the primary monitor but have not yet been tested
-on Windows; elevated windows and multi-monitor/DPI behavior are not guaranteed.
+and input use a scoped per-monitor DPI context and physical virtual-desktop
+coordinates. `desktop_monitors` lists selectable screens; `desktop_screenshot`
+accepts their `monitor` ID. Real input with multiple physical monitors remains
+experimental. Elevated windows and secure desktops cannot be controlled.
 Screenshots are private artifacts and are sent to the model provider when vision
 is confirmed. Close active sessions to revoke their existing desktop access.
 
 Claude Code and Codex can use a separate MCP process (`desktop-mcp --mode plan`
 or `--mode full`). Its mode is fixed at startup; the app reconnects it when the
-permission class changes. The planning mode advertises and executes only screen
-capture. Input tools use the host agent's approval policy. MCP request IDs are
+permission class changes. Planning advertises only screenshot, status, monitors
+and bounded wait tools. Input tools use the host agent's approval policy. MCP request IDs are
 deduplicated for the lifetime of the process; screenshot bytes are not retained
-in the replay cache. A fresh screenshot is required after each input.
+in the replay cache. MCP cancellation and owner EOF are handled during active
+operations, without replay. A fresh screenshot is required after each input and
+observations expire after 30 seconds; keyboard input also verifies foreground focus.
+`desktop_move`, `desktop_click({clicks:2,...})`, horizontal scroll (`axis:"horizontal"`)
+and gradual drag are supported. `desktop_wait` uses milliseconds, up to 10000.
+`desktop-doctor --json` checks availability without a profile, capture or input;
+the desktop app displays this diagnostic in Settings → Integrations.
 
 Optional Trex Browser integration is explicitly enabled per app-server session:
 `session/start` accepts `browser:{enabled:true,profile:"BROWSER1",clientId:"stable-tab-or-room-id"}`.

@@ -21,4 +21,10 @@
 .browser-settings-create label { flex:1; }
 .browser-settings-create button { min-height:36px; flex-shrink:0; }
 .browser-settings-error { color:var(--error,#df7777); font-size:12px; line-height:1.6; }
+.integration-displays { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 14px; }
+.integration-display { display:flex; align-items:center; gap:10px; padding:10px 13px; border:1px solid var(--border); border-radius:12px; background:var(--bg); min-width:0; }
+.integration-display > span { color:var(--accent); font-size:22px; line-height:1; }
+.integration-display > div { display:grid; gap:4px; min-width:0; }
+.integration-display strong { font-size:12px; font-weight:500; overflow:hidden; text-overflow:ellipsis; }
+.integration-display small { color:var(--text-muted); font-size:11px; }
 @media(max-width:440px) { .browser-settings-card { padding:16px; } .browser-settings-status { margin-left:52px; } .browser-settings-create { align-items:stretch; flex-direction:column; } }

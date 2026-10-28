@@ -33,7 +33,8 @@ const base = await declarations("./queue-send-now.test.mjs", ["harness", "flush"
       const flags=spawns.find(spawn=>spawn.id===request.process)?.request.flags ?? [], i=flags.indexOf("--mcp-config");
       const config=i>=0?JSON.parse(flags[i+1]).mcpServers.trex_desktop:null;
       const mode=config?.args?.at(-1);
-      const names=mode==="plan"?["desktop_screenshot"]:["desktop_screenshot","desktop_click","desktop_drag","desktop_scroll","desktop_type","desktop_key"];
+      const read=["desktop_screenshot","desktop_status","desktop_monitors","desktop_wait"];
+      const names=mode==="plan"?read:[...read,"desktop_click","desktop_move","desktop_drag","desktop_scroll","desktop_type","desktop_key"];
       return {mcpServers:config?[{name:"trex_desktop",status:"connected",serverInfo:{name:"trex-desktop"},config,tools:names.map(name=>({name}))}]:[]};
     })() : { current_permission_mode:`],
     ['models: [{ id: "offline-model", efforts: ["high", "max"] }]', 'models: extra.models ?? [{ id: "offline-model", efforts: ["high", "max"] }]'],
@@ -944,7 +945,7 @@ for (const provider of ["claude", "codex"]) test(`${provider}: desktop MCP binds
   const h = harness(t, provider, {
     browser: { ...browser, enabled: false }, desktopEnabled: true,
     api: { trexDesktopMcpConfig: async mode => { calls.push(mode); return { command: "C:\\Trex\\trex-agent.exe", args: ["desktop-mcp", "--mode", mode === "observe" ? "plan" : "full"] }; } },
-    mcpStatus: { data: [{ name: "trex_desktop", runtimeStatus: "connected", tools: Object.fromEntries(["desktop_screenshot", "desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"].map(name => [name, { name }])) }] },
+    mcpStatus: { data: [{ name: "trex_desktop", runtimeStatus: "connected", tools: Object.fromEntries(["desktop_screenshot", "desktop_status", "desktop_monitors", "desktop_wait", "desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"].map(name => [name, { name }])) }] },
   });
   await h.ready();
   assert.deepEqual(calls, ["qa"]);
@@ -957,7 +958,7 @@ for (const provider of ["claude", "codex"]) test(`${provider}: desktop MCP binds
     assert.equal(config["mcp_servers.trex_desktop.default_tools_approval_mode"], "prompt");
     assert.ok(h.writes.some(write => write.method === "mcpServerStatus/list" && write.params.serverName === "trex_desktop"));
   }
-  if (provider === "codex") for (const name of ["desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"]) delete h.options.mcpStatus.data[0].tools[name];
+  if (provider === "codex") for (const name of ["desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"]) delete h.options.mcpStatus.data[0].tools[name];
   h.session.setMode("plan");
   assert.equal(await send(h), true);
   assert.deepEqual(calls, ["qa", "observe"]);
@@ -1011,4 +1012,16 @@ test("Claude refuses a desktop server from an unexpected executable", async t =>
   assert.equal(await send(h),false);
   assert.equal(h.userWrites.length,0);
   assert.equal(h.nativeKills.length,1);
+});
+
+for (const provider of ["claude", "codex"]) test(`${provider}: planner rejects pointer movement even when all observation tools are present`, async t => {
+  const names=["desktop_screenshot","desktop_status","desktop_monitors","desktop_wait","desktop_move"];
+  const config={command:"trusted-agent",args:["desktop-mcp","--mode","plan"]};
+  const h=harness(t,provider,{browser:{...browser,enabled:false},desktopEnabled:true,planningOnly:true,
+    api:{trexDesktopMcpConfig:async()=>config},
+    desktopStatus:{mcpServers:[{name:"trex_desktop",status:"connected",serverInfo:{name:"trex-desktop"},config,tools:names.map(name=>({name}))}]},
+    mcpStatus:{data:[{name:"trex_desktop",runtimeStatus:"connected",tools:Object.fromEntries(names.map(name=>[name,{name}]))}]},
+  });
+  assert.equal(await send(h),false);
+  assert.equal(h.userWrites.length,0);
 });

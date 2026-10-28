@@ -695,6 +695,9 @@ mod tests {
             command.env("TREX_HOME", &home);
             run_cli_command(command, args, input)
         };
+        let desktop: DesktopStatus = parse_json(&invoke(&["desktop-doctor", "--json"], None).unwrap()).unwrap();
+        assert_eq!(desktop.coordinate_space, "physicalPixels");
+        assert!(matches!(desktop.backend.as_str(), "windows" | "x11" | "unsupported"));
         let before: Vec<ProfileSummary> =
             parse_json(&invoke(&["profiles", "list", "--json"], None).unwrap()).unwrap();
         assert!(before.is_empty());
@@ -736,4 +739,32 @@ pub async fn trex_desktop_mcp_config(mode: String) -> Result<serde_json::Value, 
     let binary = installed_cli_path()?;
     let command = binary.to_str().ok_or("La ruta del agente no es UTF-8 válida.")?;
     Ok(serde_json::json!({"command":command,"args":["desktop-mcp","--mode",fixed_mode]}))
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopStatus {
+    available: bool,
+    backend: String,
+    monitors: Vec<DesktopMonitor>,
+    coordinate_space: String,
+    reason: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopMonitor {
+    id: u32,
+    name: String,
+    primary: bool,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f32,
+}
+
+/// Read-only preflight. Does not capture the desktop, send input or open a model session.
+#[tauri::command]
+pub async fn trex_desktop_status() -> Result<DesktopStatus, String> {
+    crate::blocking(|| parse_json(&invoke_cli(&["desktop-doctor", "--json"], None)?)).await
 }

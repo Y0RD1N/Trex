@@ -366,6 +366,7 @@ pub fn run() {
             integrations::github_connection_status,
             trex_cli::trex_cli_status,
             trex_cli::trex_desktop_mcp_config,
+            trex_cli::trex_desktop_status,
             trex_browser::trex_browser_status,
             trex_browser::trex_browser_mcp_config,
             trex_browser::trex_browser_call,

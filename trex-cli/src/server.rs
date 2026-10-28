@@ -750,7 +750,7 @@ impl Server {
             if image_support != Some(true) {
                 definitions.retain(|tool| {
                     !tool["function"]["name"].as_str().is_some_and(|name| {
-                        name.starts_with("desktop_") && name != "desktop_screenshot"
+                        name.starts_with("desktop_") && !crate::desktop::read_only(name)
                     })
                 });
             }

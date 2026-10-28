@@ -100,6 +100,8 @@ export type IntegrationDependencies = { blender: boolean; hyperframes: boolean; 
 export const integrationDependencies = (cwd?: string): Promise<IntegrationDependencies> => invoke("integration_dependencies", { cwd: cwd ?? null });
 export type GitHubConnectionStatus = "connected" | "unavailable" | "timeout" | "notFound";
 export const githubConnectionStatus = (): Promise<GitHubConnectionStatus> => invoke("github_connection_status");
+export type DesktopStatus = { available: boolean; backend: string; coordinateSpace: string; reason: string | null; monitors: { id: number; name: string; primary: boolean; x: number; y: number; width: number; height: number; scaleFactor: number }[] };
+export const desktopStatus = (): Promise<DesktopStatus> => invoke("trex_desktop_status");
 
 export const saveConfig = (config: AppConfig): Promise<AppConfig> =>
   invoke<AppConfig>("save_config", { config });

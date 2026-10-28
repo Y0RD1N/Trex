@@ -1,5 +1,6 @@
 import { connectBrowser } from "../browserConnection";
 import { browserMode, OBSERVE_BROWSER_TOOLS } from "../browser";
+import { DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
 /**
  * Sesión de Claude Code como chat: `claude -p` con stream-json.
  *
@@ -27,7 +28,7 @@ import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMo
 /** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
 const USAGE_INTERVAL_MS = 60_000;
 // A shell or unknown tool approval can escape plan mode; only known readers may be approved.
-const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", CLAUDE_INBOX_TOOL, "mcp__trex_desktop__desktop_screenshot", ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
+const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", CLAUDE_INBOX_TOOL, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
 const planningDeniedLine = (requestId: string): string => JSON.stringify({
   type: "control_response", response: { subtype: "success", request_id: requestId,
     response: { behavior: "deny", message: "Esta pestaña de planificación solo permite herramientas de lectura y preguntas; no puede conceder permisos de escritura o ejecución." } },
@@ -181,10 +182,10 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const server = servers.map(record).find(item => item?.name === "trex_desktop");
       if (server?.status === "pending") { await whileCurrent(new Promise<void>(resolve => window.setTimeout(resolve, 150)), signal); continue; }
       const tools = Array.isArray(server?.tools) ? server.tools.map(item => record(item)?.name) : [];
-      const input = ["desktop_click", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"];
+      const input = DESKTOP_INPUT_TOOLS;
       const config = record(server?.config);
       if (server?.status !== "connected" || record(server.serverInfo)?.name !== "trex-desktop"
-        || config?.command !== expected.command || JSON.stringify(config?.args) !== JSON.stringify(expected.args) || !tools.includes("desktop_screenshot")
+        || config?.command !== expected.command || JSON.stringify(config?.args) !== JSON.stringify(expected.args) || !DESKTOP_READ_TOOLS.every(name => tools.includes(name))
         || (mode === "observe" ? input.some(name => tools.includes(name)) : !input.every(name => tools.includes(name)))) {
         throw new Error("Claude no confirmó las herramientas y permisos del control de computadora.");
       }

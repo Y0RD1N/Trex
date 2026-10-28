@@ -1,5 +1,8 @@
 import type { AgentProvider } from "./types";
 
+export const DESKTOP_READ_TOOLS = ["desktop_screenshot", "desktop_status", "desktop_monitors", "desktop_wait"] as const;
+export const DESKTOP_INPUT_TOOLS = ["desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"] as const;
+
 /** Availability must be checked in the session environment; never assume a CLI is installed. */
 export function integrationInstructions(provider: AgentProvider): string {
   const tools = provider === "trex"
