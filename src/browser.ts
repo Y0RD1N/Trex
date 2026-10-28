@@ -8,7 +8,7 @@ export type BrowserStatus = {
   error?: { code: string; message: string };
 };
 export type BrowserConfig = { command: string; args: string[] };
-export const BROWSER_INSTRUCTIONS = "Trex Browser is connected as the trex_browser MCP server. For browser work use its browser_navigate tool with the app's http(s) URL; this automatically opens the visible project browser, without the user opening it first. Start the application's dev server with normal workspace tools when necessary. Inspect the page with browser_snapshot, screenshots, console, network and other permitted browser tools. Desktop/computer-use integrations control a different browser; their failures do not mean Trex Browser is unavailable. Report Trex Browser errors accurately and respect its bound permissions and manual-review requirements.";
+export const BROWSER_INSTRUCTIONS = "Trex Browser is connected as the trex_browser MCP server. For browser work use its browser_navigate tool with the app's http(s) URL; this automatically opens the visible project browser, without the user opening it first. Start the application's dev server with normal workspace tools when necessary. Use browser_batch for ordered typed steps under the same permission; never replay a partial batch. Snapshot refs are page-scoped: retain tabId and revision. Inspect the page with browser_snapshot, screenshots, console, network and other permitted browser tools. Desktop/computer-use integrations control a different browser; their failures do not mean Trex Browser is unavailable. Report Trex Browser errors accurately and respect its bound permissions and manual-review requirements.";
 export type BrowserResult = {
   content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
   structuredContent?: Record<string, unknown>; isError: boolean;
@@ -17,13 +17,14 @@ export type BrowserCall = {
   name: string; arguments: Record<string, unknown>; cwd: string; mode: BrowserMode; clientId: string;
   profile?: string; operationId?: string; timeoutMs?: number;
 };
+export type BrowserSpace = { clientId: string; profile: string; label: string; active?: boolean };
 export type BrowserProfile = { id: string; name: string; projectId: string; createdAt: string };
 export type BrowserArtifact = {
   id: string; sha256: string; mimeType: string; sizeBytes: number; width?: number; height?: number;
   kind: string; storage: "local" | "broker"; provenance: unknown;
 };
 export const OBSERVE_BROWSER_TOOLS = new Set([
-  "browser_navigate", "browser_navigate_back", "browser_reload", "browser_tabs", "browser_frames",
+  "browser_batch", "browser_navigate", "browser_navigate_back", "browser_reload", "browser_tabs", "browser_frames",
   "browser_snapshot", "browser_console_messages", "browser_network_requests", "browser_network_body",
   "browser_take_screenshot", "browser_wait_for", "browser_artifact", "browser_status", "browser_cancel",
 ]);

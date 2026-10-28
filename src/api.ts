@@ -562,6 +562,7 @@ export const trexBrowserMcpConfig = (cwd: string, mode: BrowserMode, clientId: s
 export const trexBrowserCall = (request: BrowserCall): Promise<BrowserResult> => invoke("trex_browser_call", { request });
 export const trexBrowserOpenArtifact = (id: string, cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserResult> => invoke("trex_browser_open_artifact", { id, cwd, mode, clientId, profile });
 export const trexBrowserProfiles = (cwd: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_profiles", { cwd });
+export const trexBrowserSpaces = (cwd: string, members: {clientId:string;label:string}[]): Promise<{spaces: import("./browser").BrowserSpace[]}> => invoke("trex_browser_spaces", {cwd,members});
 export const trexBrowserCreateProfile = (cwd: string, profile: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_create_profile", { cwd, profile });
 
 export const agentTeamOpen = (team: import("./agentTeam").AgentTeam, cwd: string, resume = false): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_open", {
@@ -569,7 +570,7 @@ export const agentTeamOpen = (team: import("./agentTeam").AgentTeam, cwd: string
 });
 export const agentTeamPoll = (binding: import("./agentTeam").TeamBinding): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_poll", binding);
 export const agentTeamSnapshot = (id: string): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_snapshot", { id });
-export const agentTeamClaim = (binding: import("./agentTeam").TeamBinding): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_claim", binding);
+export const agentTeamClaim = (binding: import("./agentTeam").TeamBinding, taskId?:string): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_claim", {...binding,taskId});
 export const agentTeamPause = (binding: import("./agentTeam").TeamBinding): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_pause", binding);
 export const agentTeamFinish = (binding: import("./agentTeam").TeamBinding, taskId: string, status: string, report: string | null): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_finish", { ...binding, taskId, status, report });
 export const agentTeamMcpConfig = (binding: import("./agentTeam").TeamBinding): Promise<{ command: string; args: string[]; callArgs: string[] }> => invoke("agent_team_mcp_config", binding);

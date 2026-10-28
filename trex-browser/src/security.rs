@@ -883,26 +883,48 @@ impl Policy {
 }
 
 fn open_tree_entry(home: &Path, child: &Path) -> Result<Option<OwnedHandle>> {
-    let managed = chromium_managed_data_child(home, child);
-    match open_checked(
+    open_tree_entry_with(
+        home,
         child,
-        FILE_READ_ATTRIBUTES | READ_CONTROL | if managed { WRITE_DAC } else { 0 },
-    ) {
-        Ok(handle) => Ok(Some(handle)),
-        // Chrome rotates cache and journal files while other clients join the
-        // broker. An entry gone before it can be opened has no object to audit.
-        // This exception never covers the profile root, tokens or artifacts;
-        // existing entries still pass the same handle, link and ACL checks.
-        Err(error)
-            if managed
-                && error
-                    .downcast_ref::<io::Error>()
-                    .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) =>
-        {
-            Ok(None)
+        |access| open_checked(child, access),
+        |attempt| std::thread::sleep(std::time::Duration::from_millis(5 << attempt)),
+    )
+}
+
+fn open_tree_entry_with(
+    home: &Path,
+    child: &Path,
+    mut open: impl FnMut(u32) -> Result<OwnedHandle>,
+    mut retry: impl FnMut(u32),
+) -> Result<Option<OwnedHandle>> {
+    let managed = chromium_managed_data_child(home, child);
+    for attempt in 0..=4 {
+        match open(FILE_READ_ATTRIBUTES | READ_CONTROL | if managed { WRITE_DAC } else { 0 }) {
+            Ok(handle) => return Ok(Some(handle)),
+            Err(error)
+                if managed
+                    && error
+                        .downcast_ref::<io::Error>()
+                        .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) =>
+            {
+                return Ok(None)
+            }
+            // Concurrent browser state updates may transiently deny an audit
+            // open. Retry the open, not the browser action. Every successful
+            // retry still checks the held object's links and ACLs; inaccessible
+            // objects are never skipped. Missing non-data entries still fail.
+            Err(error)
+                if attempt < 4
+                    && error.downcast_ref::<io::Error>().is_some_and(|error| {
+                        matches!(error.raw_os_error(), Some(5 | 32 | 303))
+                    }) =>
+            {
+                retry(attempt)
+            }
+            Err(error) => return Err(error),
         }
-        Err(error) => Err(error),
     }
+    unreachable!("the final native audit attempt always returns")
 }
 
 fn chromium_managed_data_child(home: &Path, path: &Path) -> bool {
@@ -1065,6 +1087,133 @@ mod tests {
         drop(first);
         let second = PrivateHome::at(&test.0).unwrap();
         assert_eq!(second.path(), test.0);
+    }
+
+    #[test]
+    fn a_delete_pending_chromium_file_has_no_auditable_object_until_its_last_handle_closes() {
+        let test = TestHome::new();
+        let home = PrivateHome::at(&test.0).unwrap();
+        let file = home.path().join(
+            "projects/0123456789abcdef01234567/BROWSER1/user-data/Default/Cache/rotating-entry",
+        );
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, b"cache").unwrap();
+        let file = checked_absolute_path(&file).unwrap();
+        let held = open_checked_sharing(
+            &file,
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ
+                | FILE_SHARE_WRITE
+                | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
+        )
+        .unwrap();
+        // DeleteFileW retains the directory entry until the final open handle
+        // closes, unlike Rust's newer POSIX-style remove_file implementation.
+        assert_ne!(
+            unsafe {
+                windows_sys::Win32::Storage::FileSystem::DeleteFileW(wide_path(&file).as_ptr())
+            },
+            0
+        );
+        let error =
+            open_checked(&file, FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC).unwrap_err();
+        let error = error.downcast_ref::<io::Error>().unwrap();
+        assert!(matches!(error.raw_os_error(), Some(2 | 5 | 303)), "{error}");
+        if error.kind() == io::ErrorKind::NotFound {
+            assert!(open_tree_entry(home.path(), &file).unwrap().is_none());
+        } else {
+            assert!(open_tree_entry_with(
+                home.path(),
+                &file,
+                |access| open_checked(&file, access),
+                |_| {}
+            )
+            .is_err());
+        }
+        drop(held);
+        assert!(open_tree_entry(home.path(), &file).unwrap().is_none());
+    }
+
+    #[test]
+    fn transient_audit_denial_reopens_and_checks_the_real_object() {
+        let test = TestHome::new();
+        let home = PrivateHome::at(&test.0).unwrap();
+        let file = home.path().join("state.json");
+        fs::write(&file, b"private").unwrap();
+        let mut attempts = 0;
+        let mut retries = vec![];
+        let result = open_tree_entry_with(
+            home.path(),
+            &file,
+            |access| {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(io::Error::from_raw_os_error(5).into())
+                } else {
+                    open_checked(&file, access)
+                }
+            },
+            |attempt| retries.push(attempt),
+        )
+        .unwrap();
+        assert!(result.is_some());
+        assert_eq!(attempts, 2);
+        assert_eq!(retries, vec![0]);
+        drop(result);
+        fs::hard_link(&file, home.path().join("alias")).unwrap();
+        attempts = 0;
+        let error = open_tree_entry_with(
+            home.path(),
+            &file,
+            |access| {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(io::Error::from_raw_os_error(5).into())
+                } else {
+                    open_checked(&file, access)
+                }
+            },
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("hard-linked"));
+        assert_eq!(attempts, 2);
+    }
+    #[test]
+    fn persistent_audit_denial_is_bounded_and_missing_broker_entries_still_fail() {
+        let test = TestHome::new();
+        let home = PrivateHome::at(&test.0).unwrap();
+        for relative in [
+            "broker.token",
+            "artifacts/missing",
+            "projects/0123456789abcdef01234567/BROWSER1/user-data/Default/Cache/item",
+        ] {
+            let mut attempts = 0;
+            let mut retries = 0;
+            assert!(open_tree_entry_with(
+                home.path(),
+                &home.path().join(relative),
+                |_| {
+                    attempts += 1;
+                    Err(io::Error::from_raw_os_error(5).into())
+                },
+                |_| retries += 1
+            )
+            .is_err());
+            assert_eq!((attempts, retries), (5, 4));
+        }
+        let mut attempts = 0;
+        assert!(open_tree_entry_with(
+            home.path(),
+            &home.path().join("broker.token"),
+            |_| {
+                attempts += 1;
+                Err(io::Error::from_raw_os_error(if attempts == 1 { 5 } else { 2 }).into())
+            },
+            |_| {}
+        )
+        .is_err());
+        assert_eq!(attempts, 2);
     }
 
     #[test]

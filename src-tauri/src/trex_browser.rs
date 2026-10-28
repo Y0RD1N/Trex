@@ -26,7 +26,7 @@ const TOOL_NAMES: &[&str] = &[
     "browser_network_body", "browser_route", "browser_file_upload", "browser_take_screenshot", "browser_start_video",
     "browser_stop_video", "browser_start_trace", "browser_stop_trace", "browser_perf_start", "browser_perf_stop",
     "browser_cpu_profile_start", "browser_cpu_profile_stop", "browser_heap_snapshot", "browser_wait_for", "browser_artifact",
-    "browser_status", "browser_pause", "browser_resume", "browser_takeover", "browser_cancel", "browser_close",
+    "browser_status", "browser_pause", "browser_resume", "browser_takeover", "browser_cancel", "browser_close", "browser_batch",
 ];
 
 #[derive(Serialize)]
@@ -95,6 +95,15 @@ pub struct BrowserProfile {
 pub struct BrowserProfiles {
     profiles: Vec<BrowserProfile>,
 }
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserSpaceMember { client_id: String, label: String }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserSpace { client_id: String, label: String, profile: String }
+#[derive(Deserialize, Serialize)]
+pub struct BrowserSpaces { spaces: Vec<BrowserSpace> }
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -451,6 +460,29 @@ pub async fn trex_browser_create_profile(cwd: String, profile: String) -> Result
         validate_context(&cwd, "observe", "settings", Some(&profile))?;
         let path = installed_browser_path()?;
         profiles_result(&invoke_at(&path, &["profiles", "create", "--cwd", &cwd, "--profile", &profile], None, PROBE_TIMEOUT, PROBE_LIMIT)?)
+    }).await
+}
+
+#[tauri::command]
+pub async fn trex_browser_spaces(cwd: String, members: Vec<BrowserSpaceMember>) -> Result<BrowserSpaces, String> {
+    crate::blocking(move || {
+        if members.is_empty() || members.len() > 9 { return Err(INVALID.into()); }
+        let mut clients = std::collections::HashSet::new();
+        for member in &members {
+            validate_context(&cwd, "observe", &member.client_id, None)?;
+            if !plain(&member.label, 100) || member.label.trim().is_empty() || !clients.insert(&member.client_id) { return Err(INVALID.into()); }
+        }
+        let bytes = serde_json::to_vec(&serde_json::json!({"cwd":cwd,"members":members})).map_err(|_| FAILED.to_string())?;
+        let output = invoke_at(&installed_browser_path()?, &["spaces","--stdin-json"], Some(bytes), PROBE_TIMEOUT, PROBE_LIMIT)?;
+        let result: BrowserSpaces = serde_json::from_slice(&output).map_err(|_| INVALID.to_string())?;
+        let mut profiles = std::collections::HashSet::new();
+        if result.spaces.len() != members.len() { return Err(INVALID.into()); }
+        for space in &result.spaces {
+            validate_context(&cwd, "observe", &space.client_id, Some(&space.profile))?;
+            if !members.iter().any(|member| member.client_id == space.client_id && member.label == space.label)
+                || !profiles.insert(&space.profile) || !clients.remove(&space.client_id) { return Err(INVALID.into()); }
+        }
+        Ok(result)
     }).await
 }
 

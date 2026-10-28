@@ -75,6 +75,8 @@ pub struct PlanStep {
     pub task_key: String,
     pub member_id: String,
     pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<Vec<String>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -342,25 +344,132 @@ fn open(
     heartbeat(&path, epoch)?;
     Ok(state)
 }
-fn claim(root: &Path, id: &str, epoch: &str) -> Result<Snapshot, String> {
-    mutate(root, id, epoch, |state| {
-        live(state)?;
-        // One task at a time within this team, including readers. A review
-        // never observes a half-written implementation from another member.
-        if state
+fn dependencies(plan: &[PlanStep], key: &str) -> Vec<String> {
+    let Some(index) = plan.iter().position(|step| step.task_key == key) else {
+        return vec![];
+    };
+    plan[index].depends_on.clone().unwrap_or_else(|| {
+        if index > 0 {
+            vec![plan[index - 1].task_key.clone()]
+        } else {
+            vec![]
+        }
+    })
+}
+fn runnable(state: &Snapshot, task: &Task) -> bool {
+    let active: Vec<_> = state
+        .tasks
+        .iter()
+        .filter(|t| t.epoch == state.epoch && ["claimed", "running"].contains(&t.status.as_str()))
+        .collect();
+    if active.len() >= 4 || active.iter().any(|t| t.member_id == task.member_id) {
+        return false;
+    }
+    let writes = |member: &str| {
+        state
+            .members
+            .iter()
+            .find(|m| m.id == member)
+            .is_some_and(|m| m.can_write)
+    };
+    if !active.is_empty()
+        && (writes(&task.member_id) || active.iter().any(|t| writes(&t.member_id)))
+    {
+        return false;
+    }
+    let Some(step) = state.plan.iter().find(|step| step.task_key == task.key) else {
+        return active.is_empty()
+            && !state
+                .tasks
+                .iter()
+                .take_while(|t| t.id != task.id)
+                .any(|t| t.epoch == state.epoch && ACTIVE.contains(&t.status.as_str()));
+    };
+    // Unannotated plans keep their original sequential semantics.
+    if step.depends_on.is_none() && !active.is_empty() {
+        return false;
+    }
+    dependencies(&state.plan, &task.key).iter().all(|key| {
+        state
             .tasks
             .iter()
-            .any(|t| ["claimed", "running"].contains(&t.status.as_str()))
-        {
-            return Ok(());
-        }
-        if let Some(task) = state
+            .any(|t| t.key == *key && t.status == "completed")
+    })
+}
+fn settle_blocked(state: &mut Snapshot) {
+    for _ in 0..32 {
+        let blocked: Vec<_> = state
             .tasks
-            .iter_mut()
-            .find(|t| t.epoch == epoch && t.status == "queued")
-        {
-            task.status = "claimed".into();
-            task.updated_at = now();
+            .iter()
+            .filter(|task| {
+                task.epoch == state.epoch
+                    && task.status == "queued"
+                    && dependencies(&state.plan, &task.key).iter().any(|key| {
+                        state.tasks.iter().any(|t| {
+                            t.key == *key
+                                && ["failed", "cancelled", "uncertain"].contains(&t.status.as_str())
+                        })
+                    })
+            })
+            .map(|task| task.id.clone())
+            .collect();
+        if blocked.is_empty() {
+            break;
+        }
+        for task in &mut state.tasks {
+            if blocked.contains(&task.id) {
+                task.status = "cancelled".into();
+                task.report =
+                    Some("No se ejecutó: una dependencia no terminó correctamente.".into());
+                task.updated_at = now();
+            }
+        }
+    }
+}
+#[cfg(test)]
+fn claim(root: &Path, id: &str, epoch: &str) -> Result<Snapshot, String> {
+    claim_for(root, id, epoch, None)
+}
+fn claim_for(
+    root: &Path,
+    id: &str,
+    epoch: &str,
+    task_id: Option<&str>,
+) -> Result<Snapshot, String> {
+    mutate(root, id, epoch, |state| {
+        live(state)?;
+        let blocked: Vec<_> = state
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.epoch == epoch
+                    && task.status == "queued"
+                    && dependencies(&state.plan, &task.key).iter().any(|key| {
+                        state.tasks.iter().any(|t| {
+                            t.key == *key
+                                && ["failed", "cancelled", "uncertain"].contains(&t.status.as_str())
+                        })
+                    })
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        for task in &mut state.tasks {
+            if blocked.contains(&task.id) {
+                task.status = "cancelled".into();
+                task.report =
+                    Some("No se ejecutó: una dependencia no terminó correctamente.".into());
+                task.updated_at = now();
+            }
+        }
+        let selected = state.tasks.iter().position(|task| {
+            task.epoch == epoch
+                && task.status == "queued"
+                && task_id.is_none_or(|id| task.id == id)
+                && runnable(state, task)
+        });
+        if let Some(index) = selected {
+            state.tasks[index].status = "claimed".into();
+            state.tasks[index].updated_at = now();
         }
         Ok(())
     })
@@ -396,15 +505,16 @@ fn finish(
         task.status = status.into();
         task.report = report;
         task.updated_at = now();
+        settle_blocked(state);
         Ok(())
     })
 }
 pub fn tool_definitions() -> Value {
     json!([
-        {"name":"trex_team_plan","description":"Publica la lista de tareas del equipo antes de delegar. No ejecuta trabajo. Usa las mismas taskKey, memberId y task al delegar; el progreso se obtiene de los resultados reales. Puedes revisar pasos aún no enviados, sin ocultar tareas ya emitidas.","inputSchema":{"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"taskKey":{"type":"string","maxLength":100},"memberId":{"type":"string"},"task":{"type":"string","maxLength":16384}},"required":["taskKey","memberId","task"],"additionalProperties":false}}},"required":["steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
+        {"name":"trex_team_plan","description":"Publica la lista de tareas del equipo antes de delegar. No ejecuta trabajo. Usa las mismas taskKey, memberId y task al delegar; el progreso se obtiene de los resultados reales. Puedes revisar pasos aún no enviados, sin ocultar tareas ya emitidas.","inputSchema":{"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"taskKey":{"type":"string","maxLength":100},"memberId":{"type":"string"},"task":{"type":"string","maxLength":16384},"dependsOn":{"type":"array","maxItems":8,"items":{"type":"string"}}},"required":["taskKey","memberId","task"],"additionalProperties":false}}},"required":["steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
         {"name":"trex_team_members","description":"Lista los subagentes configurados, sus funciones y permisos. No crea participantes ni cambia modelos.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true}},
-        {"name":"trex_delegate_task","description":"Delega una tarea a un subagente configurado y espera su resultado. Las tareas de este equipo se ejecutan en serie. Usa un taskKey único y estable; reutilízalo solo para recuperar la misma tarea, nunca para repetir una tarea incierta o cancelada.","inputSchema":{"type":"object","properties":{"memberId":{"type":"string"},"taskKey":{"type":"string","maxLength":100},"task":{"type":"string","maxLength":16384}},"required":["memberId","taskKey","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
-        {"name":"trex_task_status","description":"Consulta el estado de las tareas. Con taskId devuelve también el resultado conservado; no vuelve a ejecutar herramientas.","inputSchema":{"type":"object","properties":{"taskId":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
+        {"name":"trex_delegate_task","description":"Delega una tarea a un subagente configurado y espera su resultado. Con wait:false solo encola y devuelve el taskId: úsalo para enviar tareas independientes antes de esperar sus resultados. El plan dependsOn define dependencias; las escrituras son exclusivas y hay hasta cuatro lectores simultáneos. Usa un taskKey único y estable; reutilízalo solo para recuperar la misma tarea, nunca para repetir una tarea incierta o cancelada.","inputSchema":{"type":"object","properties":{"memberId":{"type":"string"},"taskKey":{"type":"string","maxLength":100},"task":{"type":"string","maxLength":16384},"wait":{"type":"boolean","default":true}},"required":["memberId","taskKey","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
+        {"name":"trex_task_status","description":"Consulta el estado de las tareas. Con taskId devuelve también el resultado conservado. waitMs (0..30000) espera cambios o la finalización sin ejecutar trabajo ni gastar turnos en consultas repetidas.","inputSchema":{"type":"object","properties":{"taskId":{"type":"string"},"waitMs":{"type":"integer","minimum":0,"maximum":30000}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
     ])
 }
 fn result(value: Value, is_error: bool) -> Value {
@@ -420,8 +530,8 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
     let allowed: &[&str] = match name {
         "trex_team_plan" => &["steps"],
         "trex_team_members" => &[],
-        "trex_delegate_task" => &["memberId", "taskKey", "task"],
-        "trex_task_status" => &["taskId"],
+        "trex_delegate_task" => &["memberId", "taskKey", "task", "wait"],
+        "trex_task_status" => &["taskId", "waitMs"],
         _ => return Err("Herramienta de equipo desconocida.".into()),
     };
     if args.keys().any(|key| !allowed.contains(&key.as_str())) {
@@ -455,11 +565,36 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             }
             step.task = clean(&step.task, 16 * 1024)?;
         }
+        for (index, step) in steps.iter().enumerate() {
+            if let Some(deps) = &step.depends_on {
+                let mut seen = std::collections::HashSet::new();
+                if deps.len() > 8
+                    || deps.iter().any(|key| {
+                        !seen.insert(key)
+                            || !steps[..index].iter().any(|prior| prior.task_key == *key)
+                    })
+                {
+                    return Err(
+                        "dependsOn solo admite claves anteriores, sin duplicados ni ciclos.".into(),
+                    );
+                }
+            }
+        }
         let state = mutate(root, id, epoch, |state| {
             live(state)?;
             for step in &steps {
                 if !state.members.iter().any(|m| m.id == step.member_id) {
                     return Err("El plan apunta a un subagente no configurado.".into());
+                }
+                if state.tasks.iter().any(|t| t.key == step.task_key)
+                    && state
+                        .plan
+                        .iter()
+                        .any(|prior| prior.task_key == step.task_key)
+                    && dependencies(&state.plan, &step.task_key)
+                        != dependencies(&steps, &step.task_key)
+                {
+                    return Err("No se pueden cambiar dependencias de una tarea enviada.".into());
                 }
                 if state.tasks.iter().any(|t| {
                     t.key == step.task_key
@@ -486,11 +621,36 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
         return Ok(result(json!({"members":state.members}), false));
     }
     if name == "trex_task_status" {
-        let state = mutate(root, id, epoch, |s| live(s))?;
+        let mut state = mutate(root, id, epoch, |s| live(s))?;
         let task_id = args
             .get("taskId")
             .map(|v| v.as_str().ok_or("taskId no válido."))
             .transpose()?;
+        let wait_ms = args
+            .get("waitMs")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .filter(|ms| *ms <= 30000)
+                    .ok_or("waitMs debe ser un entero entre 0 y 30000.")
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        while Instant::now() < deadline
+            && state.tasks.iter().any(|task| {
+                task_id.is_none_or(|id| id == task.id) && ACTIVE.contains(&task.status.as_str())
+            })
+        {
+            std::thread::sleep(Duration::from_millis(100));
+            let path = store_path(root, id)?;
+            let _guard = lock(root)?;
+            state = load_live(&path)?;
+            if state.epoch != epoch {
+                return Err("La generación del equipo cambió durante la consulta.".into());
+            }
+            live(&state)?;
+        }
         if let Some(task_id) = task_id {
             let task = state
                 .tasks
@@ -504,6 +664,11 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             false,
         ));
     }
+    let wait = args
+        .get("wait")
+        .map(|value| value.as_bool().ok_or("wait debe ser booleano."))
+        .transpose()?
+        .unwrap_or(true);
     let member_id = text("memberId")?;
     let key = text("taskKey")?;
     let instruction = clean(text("task")?, 16 * 1024)?;
@@ -545,8 +710,20 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             created_at: stamp,
             updated_at: stamp,
         });
+        settle_blocked(state);
         Ok(())
     })?;
+    if !wait {
+        let task = initial
+            .tasks
+            .iter()
+            .find(|task| task.id == selected)
+            .ok_or("La tarea no está disponible.")?;
+        return Ok(result(
+            json!({"task":task,"queued":ACTIVE.contains(&task.status.as_str())}),
+            ["failed", "cancelled", "uncertain"].contains(&task.status.as_str()),
+        ));
+    }
     let path = store_path(root, id)?;
     let deadline = Instant::now() + Duration::from_secs(1800);
     let mut state = initial;
@@ -639,9 +816,10 @@ pub async fn agent_team_claim(
     app: AppHandle,
     id: String,
     epoch: String,
+    task_id: Option<String>,
 ) -> Result<Snapshot, String> {
     let root = data_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || claim(&root, &id, &epoch))
+    tauri::async_runtime::spawn_blocking(move || claim_for(&root, &id, &epoch, task_id.as_deref()))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -787,7 +965,7 @@ pub fn run_if_requested() -> bool {
             };
             let result = match method {
                 "initialize" => {
-                    json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"trex_team","version":"1.0.0"}})
+                    json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"trex_team","version":"1.0.0"},"instructions":"Publish dependencies with trex_team_plan dependsOn; [] marks independent work. Enqueue independent delegations with wait:false, then retrieve reports using trex_task_status. When browser integration is enabled, each member has a separate browser space. Workspace writers are exclusive; up to four independent readers run at once. Never replay uncertain work."})
                 }
                 "ping" => json!({}),
                 "tools/list" => json!({"tools":tool_definitions()}),
@@ -1243,5 +1421,223 @@ mod tests {
         )
         .is_err());
         assert!(finish(&f.root, "team", "epoch", "unknown", "running", None).is_err());
+    }
+    #[test]
+    fn independent_readers_finish_out_of_order_and_dependencies_block_writers() {
+        let f = Fixture::new();
+        let mut configured = members();
+        configured[0].can_write = false;
+        configured.push(Member {
+            id: "writer".into(),
+            name: "Writer".into(),
+            role: "implementation".into(),
+            can_write: true,
+        });
+        open(
+            &f.root,
+            "team",
+            "epoch",
+            f.root.to_str().unwrap(),
+            configured,
+            false,
+        )
+        .unwrap();
+        let steps = json!({"steps":[{"taskKey":"a","memberId":"impl","task":"Inspect A","dependsOn":[]},{"taskKey":"b","memberId":"review","task":"Inspect B","dependsOn":[]},{"taskKey":"write","memberId":"writer","task":"Implement findings","dependsOn":["a","b"]},{"taskKey":"verify","memberId":"impl","task":"Verify implementation","dependsOn":["write"]}]});
+        tool(&f.root, "team", "epoch", "trex_team_plan", &steps).unwrap();
+        let mut ids = vec![];
+        for step in steps["steps"].as_array().unwrap() {
+            let reply=tool(&f.root,"team","epoch","trex_delegate_task",&json!({"memberId":step["memberId"],"taskKey":step["taskKey"],"task":step["task"],"wait":false})).unwrap();
+            ids.push(
+                reply["structuredContent"]["task"]["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        claim_for(&f.root, "team", "epoch", Some(&ids[0])).unwrap();
+        let state = claim_for(&f.root, "team", "epoch", Some(&ids[1])).unwrap();
+        assert_eq!(
+            state.tasks.iter().filter(|t| t.status == "claimed").count(),
+            2
+        );
+        assert_eq!(
+            claim_for(&f.root, "team", "epoch", Some(&ids[2]))
+                .unwrap()
+                .tasks[2]
+                .status,
+            "queued"
+        );
+        finish(
+            &f.root,
+            "team",
+            "epoch",
+            &ids[1],
+            "completed",
+            Some("B verified"),
+        )
+        .unwrap();
+        assert_eq!(
+            claim_for(&f.root, "team", "epoch", Some(&ids[2]))
+                .unwrap()
+                .tasks[2]
+                .status,
+            "queued"
+        );
+        finish(
+            &f.root,
+            "team",
+            "epoch",
+            &ids[0],
+            "completed",
+            Some("A verified"),
+        )
+        .unwrap();
+        assert_eq!(
+            claim_for(&f.root, "team", "epoch", Some(&ids[2]))
+                .unwrap()
+                .tasks[2]
+                .status,
+            "claimed"
+        );
+        assert_eq!(
+            claim_for(&f.root, "team", "epoch", Some(&ids[3]))
+                .unwrap()
+                .tasks[3]
+                .status,
+            "queued"
+        );
+        let state = finish(
+            &f.root,
+            "team",
+            "epoch",
+            &ids[2],
+            "failed",
+            Some("Implementation failed"),
+        )
+        .unwrap();
+        assert_eq!(state.tasks[3].status, "cancelled");
+    }
+    #[test]
+    fn dependency_validation_and_immutable_issued_plan_fail_before_mutation() {
+        let f = Fixture::new();
+        f.open("epoch", false).unwrap();
+        for deps in [json!(["missing"]), json!(["a"]), json!(["b", "b"])] {
+            assert!(tool(
+                &f.root,
+                "team",
+                "epoch",
+                "trex_team_plan",
+                &json!({"steps":[{"taskKey":"a","memberId":"impl","task":"A","dependsOn":deps}]})
+            )
+            .is_err());
+            assert!(f.read().plan.is_empty());
+        }
+        tool(&f.root,"team","epoch","trex_team_plan",&json!({"steps":[{"taskKey":"a","memberId":"impl","task":"A","dependsOn":[]},{"taskKey":"b","memberId":"review","task":"B","dependsOn":["a"]}]})).unwrap();
+        let request = json!({"memberId":"review","taskKey":"b","task":"B","wait":false});
+        let first = tool(&f.root, "team", "epoch", "trex_delegate_task", &request).unwrap();
+        assert_eq!(
+            first,
+            tool(&f.root, "team", "epoch", "trex_delegate_task", &request).unwrap()
+        );
+        assert_eq!(f.read().tasks.len(), 1);
+        assert!(tool(&f.root,"team","epoch","trex_team_plan",&json!({"steps":[{"taskKey":"a","memberId":"impl","task":"A","dependsOn":[]},{"taskKey":"b","memberId":"review","task":"B","dependsOn":[]}]})).is_err());
+    }
+    #[test]
+    fn explicit_independent_work_still_excludes_workspace_writers() {
+        let f = Fixture::new();
+        f.open("epoch", false).unwrap();
+        tool(&f.root,"team","epoch","trex_team_plan",&json!({"steps":[{"taskKey":"a","memberId":"impl","task":"A","dependsOn":[]},{"taskKey":"b","memberId":"review","task":"B","dependsOn":[]}]})).unwrap();
+        for (key, member) in [("a", "impl"), ("b", "review")] {
+            tool(
+                &f.root,
+                "team",
+                "epoch",
+                "trex_delegate_task",
+                &json!({"taskKey":key,"memberId":member,"task":key.to_uppercase(),"wait":false}),
+            )
+            .unwrap();
+        }
+        claim(&f.root, "team", "epoch").unwrap();
+        let state = claim(&f.root, "team", "epoch").unwrap();
+        assert_eq!(state.tasks[0].status, "claimed");
+        assert_eq!(state.tasks[1].status, "queued");
+    }
+    #[test]
+    fn concurrent_readers_are_bounded_to_four_and_one_task_per_member() {
+        let f = Fixture::new();
+        let configured: Vec<_> = (0..5)
+            .map(|i| Member {
+                id: format!("reader{i}"),
+                name: format!("Reader {i}"),
+                role: "research".into(),
+                can_write: false,
+            })
+            .collect();
+        open(
+            &f.root,
+            "team",
+            "epoch",
+            f.root.to_str().unwrap(),
+            configured,
+            false,
+        )
+        .unwrap();
+        let steps:Vec<_>=(0..5).map(|i|json!({"taskKey":format!("task{i}"),"memberId":format!("reader{i}"),"task":"Inspect","dependsOn":[]})).collect();
+        tool(
+            &f.root,
+            "team",
+            "epoch",
+            "trex_team_plan",
+            &json!({"steps":steps}),
+        )
+        .unwrap();
+        for i in 0..5 {
+            tool(&f.root,"team","epoch","trex_delegate_task",&json!({"taskKey":format!("task{i}"),"memberId":format!("reader{i}"),"task":"Inspect","wait":false})).unwrap();
+        }
+        for _ in 0..6 {
+            claim(&f.root, "team", "epoch").unwrap();
+        }
+        let state = f.read();
+        assert_eq!(
+            state
+                .tasks
+                .iter()
+                .filter(|task| task.status == "claimed")
+                .count(),
+            4
+        );
+        assert_eq!(state.tasks[4].status, "queued");
+    }
+    #[test]
+    fn status_long_poll_wakes_on_a_report_without_dispatching_work() {
+        let f = Fixture::new();
+        f.open("epoch", false).unwrap();
+        let id = f.queued("inspect");
+        claim(&f.root, "team", "epoch").unwrap();
+        std::thread::scope(|scope| {
+            let waiter = scope.spawn(|| {
+                tool(
+                    &f.root,
+                    "team",
+                    "epoch",
+                    "trex_task_status",
+                    &json!({"taskId":id,"waitMs":5000}),
+                )
+                .unwrap()
+            });
+            std::thread::sleep(Duration::from_millis(150));
+            finish(&f.root, "team", "epoch", &id, "completed", Some("Verified")).unwrap();
+            let reply = waiter.join().unwrap();
+            assert_eq!(reply["structuredContent"]["task"]["status"], "completed");
+        });
+        assert_eq!(f.read().tasks.len(), 1);
+        assert!(tool(
+            &f.root,
+            "team",
+            "epoch",
+            "trex_task_status",
+            &json!({"waitMs":30001})
+        )
+        .is_err());
     }
 }

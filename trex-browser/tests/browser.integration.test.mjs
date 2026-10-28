@@ -880,7 +880,8 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
   it('a separate MCP client creates and controls tabs in another profile while the first agent remains busy', {timeout:120_000}, async () => {
     await navigate();
     await evaluate(()=>{localStorage.setItem('parallel-isolation','owner-a');return true;});
-    const before=await ok('browser_tabs',{action:'list'}), session=mcpSession('full',{clientId:'parallel-agent-b',profile:'BROWSER2'});
+    const allocation=await cli(['spaces','--stdin-json'],{cwd:workspace,members:[{clientId:'parallel-agent-b',label:'Parallel agent'}]}),peerProfile=allocation.spaces[0].profile;
+    const before=await ok('browser_tabs',{action:'list'}), session=mcpSession('full',{clientId:'parallel-agent-b',profile:peerProfile});
     let action,closed=false;
     try {
       await initializeMcp(session);
@@ -893,7 +894,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       const page=success(await mcpTool(session,5,'browser_evaluate',{function:'() => ({count:document.querySelector("#count").textContent,storage:localStorage.getItem("parallel-isolation")})'}));
       assert.equal(page.data.value.count,'1');assert.equal(page.data.value.storage,null);
       const screenshot=success(await mcpTool(session,6,'browser_take_screenshot'));
-      await checkArtifact(screenshot.artifacts[0],'screenshot','image/png',{profile:'BROWSER2'});
+      await checkArtifact(screenshot.artifacts[0],'screenshot','image/png',{profile:peerProfile});
       const workMs=performance.now()-started;
       const owner=await ok('browser_status');
       assert.equal(owner.data.pendingAction.operationId,action.operationId);
@@ -912,7 +913,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'0');
   });
 
-  it('tab-targeted actions work but snapshot references are shared across tabs in a profile', async () => {
+  it('snapshot references stay valid when another tab is inspected', async () => {
     await navigate();
     const before=await ok('browser_tabs',{action:'list'}), first=before.data.tabs.find(tab=>tab.selected).tabId;
     const added=await ok('browser_tabs',{action:'new',url:`${fixture.url}/`});
@@ -920,15 +921,55 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     try {
       const snapshot=await ok('browser_snapshot',{tabId:first});
       const button=snapshot.data.elements.find(element=>element.tag==='button'&&element.name==='Increment counter');assert.ok(button);
-      await ok('browser_snapshot',{tabId:second});
-      failure(await call('browser_click',{tabId:first,ref:button.ref,revision:snapshot.data.revision}),'STALE_SNAPSHOT');
-      await ok('browser_click',{tabId:first,selector:'#increment'});
+      const peerSnapshot=await ok('browser_snapshot',{tabId:second});
+      failure(await call('browser_click',{tabId:second,ref:button.ref,revision:peerSnapshot.data.revision}),'BROWSER_ERROR');
+      await ok('browser_click',{tabId:second,selector:'#increment'});
+      await ok('browser_click',{tabId:first,ref:button.ref,revision:snapshot.data.revision});
       assert.equal((await ok('browser_evaluate',{tabId:first,function:'() => document.querySelector("#count").textContent'})).data.value,'1');
-      assert.equal((await ok('browser_evaluate',{tabId:second,function:'() => document.querySelector("#count").textContent'})).data.value,'0');
-      concurrencyResult('tabs-within-one-profile',{result:'explicit-tab-targeting-works',snapshotReferences:'profile-wide',laterSnapshotInvalidatesEarlierRefs:true});
+      assert.equal((await ok('browser_evaluate',{tabId:second,function:'() => document.querySelector("#count").textContent'})).data.value,'1');
+      concurrencyResult('tabs-within-one-profile',{result:'explicit-tab-targeting-works',snapshotReferences:'page-scoped',laterSnapshotInvalidatesEarlierRefs:false});
     } finally { await ok('browser_tabs',{action:'close',tabId:second}); }
   });
 
+
+  it('host allocates stable distinct spaces without opening a browser or reusing manual profiles',async()=>{
+    await cli(['profiles','create','--cwd',workspace,'--profile','BROWSER2']);
+    const members=[{clientId:'space-alpha',label:'Research'},{clientId:'space-beta',label:'Review'}];
+    const result=await cli(['spaces','--stdin-json'],{cwd:workspace,members});
+    assert.equal(result.spaces.length,2);assert.equal(new Set(result.spaces.map(space=>space.profile)).size,2);
+    assert.ok(result.spaces.every(space=>space.profile!=='BROWSER1'&&space.profile!=='BROWSER2'));
+    assert.deepEqual(await cli(['spaces','--stdin-json'],{cwd:workspace,members}),result);
+    for(const space of result.spaces)assert.equal((await ok('browser_status',{},space)).data.running,false);
+    const foreign=await cli(['spaces','--stdin-json'],{cwd:workspace,members:[{clientId:'space-gamma',label:'Third'}]});
+    assert.ok(!result.spaces.some(space=>space.profile===foreign.spaces[0].profile));
+  });
+  it('typed batches return ordered durable receipts and reject invalid later steps before any input',async()=>{
+    await navigate();
+    failure(await call('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}},{tool:'browser_fill_form',arguments:{fields:[null]}}]}),'BROWSER_ERROR');
+    assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'0');
+    failure(await call('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}}]},{mode:'observe'}),'POLICY_DENIED');
+    const operationId=randomUUID();
+    const batch=await ok('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}},{tool:'browser_snapshot',arguments:{}},{tool:'browser_take_screenshot',arguments:{}}]},{operationId});
+    assert.equal(batch.data.completed,3);assert.equal(batch.data.steps.length,3);assert.equal(batch.artifacts.length,1);
+    for(const [index,step] of batch.data.steps.entries()){
+      assert.equal(step.index,index);assert.equal(step.receipt.status,'completed');
+      const receipt=JSON.parse(await fs.readFile(path.join(home,'receipts',sha256(step.operationId)+'.json'),'utf8'));
+      assert.equal(receipt.parentOperationId,operationId);assert.equal(receipt.receipt.status,'completed');assert.ok(!('arguments' in receipt));assert.ok(!('data' in receipt));
+    }
+    failure(await call('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}}]},{operationId}),'DUPLICATE_OPERATION');
+    assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'1');
+  });
+  it('cancelling a partial batch preserves completed receipts and never dispatches later steps',{timeout:90000},async()=>{
+    await navigate();const gate=randomUUID(),operationId=randomUUID();
+    const pending=call('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}},{tool:'browser_evaluate',arguments:{function:'async route=>{await fetch(route);return true;}',arg:`/gate/${gate}`}},{tool:'browser_click',arguments:{selector:'#increment'}}]},{operationId,timeoutMs:60000});
+    await eventually(async()=>fixture.isGateHeld(gate),Boolean,'Batch never reached its gate');
+    try{
+      await ok('browser_cancel',{operationId});const result=await pending;failure(result,'UNCERTAIN');
+      assert.equal(result.structuredContent.data.steps[0].receipt.status,'completed');assert.equal(result.structuredContent.data.steps.length,2);
+    }finally{fixture.releaseGate(gate);}
+    await eventually(async()=>(await ok('browser_status')).data.pendingAction,value=>!value,'Cancelled batch did not settle');
+    await ok('browser_resume');assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'1');
+  });
   it('requires explicit ownership takeover and increments generation for pause/resume/takeover', async () => {
     await navigate();
     const original = await ok('browser_status');

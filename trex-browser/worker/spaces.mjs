@@ -1,0 +1,30 @@
+import path from 'node:path';
+import { jsonRead, writePrivate } from './security.mjs';
+
+/** Host-only allocation. Models never choose a different client or profile. */
+export function ensureSpaces(service, ctx, members) {
+  if (!Array.isArray(members) || !members.length || members.length > 9) throw new Error('Expected 1..9 browser space members');
+  const seen = new Set();
+  for (const member of members) {
+    if (!member || Object.keys(member).some(key => !['clientId','label'].includes(key))
+      || typeof member.clientId !== 'string' || !member.clientId.length || member.clientId.length > 128 || /[\x00-\x1f\x7f]/.test(member.clientId)
+      || typeof member.label !== 'string' || !member.label.trim() || member.label.length > 100 || /[\x00-\x1f\x7f]/.test(member.label)
+      || seen.has(member.clientId)) throw new Error('Invalid or duplicate browser space member');
+    seen.add(member.clientId);
+  }
+  const profiles = service.profiles(ctx), used = new Set(profiles.map(profile => profile.id));
+  const available = Array.from({length:98}, (_,i) => `BROWSER${i+2}`).filter(id => !used.has(id));
+  const planned = members.map(member => {
+    const owned = profiles.find(profile => profile.space?.clientId === member.clientId);
+    const profile = owned?.id || available.shift();
+    if (!profile) throw new Error('No free browser profiles remain in this project; close/archive unused spaces before creating more');
+    return {...member, profile};
+  });
+  for (const space of planned) {
+    const binding = {...ctx,profile:space.profile}; service.createProfile(binding);
+    const file = path.join(service.profileDir(binding),'profile.json');
+    const manifest = jsonRead(file, {});
+    writePrivate(file, JSON.stringify({...manifest,space:{clientId:space.clientId,label:space.label}}));
+  }
+  return {spaces:planned};
+}

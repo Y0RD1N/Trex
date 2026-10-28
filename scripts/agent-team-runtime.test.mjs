@@ -17,20 +17,24 @@ const compiled=new Function("require","exports","window","requestAnimationFrame"
 const agent=(provider)=>({profileId:provider,profileName:provider,provider,model:"model-"+provider,effort:"high",launch:{profileId:provider,profileName:provider,command:provider,args:null,shell:"powershell",launchMode:"arg",env:null}});
 const member=(id,provider,role,canWrite=false)=>({id,name:id,role,canWrite,instructions:"Verify the task",agent:agent(provider),conversationId:null});
 function nodes(node){if(!node||typeof node!=="object")return [];if(Array.isArray(node))return node.flatMap(nodes);return [node,...nodes(node.props?.children),...nodes(node.props?.toolbar)];}
-function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,initial=null,restoredHistory=false,setup,settings={}}={}){
+function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,initial=null,restoredHistory=false,setup,settings={},readerWorkers=false}={}){
   let team={id:"team-test",epoch:"epoch-1",phase,master:member("principal","claude","coordinator"),workers:[member("implement","trex","implementation",true),member("review","codex","review")],order:[],initial,error:null};
+  if(readerWorkers)team.workers[0].canWrite=false;
   if(setup!==undefined)team.setup=setup;
   if(restoredHistory)for(const member of [team.master,...team.workers])member.conversationId="550e8400-e29b-41d4-a716-446655440000";
   let snapshot={id:team.id,epoch:team.epoch,phase:phase==="paused"?"paused":"running",tasks:[],heartbeat:1};
   const h=component.host(t), env=component.environment(), intervals=new Map(), calls=[], notices=[], sessions={}, delivered=[];
   let timer=0, tree;
   env.window.setInterval=callback=>{const id=++timer;intervals.set(id,callback);return id;};env.window.clearInterval=id=>intervals.delete(id);
-  const api={formatError:error=>error?.message??String(error),
+  const api={
+    async trexBrowserStatus(){return {ready:true,capabilities:{spaces:true}};},
+    async trexBrowserSpaces(_cwd,members){return {spaces:members.map((member,index)=>({...member,profile:"BROWSER"+(index+2)}))};},
+    formatError:error=>error?.message??String(error),
     async agentTeamOpen(next,_cwd,resume=false){calls.push(["open",next.epoch,resume]);snapshot={...snapshot,epoch:next.epoch,phase:"running"};return structuredClone(snapshot);},
     async agentTeamSnapshot(){return structuredClone(snapshot);},
     async agentTeamPoll(){calls.push(["poll"]);if(pollWait)await pollWait.promise;return structuredClone(snapshot);},
     async agentTeamPause(binding){calls.push(["pause",binding.epoch]);snapshot={...snapshot,phase:"paused",tasks:snapshot.tasks.map(task=>["claimed","running"].includes(task.status)?{...task,status:"uncertain"}:task.status==="queued"?{...task,status:"cancelled"}:task)};return structuredClone(snapshot);},
-    async agentTeamClaim(){calls.push(["claim"]);if(claimWait)await claimWait.promise;const task=snapshot.tasks.find(task=>task.status==="queued");if(task)task.status="claimed";return structuredClone(snapshot);},
+    async agentTeamClaim(_binding,taskId){calls.push(["claim"]);if(claimWait)await claimWait.promise;const task=snapshot.tasks.find(task=>task.status==="queued" && (!taskId||task.id===taskId) && helpers.teamTaskRunnable(snapshot,task,[team.master,...team.workers]));if(task)task.status="claimed";return structuredClone(snapshot);},
     async agentTeamFinish(binding,id,status,report){calls.push(["finish",binding.epoch,id,status,report]);const task=snapshot.tasks.find(task=>task.id===id);assert.ok(task);assert.equal(binding.epoch,snapshot.epoch);task.status=status;task.report=report;return structuredClone(snapshot);},
     async prepareHandoff(context){calls.push(["prepare",context]);if(prepareError)throw new Error(prepareError);if(prepareWait)await prepareWait.promise;return {id:"handoff",createdAt:1,cwd:"D:/test",content:context.content,truncated:false,sourceLabel:"principal",sourceProvider:"claude",sourceSessionId:"team-test"};},
     async loadHandoff(id){calls.push(["load",id]);return {id,content:"Saved context from the previous chat"};},
@@ -76,10 +80,10 @@ test("delegation is claimed once, sends full instructions, and returns only the 
   const h=harness(t);await h.settle();h.queue();await h.tick();assert.equal(h.delivered.length,1);assert.equal(h.delivered[0].member,"implement");assert.match(h.delivered[0].text,/Implement the specific change/);assert.match(h.delivered[0].text,/Verify the task/);assert.equal(h.snapshot.tasks[0].status,"running");
   await h.tick();assert.equal(h.delivered.length,1);h.complete("implement");h.publish();await h.tick();assert.equal(h.snapshot.tasks[0].status,"completed");assert.equal(h.snapshot.tasks[0].report,"Implementation verified");
 });
-test("the current team shares one browser identity and dispatches workers serially",async t=>{
+test("each member receives its own browser identity while legacy tasks remain serial",async t=>{
   const h=harness(t,{settings:{browserEnabled:true,browserProfile:"BROWSER1"}});await h.settle();
   const runtimes=nodes(h.tree).filter(node=>node.props?.options);
-  for(const runtime of runtimes)assert.deepEqual(runtime.props.options.browser,{enabled:true,profile:"BROWSER1",clientId:"team-test"});
+  for(const [index,runtime] of runtimes.entries())assert.deepEqual(runtime.props.options.browser,{enabled:true,profile:"BROWSER"+(index+2),clientId:"team-test-"+runtime.props.id});
   h.queue();h.snapshot.tasks.push({id:"review-task",epoch:"epoch-1",key:"review-key",memberId:"review",instruction:"Review after implementation",status:"queued",report:null,createdAt:2,updatedAt:2});
   await h.tick();await h.tick();await h.tick();
   assert.deepEqual(h.delivered.map(item=>item.member),["implement"]);
@@ -157,4 +161,47 @@ test("double submission and Stop during first-message preparation never issue a 
 test("uncertain first-message acceptance pauses and never silently resends",async t=>{
   const h=harness(t,{setup:{context:null}});await h.settle();h.sessions.principal.accept=false;assert.equal(await h.panel().session.send("Uncertain idea",[],[]),false);await h.tick();
   assert.equal(h.delivered.length,1);assert.equal(h.team.phase,"paused");assert.deepEqual(h.team.setup,{context:null});
+});
+
+test("independent readers dispatch together; a dependent step waits and Stop interrupts both",async t=>{
+  const h=harness(t,{readerWorkers:true,settings:{browserEnabled:true,browserProfile:"BROWSER1"}});await h.settle();
+  h.queue();h.snapshot.tasks.push({id:"review-task",epoch:"epoch-1",key:"review-key",memberId:"review",instruction:"Independent review",status:"queued",report:null,createdAt:2,updatedAt:2});
+  h.snapshot.plan=[{taskKey:"key",memberId:"implement",task:"Implement the specific change",dependsOn:[]},{taskKey:"review-key",memberId:"review",task:"Independent review",dependsOn:[]}];
+  await h.tick();await h.tick();assert.deepEqual(h.delivered.map(item=>item.member),["implement","review"]);
+  assert.equal(h.snapshot.tasks.filter(task=>task.status==="running").length,2);
+  h.complete("review","completed","Independent result");h.publish();await h.tick();
+  assert.equal(h.snapshot.tasks[1].status,"completed");assert.equal(h.snapshot.tasks[0].status,"running");
+  h.panel().session.interrupt();await h.settle();assert.equal(h.team.phase,"paused");assert.equal(h.snapshot.tasks[0].status,"uncertain");assert.equal(h.snapshot.tasks[1].status,"completed");
+});
+test("an explicit dependency blocks even a free reader until its prerequisite completes",async t=>{
+  const h=harness(t,{readerWorkers:true});await h.settle();h.queue();
+  h.snapshot.tasks.push({id:"review-task",epoch:"epoch-1",key:"review-key",memberId:"review",instruction:"Review result",status:"queued",report:null,createdAt:2,updatedAt:2});
+  h.snapshot.plan=[{taskKey:"key",memberId:"implement",task:"Implement the specific change",dependsOn:[]},{taskKey:"review-key",memberId:"review",task:"Review result",dependsOn:["key"]}];
+  await h.tick();await h.tick();assert.deepEqual(h.delivered.map(item=>item.member),["implement"]);
+  h.complete("implement");h.publish();await h.tick();await h.tick();assert.deepEqual(h.delivered.map(item=>item.member),["implement","review"]);
+});
+
+test("a principal that returned early receives one review turn when parallel reports finish",async t=>{
+  const h=harness(t,{readerWorkers:true});await h.settle();h.queue();
+  h.snapshot.tasks.push({id:"review-task",epoch:"epoch-1",key:"review-key",memberId:"review",instruction:"Independent review",status:"queued",report:null,createdAt:2,updatedAt:2});
+  h.snapshot.plan=[{taskKey:"key",memberId:"implement",task:"Implement the specific change",dependsOn:[]},{taskKey:"review-key",memberId:"review",task:"Independent review",dependsOn:[]}];
+  await h.tick();await h.tick();h.complete("principal","completed","Tasks queued");h.publish();await h.tick();
+  assert.equal(h.team.phase,"running");h.complete("implement");h.complete("review","completed","Review verified");h.publish();await h.tick();await h.tick();
+  const feedback=h.delivered.filter(item=>item.member==="principal");assert.equal(feedback.length,1);assert.match(feedback[0].text,/trex_task_status/);assert.match(feedback[0].text,/review-task/);
+  await h.tick();assert.equal(h.delivered.filter(item=>item.member==="principal").length,1);
+});
+
+test("a new user message cannot trigger a duplicate reports review before its native acknowledgement",async t=>{
+  const h=harness(t);await h.settle();h.queue();await h.tick();h.complete("implement");h.publish();await h.tick();h.complete("principal");h.publish();await h.tick();assert.equal(h.team.phase,"completed");
+  const gate=deferred(),requested=[],original=h.sessions.principal.send;
+  h.sessions.principal.send=async(...args)=>{requested.push(args[0]);await gate.promise;return original(...args);};
+  h.publish();const sending=h.panel().session.send("A different new idea",[],[]);await h.settle();await h.tick();await h.tick();
+  assert.deepEqual(requested,["A different new idea"]);gate.resolve();assert.equal(await sending,true);await h.settle();
+});
+
+test("restored team history retains human browser artifact controls without starting its agents",async t=>{
+  const h=harness(t,{phase:"paused",restoredHistory:true,settings:{browserEnabled:true,browserProfile:"BROWSER1"}});await h.settle();
+  assert.equal(h.panel().browser.enabled,true);assert.deepEqual(h.panel().browserSpaces,[]);
+  for(const runtime of nodes(h.tree).filter(node=>node.props?.options))assert.equal(runtime.props.options.browser.enabled,false);
+  assert.equal(h.delivered.length,0);
 });

@@ -154,7 +154,11 @@ offlineTest("the observe allowlist matches the published contract and excludes m
   assert.deepEqual([...OBSERVE_BROWSER_TOOLS].sort(), observe.map(tool => tool.name).sort());
   for (const tool of all) {
     assert.equal(OBSERVE_BROWSER_TOOLS.has(tool.name), observe.some(item => item.name === tool.name), tool.name);
-    if (OBSERVE_BROWSER_TOOLS.has(tool.name)) assert.equal(tool.annotations.readOnlyHint, true, tool.name);
+    if (OBSERVE_BROWSER_TOOLS.has(tool.name)) {
+      assert.equal(observe.find(item=>item.name===tool.name).annotations.readOnlyHint,true,tool.name);
+      // A full-mode batch can contain input; only its observe grant is read-only.
+      assert.equal(tool.annotations.readOnlyHint,tool.name!=="browser_batch",tool.name);
+    }
   }
   assert.equal(OBSERVE_BROWSER_TOOLS.has("browser_evaluate"), false);
   assert.equal(OBSERVE_BROWSER_TOOLS.has("browser_file_upload"), false);

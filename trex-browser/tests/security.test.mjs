@@ -34,7 +34,7 @@ test('offline state stays consistent with CDP throttling across tabs and partial
 });
 
 test('observe tools are a fixed narrow subset; outer policy cannot be overridden',()=>{
-  assert.deepEqual(tools('observe').map(t=>t.name),['browser_navigate','browser_navigate_back','browser_reload','browser_tabs','browser_frames','browser_snapshot','browser_console_messages','browser_network_requests','browser_network_body','browser_take_screenshot','browser_wait_for','browser_artifact','browser_status','browser_cancel']);
+  assert.deepEqual(tools('observe').map(t=>t.name),['browser_batch','browser_navigate','browser_navigate_back','browser_reload','browser_tabs','browser_frames','browser_snapshot','browser_console_messages','browser_network_requests','browser_network_body','browser_take_screenshot','browser_wait_for','browser_artifact','browser_status','browser_cancel']);
   for(const name of ['browser_click','browser_evaluate','browser_file_upload','browser_start_video','browser_emulate','browser_takeover'])assert.throws(()=>validateArguments(name,{},'observe'));
   for(const key of ['cwd','mode','profile','clientId','grantId','token'])assert.throws(()=>validateArguments('browser_snapshot',{[key]:'override'},'full'));
   assert.throws(()=>validateArguments('browser_tabs',{action:'new'},'observe'));

@@ -1,5 +1,5 @@
 import BrowserMenu from "./chat/BrowserMenu";
-import { browserOptions, brokerArtifactId } from "../browser";
+import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browser";
 /**
  * ChatView: sesión de Claude Code o de Codex como conversación.
  *
@@ -70,6 +70,8 @@ export type ChatViewProps = ChatSessionOptions & {
   toolbar?: ReactNode;
   composerLead?: ReactNode;
   terminalOwners?: TerminalOwner[];
+  browserSpaces?: import("../browser").BrowserSpace[];
+  onStopBrowserAgent?: (clientId:string)=>void;
   itemLabels?: Record<string, ChatAttribution>;
   taskPlan?: ChatTask[];
   taskAuthor?: string;
@@ -1027,7 +1029,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         case "tool": return asked(item.id) ? null : <div key={item.id} data-plan-source={["TodoWrite", "TaskCreate", "TaskUpdate"].includes(item.name) ? item.id : undefined}><ToolRow item={item} cwd={cwd}
           onOpenArtifact={props.browser?.enabled ? async artifact => {
             const id = brokerArtifactId(artifact); if (!id || !props.browser) return;
-            try { const result = await trexBrowserOpenArtifact(id, cwd, "full", props.browser.clientId, props.browser.profile);
+            const profile=(artifact.provenance as {profile?:string}|null)?.profile;
+            const binding=props.browserSpaces?.find(space=>space.profile===profile)??{...props.browser,profile:profile&&validBrowserProfile(profile)?profile:props.browser.profile};
+            try { const result = await trexBrowserOpenArtifact(id, cwd, "full", binding?.clientId??props.browser.clientId, binding?.profile??props.browser.profile);
               if (result.isError) session.notice("warn", "No se pudo abrir el archivo. Revisa el estado del navegador.");
             } catch { session.notice("warn", "No se pudo abrir el archivo del navegador."); }
           } : undefined}
@@ -1283,7 +1287,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         <ComposerSettings mode={mode} modes={modeOptions} onMode={session.setMode}
           levels={efforts} effort={state.effort} onEffort={session.setEffort} speed={speed} fast={state.fast} onFast={session.setFast}
           openSignal={menuSignal} />
-        {props.browser?.enabled && <BrowserMenu cwd={cwd} browser={props.browser} />}
+        {props.browser?.enabled && <BrowserMenu cwd={cwd} browser={props.browser} spaces={props.browserSpaces} onStopAgent={props.onStopBrowserAgent} />}
         <span className="chat-composer-spacer" />
         {props.onPlanHere && <button type="button" className="chat-tray-chip chat-plan-here" disabled={handoffDisabled}
           onClick={event => { event.currentTarget.focus({ preventScroll: true }); planHere(); }}><MapIcon size={13} /><span>Planear aquí</span></button>}

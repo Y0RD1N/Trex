@@ -196,6 +196,16 @@ impl ToolProvider for BrowserToolProvider {
         // Read-only evidence tools never execute caller JavaScript or requests.
         // Interaction bodies (click/fill/keys/drag/etc.) always require ask approval.
         match name {
+            "browser_batch" => input["steps"].as_array().is_none_or(|steps| {
+                steps.is_empty()
+                    || steps.iter().any(|step| {
+                        step["tool"] == "browser_batch"
+                            || self.is_mutating(
+                                step["tool"].as_str().unwrap_or(""),
+                                &step["arguments"],
+                            )
+                    })
+            }),
             "browser_tabs" => !matches!(
                 input["action"].as_str(),
                 None | Some("list") | Some("select")
@@ -228,6 +238,33 @@ impl ToolProvider for BrowserToolProvider {
                 "unavailable browser tool"
             );
             ensure!(input.is_object(), "browser arguments must be an object");
+            if name == "browser_batch" {
+                let steps = input["steps"].as_array().context("batch steps required")?;
+                ensure!((1..=16).contains(&steps.len()), "batch step limit");
+                for step in steps {
+                    let tool = step["tool"].as_str().context("batch tool required")?;
+                    ensure!(
+                        tool != "browser_batch" && allowed_tool(tool, &self.mode),
+                        "batch step denied by policy"
+                    );
+                    ensure!(step["arguments"].is_object(), "batch arguments required");
+                    if self.mode == "observe" {
+                        ensure!(
+                            tool != "browser_tabs"
+                                || matches!(
+                                    step["arguments"]["action"].as_str(),
+                                    None | Some("list" | "select")
+                                ),
+                            "plan batch cannot mutate tabs"
+                        );
+                        ensure!(
+                            tool != "browser_console_messages"
+                                || step["arguments"]["clear"] != true,
+                            "plan batch cannot clear logs"
+                        );
+                    }
+                }
+            }
             if self.mode == "observe" {
                 ensure!(
                     name != "browser_tabs"
@@ -298,7 +335,8 @@ fn decode_result(bytes: &[u8]) -> Result<Value> {
 fn observe_tool(name: &str) -> bool {
     matches!(
         name,
-        "browser_navigate"
+        "browser_batch"
+            | "browser_navigate"
             | "browser_navigate_back"
             | "browser_reload"
             | "browser_status"
@@ -564,6 +602,15 @@ mod tests {
         assert!(provider.is_mutating("browser_mouse", &json!({"action":"click"})));
         assert!(provider.is_mutating("browser_evaluate", &json!({"function":"() => 1"})));
         assert!(provider.is_mutating("unknown", &json!({})));
+        assert!(!provider.is_mutating(
+            "browser_batch",
+            &json!({"steps":[{"tool":"browser_snapshot","arguments":{}}]})
+        ));
+        assert!(provider.is_mutating("browser_batch", &json!({"steps":[{"tool":"browser_snapshot","arguments":{}},{"tool":"browser_click","arguments":{"selector":"button"}}]})));
+        assert!(provider.is_mutating(
+            "browser_batch",
+            &json!({"steps":[{"tool":"browser_batch","arguments":{}}]})
+        ));
     }
 
     #[test]

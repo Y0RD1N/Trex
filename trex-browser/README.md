@@ -53,6 +53,7 @@ Source package files live at `trex-browser/package*.json`; source worker modules
 trex-browser --version
 trex-browser doctor --json
 trex-browser tools --json --mode observe|qa|full
+trex-browser spaces --stdin-json
 trex-browser profiles list --cwd C:\absolute\project
 trex-browser profiles create --cwd C:\absolute\project --profile BROWSER1
 trex-browser mcp --cwd C:\absolute\project --mode qa --client opaque-client-id --profile BROWSER1
@@ -103,29 +104,48 @@ The broker listens only on IPv4 loopback, requires an exact Host header, rejects
 
 Ownership is project/profile plus a logical client and monotonically changing generation. Another client must explicitly take over. `browser_status` distinguishes `pauseReason: manual | uncertain | runtime | null` and reports the uncertain operation ID/tool without arguments. Normal agent work must not call `browser_pause`. An explicit human pause is preserved until the owner resumes it.
 
-### Tabs, agents and actual parallelism
+### Spaces, tabs and parallelism
 
-- The browser owner covers the whole project/profile, not an individual tab.
-  An independent client cannot create a new tab in an already-owned profile:
-  it receives `OWNERSHIP` before dispatch, without pausing the owner's action.
-- Adapters sharing one logical workflow client can create tabs, but page actions
-  use one profile-wide queue. A new-tab action waits for the active action.
-  The selected tab and snapshot-reference revision are also profile-wide.
-  Use explicit `tabId` targeting and fresh snapshots; reading a second tab
-  invalidates references from an earlier snapshot of the first tab.
-- Separate profiles have independent browsers, storage and action queues.
-  Real native/MCP tests hold an action in BROWSER1 while a different client cold
-  launches BROWSER2, creates a tab, clicks, captures and closes BROWSER2.
-  BROWSER1 remains active and its page and storage remain unchanged.
-- The current desktop team shares one browser identity/profile for all members
-  and dispatches one worker delegation at a time. It does not automatically
-  allocate independent browser profiles or run workers concurrently. The browser
-  engine's parallel-profile support does not imply parallel team scheduling.
+The desktop host reserves a stable persistent profile and client identity for
+**each team member**, including the coordinator. `spaces --stdin-json` accepts
+`{cwd,members:[{clientId,label}]}` and returns `{spaces:[{clientId,label,profile}]}`.
+Allocation is broker-serialized, validates the complete request first, preserves
+existing manual profiles, and never launches Chrome. BROWSER1 remains available
+for manually selected chat profiles; at most 98 allocated spaces fit a project.
+Repeated allocation recovers the same bindings after restart. The command and
+management endpoint are host APIs, not model-facing tools.
 
-QA and full expose the same 41 browser tools; observe exposes 14 tools with
-runtime restrictions on tab creation, page input, JavaScript and captures.
+Ownership still covers a whole project/profile. Independent clients cannot
+create tabs in another owner's profile; shared identities serialize page inputs.
+Different allocated profiles run concurrently with separate browser storage.
+The team scheduler supports up to four independent read-only tasks. Tasks that
+can write the shared workspace remain exclusive. `trex_team_plan.dependsOn: []`
+marks independent work; prerequisites must be earlier plan keys. Omitted
+`dependsOn` preserves sequential plans. `trex_delegate_task` with `wait:false`
+queues work and returns its durable task ID; status with `waitMs` up to 30000
+waits for results. Uncertain work is never automatically retried. See
+[the team spaces guide](../docs/agent-browser-spaces.md).
+
+Snapshots return `tabId` and a **page-specific revision**. Refs and frame maps
+belong to that page; snapshots or actions on another tab do not invalidate them.
+Navigation, input, ownership changes and pauses invalidate the affected refs.
+Pass the snapshot's `tabId`, `revision` and `ref` together. The visible selected
+tab remains a profile-level convenience, not a separate agent identity.
+
+QA/full expose 42 browser tools; observe exposes 15. `browser_batch` accepts
+1..16 ordered `{tool,arguments}` steps and validates every schema and bound mode
+before any dispatch. No nested batch, ownership/lifecycle or file-upload step
+is accepted. Inputs remain serialized within the profile. It returns per-step
+receipts and artifact refs, with only the latest screenshot image inline.
+Text results have a combined 1 MiB budget. Each issued step has a durable receipt
+without arguments, page content or image data. A failure stops subsequent steps;
+completed actions are not rolled back. Cancellation targets the parent operation
+and interrupts its current step. Never replay a partial batch automatically.
+
 These are web-page/browser controls, not native desktop or Chrome-settings UI
-controls. Model-facing arguments cannot change their bound client or profile.
+controls. Model arguments cannot override the bound project, client or profile.
+Doctor advertises `spaces`, `batch` and `pageScopedRefs`; an older companion must
+be updated before the desktop enables team spaces.
 
 Network throttling is tracked per tab. Profile-wide offline changes are also
 applied to every CDP session with network conditions, preserving that tab's

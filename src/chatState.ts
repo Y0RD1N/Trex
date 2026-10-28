@@ -511,6 +511,7 @@ export function describeTool(name: string, input: Json, cwd: string, running: bo
   const verb = (live: string, done: string): string => running ? live : done;
   const browser = name.replace(/^mcp__trex_browser__/, "");
   const browserLabels: Record<string, [string, string, string]> = {
+    browser_batch: ["Ejecutando", "Ejecutó", "un flujo del navegador"],
     browser_navigate: ["Abriendo", "Abrió", text(input.url) || "una página"],
     browser_navigate_back: ["Volviendo", "Volvió", "a la página anterior"],
     browser_reload: ["Recargando", "Recargó", "la página"],

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
-import { Artifacts, MAX_ARTIFACT, MAX_IMAGE, jsonRead, writePrivate, safePath, uploadSnapshot, childEnvironment } from './security.mjs';
+import { Artifacts, MAX_ARTIFACT, MAX_IMAGE, jsonRead, writePrivate, safePath, uploadSnapshot, childEnvironment, sha256 } from './security.mjs';
 import { validateArguments } from './tools.mjs';
 import { guardBrowser } from './guard.mjs';
 
@@ -33,6 +33,7 @@ function navigateUrl(input){let u;try{u=new URL(input);}catch{throw new Error('V
 // Observation does not send input to a page. It remains available during a
 // pause and cannot make an unrelated page action uncertain when it times out.
 export function isObservation(name,args={}){
+  if(name==='browser_batch')return Array.isArray(args.steps)&&args.steps.every(step=>isObservation(step.tool,step.arguments));
   return ['browser_frames','browser_snapshot','browser_take_screenshot','browser_network_requests','browser_network_body','browser_wait_for'].includes(name)
     || name==='browser_console_messages'&&!args.clear
     || name==='browser_tabs'&&(!args.action||args.action==='list')
@@ -46,12 +47,18 @@ export class BrowserService {
   profiles(ctx){const dir=path.join(this.home,'projects',ctx.projectId);safePath(dir,{allowMissing:true});if(!fs.existsSync(dir))return [];return fs.readdirSync(dir).filter(n=>/^BROWSER[1-9][0-9]?$/.test(n)).map(id=>({id,name:id,projectId:ctx.projectId,...jsonRead(path.join(dir,id,'profile.json'),{})}));}
   createProfile(ctx){const dir=this.profileDir(ctx);safePath(dir,{allowMissing:true});fs.mkdirSync(dir,{recursive:true,mode:0o700});const manifest=path.join(dir,'profile.json');if(!fs.existsSync(manifest))writePrivate(manifest,JSON.stringify({createdAt:new Date().toISOString()}));return this.profiles(ctx).find(p=>p.id===ctx.profile);}
   key(ctx){return `${ctx.projectId}/${ctx.profile}`;}
-  state(ctx){const key=this.key(ctx);let s=this.sessions.get(key);if(!s){s={key,ctx,owner:null,generation:0,paused:false,pauseReason:null,pauseOperation:null,revision:0,tabs:new Map(),frames:new Map(),refs:new Map(),events:[],network:new Map(),capture:null,queue:Promise.resolve(),active:null};this.sessions.set(key,s);}return s;}
+  state(ctx){const key=this.key(ctx);let s=this.sessions.get(key);if(!s){s={key,ctx,owner:null,generation:0,paused:false,pauseReason:null,pauseOperation:null,revision:0,pageStates:new Map(),tabs:new Map(),frames:new Map(),refs:new Map(),events:[],network:new Map(),capture:null,queue:Promise.resolve(),active:null};this.sessions.set(key,s);}return s;}
+  pageState(s,p){s.pageStates||=new Map();if(!s.pageStates.has(p))s.pageStates.set(p,{revision:0,refs:new Map(),frames:new Map()});return s.pageStates.get(p);}
+  resultRevision(s,args,result){const page=s.tabs.get(args.tabId||s.selected);return result.data?.revision??(page?this.pageState(s,page).revision:s.revision);}
+  retireRefs(s,refs){s.retiredRefs||=new Set();for(const ref of refs.values())s.retiredRefs.add(ref.handle);this.drainRefs(s);}
+  drainRefs(s){if(s.refLeases)return;for(const handle of s.retiredRefs||[])handle.dispose?.().catch(()=>{});s.retiredRefs?.clear();}
+  invalidate(s,p){const state=this.pageState(s,p);state.revision++;this.retireRefs(s,state.refs);state.refs.clear();s.revision++;}
+  invalidateAll(s){for(const p of s.tabs.values())this.invalidate(s,p);s.refs.clear();s.frames.clear();}
   pause(s,reason,op=null){
     // An interrupted action must not erase an explicit human pause.
     if(s.paused&&s.pauseReason==='manual'&&reason!=='manual')return;
     if(s.paused&&s.pauseReason==='runtime'&&reason==='uncertain')return;
-    s.paused=true;s.pauseReason=reason;s.pauseOperation=op?{operationId:op.id,tool:op.name}:null;s.revision++;s.refs.clear();
+    s.paused=true;s.pauseReason=reason;s.pauseOperation=op?{operationId:op.id,tool:op.name}:null;s.revision++;this.invalidateAll(s);
   }
   unpause(s){s.paused=false;s.pauseReason=null;s.pauseOperation=null;}
   status(s,ctx){return {running:!!s.browser,paused:s.paused,pauseReason:s.paused?s.pauseReason:null,pauseOperation:s.paused?s.pauseOperation:null,pendingAction:s.active?{operationId:s.active.id,tool:s.active.name,cancelRequested:s.active.controller.signal.aborted}:null,observationAvailable:!s.supervisorError&&!s.closing,owner:s.owner===ctx.clientId?'self':s.owner?'other':null,generation:s.generation,capture:s.capture?{kind:s.capture.kind,startedAt:s.capture.startedAt}:null,tabs:s.tabs.size,...(s.supervisorError?{supervisorError:s.supervisorError}:{})};}
@@ -72,16 +79,16 @@ export class BrowserService {
     try{s.guard=await guardBrowser(s.browser,browser.executablePath,phase=>{s.startupStage=phase;},error=>{s.supervisorError=error.message;this.pause(s,'runtime',s.active);s.active?.controller.abort();});s.supervisorError=null;}catch(e){const failed=s.browser;s.browser=null;this.pause(s,'runtime');failed.browser().close().catch(()=>{});throw Object.assign(new Error(`Owned browser supervisor could not establish control (${s.startupStage}); inspect the browser before resuming`),{code:'UNCERTAIN'});}
     s.browser.setDefaultTimeout(10000);s.browser.setDefaultNavigationTimeout(15000);
     s.browser.on('page',p=>this.attachPage(s,p));
-    s.browser.on('close',()=>{s.browser=null;s.tabs.clear();s.refs.clear();s.capture=null;s.generation++;const guard=s.guard;if(guard){const timer=setTimeout(()=>guard.stop().then(()=>{if(s.guard===guard)s.guard=null;}).catch(()=>{}),3000);timer.unref();}});
+    s.browser.on('close',()=>{s.browser=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();s.capture=null;s.generation++;const guard=s.guard;if(guard){const timer=setTimeout(()=>guard.stop().then(()=>{if(s.guard===guard)s.guard=null;}).catch(()=>{}),3000);timer.unref();}});
     for(const p of s.browser.pages())this.attachPage(s,p);
     if(!s.tabs.size)this.attachPage(s,await s.browser.newPage());
     s.startupStage=null;
     if(!s.owner)s.owner=ctx.clientId;
   }
-  attachPage(s,p){if([...s.tabs.values()].includes(p))return;const id=`tab-${++s.revision}`;s.tabs.set(id,p);s.selected||=id;
-    p.on('close',()=>{s.tabs.delete(id);s.revision++;if(s.selected===id)s.selected=s.tabs.keys().next().value;});
-    p.on('domcontentloaded',()=>{s.revision++;s.refs.clear();});
-    p.on('framenavigated',()=>{s.revision++;s.refs.clear();});
+  attachPage(s,p){if([...s.tabs.values()].includes(p))return;const id=`tab-${++s.revision}`;s.tabs.set(id,p);this.pageState(s,p);s.selected||=id;
+    p.on('close',()=>{this.invalidate(s,p);s.tabs.delete(id);s.pageStates.delete(p);s.cdps?.delete(p);s.revision++;if(s.selected===id)s.selected=s.tabs.keys().next().value;});
+    p.on('domcontentloaded',()=>this.invalidate(s,p));
+    p.on('framenavigated',()=>this.invalidate(s,p));
     p.on('dialog',dialog=>{s.dialog={dialog,tabId:id,type:dialog.type(),message:text(dialog.message())};});
     p.on('console',m=>{s.events.push({kind:'console',type:m.type(),text:text(m.text()),tabId:id,at:Date.now()});if(s.events.length>300)s.events.shift();});
     p.on('pageerror',e=>{s.events.push({kind:'pageerror',text:text(e.message),tabId:id,at:Date.now()});if(s.events.length>300)s.events.shift();});
@@ -90,9 +97,9 @@ export class BrowserService {
     p.on('download',download=>{const file=this.artifacts.temp();download.saveAs(file).then(async()=>{const stat=fs.statSync(file);if(stat.size>MAX_ARTIFACT){fs.rmSync(file,{force:true});return;}const meta=await this.artifacts.addFile(file,'application/octet-stream','download',s.ctx,{suggestedFilename:text(path.basename(download.suggestedFilename()))});s.events.push({kind:'download',artifact:meta,at:Date.now()});while(s.events.length>300)s.events.shift();}).catch(()=>{});});
   }
   page(s,args={}){const p=s.tabs.get(args.tabId||s.selected);if(!p)throw new Error('Tab not found; list browser_tabs');return p;}
-  frame(s,args){const p=this.page(s,args);if(!args.frameId)return p.mainFrame();const f=s.frames.get(args.frameId);if(!f||f.page()!==p||f.isDetached())throw new Error('Frame is stale; list browser_frames');return f;}
+  frame(s,args){const p=this.page(s,args);if(!args.frameId)return p.mainFrame();const f=this.pageState(s,p).frames.get(args.frameId);if(!f||f.page()!==p||f.isDetached())throw new Error('Frame is stale; list browser_frames');return f;}
   async locator(s,args){
-    if(args.ref){if(args.revision!==s.revision)throw Object.assign(new Error('Stale snapshot revision; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});const ref=s.refs.get(args.ref);if(!ref)throw new Error('Unknown ref');if(ref.frame!==this.frame(s,args))throw new Error('Ref belongs to another frame');if(!await ref.handle.evaluate(e=>e.isConnected))throw new Error('Element is detached; refresh snapshot');const current=await ref.handle.evaluate(e=>e.outerHTML.slice(0,8192));if(current!==ref.fingerprint)throw Object.assign(new Error('Element changed; refresh snapshot'),{code:'STALE_SNAPSHOT'});return ref.handle;}
+    if(args.ref){const state=this.pageState(s,this.page(s,args));if(args.revision!==state.revision)throw Object.assign(new Error('Stale snapshot revision; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});const ref=state.refs.get(args.ref);if(!ref)throw new Error('Unknown ref');if(ref.frame!==this.frame(s,args))throw new Error('Ref belongs to another frame');if(!await ref.handle.evaluate(e=>e.isConnected))throw new Error('Element is detached; refresh snapshot');const current=await ref.handle.evaluate(e=>e.outerHTML.slice(0,8192));if(current!==ref.fingerprint)throw Object.assign(new Error('Element changed; refresh snapshot'),{code:'STALE_SNAPSHOT'});return ref.handle;}
     const f=this.frame(s,args);let locator;
     if(args.role)locator=f.getByRole(args.role,{name:args.name,exact:true});else if(args.selector)locator=f.locator(args.selector);else throw new Error('An element ref/revision or explicit selector/role is required');
     if(await locator.count()!==1)throw new Error('Locator must identify exactly one element');return locator;
@@ -100,12 +107,14 @@ export class BrowserService {
   async cdp(s,p){s.cdps||=new Map();if(!s.cdps.has(p))s.cdps.set(p,await s.browser.newCDPSession(p));return s.cdps.get(p);}
   cancel(ctx,id){const op=this.operations.get(id);if(!op||op.finishedAt||op.ctx.projectId!==ctx.projectId||op.ctx.clientId!==ctx.clientId||op.ctx.profile!==ctx.profile)throw new Error('Active operation not found for this client/project/profile');op.controller.abort();return {operationId:id,cancelRequested:true};}
   async interrupt(s){
-    if(!s.browser||!s.active)return;const op=s.active;
+    if(!s.browser||!s.active)return;const active=s.active,op={name:active.activeTool||active.name,args:active.activeArgs||active.args};
     if(!['browser_navigate','browser_navigate_back','browser_reload','browser_evaluate','browser_type','browser_press_key','browser_click'].includes(op.name))return;
     try{const p=this.page(s,op.args);const c=await this.cdp(s,p);await c.send('Page.stopLoading');if(op.name==='browser_evaluate')await c.send('Runtime.terminateExecution');}catch{}
   }
   async call(ctx,name,args,operationId,timeoutMs){
-    validateArguments(name,args,ctx.mode);const s=this.state(ctx);
+    validateArguments(name,args,ctx.mode);
+    if(name==='browser_batch')for(const step of args.steps)if(step.tool==='browser_navigate'||step.tool==='browser_tabs'&&step.arguments.url)navigateUrl(step.arguments.url);
+    const s=this.state(ctx);
     if(name==='browser_cancel')return {data:this.cancel(ctx,args.operationId),artifacts:[]};
     if(name==='browser_status')return {data:{...this.status(s,ctx),dialog:s.dialog?{type:s.dialog.type,message:s.dialog.message,tabId:s.dialog.tabId,untrustedContent:true}:null},artifacts:[],generation:s.generation,revision:s.revision};
     if(s.closing&&name!=='browser_artifact')throw Object.assign(new Error('This profile is closing; wait for browser_close to finish before reopening it.'),{code:'PROFILE_CLOSING'});
@@ -114,7 +123,7 @@ export class BrowserService {
       if(!s.dialog)throw new Error('No pending dialog');const dialog=s.dialog;s.dialog=null;
       try{await abortableRead(args.accept?dialog.dialog.accept(args.promptText):dialog.dialog.dismiss(),AbortSignal.timeout(timeoutMs));}
       catch{ this.pause(s,'uncertain',{id:operationId,name});throw Object.assign(new Error('Dialog response is uncertain; inspect before resuming'),{code:'UNCERTAIN'}); }
-      s.revision++;s.refs.clear();return {data:{handled:true},artifacts:[],generation:s.generation,revision:s.revision};
+      s.revision++;this.invalidateAll(s);return {data:{handled:true},artifacts:[],generation:s.generation,revision:s.revision};
     }
     if(name==='browser_pause'){
       if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Only the current owner may pause'),{code:'OWNERSHIP'});
@@ -131,7 +140,7 @@ export class BrowserService {
     const recoveryTakeover=name==='browser_takeover'&&s.paused&&s.active?.controller.signal.aborted;
     if(recoveryClose)for(const pending of this.operations.values())if(!pending.observation&&!pending.finishedAt&&pending.ctx.projectId===ctx.projectId&&pending.ctx.profile===ctx.profile&&pending.ctx.clientId===ctx.clientId)pending.controller.abort();
     const controller=new AbortController();const op={id:operationId,ctx,controller,name,args,observation};this.operations.set(operationId,op);
-    const cancelled=()=>Object.assign(new Error(!op.started?'Queued operation cancelled before execution':observation?'Observation cancelled or timed out; browser remains available. Retry this read with a new operationId.':'Operation cancelled or timed out; inspect with browser_snapshot or browser_take_screenshot, then browser_resume before a new action. Never replay the uncertain action.'),{code:!op.started?'CANCELLED':observation?(op.timedOut?'READ_TIMEOUT':'CANCELLED'):'UNCERTAIN'});
+    const cancelled=()=>Object.assign(new Error(!op.started?'Queued operation cancelled before execution':observation?'Observation cancelled or timed out; browser remains available. Retry this read with a new operationId.':'Operation cancelled or timed out; inspect with browser_snapshot or browser_take_screenshot, then browser_resume before a new action. Never replay the uncertain action.'),{code:!op.started?'CANCELLED':observation?(op.timedOut?'READ_TIMEOUT':'CANCELLED'):'UNCERTAIN',...(op.batchSteps?{batchSteps:op.batchSteps.map(step=>({...step}))}:{})});
     const timer=setTimeout(()=>{op.timedOut=true;controller.abort();},timeoutMs);timer.unref();
     const execute=async()=>{
       if(controller.signal.aborted)throw Object.assign(new Error('Operation cancelled before execution'),{code:'CANCELLED'});
@@ -139,9 +148,10 @@ export class BrowserService {
       if(s.paused&&!observation&&!PAUSE_CONTROL.has(name))throw pausedError(s);
       if(s.owner&&s.owner!==ctx.clientId&&!['browser_status','browser_takeover','browser_artifact'].includes(name))throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});
       op.started=true;if(!observation&&!recoveryTakeover)s.active=op;const abort=()=>{if(!observation){this.pause(s,'uncertain',op);this.interrupt(s).catch(()=>{});}};controller.signal.addEventListener('abort',abort,{once:true});
-      try{const pending=this.execute(s,ctx,name,args,controller.signal);const result=observation?await abortableRead(pending,controller.signal):await pending;if(controller.signal.aborted)throw cancelled();if(observation&&name!=='browser_artifact'&&s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Browser ownership changed during observation'),{code:'OWNERSHIP'});return {...result,generation:s.generation,revision:s.revision};}
-      catch(e){if(observation&&(controller.signal.aborted||e.name==='TimeoutError'))throw controller.signal.aborted?cancelled():Object.assign(new Error('Observation timed out; browser remains available. Retry the read with a new operationId.'),{code:'READ_TIMEOUT'});if(e.name==='TimeoutError'){this.pause(s,'uncertain',op);await this.interrupt(s);throw Object.assign(new Error('Browser action timed out and may have affected the page; inspect before resuming, do not replay'),{code:'UNCERTAIN'});}throw e;}
-      finally{controller.signal.removeEventListener('abort',abort);if(s.active===op)s.active=null;}
+      s.refLeases=(s.refLeases||0)+1;
+      try{const pending=this.execute(s,ctx,name,args,controller.signal,operationId);const result=observation?await abortableRead(pending,controller.signal):await pending;if(controller.signal.aborted)throw cancelled();if(observation&&name!=='browser_artifact'&&s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Browser ownership changed during observation'),{code:'OWNERSHIP'});return {...result,generation:s.generation,revision:this.resultRevision(s,args,result)};}
+      catch(e){if(observation&&(controller.signal.aborted||e.name==='TimeoutError'))throw controller.signal.aborted?cancelled():Object.assign(new Error('Observation timed out; browser remains available. Retry the read with a new operationId.'),{code:'READ_TIMEOUT'});if(e.name==='TimeoutError'){this.pause(s,'uncertain',op);await this.interrupt(s);throw Object.assign(new Error('Browser action timed out and may have affected the page; inspect before resuming, do not replay'),{code:'UNCERTAIN',...(e.batchSteps?{batchSteps:e.batchSteps}:{})});}throw e;}
+      finally{controller.signal.removeEventListener('abort',abort);if(s.active===op)s.active=null;s.refLeases--;this.drainRefs(s);}
     };
     // Page actions stay serialized; a hung action must not hide the page from
     // screenshots, snapshots, logs or status used to diagnose its outcome.
@@ -150,15 +160,40 @@ export class BrowserService {
     try{return await Promise.race([work,new Promise((_,reject)=>{rejectOnAbort=()=>{if(op.started&&!observation)this.pause(s,'uncertain',op);reject(cancelled());};controller.signal.addEventListener('abort',rejectOnAbort,{once:true});})]);}
     finally{clearTimeout(timer);controller.signal.removeEventListener('abort',rejectOnAbort);op.finishedAt=Date.now();if(this.operations.size>1000){for(const [id,old] of this.operations)if(old.finishedAt){this.operations.delete(id);if(this.operations.size<800)break;}}}
   }
-  async execute(s,ctx,name,a,signal){
+  async executeBatch(s,ctx,args,signal,operationId){
+    const op=this.operations.get(operationId),steps=[],artifacts=[];if(op)op.batchSteps=steps;
+    let image,bytes=0;
+    for(const [index,step] of args.steps.entries()){
+      signal.throwIfAborted();
+      const id=`batch:${sha256(operationId)}:${index}`,receipt={index,tool:step.tool,operationId:id,receipt:{status:'uncertain',manualReview:true,replaySafe:false}};
+      const persist=()=>writePrivate(path.join(this.home,'receipts',`${sha256(id)}.json`),JSON.stringify({operationId:id,parentOperationId:operationId,name:step.tool,projectId:ctx.projectId,profile:ctx.profile,clientHash:sha256(ctx.clientId),at:new Date().toISOString(),receipt:receipt.receipt}));
+      const prior=jsonRead(path.join(this.home,'receipts',`${sha256(id)}.json`),null);if(prior)throw Object.assign(new Error('Duplicate batch step; never replay automatically'),{code:'DUPLICATE_OPERATION',batchSteps:steps});
+      steps.push(receipt);persist();if(op){op.activeTool=step.tool;op.activeArgs=step.arguments;}
+      try{
+        const result=await this.execute(s,ctx,step.tool,step.arguments,signal,id);signal.throwIfAborted();
+        receipt.receipt={status:'completed',manualReview:false,replaySafe:false};persist();
+        receipt.revision=this.resultRevision(s,step.arguments,result);
+        receipt.artifacts=result.artifacts||[];artifacts.push(...receipt.artifacts);if(result.image)image=result.image;
+        const size=Buffer.byteLength(JSON.stringify(result.data??{}));
+        if(bytes+size>1024*1024){receipt.data={omitted:true,reason:'Batch text output limit'};throw new Error('Batch text output exceeds 1 MiB; request smaller reads');}
+        bytes+=size;receipt.data=result.data;
+      }catch(error){
+        if(receipt.receipt.status!=='completed'){const uncertain=!isObservation(step.tool,step.arguments)&&(signal.aborted||error.name==='TimeoutError'||error.code==='UNCERTAIN');receipt.receipt={status:uncertain?'uncertain':'rejected',manualReview:uncertain,replaySafe:false};persist();}
+        error.batchSteps=steps;throw error;
+      }
+    }
+    return {data:{steps,completed:steps.length},artifacts,...(image?{image}:{})};
+  }
+  async execute(s,ctx,name,a,signal,operationId){
     const out=(data={},artifacts=[])=>({data,artifacts});
+    if(name==='browser_batch')return this.executeBatch(s,ctx,a,signal,operationId);
     if(name==='browser_status')return out(this.status(s,ctx));
     if(name==='browser_pause'){this.pause(s,'manual');s.generation++;return out(this.status(s,ctx));}
     if(name==='browser_resume'){if(s.owner&&s.owner!==ctx.clientId)throw new Error('Only owner may resume');if(s.supervisorError)throw Object.assign(new Error('Browser supervisor is unavailable; close this profile and reopen it before continuing.'),{code:'RUNTIME_UNAVAILABLE'});this.unpause(s);s.owner=ctx.clientId;s.generation++;return out(this.status(s,ctx));}
-    if(name==='browser_takeover'){const pendingAction=s.active?.controller.signal.aborted;if(pendingAction)for(const pending of this.operations.values())if(pending.controller.signal!==signal&&!pending.observation&&!pending.finishedAt&&pending.ctx.projectId===ctx.projectId&&pending.ctx.profile===ctx.profile&&pending.ctx.clientId===s.owner)pending.controller.abort();s.owner=ctx.clientId;s.ctx=ctx;if(s.supervisorError)this.pause(s,'runtime');else if(!pendingAction)this.unpause(s);s.generation++;s.revision++;s.refs.clear();return out(this.status(s,ctx));}
+    if(name==='browser_takeover'){const pendingAction=s.active?.controller.signal.aborted;if(pendingAction)for(const pending of this.operations.values())if(pending.controller.signal!==signal&&!pending.observation&&!pending.finishedAt&&pending.ctx.projectId===ctx.projectId&&pending.ctx.profile===ctx.profile&&pending.ctx.clientId===s.owner)pending.controller.abort();s.owner=ctx.clientId;s.ctx=ctx;if(s.supervisorError)this.pause(s,'runtime');else if(!pendingAction)this.unpause(s);s.generation++;s.revision++;this.invalidateAll(s);return out(this.status(s,ctx));}
     if(name==='browser_artifact')return this.artifact(ctx,a);
     if(name==='browser_close'){s.closing=true;try{let artifacts=[];if(s.capture)artifacts=(await this.stopCapture(s,ctx,s.capture.kind)).artifacts;if(s.opening)await s.opening;await this.closeProfile(s);s.owner=null;s.supervisorError=null;this.unpause(s);return out({closed:true,...this.status(s,ctx)},artifacts);}finally{s.closing=false;}}
-    await this.ensure(s,ctx);signal.throwIfAborted();if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});const p=this.page(s,a);const actionDone=()=>{s.revision++;s.refs.clear();};
+    await this.ensure(s,ctx);signal.throwIfAborted();if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});const p=this.page(s,a);const actionDone=()=>this.invalidate(s,p);
     switch(name){
       case 'browser_navigate': await p.goto(navigateUrl(a.url),{waitUntil:'domcontentloaded'});return out({url:p.url()});
       case 'browser_navigate_back': await p.goBack({waitUntil:'domcontentloaded'});return out({url:p.url()});
@@ -169,14 +204,14 @@ export class BrowserService {
         if(a.action==='close')await this.page(s,a).close();
         return out({tabs:await Promise.all([...s.tabs].map(async([tabId,page])=>({tabId,url:page.url(),title:text(await page.title().catch(()=>'')),selected:tabId===s.selected}))),dialog:s.dialog?{type:s.dialog.type,message:s.dialog.message,tabId:s.dialog.tabId}:null});
       }
-      case 'browser_frames':{s.frames.clear();const frames=p.frames().map((frame,i)=>{const frameId=`${[...s.tabs].find(([,v])=>v===p)[0]}-frame-${i}-${s.revision}`;s.frames.set(frameId,frame);return {frameId,url:frame.url(),name:frame.name(),main:frame===p.mainFrame()};});return out({frames});}
+      case 'browser_frames':{const state=this.pageState(s,p);state.frames.clear();const frames=p.frames().map((frame,i)=>{const frameId=`${[...s.tabs].find(([,v])=>v===p)[0]}-frame-${i}-${s.revision}`;state.frames.set(frameId,frame);return {frameId,url:frame.url(),name:frame.name(),main:frame===p.mainFrame()};});return out({frames});}
       case 'browser_handle_dialog':{if(!s.dialog)throw new Error('No pending dialog');const d=s.dialog;s.dialog=null;if(a.accept)await d.dialog.accept(a.promptText);else await d.dialog.dismiss();actionDone();return out({handled:true});}
       case 'browser_snapshot':{
-        const f=this.frame(s,a),revision=s.revision,generation=s.generation,refs=new Map(),elements=[];const selector='a,button,input,textarea,select,[role],[tabindex],summary';const handles=await f.locator(selector).elementHandles();let published=false;
+        const state=this.pageState(s,p),f=this.frame(s,a),revision=state.revision,generation=s.generation,refs=new Map(),elements=[];const selector='a,button,input,textarea,select,[role],[tabindex],summary';const handles=await f.locator(selector).elementHandles();let published=false;
         try{
-          for(const [i,handle] of handles.slice(0,500).entries()){signal.throwIfAborted();const ref=`e${i+1}`;const info=await handle.evaluate(e=>({tag:e.tagName.toLowerCase(),role:e.getAttribute('role'),name:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||e.getAttribute('name')||'').slice(0,500),type:e.getAttribute('type'),fingerprint:e.outerHTML.slice(0,8192)})).catch(()=>null);if(info){refs.set(ref,{handle,frame:f,fingerprint:info.fingerprint});delete info.fingerprint;elements.push({ref,...info});}}
-          const accessibility=await f.locator('body').ariaSnapshot({timeout:2500}).catch(()=>'');signal.throwIfAborted();if(s.revision!==revision||s.generation!==generation||s.owner!==ctx.clientId)throw Object.assign(new Error('Page or browser ownership changed while reading; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});
-          s.revision++;s.refs=refs;published=true;return out({url:f.url(),revision:s.revision,accessibility:text(accessibility),elements,untrustedContent:true});
+          for(const [i,handle] of handles.slice(0,500).entries()){signal.throwIfAborted();const ref=`${[...s.tabs].find(([,page])=>page===p)[0]}-e${i+1}`;const info=await handle.evaluate(e=>({tag:e.tagName.toLowerCase(),role:e.getAttribute('role'),name:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||e.getAttribute('name')||'').slice(0,500),type:e.getAttribute('type'),fingerprint:e.outerHTML.slice(0,8192)})).catch(()=>null);if(info){refs.set(ref,{handle,frame:f,fingerprint:info.fingerprint});delete info.fingerprint;elements.push({ref,...info});}}
+          const accessibility=await f.locator('body').ariaSnapshot({timeout:2500}).catch(()=>'');signal.throwIfAborted();if(state.revision!==revision||s.generation!==generation||s.owner!==ctx.clientId)throw Object.assign(new Error('Page or browser ownership changed while reading; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});
+          this.retireRefs(s,state.refs);state.revision++;state.refs=refs;published=true;return out({tabId:[...s.tabs].find(([,page])=>page===p)[0],url:f.url(),revision:state.revision,accessibility:text(accessibility),elements,untrustedContent:true});
         }finally{if(!published)for(const handle of handles)handle.dispose?.().catch(()=>{});}
       }
       case 'browser_click':await (await this.locator(s,a)).click({button:a.button||'left',clickCount:bounded(a.clickCount,1,3,1),timeout:10000,noWaitAfter:true});actionDone();return out({clicked:true});
@@ -226,7 +261,7 @@ export class BrowserService {
         if(s.capture)throw new Error('Another capture is active');const c=await this.cdp(s,p);const file=this.artifacts.temp();const fd=fs.openSync(file,'wx',0o600);let size=0,overflow=false;const onChunk=({chunk})=>{size+=Buffer.byteLength(chunk);if(size<=MAX_ARTIFACT)fs.writeSync(fd,chunk);else overflow=true;};s.capture={kind:'heap',startedAt:new Date().toISOString()};c.on('HeapProfiler.addHeapSnapshotChunk',onChunk);try{await c.send('HeapProfiler.takeHeapSnapshot',{reportProgress:false});}finally{c.off('HeapProfiler.addHeapSnapshotChunk',onChunk);fs.closeSync(fd);s.capture=null;}if(overflow){fs.rmSync(file,{force:true});throw new Error('Heap exceeds 64 MiB limit');}const meta=await this.artifacts.addFile(file,'application/json','heap',ctx);return out({},[meta]);
       }
       case 'browser_wait_for':{const hasTarget=!!(a.text||a.selector||a.role||a.ref);if(!hasTarget&&a.time===undefined)throw new Error('A text, locator or time in seconds is required');const deadline=Date.now()+bounded(a.time!==undefined?a.time*1000:undefined,0,60000,10000);if(!hasTarget){while(Date.now()<deadline){if(signal.aborted)throw new Error('Cancelled');await sleep(Math.min(100,deadline-Date.now()));}return out({waited:true});}let handle,loc;
-        if(a.ref){if(a.revision!==s.revision)throw Object.assign(new Error('Stale snapshot revision; refresh browser_snapshot'),{code:'STALE_SNAPSHOT'});const ref=s.refs.get(a.ref);if(!ref||ref.frame!==this.frame(s,a))throw new Error('Unknown or foreign-frame ref');handle=ref.handle;}
+        if(a.ref){const state=this.pageState(s,p);if(a.revision!==state.revision)throw Object.assign(new Error('Stale snapshot revision; refresh browser_snapshot'),{code:'STALE_SNAPSHOT'});const ref=state.refs.get(a.ref);if(!ref||ref.frame!==this.frame(s,a))throw new Error('Unknown or foreign-frame ref');handle=ref.handle;}
         else loc=a.text?this.frame(s,a).getByText(a.text,{exact:false}):a.role?this.frame(s,a).getByRole(a.role,{name:a.name,exact:true}):this.frame(s,a).locator(a.selector);
         while(Date.now()<=deadline){if(signal.aborted)throw new Error('Cancelled');const count=handle?(await handle.evaluate(e=>e.isConnected)?1:0):await loc.count();const visible=count>0&&(handle?await handle.isVisible():await loc.first().isVisible());if(a.state==='hidden'?!visible:a.state==='detached'?count===0:a.state==='attached'?count>0:visible)return out({matched:true});await sleep(100);}throw new Error('Wait timed out');}
       default:throw new Error('Unknown tool');
@@ -264,7 +299,7 @@ export class BrowserService {
   async closeProfile(s){
     const context=s.browser,guard=s.guard;if(!context&&!guard)return;
     let closing=Promise.resolve();if(context){const browser=context.browser();closing=(browser?browser.close({reason:'Trex Browser profile stopped by its owner'}):context.close());}
-    if(guard){await Promise.race([closing.catch(()=>{}),sleep(3000)]);try{await guard.stop();}catch(e){this.pause(s,'runtime',s.active);throw Object.assign(new Error(`Owned browser shutdown is uncertain (${e.message}); manual review required`),{code:'UNCERTAIN'});}if(s.guard===guard)s.guard=null;closing.catch(()=>{});s.browser=null;s.tabs.clear();s.refs.clear();}
+    if(guard){await Promise.race([closing.catch(()=>{}),sleep(3000)]);try{await guard.stop();}catch(e){this.pause(s,'runtime',s.active);throw Object.assign(new Error(`Owned browser shutdown is uncertain (${e.message}); manual review required`),{code:'UNCERTAIN'});}if(s.guard===guard)s.guard=null;closing.catch(()=>{});s.browser=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();}
     else await closing;
   }
   async shutdown(){await Promise.allSettled([...this.sessions.values()].map(async s=>{if(s.capture)try{await this.stopCapture(s,s.capture.ctx,s.capture.kind);}catch{}await this.closeProfile(s);}));}
