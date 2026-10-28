@@ -11,6 +11,8 @@ const { initialChatState, baseReducer } = await load("chatState");
 const { chatReducer, claudeChatFlags, controlLine } = await load("claudeChat");
 const { codexReducer, resultLine } = await load("codexChat");
 const { integrationInstructions } = await load("integrations");
+const { taskInstructions } = await load("chatTasks");
+const { taskTool } = await load("taskTools");
 
 const message = (id, extra = {}) => ({ id, text: `instrucción ${id}`, images: [], previews: [], createdAt: 100, ...extra });
 const batch = (id, messages) => ({ messages: [], receipt: { id, messages } });
@@ -318,7 +320,7 @@ for (const protocolVersion of ["2024-11-05", "2025-03-26", "2025-06-18", "2025-1
     assert.equal(outer.response.request_id, "outer-initialize");
     assert.deepEqual(mcp, { jsonrpc: "2.0", id: 7, result: {
       protocolVersion, capabilities: { tools: {} }, serverInfo: { name: INBOX_SERVER, version: "1.0.0" },
-      instructions: integrationInstructions("claude"),
+      instructions: `${integrationInstructions("claude")} ${taskInstructions("claude")}`,
     } });
     assert.equal(reply.receipt, null);
     assert.equal(reads, 0);
@@ -336,7 +338,7 @@ test("MCP tools/list advertises the empty input schema without reading storage",
   const reply = await claudeInboxReply("outer-list", mcpRequest("tools/list", {}, "list-id"), async () => { reads++; return EMPTY_QUEUE; });
   const { mcp } = wireReply(reply);
   assert.equal(mcp.id, "list-id");
-  assert.deepEqual(mcp.result.tools, [inboxTool]);
+  assert.deepEqual(mcp.result.tools, [inboxTool, taskTool]);
   assert.deepEqual(inboxTool.inputSchema, { type: "object", properties: {}, additionalProperties: false });
   assert.equal(inboxTool.name, INBOX_TOOL);
   assert.equal(reads, 0);

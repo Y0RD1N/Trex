@@ -24,6 +24,94 @@ const { codexReducer } = await load("codexChat");
 const { trexReducer } = await load("trexChat");
 const { chatTasks } = await load("chatTasks");
 
+const taskToolName = "mcp__trex_inbox__trex_update_tasks";
+const taskPlan = { plan: [{ step: "Revisar los archivos", status: "in_progress" }, { step: "Probar los cambios", status: "pending" }] };
+test("the app's always-attached MCP advertises task tracking without native task tools", async () => {
+  const reply = await claudeInboxReply("tasks-list", { subtype: "mcp_message", server_name: "trex_inbox", message: { id: 1, method: "tools/list" } }, () => assert.fail("discovery must not consume messages"));
+  const tools = JSON.parse(reply.line).response.response.mcp_response.result.tools;
+  assert.ok(tools.some(tool => tool.name === "trex_update_tasks"));
+});
+test("the app task tool accepts a validated list without consuming the inbox", async () => {
+  const reply = await claudeInboxReply("tasks-call", { subtype: "mcp_message", server_name: "trex_inbox", message: { id: 2, method: "tools/call", params: { name: "trex_update_tasks", arguments: taskPlan } } }, () => assert.fail("tasks must not consume messages"));
+  const response = JSON.parse(reply.line).response.response.mcp_response;
+  assert.equal(response.error, undefined);
+  assert.equal(response.result.isError, false);
+  assert.deepEqual(response.result.structuredContent.plan, taskPlan.plan);
+});
+test("Claude app task results become visible only after acceptance and restore from real protocol history", () => {
+  const entries = [
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "app-tasks", name: taskToolName, input: taskPlan }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "app-tasks", content: JSON.stringify(taskPlan) }] } },
+  ];
+  const pending = chatReducer(initialChatState("default"), { type: "line", event: entries[0], now: 1 });
+  assert.deepEqual(chatTasks(pending.items, "Claude"), []);
+  const accepted = chatReducer(pending, { type: "line", event: entries[1], now: 2 });
+  assert.deepEqual(chatTasks(accepted.items, "Claude").map(task => task.status), ["in_progress", "pending"]);
+  const restored = chatReducer(initialChatState("plan"), { type: "history", entries });
+  assert.deepEqual(chatTasks(restored.items, "Claude").map(task => task.title), taskPlan.plan.map(step => step.step));
+});
+test("Codex's app MCP task result updates the ordinary task panel", () => {
+  const item = { type: "mcpToolCall", id: "app-tasks", server: "trex_inbox", tool: "trex_update_tasks", arguments: taskPlan, status: "completed", result: { isError: false, content: [], structuredContent: taskPlan } };
+  const state = codexReducer(initialChatState("auto"), { type: "rpc", message: { method: "item/completed", params: { item, turnId: "turn-1" } }, scope: "process", now: 1 });
+  assert.deepEqual(chatTasks(state.items, "Codex").map(task => task.status), ["in_progress", "pending"]);
+});
+test("Claude planning permits native task metadata and app tasks while rejecting workspace writes", async t => {
+  const h = native.harness(t, "claude", { mode: "plan", planningOnly: true }); await h.ready();
+  for (const tool of ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", taskToolName]) {
+    h.line({ type: "control_request", request_id: tool, request: { subtype: "can_use_tool", tool_name: tool, input: {} } }); await h.pump();
+    const response = h.writes.findLast(write => write.response?.request_id === tool);
+    // Native task permissions may use the normal UI. They must never be silently denied by the planner guard.
+    assert.notEqual(response?.response?.response?.behavior, "deny", tool);
+    if (tool === taskToolName) assert.equal(response?.response?.response?.behavior, "allow");
+  }
+  h.line({ type: "control_request", request_id: "no-write", request: { subtype: "can_use_tool", tool_name: "Write", input: { file_path: "file.ts", content: "bad" } } }); await h.pump();
+  assert.equal(h.writes.findLast(write => write.response?.request_id === "no-write").response.response.behavior, "deny");
+});
+
+test("app task validation rejects malformed, oversized and partially invalid lists without reading messages", async () => {
+  for (const input of [null, [], {}, {plan:[],cwd:"elsewhere"}, {plan:[...taskPlan.plan,null]},
+    {plan:[{step:"A",status:"in_progress"},{step:"B",status:"in_progress"}]},
+    {plan:[{step:" ",status:"pending"}]}, {plan:[{step:"A",status:"deleted"}]},
+    {plan:[{step:"A",status:"pending",command:"run"}]}, {plan:[{step:"x".repeat(2001),status:"pending"}]},
+    {plan:Array.from({length:65},()=>({step:"A",status:"pending"}))},
+    {plan:Array.from({length:20},()=>({step:"x".repeat(1999),status:"pending"}))}]) {
+    const reply=await claudeInboxReply("invalid-tasks",{subtype:"mcp_message",server_name:"trex_inbox",message:{id:7,method:"tools/call",params:{name:"trex_update_tasks",arguments:input}}},()=>assert.fail("invalid tasks must not consume messages"));
+    assert.equal(JSON.parse(reply.line).response.response.mcp_response.error?.code,-32602);
+  }
+});
+
+test("failed, unconfirmed, malformed and foreign task responses cannot replace an accepted task list", () => {
+  const accepted={kind:"tool",id:"previous",name:"TodoWrite",status:"done",input:{todos:[{content:"Keep",status:"pending"}]},output:null,patch:null};
+  for(const variant of ["failed","missing-result","malformed","foreign","pending"]) {
+    const item={type:"mcpToolCall",id:"new",server:variant==="foreign"?"foreign":"trex_inbox",tool:"trex_update_tasks",arguments:variant==="malformed"?{plan:[null]}:taskPlan,status:variant==="pending"?"inProgress":"completed",result:variant==="missing-result"?null:{isError:variant==="failed",content:[]}};
+    const state=codexReducer({...initialChatState("auto"),items:[accepted]},{type:"rpc",message:{method:"item/completed",params:{item,turnId:"turn"}},scope:"p",now:1});
+    assert.deepEqual(chatTasks(state.items,"Codex").map(task=>task.title),["Keep"],variant);
+  }
+  for(const failed of [true,false]) {
+    const tool={type:"assistant",message:{content:[{type:"tool_use",id:"new",name:taskToolName,input:taskPlan}]}};
+    let state=chatReducer({...initialChatState("default"),items:[accepted]},{type:"line",event:tool,now:1});
+    if(failed)state=chatReducer(state,{type:"line",event:{type:"user",message:{content:[{type:"tool_result",tool_use_id:"new",is_error:true,content:"Rejected"}]}},now:2});
+    else state=chatReducer(state,{type:"line",event:{type:"result",subtype:"success",uuid:"terminal"},now:2});
+    assert.deepEqual(chatTasks(state.items,"Claude").map(task=>task.title),["Keep"]);
+  }
+});
+
+for (const provider of ["claude","codex"]) test(`${provider}: app task acceptance opens the existing task panel in an ordinary chat`, t => {
+  const environment=ui.environment(),component=ui.host(t),{ChatPanel}=ui.panelModule(environment);
+  const input=provider==="claude"?[
+    {type:"assistant",message:{content:[{type:"tool_use",id:"app-tasks",name:taskToolName,input:taskPlan}]}},
+    {type:"user",message:{content:[{type:"tool_result",tool_use_id:"app-tasks",content:JSON.stringify(taskPlan)}]}},
+  ]:[{method:"item/completed",params:{item:{type:"mcpToolCall",id:"app-tasks",server:"trex_inbox",tool:"trex_update_tasks",arguments:taskPlan,status:"completed",result:{isError:false,content:[]}},turnId:"turn"}}];
+  let state=initialChatState(provider==="claude"?"default":"auto");
+  const session={provider,state,queue:ui.queueStore(),notice:ui.noop,refreshSkills:ui.noop};
+  const render=()=>component.render(()=>ChatPanel({...ui.baseProps(),provider,session}));
+  render();for(const event of input)state=provider==="claude"?chatReducer(state,{type:"line",event,now:1}):codexReducer(state,{type:"rpc",message:event,scope:"p",now:1});
+  session.state=state;const tree=render();
+  const panel=ui.find(tree,node=>node.type==="./chat/TaskPanel:default");
+  assert.deepEqual(panel.props.tasks.map(task=>task.title),taskPlan.plan.map(step=>step.step));
+  assert.equal(state.modeChoice,provider==="claude"?"default":"auto");
+});
+
 function taskEvents(provider, stage) {
   const done = stage === "done";
   const tasks = [{ content: "Revisar el código", status: "completed" }, { content: "Validar los cambios", status: done ? "completed" : "in_progress" }];

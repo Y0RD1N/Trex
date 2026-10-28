@@ -21,14 +21,14 @@ import { answeredInput, chatReducer, claudeChatFlags, controlErrorLine, controlL
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
 import { InboxRequests, INBOX_SERVER } from "../messageQueue";
-import { CLAUDE_INBOX_TOOL, claudeInboxInitialize, claudeInboxReply } from "../inboxProtocol";
+import { CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, claudeInboxInitialize, claudeInboxReply } from "../inboxProtocol";
 import { IS_WINDOWS } from "../platform";
 import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMode, claudePlanningExitResponse, claudePlanningFlags } from "../workflowSafety";
 
 /** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
 const USAGE_INTERVAL_MS = 60_000;
 // A shell or unknown tool approval can escape plan mode; only known readers may be approved.
-const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", CLAUDE_INBOX_TOOL, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
+const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
 const planningDeniedLine = (requestId: string): string => JSON.stringify({
   type: "control_response", response: { subtype: "success", request_id: requestId,
     response: { behavior: "deny", message: "Esta pestaña de planificación solo permite herramientas de lectura y preguntas; no puede conceder permisos de escritura o ejecución." } },
@@ -337,8 +337,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       })().catch(error => dispatch({ type: "notice", id: localId(), tone: "error", text: `La entrega de la cola quedó pendiente: ${formatError(error)}` }));
       return;
     }
-    // Reading trex's own inbox needs no permission to execute external tools.
-    if (message.type === "control_request" && message.request?.subtype === "can_use_tool" && message.request_id && message.request.tool_name === CLAUDE_INBOX_TOOL) {
+    // Our inbox/task metadata tools cannot execute commands or modify the workspace.
+    if (message.type === "control_request" && message.request?.subtype === "can_use_tool" && message.request_id && [CLAUDE_INBOX_TOOL, MCP_TASK_TOOL].includes(String(message.request.tool_name))) {
       writeOrReport(permissionLine(message.request_id, true, record(message.request.input) ?? {}));
       return;
     }

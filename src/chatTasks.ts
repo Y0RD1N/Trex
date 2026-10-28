@@ -1,6 +1,7 @@
 import { todoItems, type ChatItem } from "./chatState";
 import type { TeamMember, TeamSnapshot } from "./agentTeam";
 import type { AgentProvider } from "./types";
+import { MCP_TASK_TOOL } from "./taskTools";
 
 export type TaskState = "pending" | "in_progress" | "completed" | "failed" | "cancelled" | "uncertain";
 export type ChatTask = { id: string; title: string; status: TaskState; owner: string; memberId?: string; sourceId?: string; report?: string | null };
@@ -9,7 +10,7 @@ export const TASK_STATES: Record<TaskState, string> = { pending: "Pendiente", in
 
 /** Task tracking is independent of the chat's permissions or planning workflow. */
 export function taskInstructions(provider: AgentProvider): string {
-  const tools = provider === "claude" ? "TodoWrite or TaskCreate/TaskUpdate" : "update_plan";
+  const tools = provider === "trex" ? "update_plan" : `${MCP_TASK_TOOL} (trex_update_tasks on the trex_inbox server), with plan:[{step,status}]. This app tool is available even when native ${provider === "claude" ? "TodoWrite or TaskCreate/TaskUpdate" : "update_plan"} is absent; prefer the app tool`;
   return `For work with multiple meaningful steps, use the available native task tools (${tools}) to publish a short task list before starting and update it as you work. This works in ordinary chats as well as planning chats. Mark a task in progress when you start it and completed only after verifying its result; keep unfinished work pending. Review and update the list as work changes and before your final response. Simple questions and single-step actions do not need a list. Follow the user's task-tracking preferences. Task tracking does not require switching permission modes, creating subagents, or starting a planning workflow. Respect the current permissions and any configured team workflow; use its team-plan tools for delegated work. If task tools are unavailable, say so instead of claiming a list was published.`;
 }
 

@@ -19,6 +19,7 @@ import { imageReference, withoutImageLabels } from "./imageReferences";
 import { questionInstructions } from "./chatQuestions";
 import { INBOX_INSTRUCTIONS } from "./messageQueue";
 import { taskInstructions } from "./chatTasks";
+import { taskToolInput } from "./taskTools";
 import { integrationInstructions } from "./integrations";
 
 export type ChatAction =
@@ -194,9 +195,11 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
       // Las respuestas a las preguntas quedan junto a ellas para mostrarlas en el hilo.
       const answers = record(toolResult?.answers);
       const response = text(toolResult?.response).trim();
+      const taskInput = block.is_error === true ? null : taskToolInput(current.name, current.input);
       items[index] = { ...current, status: block.is_error === true ? "error" : "done",
-        input: answers ? { ...current.input, answers, ...(response ? { response } : {}) }
-          : toolResult?.type === "create" ? { ...current.input, changeKind: "add" } : current.input,
+        ...(taskInput ? { name: "TodoWrite" } : {}),
+        input: taskInput ?? (answers ? { ...current.input, answers, ...(response ? { response } : {}) }
+          : toolResult?.type === "create" ? { ...current.input, changeKind: "add" } : current.input),
         output: answers ? answerText(answers) : (current.name.startsWith("mcp__trex_browser__") || current.name.startsWith("mcp__trex_desktop__")) ? browserToolResultText(block.content) : resultText(block.content),
         ...((current.name.startsWith("mcp__trex_browser__") || current.name.startsWith("mcp__trex_desktop__")) ? { artifacts: browserResultArtifacts({ content: block.content }) } : {}),
         patch: patchLines(toolResult?.structuredPatch) ?? current.patch };

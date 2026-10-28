@@ -1,4 +1,5 @@
 import { browserResultArtifacts, browserToolResultText } from "./browser";
+import { taskToolInput } from "./taskTools";
 /**
  * Protocolo de Codex en modo chat (`codex app-server`).
  *
@@ -388,7 +389,10 @@ function itemTools(item: Json): ToolItem[] {
     case "fileChange": return fileTools(item);
     case "mcpToolCall": {
       const input = record(item.arguments) ?? {};
-      return [{ kind: "tool", id, name: `mcp__${text(item.server)}__${text(item.tool)}`, input, status: item.error ? "error" : status, output: (item.server === "trex_browser" || item.server === "trex_desktop") && !item.error ? browserToolResultText(record(item.result)?.content ?? item.result) : mcpOutput(item), patch: null, ...((item.server === "trex_browser" || item.server === "trex_desktop") ? { artifacts: browserResultArtifacts(item.result) } : {}) }];
+      const name = `mcp__${text(item.server)}__${text(item.tool)}`;
+      const failed = !!item.error || record(item.result)?.isError === true;
+      const taskInput = !failed && status === "done" && record(item.result) ? taskToolInput(name, input) : null;
+      return [{ kind: "tool", id, name: taskInput ? "TodoWrite" : name, input: taskInput ?? input, status: failed ? "error" : status, output: (item.server === "trex_browser" || item.server === "trex_desktop") && !item.error ? browserToolResultText(record(item.result)?.content ?? item.result) : mcpOutput(item), patch: null, ...((item.server === "trex_browser" || item.server === "trex_desktop") ? { artifacts: browserResultArtifacts(item.result) } : {}) }];
     }
     case "dynamicToolCall": {
       const output = list(item.contentItems).map(record).map(entry => text(entry?.text)).filter(Boolean).join("\n");

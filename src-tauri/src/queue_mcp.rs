@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager};
 
 const MCP_FLAG: &str = "--trex-inbox-mcp";
 const TOOL_NAME: &str = "trex_read_messages";
+const TASK_TOOL: &str = "trex_update_tasks";
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const TOOL_DESCRIPTION: &str = "Lee los mensajes que el usuario ha dejado en cola durante este turno. El agente decide cuándo consultar este punto de control; consulta antes de la respuesta final para incorporar nuevas indicaciones. Sin argumentos. Un recibo repetido debe procesarse una sola vez.";
@@ -90,13 +91,59 @@ fn mcp_config(executable: &Path, data_dir: &Path, queue_id: &str) -> Result<Valu
     Ok(json!({
         "mcp_servers.trex_inbox.command": executable,
         "mcp_servers.trex_inbox.args": [MCP_FLAG, data_dir, queue_id],
-        "mcp_servers.trex_inbox.enabled": true
+        "mcp_servers.trex_inbox.enabled": true,
+        "mcp_servers.trex_inbox.required": true,
+        "mcp_servers.trex_inbox.default_tools_approval_mode": "approve"
     }))
 }
 
 enum Frame {
     Json(Vec<u8>),
     TooLarge,
+}
+
+fn task_tool() -> Value {
+    json!({
+        "name":TASK_TOOL,
+        "description":"Publish or replace this chat's visible task list, in ordinary chats or planning mode. Mark the current step in_progress, verified work completed and unfinished work pending. At most one step can be in progress. plan:[] clears the list. This only tracks tasks: it never executes work, edits workspace files or changes permissions. Maximum 64 steps and 32 KiB of JSON arguments.",
+        "inputSchema":{"type":"object","properties":{"plan":{"type":"array","maxItems":64,"items":{"type":"object","properties":{"step":{"type":"string","minLength":1,"maxLength":2000},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["step","status"],"additionalProperties":false}}},"required":["plan"],"additionalProperties":false},
+        "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
+    })
+}
+
+fn update_tasks(args: Option<&Value>) -> Result<Value, &'static str> {
+    let invalid = "Expected plan with up to 64 valid steps, at most one in_progress, and at most 32 KiB of JSON.";
+    let args = args.and_then(Value::as_object).ok_or(invalid)?;
+    if args.len() != 1 {
+        return Err(invalid);
+    }
+    let plan = args.get("plan").and_then(Value::as_array).ok_or(invalid)?;
+    if plan.len() > 64 || serde_json::to_vec(args).map_err(|_| invalid)?.len() > 32 * 1024 {
+        return Err(invalid);
+    }
+    let mut active = 0;
+    for entry in plan {
+        let step = entry.as_object().ok_or(invalid)?;
+        let title = step.get("step").and_then(Value::as_str).ok_or(invalid)?;
+        let status = step.get("status").and_then(Value::as_str).ok_or(invalid)?;
+        if step.len() != 2
+            || title.trim().is_empty()
+            || title.chars().count() > 2000
+            || !["pending", "in_progress", "completed"].contains(&status)
+        {
+            return Err(invalid);
+        }
+        if status == "in_progress" {
+            active += 1;
+            if active > 1 {
+                return Err(invalid);
+            }
+        }
+    }
+    let accepted = json!({"plan":plan});
+    Ok(
+        json!({"content":[{"type":"text","text":accepted.to_string()}],"structuredContent":accepted,"isError":false}),
+    )
 }
 
 /// Drain an oversized line without buffering more than the input bound.
@@ -252,7 +299,8 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str) -> Option<Val
             json!({
                 "protocolVersion": version,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "trex-inbox", "version": env!("CARGO_PKG_VERSION")}
+                "serverInfo": {"name": "trex-inbox", "version": env!("CARGO_PKG_VERSION")},
+                "instructions": "For multi-step work in this chat, use mcp__trex_inbox__trex_update_tasks (trex_update_tasks) with plan:[{step,status}] to publish and maintain the visible task list, even if native update_plan is unavailable. The tool tracks metadata only and is safe in read-only/planning mode. It never executes tasks or grants workspace access. Mark completed only after verification. trex_read_messages reads the user's queued instructions separately."
             })
         }
         "ping" => json!({}),
@@ -260,7 +308,7 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str) -> Option<Val
             "name": TOOL_NAME,
             "description": TOOL_DESCRIPTION,
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
-        }]}),
+        }, task_tool()]}),
         "tools/call" => {
             let Some(params) = params else {
                 return Some(rpc_error(
@@ -269,6 +317,12 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str) -> Option<Val
                     "Faltan los parámetros de la herramienta.",
                 ));
             };
+            if params.get("name").and_then(Value::as_str) == Some(TASK_TOOL) {
+                return Some(match update_tasks(params.get("arguments")) {
+                    Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+                    Err(error) => rpc_error(id, -32602, error),
+                });
+            }
             if params.get("name").and_then(Value::as_str) != Some(TOOL_NAME)
                 || params
                     .get("arguments")
@@ -413,7 +467,12 @@ mod tests {
         let pending = enqueue_in(&dir.0, QUEUE, message("config")).unwrap();
         let executable = dir.0.join("app executable.exe");
         let config = mcp_config(&executable, &dir.0, QUEUE).unwrap();
-        assert_eq!(config.as_object().unwrap().len(), 3);
+        assert_eq!(config.as_object().unwrap().len(), 5);
+        assert_eq!(config["mcp_servers.trex_inbox.required"], true);
+        assert_eq!(
+            config["mcp_servers.trex_inbox.default_tools_approval_mode"],
+            "approve"
+        );
         assert_eq!(
             config["mcp_servers.trex_inbox.command"],
             executable.to_str().unwrap()
@@ -459,7 +518,8 @@ mod tests {
         assert_eq!(replies[0]["result"]["serverInfo"]["name"], "trex-inbox");
         assert_eq!(replies[1]["id"], "ping");
         assert_eq!(replies[1]["result"], json!({}));
-        assert_eq!(replies[2]["result"]["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(replies[2]["result"]["tools"].as_array().unwrap().len(), 2);
+        assert_eq!(replies[2]["result"]["tools"][1], task_tool());
         assert_eq!(replies[2]["result"]["tools"][0]["name"], TOOL_NAME);
         assert_eq!(
             replies[2]["result"]["tools"][0]["inputSchema"]["additionalProperties"],
@@ -689,5 +749,69 @@ mod tests {
             output.bytes.iter().filter(|&&byte| byte == b'\n').count(),
             2
         );
+    }
+
+    #[test]
+    fn task_tool_publishes_progress_without_reading_or_modifying_the_inbox() {
+        let dir = TestDir::new();
+        let pending = enqueue_in(&dir.0, QUEUE, message("keep-pending")).unwrap();
+        let entries = || {
+            let mut names: Vec<_> = fs::read_dir(&dir.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let before = entries();
+        let plan = json!({"plan":[{"step":"Inspeccionar 🦖","status":"in_progress"},{"step":"Validar","status":"pending"}]});
+        let request = |id: i64, args: Value| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":TASK_TOOL,"arguments":args}});
+        let replies = exchange(
+            &dir.0,
+            &[request(1, plan.clone()), request(2, json!({"plan":[]}))],
+        );
+        assert_eq!(replies[0]["result"]["structuredContent"], plan);
+        assert_eq!(replies[0]["result"]["isError"], false);
+        assert_eq!(
+            replies[1]["result"]["structuredContent"],
+            json!({"plan":[]})
+        );
+        assert_eq!(list_in(&dir.0, QUEUE).unwrap(), pending);
+        assert_eq!(
+            entries(),
+            before,
+            "task metadata cannot create storage outside the existing inbox"
+        );
+    }
+
+    #[test]
+    fn task_validation_rejects_the_entire_plan_and_recovers_at_the_next_request() {
+        let dir = TestDir::new();
+        for invalid in [
+            json!(null),
+            json!([]),
+            json!({}),
+            json!({"plan":[],"cwd":"elsewhere"}),
+            json!({"plan":[{"step":"valid","status":"completed"},null]}),
+            json!({"plan":[{"step":"A","status":"in_progress"},{"step":"B","status":"in_progress"}]}),
+            json!({"plan":[{"step":" ","status":"pending"}]}),
+            json!({"plan":[{"step":"A","status":"deleted"}]}),
+            json!({"plan":[{"step":"A","status":"pending","command":"execute"}]}),
+            json!({"plan":[{"step":"x".repeat(2001),"status":"pending"}]}),
+            json!({"plan":vec![json!({"step":"A","status":"pending"});65]}),
+            json!({"plan":vec![json!({"step":"x".repeat(1999),"status":"pending"});20]}),
+        ] {
+            let call = |id, args| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":TASK_TOOL,"arguments":args}});
+            let replies = exchange(
+                &dir.0,
+                &[
+                    call(1, invalid),
+                    call(2, json!({"plan":[{"step":"Accepted","status":"pending"}]})),
+                ],
+            );
+            assert_eq!(replies[0]["error"]["code"], -32602);
+            assert_eq!(replies[1]["result"]["isError"], false);
+            assert!(!dir.0.join("message-queues").exists());
+        }
     }
 }

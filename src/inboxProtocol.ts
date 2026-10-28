@@ -1,6 +1,9 @@
 import { record, type Json } from "./chatState";
 import { INBOX_SERVER, INBOX_TOOL, inboxContent, inboxTool, type QueueReceipt, type QueueSnapshot } from "./messageQueue";
 import { integrationInstructions } from "./integrations";
+import { taskInstructions } from "./chatTasks";
+import { TASK_TOOL, taskTool, parseTaskPlan } from "./taskTools";
+export { MCP_TASK_TOOL } from "./taskTools";
 
 export const claudeInboxInitialize = { subtype: "initialize", sdkMcpServers: [INBOX_SERVER] };
 export const CLAUDE_INBOX_TOOL = `mcp__${INBOX_SERVER}__${INBOX_TOOL}`;
@@ -27,10 +30,15 @@ export async function claudeInboxReply(requestId: string, request: Json, read: (
     const versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
     result = { protocolVersion: versions.includes(String(params.protocolVersion)) ? params.protocolVersion : versions[versions.length - 1],
       capabilities: { tools: {} }, serverInfo: { name: INBOX_SERVER, version: "1.0.0" },
-      instructions: integrationInstructions("claude") };
-  } else if (message.method === "tools/list") result = { tools: [inboxTool] };
+      instructions: `${integrationInstructions("claude")} ${taskInstructions("claude")}` };
+  } else if (message.method === "tools/list") result = { tools: [inboxTool, taskTool] };
   else if (message.method === "tools/call") {
-    if (params.name !== INBOX_TOOL) error = { code: -32602, message: "Unknown trex inbox tool." };
+    if (params.name === TASK_TOOL) {
+      const plan = parseTaskPlan(params.arguments);
+      if (!plan) error = { code: -32602, message: "Expected plan with up to 64 valid steps, at most one in_progress, and at most 32 KiB of JSON." };
+      else result = { content: [{ type: "text", text: JSON.stringify(plan) }], structuredContent: plan, isError: false };
+    }
+    else if (params.name !== INBOX_TOOL) error = { code: -32602, message: "Unknown trex inbox tool." };
     else if (!record(params.arguments) || Object.keys(params.arguments as object).length) error = { code: -32602, message: "This tool accepts an empty arguments object." };
     else {
       try {
