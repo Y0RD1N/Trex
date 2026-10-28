@@ -68,7 +68,9 @@ type HoverReveal<T extends HTMLElement> = {
 export function useHoverReveal<T extends HTMLElement>({
   enabled,
   edge,
-  edgeSize = 8,
+  // Frameless native windows reserve the first pixels for resizing. Keep a
+  // usable hover strip inside that border, including on scaled displays.
+  edgeSize = 16,
   extent,
   openFrom = 0,
   openDelay = 80,
