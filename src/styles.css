@@ -2759,7 +2759,8 @@ body.dragging-sidebar .sidebar {
   right: 0;
   left: 0;
   z-index: auto;
-  transform: translateY(0);
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
 }
 .bar-slot.auto-hide .tabs-bar {
   will-change: transform;
@@ -2767,7 +2768,7 @@ body.dragging-sidebar .sidebar {
   transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 200ms var(--ease-out);
 }
 .bar-slot.auto-hide:not(.shown) .tabs-bar {
-  transform: translateY(calc(-100% - 2px));
+  transform: translate3d(0, calc(-100% - 2px), 0);
   pointer-events: none;
   box-shadow: none;
 }

@@ -303,3 +303,62 @@
   :root[data-theme] .usage-dialog .usage-account { padding-inline: 0; }
   :root[data-theme] .modal.feature-dialog.usage-dialog { border-radius: 12px; }
 }
+
+/* One fade for each opaque surface. The former glass rules faded the tint,
+   border and individual children separately, rebuilding layers mid-transition. */
+:root[data-theme] .context-menu.motion-popover,
+:root[data-theme] .context-menu.chat-glass-menu.motion-popover,
+:root[data-theme] .composer-panel.motion-popover {
+  --menu-fade: 1;
+  --sheet-fade: 1;
+  opacity: var(--menu-fade);
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  transition: --menu-fade var(--dur-popover) var(--ease-out), transform var(--dur-popover) var(--ease-out);
+}
+:root[data-theme] .context-menu.chat-glass-menu.motion-popover > * { opacity: 1; }
+:root[data-theme] .context-menu.motion-popover.entering,
+:root[data-theme] .context-menu.chat-glass-menu.motion-popover.entering,
+:root[data-theme] .composer-panel.motion-popover.entering {
+  --menu-fade: 0;
+  transform: translate3d(0, var(--menu-shift, -4px), 0);
+}
+:root[data-theme] .context-menu.motion-popover.leaving,
+:root[data-theme] .context-menu.chat-glass-menu.motion-popover.leaving,
+:root[data-theme] .composer-panel.motion-popover.leaving {
+  --menu-fade: 0;
+  transform: translate3d(0, calc(var(--menu-shift, -4px) * .5), 0);
+  transition-duration: var(--dur-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+@property --overlay-fade { syntax: "<number>"; inherits: false; initial-value: 1; }
+:root[data-theme] :is(.modal-backdrop, .dialog-overlay) {
+  --overlay-fade: 1;
+  opacity: var(--overlay-fade);
+  background: var(--sheet-veil);
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  transition: --overlay-fade var(--dur) var(--ease-in-out);
+}
+:root[data-theme] :is(.modal-backdrop, .dialog-overlay):is(.entering, .leaving) { --overlay-fade: 0; }
+:root[data-theme] :is(.modal-backdrop, .dialog-overlay).leaving {
+  transition-duration: var(--dur-exit);
+  transition-timing-function: var(--ease-exit);
+}
+:root[data-theme] :is(.modal, .modal.settings-modal, .dialog-card) {
+  --sheet-fade: 1;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  transition: transform var(--dur) var(--ease-out);
+}
+:root[data-theme] :is(.modal-backdrop, .dialog-overlay):is(.entering, .leaving) :is(.modal, .dialog-card) { --sheet-fade: 1; }
+:root[data-theme] :is(.modal, .dialog-card) > * { opacity: 1; }
+:root[data-theme] .modal-backdrop.entering .modal,
+:root[data-theme] .dialog-overlay.entering .dialog-card { transform: translate3d(0, 8px, 0); }
+:root[data-theme] .modal-backdrop.leaving .modal,
+:root[data-theme] .dialog-overlay.leaving .dialog-card { transform: translate3d(0, 4px, 0); transition-duration: var(--dur-exit); }
+:root[data-theme] .dialog-overlay.anchored { background: transparent; }
+:root[data-theme] .dialog-overlay.anchored.entering .dialog-card { transform: translate3d(0, var(--dialog-travel), 0); }
+:root[data-theme] .dialog-overlay.anchored.leaving .dialog-card { transform: translate3d(0, calc(var(--dialog-travel) * .5), 0); }
+:root[data-theme] .settings-backdrop:is(.entering, .leaving) .settings-modal { transform: translate3d(0, 0, 0); }

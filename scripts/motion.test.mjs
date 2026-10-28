@@ -1,8 +1,78 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { load } from "./ts-loader.mjs";
+import { readFile } from "node:fs/promises";
+import ts from "typescript";
 
 const { enterAfterPaint, motionDuration, waitForMotion } = await load("motion");
+
+const presenceSource = await readFile(new URL("../src/hooks/usePresence.ts", import.meta.url), "utf8");
+const presenceCode = ts.transpileModule(presenceSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+let activePresence;
+const presenceReact = Object.fromEntries(["useState", "useLayoutEffect"].map(name => [name, (...args) => activePresence[name](...args)]));
+const presenceModule = {};
+new Function("require", "exports", presenceCode)(name => ({ react: presenceReact,
+  "./useReducedMotion": { useReducedMotion: () => activePresence.reduced },
+  "../motion": { enterAfterPaint, waitForMotion } })[name], presenceModule);
+
+function presenceHarness(t) {
+  const paint = paintHarness(), slots = [];
+  let cursor = 0, dirty = false, pending = [], animations = [];
+  const element = { querySelectorAll: () => [], getAnimations: () => animations }, ref = { current: element };
+  const h = {
+    paint, element, reduced: false,
+    useState(initial) { const index = cursor++, slot = slots[index] ??= { value: initial };
+      return [slot.value, value => { const next = typeof value === "function" ? value(slot.value) : value; if (next !== slot.value) { slot.value = next; dirty = true; } }]; },
+    useLayoutEffect(effect, deps) { const index = cursor++, previous = slots[index];
+      if (!previous || !deps.every((value, at) => Object.is(value, previous.deps[at]))) pending.push(() => {
+        previous?.cleanup?.(); slots[index] = { deps, cleanup: effect() };
+      }); },
+    animate() { const value = animation(element, { duration: 320 }); animations = [value]; return value; },
+    render(value) { let result;
+      for (let i = 0; i < 15; i++) {
+        cursor = 0; dirty = false; pending = []; activePresence = h;
+        result = presenceModule.usePresence(value, 320, ref);
+        if (dirty) continue;
+        for (const effect of pending) effect();
+        if (!dirty) return result;
+      }
+      throw Error("Presence failed to settle");
+    },
+  };
+  t.after(() => { for (const slot of slots) slot?.cleanup?.(); paint.restore(); });
+  return h;
+}
+
+test("a hidden sliding layer prepares retained content before starting its entrance", t => {
+  const h = presenceHarness(t);
+  assert.equal(h.render(null).value, null);
+  let state = h.render(true);
+  assert.equal(state.value, true); assert.equal(state.entering, true);
+  h.paint.paint(); state = h.render(true); assert.equal(state.entering, true);
+  h.paint.paint(); state = h.render(true); assert.equal(state.entering, false);
+});
+
+test("sliding content is retained until the actual transition ends", async t => {
+  const h = presenceHarness(t); h.render(true); h.paint.paint(); h.paint.paint(); h.render(true);
+  const exit = h.animate(); const leaving = h.render(null);
+  assert.equal(leaving.leaving, true); assert.equal(leaving.value, true);
+  await tick(); assert.equal(h.render(null).value, true);
+  exit.resolve(); await tick(); assert.equal(h.render(null).value, null);
+});
+
+test("a quick reversal cannot disable or restart a layer which is still visible", async t => {
+  const h = presenceHarness(t); h.render(true); h.paint.paint(); h.paint.paint(); h.render(true);
+  const exit = h.animate(); h.render(null);
+  const reopened = h.render(true);
+  assert.equal(reopened.value, true); assert.equal(reopened.entering, false); assert.equal(reopened.leaving, false);
+  exit.resolve(); await tick(); assert.equal(h.render(true).value, true);
+});
+
+test("reduced motion exposes and retires sliding controls without a delayed frame", t => {
+  const h = presenceHarness(t); h.reduced = true;
+  const opened = h.render(true); assert.equal(opened.value, true); assert.equal(opened.entering, false);
+  assert.equal(h.render(null).value, null); assert.equal(h.paint.frames.size, 0);
+});
 
 function paintHarness() {
   const timers = timerHarness(), previous = [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame];

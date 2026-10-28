@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { clamp, normalizeText } from "../api";
 import { useHoverReveal } from "../hooks/useHoverReveal";
+import { usePresence } from "../hooks/usePresence";
 import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
@@ -128,6 +129,11 @@ export default function Sidebar({
     },
   });
   const peek = sidebarCollapsed && reveal.revealed;
+  const slideRef = useRef<HTMLDivElement>(null);
+  const slide = usePresence(!sidebarCollapsed || peek ? true : null, 320, slideRef);
+  // Prepare the retained content before exposing its compositor layer. During
+  // exit it stays paintable until the slide has actually finished.
+  const peekShown = peek && !slide.entering;
 
   const expandProject = (projectId: string): void => {
     setExpandedProjects((previous) => previous.has(projectId) ? previous : new Set(previous).add(projectId));
@@ -179,12 +185,12 @@ export default function Sidebar({
     <aside
       id="workspace-sidebar"
       ref={reveal.ref}
-      className={`sidebar${sidebarCollapsed ? " collapsed" : ""}${peek ? " peek" : ""}${sidebarWidth <= 220 ? " compact" : ""}`}
+      className={`sidebar${sidebarCollapsed ? " collapsed" : ""}${peekShown ? " peek" : ""}${sidebarWidth <= 220 ? " compact" : ""}`}
       style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
       {...reveal.handlers}
     >
-      <div className="sidebar-clip" style={{ width: sidebarWidth }}>
-      <div className="sidebar-inner" style={{ width: sidebarWidth }} inert={sidebarCollapsed && !peek} aria-hidden={(sidebarCollapsed && !peek) || undefined}>
+      <div ref={slideRef} className="sidebar-clip" style={{ width: sidebarWidth }}>
+      <div className="sidebar-inner" style={{ width: sidebarWidth }} inert={slide.value === null} aria-hidden={(sidebarCollapsed && !peek) || undefined}>
         <div className="sidebar-top" data-tauri-drag-region="deep">
           <header className="sidebar-header" data-tauri-drag-region>
             <span className="sidebar-brand" aria-hidden="true" data-tauri-drag-region>

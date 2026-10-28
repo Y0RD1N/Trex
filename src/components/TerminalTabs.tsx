@@ -12,6 +12,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useHoverReveal } from "../hooks/useHoverReveal";
+import { usePresence } from "../hooks/usePresence";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { AgentNotice, LauncherProfile, TabState } from "../types";
 import { FolderIcon, GridIcon, LayoutIcon, MapIcon, MaximizeIcon, PlusIcon, SearchIcon, SplitIcon, TerminalIcon } from "./Icons";
@@ -78,12 +79,15 @@ export default function TerminalTabs({
     holdOpen: (slot) => slot.querySelector(":focus-visible") !== null,
   });
   const shown = !autoHideTopBar || reveal.revealed;
+  const barRef = useRef<HTMLElement>(null);
+  const bar = usePresence(shown ? true : null, 380, barRef);
+  const slideShown = !autoHideTopBar || shown && !bar.entering;
 
   useEffect(() => { setMenu(null); setLayoutMenu(null); }, [projectName, activeTabId]);
 
   return (
-    <div ref={reveal.ref} className={`bar-slot${autoHideTopBar ? " auto-hide" : ""}${shown ? " shown" : ""}`} {...reveal.handlers}>
-    <header className="tabs-bar" data-tauri-drag-region="deep">
+    <div ref={reveal.ref} className={`bar-slot${autoHideTopBar ? " auto-hide" : ""}${slideShown ? " shown" : ""}`} {...reveal.handlers}>
+    <header ref={barRef} className="tabs-bar" data-tauri-drag-region="deep" inert={bar.value === null} aria-hidden={!shown || undefined}>
       <div className="workspace-title" data-tauri-drag-region>
         <span className={current?.kind === "claude" ? "workspace-mark claude" : "workspace-mark"} aria-hidden="true">
           {current?.agentTeam ? <span className="workspace-team-mark"><AgentIcon kind={current.agentTeam.master.agent.provider} size={12} /><span>+{current.agentTeam.workers.length}</span></span>

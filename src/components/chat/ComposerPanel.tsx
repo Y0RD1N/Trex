@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useFloatingPosition } from "../../hooks/useFloatingPosition";
+import { usePresence } from "../../hooks/usePresence";
 import { ChevronIcon, CloseIcon } from "../Icons";
 import "./ComposerPanel.css";
 
@@ -40,8 +41,9 @@ export default function ComposerPanel({ label, title, icon, count, detail, atten
       target?.focus({ preventScroll: true });
     });
   };
-  const anchor = useMemo(() => open && trigger.current ? { element: trigger.current } : null, [open]);
-  const position = useFloatingPosition(anchor, surface, { side: "top", align: "start", flip: false, gap: 8 });
+  const presence = usePresence(open ? true : null, 160, surface);
+  const anchor = useMemo(() => presence.value && trigger.current ? { element: trigger.current } : null, [presence.value]);
+  const position = useFloatingPosition(anchor, surface, { side: "top", align: "start", flip: false, gap: 8, frozen: presence.leaving });
   useEffect(() => { if (!visible) change.current(false); }, [visible]);
   const focused = useRef(false);
   useLayoutEffect(() => {
@@ -96,8 +98,9 @@ export default function ComposerPanel({ label, title, icon, count, detail, atten
       <span>{label}</span>{count !== undefined && <span className="composer-tab-count">{count}</span>}
       <ChevronIcon size={12} />
     </button>}
-    {createPortal(<div ref={surface} id={id} role="region" tabIndex={-1} aria-label={title} hidden={!open} inert={!open}
-      className="composer-panel" style={{ left: position?.left ?? 8, top: position?.top ?? 8, visibility: open && position ? "visible" : "hidden" }}>
+    {createPortal(<div ref={surface} id={id} role="region" tabIndex={-1} aria-label={title} hidden={presence.value === null} inert={!open} aria-hidden={!open || undefined}
+      className={`composer-panel motion-popover${presence.entering ? " entering" : ""}${presence.leaving ? " leaving" : ""}`}
+      style={{ left: position?.left ?? 8, top: position?.top ?? 8, visibility: presence.value && position ? "visible" : "hidden" }}>
       <header className="composer-panel-heading"><div><h2>{title}</h2>{detail && <p>{detail}</p>}</div>{actions}
         <button type="button" className="icon-btn" aria-label={`Contraer ${label.toLocaleLowerCase()}`}
           onClick={() => dismiss.current(true)}><CloseIcon size={14} /></button>

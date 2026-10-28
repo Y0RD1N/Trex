@@ -91,10 +91,11 @@
   gap: 28px;
 }
 .settings-page[hidden] { display: none; }
-.settings-page:not([hidden]) { animation: settings-page-in var(--dur) var(--ease-out) both; }
+.settings-page { transform: translate3d(0, 0, 0); backface-visibility: hidden; }
+.settings-page:not([hidden]) { animation: settings-page-in var(--dur) var(--ease-out) backwards; }
 @keyframes settings-page-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translate3d(0, 6px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 .settings-terminal-page { gap: 16px; }
 .settings-page:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: -3px; }

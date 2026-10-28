@@ -39,6 +39,7 @@ function harness({ peek = false, profiles = [] } = {}) {
     "./AgentIcon": { __esModule: true, default: "AgentIcon" }, "./SessionItem": { __esModule: true, default: "SessionItem" },
     "./DropdownMenu": { __esModule: true, default: "DropdownMenu" }, "./ProfileMenuItems": { __esModule: true, default: "ProfileMenuItems" },
     "../projectIcons": { useProjectIcon: () => null },
+    "../hooks/usePresence": { usePresence: value => ({ value, entering: false, leaving: value === null }) },
     "../hooks/useHoverReveal": { useHoverReveal: () => ({ ref: { current: null }, revealed: peek, handlers: {}, hide: () => hides++ }) } };
   const envWindow = { addEventListener: noop, removeEventListener: noop }, envDocument = { body: { classList: { add: noop, remove: noop } } };
   const component = name => { const exports = {}; compiled[name](specifier => { assert.ok(modules[specifier], `Unexpected dependency ${specifier}`); return modules[specifier]; }, exports, envWindow, envDocument); return exports.default; };
