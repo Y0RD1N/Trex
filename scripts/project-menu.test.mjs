@@ -38,6 +38,7 @@ function harness({ peek = false, profiles = [] } = {}) {
   const modules = { ...helpers, react, "react/jsx-runtime": { jsx, jsxs: jsx }, "./Icons": icons,
     "./AgentIcon": { __esModule: true, default: "AgentIcon" }, "./SessionItem": { __esModule: true, default: "SessionItem" },
     "./DropdownMenu": { __esModule: true, default: "DropdownMenu" }, "./ProfileMenuItems": { __esModule: true, default: "ProfileMenuItems" },
+    "./ProjectFilter": { __esModule: true, default: "ProjectFilter" },
     "../projectIcons": { useProjectIcon: () => null },
     "../hooks/usePresence": { usePresence: value => ({ value, entering: false, leaving: value === null }) },
     "../hooks/useHoverReveal": { useHoverReveal: () => ({ ref: { current: null }, revealed: peek, handlers: {}, hide: () => hides++ }) } };
@@ -46,6 +47,7 @@ function harness({ peek = false, profiles = [] } = {}) {
   const ProjectItem = component("ProjectItem"); modules["./ProjectItem"] = { __esModule: true, default: ProjectItem };
   const Sidebar = component("Sidebar"), parent = host(), child = host();
   const props = { projects: [{ id: "target", name: "Other project", path: "D:/other" }, { id: "active", name: "Current project", path: "D:/current" }],
+    allProjects: [], projectFilter: { mode: "all", projectIds: [] }, onProjectFilterChange: noop,
     profiles, activeProjectId: "active", activeTabId: null, tabs: [], sidebarWidth: 260, sidebarCollapsed: peek,
     claudeInfo: { found: true }, search: "", shortcuts: helpers["../shortcuts"].DEFAULT_SHORTCUTS, themeMode: "light", searchInputRef: { current: null }, updates: [],
     onNewShell: projectId => actions.push(["terminal", projectId]), onWorkflow: projectId => actions.push(["workflow", projectId]),

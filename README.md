@@ -56,6 +56,9 @@ carpeta, con el asistente y el perfil que elijas.
 - **Barra lateral organizada**: marca proyectos como favoritos desde su menú
   para tenerlos arriba. Las sesiones aparecen directamente dentro de su proyecto;
   los nombres completos se muestran al pasar el cursor o enfocar con el teclado.
+- **Vista de proyectos**: bajo la búsqueda puedes mostrar Todos, solo Favoritos o
+  Elegir uno o varios proyectos. La selección se conserva al reiniciar; la búsqueda
+  se aplica dentro de esa vista y las sesiones de los proyectos ocultos siguen abiertas.
 - **Movimiento ajustable**: transiciones breves entre sesiones y paneles, con
   reducción de animaciones en Ajustes → Apariencia y respeto a la preferencia del sistema.
 - **Color completo en las terminales**: ANSI, 256 colores y RGB para Claude Code,
@@ -109,6 +112,11 @@ mensajes a cada rol; `@Claude` y `@Codex` también funcionan si el proveedor
 identifica a un único participante. Los mensajes normales se envían al destino
 seleccionado. Los cambios de rol comparten un extracto acotado del historial,
 sin sustituir el plan definitivo completo ni los permisos del asistente.
+
+El control del flujo aparece compacto a la derecha, encima de **Tareas**. Muestra
+los participantes, el estado y el ciclo; el botón **Modelos y esfuerzo del flujo**
+despliega los ajustes de ambos agentes. Detener, nueva planificación y la revisión
+de errores siguen disponibles en la misma tarjeta.
 
 **Detener** pausa la transición y detiene la respuesta activa; los errores
 también detienen el flujo. Al reabrir la aplicación, los flujos pendientes se

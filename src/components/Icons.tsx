@@ -30,6 +30,10 @@ export function StarIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><path d="m12 3 2.8 5.7 6.3.9-4.55 4.44 1.07 6.27L12 17.35l-5.62 2.96 1.07-6.27L2.9 9.6l6.3-.9Z" /></svg>;
 }
 
+export function FilterIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M4 6h16M7 12h10M10 18h4" /></svg>;
+}
+
 export function KeyboardIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}>
     <rect x="2.5" y="5.5" width="19" height="13" rx="2" />

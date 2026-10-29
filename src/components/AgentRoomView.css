@@ -1,13 +1,13 @@
 .agent-room { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
 .agent-room > .chat { flex: 1; min-height: 0; height: auto; }
-.agent-room-toolbar { padding: 14px 20px 10px; border-bottom: 1px solid color-mix(in srgb, var(--text) 5%, transparent); background: linear-gradient(180deg, var(--surface-highlight, transparent), transparent), var(--term-bg); flex: 0 0 auto; }
-.agent-room-participants { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; max-width: 900px; margin: 0 auto; }
-.agent-room-participant { min-width: 0; padding: 10px 12px 7px; border: 1px solid var(--surface-edge, var(--border)); border-radius: 16px; background: var(--surface-raised, var(--bg-surface)); box-shadow: inset 0 1px 0 var(--surface-highlight, transparent); transition: border-color var(--dur), background var(--dur); }
+.agent-room-toolbar { padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface); flex: 0 0 auto; }
+.agent-room-participants { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 5px; }
+.agent-room-participant { min-width: 0; padding: 8px 6px; border: 1px solid transparent; border-radius: 8px; background: transparent; transition: border-color var(--dur), background var(--dur); }
 .agent-room-participant.is-selected { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 5%, var(--term-bg)); }
-.agent-room-person { display: flex; align-items: center; gap: 9px; width: 100%; padding: 0; border: 0; color: var(--text); background: transparent; cursor: pointer; text-align: left; }
+.agent-room-person { display: flex; align-items: center; gap: 7px; min-height: 28px; width: 100%; padding: 0; border: 0; color: var(--text); background: transparent; cursor: pointer; text-align: left; }
 .agent-room-person > span:nth-child(2) { display: flex; min-width: 0; gap: 2px; flex-direction: column; }
-.agent-room-person strong { font-size: 11px; font-weight: 600; }
-.agent-room-person small { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-room-person strong { font-size: 10px; font-weight: 600; }
+.agent-room-person small { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-room-readonly { margin-left: auto; color: var(--text-dim); font-size: 9px; white-space: nowrap; }
 .agent-room-settings { display: flex; align-items: center; gap: 7px; padding-top: 5px; min-width: 0; color: var(--text-muted); font-size: 10px; }
 .agent-room-settings > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -15,7 +15,7 @@
 .agent-room-runtime-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 7px; color: var(--text-muted); font-size: 10px; }
 .agent-room-settings .select-trigger { min-height: 24px; padding: 2px 5px; border: 0; background: transparent; font-size: 10px; width: auto; max-width: 70%; }
 .agent-room-settings .select-trigger:last-child { margin-left: auto; max-width: 43%; }
-.agent-room-status { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; max-width: 900px; margin: 9px auto 0; font-size: 10px; }
+.agent-room-status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 7px 2px 0; font-size: 10px; }
 .agent-room-phase { color: var(--text-muted); display: inline-flex; align-items: center; gap: 5px; }
 .agent-room-phase::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); }
 .agent-room-phase.phase-planning::before, .agent-room-phase.phase-executing::before, .agent-room-phase.phase-transferring::before { background: var(--accent); box-shadow: 0 0 7px color-mix(in srgb, var(--accent) 35%, transparent); }
@@ -23,6 +23,11 @@
 .agent-room-cycle { color: var(--text-dim); margin-right: auto; }
 .agent-room-action, .agent-room-plan-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 8px; border: 1px solid var(--surface-edge, var(--border)); border-radius: 9px; background: transparent; color: var(--text-muted); font: inherit; cursor: pointer; }
 .agent-room-action:hover, .agent-room-plan-action:hover { color: var(--text); background: var(--bg-surface); }
+.agent-room-icon-action { width: 25px; height: 25px; padding: 0; flex: 0 0 auto; border-color: transparent; border-radius: 6px; }
+.agent-room-icon-action:hover, .agent-room-icon-action[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+.agent-room-review { margin-top: 8px; width: 100%; font-size: 10px; }
+.agent-room-toolbar.is-configuring .agent-room-participants { grid-template-columns: minmax(0, 1fr); }
+.agent-room-toolbar.is-configuring .agent-room-participant { border-color: var(--border); }
 .agent-room button:disabled { opacity: .45; cursor: default; }
 .agent-room button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .agent-room-note { max-width: 900px; margin: 8px auto 0; padding: 8px 10px; border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
@@ -41,15 +46,6 @@
 .agent-room-composer-lead + .chat-queue { margin-inline: 7px; }
 .agent-room-starting { min-height: 0; color: var(--text-muted); font-size: 12px; }
 .agent-room-starting > p { padding: 24px; text-align: center; }
-@media (max-width: 600px) {
-  .agent-room-toolbar { padding: 9px 10px; }
-  .agent-room-participants { gap: 6px; }
-  .agent-room-participant { padding: 8px; }
-  .agent-room-readonly { display: none; }
-  .agent-room-settings { flex-wrap: wrap; gap: 2px; }
-  .agent-room-settings .select-trigger { max-width: 100%; }
-  .agent-room-settings .select-trigger:last-child { margin-left: 0; max-width: 100%; }
-}
 @container (max-width: 520px) {
   .agent-room-composer-lead { column-gap: 8px; }
   .agent-room-composer-lead .select-trigger { max-width: 200px; }

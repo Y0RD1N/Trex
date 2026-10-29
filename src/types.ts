@@ -9,6 +9,7 @@ import type { HandoffReference } from "./handoff";
 import type { AgentWorkflow } from "./agentWorkflow";
 import type { AgentRoom } from "./agentRoom";
 import type { AgentTeam } from "./agentTeam";
+import type { ProjectFilter } from "./projectFilter";
 
 /** Forma en la que el backend lanza un asistente dentro del PTY. */
 export type LaunchMode = "arg" | "inject";
@@ -116,6 +117,7 @@ export type UiState = {
  * completo, así que no se pierde nada al guardar.
  */
 export type UiStateExtended = UiState & {
+  projectFilter: ProjectFilter;
   lastTabs?: PersistedTab[];
   /** La barra lateral está oculta (Ctrl+B) y el área principal ocupa todo. */
   sidebarCollapsed: boolean;

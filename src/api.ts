@@ -18,6 +18,7 @@ import { normalizeEffortChoice, normalizeModelChoice } from "./chatState";
 import { normalizeAgentWorkflow } from "./agentWorkflow";
 import { normalizeAgentRoom } from "./agentRoom";
 import { normalizeAgentTeam } from "./agentTeam";
+import { normalizeProjectFilter } from "./projectFilter";
 import type {
   AgentProvider,
   AppConfig,
@@ -238,6 +239,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 const DEFAULT_UI: UiStateExtended = {
+  projectFilter: { mode: "all", projectIds: [] },
   lastProjectId: null,
   sidebarWidth: 290,
   activeProjectId: null,
@@ -528,6 +530,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     if (layout) splitLayouts[projectId] = layout;
   }
   const ui: UiStateExtended = {
+    projectFilter: normalizeProjectFilter(uiRaw.projectFilter, projects),
     lastProjectId: asNullableString(uiRaw.lastProjectId),
     activeProjectId: asNullableString(uiRaw.activeProjectId),
     // Lectura defensiva: cualquier valor que no sea booleano deja la barra expandida.

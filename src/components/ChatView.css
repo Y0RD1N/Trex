@@ -7,6 +7,7 @@
 
 .chat {
   --chat-width: 780px;
+  --chat-toolbar-space: calc(var(--chat-toolbar-height, 0px) + var(--chat-toolbar-gap, 0px));
   /* Cristal de la caja de mensaje: el mismo color del fondo del chat, translúcido
      y con desenfoque, para que la caja parezca hecha del propio fondo. */
   --dock-glass: color-mix(in srgb, var(--term-bg) 80%, transparent);
@@ -65,7 +66,15 @@
 
 .chat-floating-toolbar { position: absolute; z-index: 4; top: var(--chat-header-space, 0px); right: 0; left: 0; max-height: min(35%, 280px); overflow-y: auto; scrollbar-width: thin; }
 .chat-floating-toolbar:empty { display: none; }
-.chat-floating-toolbar > .agent-room-toolbar { margin: 12px 16px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface); }
+.chat:has(> .chat-floating-toolbar > .agent-room-toolbar) { --chat-toolbar-gap: 16px; }
+.chat-floating-toolbar:has(> .agent-room-toolbar) { left: auto; right: 16px; width: min(280px, calc(100% - 32px)); top: calc(var(--chat-header-space, 0px) + 10px); max-height: min(60%, calc(100% - var(--composer-space, 120px) - 64px)); border-radius: 12px; }
+.chat-floating-toolbar > .agent-room-toolbar { margin: 0; }
+@container chat (min-width: 761px) {
+  /* La columna de tareas ya reserva el lado derecho: el hilo puede empezar
+     junto al control del flujo, sin dejar una franja vacía a todo lo ancho. */
+  .chat:has(.agent-room-toolbar):has(.chat-task-panel) .chat-thread { padding-top: calc(var(--chat-header-space, 0px) + 24px); }
+  .chat:has(.agent-room-toolbar):has(.chat-task-panel) .chat-scroll { scroll-padding-top: calc(var(--chat-header-space, 0px) + 24px); }
+}
 
 /* --- Estado vacío ------------------------------------------------------- */
 .chat.is-empty .chat-thread {
@@ -744,8 +753,8 @@
   gap: 6px;
   font: 11.5px var(--font-mono);
 }
-.chat-diff-count .add { color: var(--ok-text); }
-.chat-diff-count .del { color: var(--danger); }
+.chat-diff-count .add { color: var(--diff-add-text); }
+.chat-diff-count .del { color: var(--diff-del-text); }
 .chat-status.error {
   display: grid;
   place-items: center;
@@ -822,10 +831,10 @@
   text-align: center;
   user-select: none;
 }
-.chat-diff-line.add { background: var(--ok-bg); color: var(--ok-text); }
-.chat-diff-line.add .chat-diff-sign { color: var(--ok-text); }
-.chat-diff-line.del { background: var(--danger-bg); color: var(--danger); }
-.chat-diff-line.del .chat-diff-sign { color: var(--danger); }
+.chat-diff-line.add { background: var(--diff-add-bg); color: var(--diff-add-text); box-shadow: inset 2px 0 var(--diff-add-edge); }
+.chat-diff-line.add .chat-diff-sign { color: var(--diff-add-text); }
+.chat-diff-line.del { background: var(--diff-del-bg); color: var(--diff-del-text); box-shadow: inset 2px 0 var(--diff-del-edge); }
+.chat-diff-line.del .chat-diff-sign { color: var(--diff-del-text); }
 .chat-diff-line.ctx { color: var(--text-muted); }
 .chat-diff-line.gap { color: var(--text-dim); }
 

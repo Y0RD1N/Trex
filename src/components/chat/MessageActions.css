@@ -75,9 +75,9 @@
   background: color-mix(in srgb, var(--ok-text) 9%, transparent);
   color: var(--ok-text);
 }
-.chat-changes-counts { display: inline-flex; flex: 0 0 auto; gap: 8px; font: 10.5px var(--font-mono); font-variant-numeric: tabular-nums; }
-.chat-changes-counts .add { color: var(--ok-text); }
-.chat-changes-counts .del { color: var(--danger); }
+.chat-changes-counts { display: inline-flex; flex: 0 0 auto; gap: 8px; font: 500 10.5px var(--font-mono); font-variant-numeric: tabular-nums; }
+.chat-changes-counts .add { color: var(--diff-add-text); }
+.chat-changes-counts .del { color: var(--diff-del-text); }
 .chat-changes-toggle .chat-changes-counts { margin-left: 3px; }
 .chat-changes-diff-button {
   display: grid;
@@ -117,15 +117,15 @@
 .chat-change-chevron { display: grid; flex: 0 0 auto; width: 12px; color: var(--text-dim); transform: rotate(-90deg); transition: transform var(--dur) var(--ease-spring); }
 .chat-change-node.open > .chat-change-row .chat-change-chevron { transform: rotate(0); }
 .chat-change-icon { display: grid; flex: 0 0 auto; color: var(--text-dim); }
-.chat-change-icon.added { color: var(--ok-text); }
-.chat-change-icon.deleted { color: var(--danger); }
+.chat-change-icon.added { color: var(--diff-add-text); }
+.chat-change-icon.deleted { color: var(--diff-del-text); }
 .chat-change-icon.renamed { color: var(--accent); }
 .chat-change-name { overflow: hidden; min-width: 0; font: 11.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .chat-change-row .chat-changes-counts { margin-left: auto; }
 .chat-change-files { color: var(--text-dim); opacity: 0.6; font-size: 10px; }
 .chat-change-status { color: var(--text-dim); font-size: 9px; }
-.chat-change-status.added { color: var(--ok-text); }
-.chat-change-status.deleted { color: var(--danger); }
+.chat-change-status.added { color: var(--diff-add-text); }
+.chat-change-status.deleted { color: var(--diff-del-text); }
 .chat-change-status.renamed { color: var(--accent); }
 .chat-change-diff { margin: 3px 6px 8px calc(12px + var(--change-depth) * 17px); border-radius: 8px; overflow: hidden; animation: chat-reveal var(--dur) var(--ease-out) backwards; }
 .chat-change-diff .chat-diff { margin: 0; max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }

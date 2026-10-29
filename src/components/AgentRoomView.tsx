@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { formatError, loadHandoff, prepareHandoff } from "../api";
 import { mergeRoomItems, roomConversationContext, roomQueueAddress, roomQueueSnapshot, routeRoomMessage, type AgentRoom, type RoomRole } from "../agentRoom";
 import { completedWorkflowPlan, IMPLEMENTATION_INSTRUCTION, PLANNING_INSTRUCTION, workflowClarifications, workflowPlanContext } from "../agentWorkflow";
-import { chatActivity, conversationTitle, effortLabel, initialChatState, supportedEfforts, type ChatState, type OutgoingImage } from "../chatState";
+import { conversationTitle, initialChatState, type ChatState, type OutgoingImage } from "../chatState";
 import { chatTasks, roomTasks } from "../chatTasks";
 import { buildHandoffPrompt, handoffAlreadySent, sanitizeHandoffText, type HandoffSource, type PreparedHandoff } from "../handoff";
 import { type ChatSession, type ChatSessionOptions } from "../hooks/chatSession";
@@ -14,7 +14,8 @@ import { INBOX_WAKE, messageQueueId, type QueuedMessage } from "../messageQueue"
 import { localCommand } from "../chatCommands";
 import { ChatPanel, type ChatViewProps } from "./ChatView";
 import AgentIcon from "./AgentIcon";
-import { MapIcon, StopIcon } from "./Icons";
+import { MapIcon } from "./Icons";
+import AgentRoomToolbar from "./AgentRoomToolbar";
 import Select from "./Select";
 import "./AgentRoomView.css";
 
@@ -25,10 +26,6 @@ export type AgentRoomViewProps = Omit<ChatViewProps, "workflow" | "planningOnly"
 
 const ROLES: RoomRole[] = ["planner", "executor"];
 const ROLE_NAMES = { planner: "Planificador", executor: "Ejecutor" };
-const PHASE_NAMES: Record<AgentRoom["phase"], string> = {
-  idle: "Listo", planning: "Planificando", waiting: "Espera tu respuesta", transferring: "Preparando contexto",
-  executing: "Ejecutando", completed: "Completado", paused: "Pausado", failed: "Revisar error",
-};
 type Sessions = Partial<Record<RoomRole, ChatSession>>;
 type SendKind = "plan" | "execute" | "message";
 type Issued = { cycle: number; kind: SendKind; previous: string | null; users: Set<string>; accepted: boolean };
@@ -414,43 +411,11 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
   }]));
   const roomTaskPlan = roomTasks(merged.items, { planner: room.planner.agent.profileName, executor: room.executor.agent.profileName });
 
-  const toolbar = <div className="agent-room-toolbar">
-    <div className="agent-room-participants" aria-label="Participantes de la conversación">
-      {ROLES.map(role => {
-        const participant = room[role], session = sessions[role], state = session?.state;
-        const models = state?.models ?? [], model = state?.modelChoice ?? state?.model ?? participant.agent.model ?? "";
-        const efforts = state ? supportedEfforts(models, state.model, state.modelChoice) : [];
-        const effort = state?.effortChoice ?? state?.effort ?? participant.agent.effort ?? "";
-        return <div key={role} className={`agent-room-participant${room.active === role ? " is-selected" : ""}`}>
-          <button type="button" className="agent-room-person" aria-pressed={room.active === role} disabled={disableSelection && room.active !== role}
-            onClick={() => selectRole(role)} title={`Escribir al ${ROLE_NAMES[role].toLowerCase()}`}>
-            <AgentIcon kind={participant.agent.provider} size={17} activity={state ? chatActivity(state) : "idle"} />
-            <span><strong>{ROLE_NAMES[role]}</strong><small>{participant.agent.profileName}</small></span>
-            {role === "planner" && <span className="agent-room-readonly">Solo lectura</span>}
-          </button>
-          <div className="agent-room-settings">
-            {models.length ? <Select aria-label={`Modelo del ${ROLE_NAMES[role].toLowerCase()}`} value={model} disabled={disableSelection}
-              options={models.map(item => ({ value: item.value, label: item.displayName }))} onChange={value => sessionsRef.current[role]?.setModel(value)} />
-              : <span title={model || "Modelo del perfil"}>{model || "Modelo del perfil"}</span>}
-            {efforts.length ? <Select aria-label={`Esfuerzo del ${ROLE_NAMES[role].toLowerCase()}`} value={effort} disabled={disableSelection}
-              placeholder="Esfuerzo del perfil" options={efforts.map(value => ({ value, label: effortLabel(value) }))}
-              onChange={value => sessionsRef.current[role]?.setEffort(value)} /> : <span>{effort ? effortLabel(effort) : "Esfuerzo del perfil"}</span>}
-          </div>
-          {state && ["failed", "exited"].includes(state.process) && <div className="agent-room-runtime-error">
-            <span>{ROLE_NAMES[role]} sin conexión</span>
-            <button type="button" className="agent-room-action" disabled={busy || working}
-              onClick={() => { void sessionsRef.current[role]?.start().catch(error => latest.current.onMessage(formatError(error))); }}
-              aria-label={`Reintentar ${ROLE_NAMES[role].toLowerCase()}`}>Reintentar</button>
-          </div>}
-        </div>;
-      })}
-    </div>
-    <div className="agent-room-status" role="status"><span className={`agent-room-phase phase-${room.phase}`}>{PHASE_NAMES[room.phase]}</span>
-      <span className="agent-room-cycle">Ciclo {room.cycle}</span>
-      {(busy || lock) && <button type="button" className="agent-room-action" onClick={stop}><StopIcon size={12} />Detener</button>}
-      {["paused", "failed"].includes(room.phase) && <button type="button" className="agent-room-action" onClick={() => setReviewing(value => !value)}>Revisar y reanudar</button>}
-      <button type="button" className="agent-room-action" disabled={disableSelection} onClick={newPlanning}><MapIcon size={13} />Nueva planificación</button>
-    </div>
+  const toolbar = <AgentRoomToolbar room={room} states={states} disabled={disableSelection} busy={busy || lock}
+    onSelect={selectRole} onModel={(role, value) => sessionsRef.current[role]?.setModel(value)}
+    onEffort={(role, value) => sessionsRef.current[role]?.setEffort(value)}
+    onRetry={role => { void sessionsRef.current[role]?.start().catch(error => latest.current.onMessage(formatError(error))); }}
+    onStop={stop} onNewPlanning={newPlanning} onReview={() => setReviewing(value => !value)}>
     {(room.error || reviewing) && <div className="agent-room-note"><span>{room.error}</span>{reviewing && <>
       <p>Revisa las dos conversaciones. Al continuar, el agente comprobará el estado actual y los pasos ya realizados.</p>
       <button type="button" className="agent-room-action" disabled={busy || working || hasQueue} onClick={resume}>Continuar {room.pending?.role === "planner" || (!room.pending && room.active === "planner") ? "planificación" : "ejecución"}</button>
@@ -467,7 +432,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
         </div>;
       })}
     </>}</div>}
-  </div>;
+  </AgentRoomToolbar>;
   const composerLead = <div className="agent-room-composer-lead"><div className="agent-room-target"><span>Enviar a</span>
     <Select aria-label="Agente destinatario" value={room.active} disabled={disableSelection} onChange={value => selectRole(value as RoomRole)}
       options={ROLES.map(role => ({ value: role, label: `${ROLE_NAMES[role]} · ${room[role].agent.profileName}`, icon: <AgentIcon kind={room[role].agent.provider} size={13} /> }))} />

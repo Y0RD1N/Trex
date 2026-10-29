@@ -357,7 +357,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     if (!composer || !toolbar || !root) return;
     const measure = (): void => {
       root.style.setProperty("--composer-space", `${composer.offsetHeight}px`);
-      root.style.setProperty("--chat-toolbar-space", `${toolbar.offsetHeight}px`);
+      root.style.setProperty("--chat-toolbar-height", `${toolbar.offsetHeight}px`);
       const scroller = scrollRef.current;
       if (scroller && stickRef.current) scroller.scrollTop = scroller.scrollHeight;
     };

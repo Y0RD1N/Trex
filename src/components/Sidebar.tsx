@@ -29,6 +29,8 @@ import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
 import { sessionLabel } from "../sessionTitle";
 import { projectActivity } from "../agentActivity";
+import ProjectFilterControl from "./ProjectFilter";
+import type { ProjectFilter } from "../projectFilter";
 
 /** Ancho al que vuelve la barra lateral con doble clic en el divisor. */
 const DEFAULT_SIDEBAR_WIDTH = 290;
@@ -36,6 +38,9 @@ const DEFAULT_SIDEBAR_WIDTH = 290;
 type Props = {
   /** Proyectos ya filtrados por el buscador. */
   projects: Project[];
+  allProjects: Project[];
+  projectFilter: ProjectFilter;
+  onProjectFilterChange: (filter: ProjectFilter) => void;
   activeProjectId: string | null;
   sidebarWidth: number;
   /** Barra lateral oculta: ancho 0 y contenido desvanecido. */
@@ -79,6 +84,9 @@ type Props = {
 
 export default function Sidebar({
   projects,
+  allProjects,
+  projectFilter,
+  onProjectFilterChange,
   activeProjectId,
   sidebarWidth,
   sidebarCollapsed,
@@ -239,6 +247,8 @@ export default function Sidebar({
           </div>
         </div>
 
+        <ProjectFilterControl projects={allProjects} value={projectFilter} activeProjectId={activeProjectId} onChange={onProjectFilterChange} />
+
         <nav className="project-list" aria-label="Proyectos y sesiones">
           {projectSections(projects).map(section => <section key={section.id} className="sidebar-project-section" aria-label={section.label}>
           <div className="sidebar-section-label"><span>{section.label}</span><span>{section.projects.length}</span></div>
@@ -307,13 +317,18 @@ export default function Sidebar({
 
           {noResults && (
             <div className="sidebar-empty sidebar-empty-centered">
-              Sin resultados para «{query}»
+              Sin resultados para «{query}»{projectFilter.mode !== "all" ? " en esta vista." : "."}
+              <button type="button" className="sidebar-filter-reset" onClick={() => onSearchChange("")}>Limpiar búsqueda</button>
             </div>
           )}
 
           {projects.length === 0 && !noResults && (
             <div className="sidebar-empty">
-              Todavía no hay proyectos. Añade una carpeta para empezar.
+              {allProjects.length === 0 ? "Todavía no hay proyectos. Añade una carpeta para empezar."
+                : projectFilter.mode === "favorites" ? "Aún no tienes favoritos. Marca un proyecto con una estrella para verlo aquí."
+                : "No has seleccionado proyectos. Abre el filtro y elige los que quieres ver."}
+              {allProjects.length > 0 && <button type="button" className="sidebar-filter-reset"
+                onClick={() => onProjectFilterChange({ ...projectFilter, mode: "all" })}>Mostrar todos los proyectos</button>}
             </div>
           )}
         </nav>

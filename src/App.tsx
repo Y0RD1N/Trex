@@ -67,6 +67,7 @@ import TooltipProvider from "./components/TooltipProvider";
 import ImageViewerProvider from "./components/ImageViewer";
 import ProjectHome from "./components/ProjectHome";
 import { sessionLabel } from "./sessionTitle";
+import { filterProjects, includeAddedProject, normalizeProjectFilter, type ProjectFilter } from "./projectFilter";
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, profilesForInstallation, restoreLaunch } from "./profiles";
 import { applyDesign } from "./visualDesign";
@@ -598,7 +599,8 @@ function AppShell() {
         ? {
             ...prev,
             projects: [...prev.projects, project],
-            ui: { ...prev.ui, activeProjectId: project.id, lastProjectId: project.id },
+            ui: { ...prev.ui, activeProjectId: project.id, lastProjectId: project.id,
+              projectFilter: includeAddedProject(prev.ui.projectFilter, project.id) },
           }
         : prev,
     );
@@ -622,6 +624,11 @@ function AppShell() {
 
   const toggleFavorite = useCallback((projectId: string) => {
     setConfig(previous => previous ? { ...previous, projects: previous.projects.map(project => project.id === projectId ? { ...project, favorite: !project.favorite } : project) } : previous);
+  }, []);
+
+  const setProjectFilter = useCallback((filter: ProjectFilter) => {
+    setConfig(previous => previous ? { ...previous, ui: { ...previous.ui,
+      projectFilter: normalizeProjectFilter(filter, previous.projects) } } : previous);
   }, []);
 
   const deleteProject = useCallback(async (projectId: string, trigger: HTMLElement, returnFocus: HTMLElement | null) => {
@@ -672,7 +679,8 @@ function AppShell() {
       return {
         ...prev,
         projects,
-        ui: { ...prev.ui, activeProjectId: nextActive, lastProjectId: nextActive },
+        ui: { ...prev.ui, activeProjectId: nextActive, lastProjectId: nextActive,
+          projectFilter: normalizeProjectFilter(prev.ui.projectFilter, projects) },
       };
     });
   }, [dialog]);
@@ -1315,7 +1323,7 @@ function AppShell() {
 
   /** Proyectos visibles: filtrado en vivo por nombre y por ruta, sin acentos. */
   const visibleProjects = useMemo(() => {
-    const all = config?.projects ?? [];
+    const all = config ? filterProjects(config.projects, config.ui.projectFilter) : [];
     const needle = normalizeText(search);
     if (!needle) return all;
     return all.filter(
@@ -1324,7 +1332,7 @@ function AppShell() {
         normalizeText(project.path).includes(needle) ||
         tabs.some((tab) => tab.projectId === project.id && normalizeText(sessionLabel(tab)).includes(needle)),
     );
-  }, [config?.projects, search, tabs]);
+  }, [config?.projects, config?.ui.projectFilter, search, tabs]);
 
   if (!config || !workspaceReady) return <Splash />;
 
@@ -1364,6 +1372,9 @@ function AppShell() {
     <div className="app">
       <Sidebar
         projects={visibleProjects}
+        allProjects={config.projects}
+        projectFilter={config.ui.projectFilter}
+        onProjectFilterChange={setProjectFilter}
         activeProjectId={activeProjectId}
         sidebarWidth={config.ui.sidebarWidth}
         sidebarCollapsed={config.ui.sidebarCollapsed}

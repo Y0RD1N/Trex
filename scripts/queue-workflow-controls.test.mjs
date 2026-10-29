@@ -102,7 +102,7 @@ function uiModule(name) {
   } }));
   return ui.get(name);
 }
-const uiPaths = new Set(["./chat/BrowserMenu","./AgentIcon", "./Select", "./Icons", "./chat/ChatItems", "./chat/ModelMenu",
+const uiPaths = new Set(["./chat/BrowserMenu","./AgentIcon", "./AgentRoomToolbar", "./Select", "./Icons", "./chat/ChatItems", "./chat/ModelMenu",
   "./chat/ComposerSettings", "./chat/UsageMenu", "./chat/SharedFiles", "./ImageViewer", "./chat/QuestionPanel",
   "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/QueuedMessages", "./chat/ComposerPanel", "./chat/BackgroundTerminals", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome"]);
 function environment() {
