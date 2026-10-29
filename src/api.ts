@@ -12,7 +12,7 @@ import { DEFAULT_CURSOR_STYLE, DEFAULT_CURSOR_WIDTH, normalizeCursorStyle, norma
 import { normalizeDesign } from "./visualDesign";
 import { normalizeShortcuts, bindingError, keyError } from "./shortcuts";
 import { normalizeSplitLayout, type SplitLayout } from "./splitLayout";
-import { validConversationId } from "./conversations";
+import { validConversationId, validAcpId } from "./conversations";
 import { normalizeHandoffReference, type HandoffContext, type PreparedHandoff } from "./handoff";
 import { normalizeEffortChoice, normalizeModelChoice } from "./chatState";
 import { normalizeAgentWorkflow } from "./agentWorkflow";
@@ -161,8 +161,12 @@ export const agentKill = (id: string): Promise<void> => invoke<void>("agent_kill
 export const agentTerminalOutput = (id: string, taskId: string): Promise<{ text: string; truncated: boolean }> =>
   invoke("agent_terminal_output", { id, taskId });
 
-export const messageQueueMcpConfig = (queueId: string): Promise<Record<string, unknown>> =>
-  invoke("message_queue_mcp_config", { queueId });
+export const messageQueueMcpConfig = (queueId: string, tasksOnly = false): Promise<Record<string, unknown>> =>
+  invoke("message_queue_mcp_config", { queueId, tasksOnly });
+
+export type AntigravityRuntime = { installed: boolean; command: string | null; version: string | null; flags: string[]; env: Record<string, string> };
+export const antigravityRuntime = (command = "antigravity-acp", configDir = ""): Promise<AntigravityRuntime> => invoke("antigravity_runtime", { command, configDir });
+export const installAntigravity = (): Promise<AntigravityRuntime> => invoke("antigravity_install");
 
 /** Archivos del proyecto (relativos a su carpeta) para las menciones con `@`. */
 export const listProjectFiles = (cwd: string): Promise<string[]> => invoke<string[]>("list_project_files", { cwd });
@@ -501,20 +505,22 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     claude: ["default", "acceptEdits", "plan", "bypassPermissions", "auto", "dontAsk"],
     codex: ["read-only", "auto", "plan", "full"],
     trex: ["plan", "ask", "auto", "full"],
+    antigravity: ["default", "ask", "accept-edits", "auto", "full"],
   };
   const chatMode = (kind: TabKind, value: unknown): string | null =>
-    kind !== "shell" && typeof value === "string" && CHAT_MODES[kind].includes(value) ? value : null;
+    kind === "antigravity" ? typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value) && !/plan|architect|read.?only/i.test(value) ? value : null
+      : kind !== "shell" && typeof value === "string" && CHAT_MODES[kind].includes(value) ? value : null;
   if (Array.isArray(uiRaw.lastTabs)) {
     for (const entry of uiRaw.lastTabs) {
       const rec = asRecord(entry);
       if (!rec) continue;
       const projectId = asString(rec.projectId, "");
       if (!projectId) continue;
-      const kind: TabKind = rec.kind === "shell" || rec.kind === "codex" || rec.kind === "trex" ? rec.kind : "claude";
+      const kind: TabKind = rec.kind === "shell" || rec.kind === "codex" || rec.kind === "trex" || rec.kind === "antigravity" ? rec.kind : "claude";
       const subtitle = asString(rec.subtitle, "").trim() || kind;
       const launch = normalizeLaunch(rec.launch, kind);
       if (rec.launch != null && !launch) continue;
-      lastTabs.push({ id: typeof rec.id === "string" && /^t-[a-z0-9-]+$/i.test(rec.id) ? rec.id : undefined, projectId, kind, subtitle, launch, conversationId: validConversationId(rec.conversationId) ? rec.conversationId : null,
+      lastTabs.push({ id: typeof rec.id === "string" && /^t-[a-z0-9-]+$/i.test(rec.id) ? rec.id : undefined, projectId, kind, subtitle, launch, conversationId: (kind === "antigravity" ? validAcpId(rec.conversationId) : validConversationId(rec.conversationId)) ? rec.conversationId as string : null,
         chatMode: chatMode(kind, rec.chatMode), chatModel: kind === "shell" ? null : normalizeModelChoice(rec.chatModel),
         chatEffort: kind === "shell" ? null : normalizeEffortChoice(rec.chatEffort),
         handoff: kind === "shell" ? null : normalizeHandoffReference(rec.handoff),
@@ -546,7 +552,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     splitLayouts,
   };
   const chatModes = asRecord(uiRaw.chatModes);
-  for (const provider of ["claude", "codex", "trex"] as const) {
+  for (const provider of ["claude", "codex", "trex", "antigravity"] as const) {
     const mode = chatMode(provider, chatModes?.[provider]);
     if (mode) ui.chatModes = { ...ui.chatModes, [provider]: mode };
   }

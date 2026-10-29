@@ -2,6 +2,7 @@ import { browserArtifacts, browserResultArtifacts } from "./browser";
 /** Protocolo propio de Trex CLI: la API del proveedor permanece dentro del CLI. */
 import { baseReducer, currentModel, finalize, list, liveCompletion, normalizeEffortChoice, normalizeModelChoice, record, text,
   type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type Json, type ModelInfo } from "./chatState";
+import { addApiUsage, readApiUsage } from "./tokenUsage";
 
 const tokens = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 const windowSize = (value: unknown): number | null => { const count = tokens(value); return count && count > 0 ? count : null; };
@@ -26,6 +27,7 @@ export function parseTrexModels(raw: unknown): ModelInfo[] {
 export type TrexChatAction = BaseChatAction
   | { type: "trexReady"; result: Json; models: ModelInfo[] }
   | { type: "trexEvent"; method: string; params: Json; now: number }
+  | { type: "trexUsage"; result: Json }
   | { type: "trexFailed"; id: string; message: string };
 
 const TOOL_NAMES: Record<string, string> = { read_file: "Read", list_files: "LS", search: "Grep", write_file: "Write", apply_patch: "TrexPatch", shell: "Bash", trex_read_messages: "trex_read_messages" };
@@ -81,10 +83,11 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
       turnItemStart: pending.length ? items.length : null,
       usage: previousTotal === null ? null : { used: 0, window: null, parts: [], reserve: null, total: previousTotal, measured: false } };
     const usage = record(result.usage);
+    const apiUsage = readApiUsage(usage?.apiUsage) ?? readApiUsage(usage) ?? (state.sessionId === text(result.sessionId) && !usage ? state.apiUsage : null);
     // Una respuesta de arranque puede llegar después de elegir otro modelo.
     const selectedLimit = !next.modelChoice || next.modelChoice === model ? limit : null;
     const hasHistory = items.some(item => ["user", "text", "thinking", "tool"].includes(item.kind));
-    return { ...next, usage: usage ? readUsage(usage, next, true, selectedLimit)
+    return { ...next, apiUsage, costUsd: apiUsage?.costUsd ?? null, usage: usage ? readUsage(usage, next, true, selectedLimit)
       : selectedLimit || hasHistory || previousTotal !== null ? { used: 0, window: selectedLimit ?? currentModel(models, model, next.modelChoice)?.contextWindow ?? null,
         parts: [], reserve: null, total: previousTotal, ...(hasHistory || previousTotal !== null ? { measured: false } : {}) } : null };
   }
@@ -93,9 +96,21 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
     const next = finish(state, action.id, "failed", `failed:${action.id}`, action.message, Date.now());
     return next;
   }
+  if (action.type === "trexUsage") {
+    if (action.result.sessionId !== state.sessionId) return state;
+    const raw = record(action.result.usage), apiUsage = readApiUsage(raw?.apiUsage);
+    return { ...state, apiUsage, costUsd: apiUsage?.costUsd ?? null,
+      usage: raw ? readUsage(raw, state, true, windowSize(action.result.contextWindow)) : state.usage ? { ...state.usage, measured: false } : null };
+  }
   if (action.type !== "trexEvent") return baseReducer(state, action);
   const p = action.params, userId = text(p.messageId);
   if (p.sessionId !== state.sessionId || !state.pendingMessageIds.includes(userId)) return state;
+  if (action.method === "usage/updated") {
+    const raw = record(p.usage), apiUsage = readApiUsage(p.apiUsage);
+    if (!raw || !apiUsage) return state;
+    return { ...state, apiUsage, costUsd: apiUsage.costUsd,
+      usage: { ...readUsage(raw, state, true), total: apiUsage.totalTokens } };
+  }
   if (action.method === "turn/started") return { ...state, activeMessageIds: [userId], turnId: text(p.turnId) || userId };
   if (action.method === "message/delta") {
     const kind = p.kind === "thinking" ? "thinking" : "text";
@@ -128,8 +143,12 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
     const next = finish(state, userId, status, `trex:${userId}`, text(p.error), action.now);
     const usage = record(p.usage);
     if (!usage) return next;
-    return { ...next, usage: readUsage(usage, next),
-      costUsd: typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd) && usage.costUsd >= 0 ? (state.costUsd ?? 0) + usage.costUsd : state.costUsd };
+    const snapshot = readApiUsage(p.apiUsage);
+    const legacy = readApiUsage({ ...usage, totalTokens: tokens(usage.inputTokens) !== null && tokens(usage.outputTokens) !== null ? Number(usage.inputTokens) + Number(usage.outputTokens) : null });
+    const apiUsage = snapshot ?? addApiUsage(state.apiUsage, legacy);
+    const context = readUsage(usage, next);
+    return { ...next, apiUsage, usage: { ...context, ...(snapshot ? { total: snapshot.totalTokens } : {}) },
+      costUsd: snapshot ? snapshot.costUsd : apiUsage?.costUsd ?? state.costUsd };
   }
   return state;
 }

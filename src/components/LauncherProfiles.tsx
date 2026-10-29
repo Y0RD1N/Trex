@@ -7,6 +7,7 @@ import Select from "./Select";
 import { useDialog } from "./DialogProvider";
 import TrexCliProfiles, { trexConnectionName, useTrexCliProfiles, type TrexCliProfile } from "./TrexCliProfiles";
 import "./LauncherProfiles.css";
+import AntigravitySetup from "./AntigravitySetup";
 
 type Props = {
   profiles: LauncherProfile[];
@@ -46,7 +47,7 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
     if (provider === "trex") return;
     const profile: LauncherProfile = duplicate
       ? { ...duplicate, id: crypto.randomUUID(), name: uniqueName(`${duplicate.name} · copia`) }
-      : { id: crypto.randomUUID(), name: uniqueName(PROVIDER_NAMES[provider]), provider, command: provider, args: "", shell: "", launchMode: "arg", configDir: "" };
+      : { id: crypto.randomUUID(), name: uniqueName(PROVIDER_NAMES[provider]), provider, command: provider === "antigravity" ? "antigravity-acp" : provider, args: "", shell: "", launchMode: "arg", configDir: "" };
     onChange([...profiles, profile], defaultProfileId);
     setSelectedId(profile.id);
     setCreatingTrex(false);
@@ -126,6 +127,7 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
     <div className="profile-add-actions">
       <button type="button" className="btn btn-small btn-ghost" disabled={trexBusy} onClick={() => add("claude")}><PlusIcon size={13} /> Añadir Claude</button>
       <button type="button" className="btn btn-small btn-ghost" disabled={trexBusy} onClick={() => add("codex")}><PlusIcon size={13} /> Añadir Codex</button>
+      <button type="button" className="btn btn-small btn-ghost" disabled={trexBusy} onClick={() => add("antigravity")}><PlusIcon size={13} /> Añadir Antigravity</button>
       <button type="button" className="btn btn-small btn-ghost" disabled={!trexReady || trexBusy} aria-describedby={`${id}-trex-hint`}
         onClick={() => { setCreatingTrex(true); setAdvanced(false); setTrexNotice(""); }}><PlusIcon size={13} /> Trex API</button>
     </div>
@@ -157,13 +159,14 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
         <div><button type="button" className="icon-btn" title="Duplicar perfil" aria-label="Duplicar perfil" onClick={() => add(selected.provider, selected)}><CopyIcon size={14} /></button>
           <button type="button" className="icon-btn" title="Eliminar perfil" aria-label="Eliminar perfil" disabled={profiles.length <= 1} onClick={remove}><TrashIcon size={14} /></button></div>
       </div>
+      {selected.provider === "antigravity" && <AntigravitySetup profile={selected} onBusyChange={changeTrexBusy} />}
       <div className="profile-field"><label htmlFor={`${id}-name`}>Nombre del perfil</label>
         <input id={`${id}-name`} className="input" value={selected.name} placeholder="Claude 1, Claude 2, Codex trabajo…" aria-invalid={!selected.name.trim()} onChange={event => patch({ name: event.currentTarget.value })} /></div>
       <div className="profile-field"><label htmlFor={`${id}-command`}>Comando</label>
-        <input id={`${id}-command`} className="input settings-mono" value={selected.command} spellCheck={false} placeholder={selected.provider === "claude" ? "claude1" : "codex"}
+        <input id={`${id}-command`} className="input settings-mono" value={selected.command} spellCheck={false} placeholder={selected.provider === "antigravity" ? "antigravity-acp" : selected.provider === "claude" ? "claude1" : "codex"}
           aria-invalid={!selected.command.trim()} aria-describedby={`${id}-command-hint`} onChange={event => patch({ command: event.currentTarget.value })} />
-        <small id={`${id}-command-hint`}>Nombre, ruta, alias o función de tu shell. Por ejemplo: {selected.provider === "claude" ? "claude1 o claude2" : "codex"}.</small></div>
-      <div className="profile-status" role="status">
+        <small id={`${id}-command-hint`}>{selected.provider === "antigravity" ? "Usa antigravity-acp para gestionar el componente automáticamente, o indica la ruta completa del servidor oficial." : `Nombre, ruta, alias o función de tu shell. Por ejemplo: ${selected.provider === "claude" ? "claude1 o claude2" : "codex"}.`}</small></div>
+      {selected.provider !== "antigravity" && <><div className="profile-status" role="status">
         <span className={`settings-status-dot${standard && info && !info.found ? " missing" : ""}`} aria-hidden="true" />
         <span>{standard ? !info ? "Comprobando instalación…" : info.found ? `${PROVIDER_NAMES[selected.provider]} disponible${info.version ? ` · ${info.version}` : ""}` : `${PROVIDER_NAMES[selected.provider]} no detectado en el equipo` : "Comando personalizado · se ejecutará con tu shell"}</span>
         {standard && <button type="button" className="btn btn-small btn-ghost" disabled={!info} onClick={onRedetect}>Comprobar</button>}
@@ -173,7 +176,7 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
         <Select id={`${id}-start`} value={startMode} onChange={value => {
           if (value === "custom") { setCustomStartId(selected.id); setAdvanced(true); requestAnimationFrame(() => document.getElementById(`${id}-args`)?.focus()); }
           else { setCustomStartId(null); patch({ args: value }); }
-        }} options={[...startOptions, { value: "custom", label: "Argumentos personalizados" }]} /></div>
+        }} options={[...startOptions, { value: "custom", label: "Argumentos personalizados" }]} /></div></>}
       <label className="profile-default-control"><input type="radio" name={`${id}-default-profile`} checked={selected.id === defaultProfileId} onChange={() => onChange(profiles, selected.id)} />
         <span>Usar este perfil con Ctrl+T y al iniciar trex</span></label>
       <p className="settings-note">La cuenta se gestiona en el propio asistente. Cambiar un perfil solo afecta a las sesiones nuevas.</p>
@@ -182,17 +185,17 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
         <button type="button" className="settings-advanced-trigger" aria-expanded={advanced} aria-controls={`${id}-advanced`} onClick={() => setAdvanced(!advanced)}><ChevronIcon size={13} />Opciones avanzadas del perfil</button>
         <div id={`${id}-advanced`} className={`settings-advanced-content${advanced ? " open" : ""}`} inert={!advanced} aria-hidden={!advanced || undefined}>
           <div className="settings-advanced-clip"><div className="settings-advanced-fields">
-            <div className="profile-field"><label htmlFor={`${id}-args`}>Argumentos</label><input id={`${id}-args`} className="input settings-mono" value={selected.args} spellCheck={false}
+            <div className="profile-field"><label htmlFor={`${id}-args`}>Argumentos</label><input id={`${id}-args`} className="input settings-mono" value={selected.args} spellCheck={false} aria-invalid={selected.provider === "antigravity" && !!selected.args.trim()}
               placeholder={selected.provider === "codex" ? "Por ejemplo: --no-alt-screen" : "Sin argumentos adicionales"} onChange={event => patch({ args: event.currentTarget.value })} /></div>
             <div className="profile-field"><label htmlFor={`${id}-config-dir`}>Carpeta de configuración (opcional)</label><input id={`${id}-config-dir`} className="input settings-mono" value={selected.configDir} spellCheck={false}
-              placeholder={selected.provider === "codex" ? "~/.codex-trabajo" : "~/.claude-cuenta-2"} aria-describedby={`${id}-config-hint`} onChange={event => patch({ configDir: event.currentTarget.value })} />
-              <small id={`${id}-config-hint`}>Para separar la configuración y la cuenta mediante {selected.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"}. Déjala vacía si tu comando ya lo gestiona.</small></div>
-            <div className="profile-field"><label htmlFor={`${id}-shell`}>Shell del perfil</label><Select id={`${id}-shell`} value={selected.shell} onChange={shell => patch({ shell })} options={[
+              placeholder={selected.provider === "antigravity" ? "~/.gemini-trex-trabajo" : selected.provider === "codex" ? "~/.codex-trabajo" : "~/.claude-cuenta-2"} aria-describedby={`${id}-config-hint`} onChange={event => patch({ configDir: event.currentTarget.value })} />
+              <small id={`${id}-config-hint`}>{selected.provider === "antigravity" ? "Carpeta GEMINI_HOME para una cuenta de Google independiente. Vacía: usa la cuenta de Antigravity de Trex." : `Para separar la configuración y la cuenta mediante ${selected.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"}. Déjala vacía si tu comando ya lo gestiona.`}</small></div>
+            <div className="profile-field"><label htmlFor={`${id}-shell`}>Shell del perfil</label><Select id={`${id}-shell`} value={selected.shell} disabled={selected.provider === "antigravity"} onChange={shell => patch({ shell })} options={[
               { value: "", label: "Usar el shell de trex" },
               ...(!appInfo?.shellOptions.some(option => option.id === selected.shell) && selected.shell ? [{ value: selected.shell, label: `${selected.shell} (actual)` }] : []),
               ...(appInfo?.shellOptions.map(option => ({ value: option.id, label: option.label, disabled: !option.available, description: option.available ? undefined : "No disponible" })) ?? []),
             ]} /></div>
-            <div className="profile-field"><label htmlFor={`${id}-launch`}>Método de inicio</label><Select id={`${id}-launch`} value={selected.launchMode} onChange={value => patch({ launchMode: value === "inject" ? "inject" : "arg" })} options={[
+            <div className="profile-field"><label htmlFor={`${id}-launch`}>Método de inicio</label><Select id={`${id}-launch`} value={selected.launchMode} disabled={selected.provider === "antigravity"} onChange={value => patch({ launchMode: value === "inject" ? "inject" : "arg" })} options={[
               { value: "arg", label: "Directo" }, { value: "inject", label: "Compatible", description: "Escribir el comando en la terminal" },
             ]} /></div>
           </div></div>

@@ -6,6 +6,9 @@ use std::path::{Component, Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 
 pub struct HyperframesProvider;
+pub(crate) fn available(cwd: &Path) -> bool {
+    find_cli(cwd).is_some()
+}
 impl ToolProvider for HyperframesProvider {
     fn definitions(&self, mode: &str) -> Vec<Value> {
         if mode == "plan" {

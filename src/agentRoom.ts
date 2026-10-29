@@ -1,7 +1,7 @@
 /** Una conversación compartida con historiales y cuentas independientes por rol. */
 import { normalizeAgentWorkflow, type WorkflowAgent, type WorkflowStatus } from "./agentWorkflow";
 import { initialChatState, type ChatItem, type ChatState } from "./chatState";
-import { validConversationId } from "./conversations";
+import { validConversationId, validAcpId } from "./conversations";
 import { createHandoffContext, normalizeHandoffReference, sanitizeHandoffText, type HandoffContext, type HandoffReference, type HandoffSource } from "./handoff";
 import type { QueueSnapshot, QueuedMessage } from "./messageQueue";
 
@@ -36,7 +36,7 @@ export type AgentRoom = {
 
 const ROLES: RoomRole[] = ["planner", "executor"];
 const PHASES: AgentRoom["phase"][] = ["idle", "planning", "waiting", "transferring", "executing", "completed", "paused", "failed"];
-const MODES = { claude: ["default", "acceptEdits", "plan", "bypassPermissions", "auto", "dontAsk", "manual"], codex: ["read-only", "auto", "plan", "full"], trex: ["plan", "ask", "auto", "full"] };
+const MODES = { claude: ["default", "acceptEdits", "plan", "bypassPermissions", "auto", "dontAsk", "manual"], codex: ["read-only", "auto", "plan", "full"], antigravity: ["ask", "default", "accept-edits", "auto", "full"], trex: ["plan", "ask", "auto", "full"] };
 const object = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 100 && !/[^A-Za-z0-9_-]/.test(value);
 const isRole = (value: unknown): value is RoomRole => value === "planner" || value === "executor";
@@ -87,13 +87,15 @@ export function normalizeAgentRoom(raw: unknown): AgentRoom | null {
   const planner = object(value.planner), executor = object(value.executor);
   if (!planner || !executor) return null;
   for (const participant of [planner, executor]) {
-    if (participant.conversationId !== null && (!validConversationId(participant.conversationId) || participant.conversationId.length !== 36)) return null;
+    if (participant.conversationId !== null && !(participant.agent && (participant.agent as { provider?: unknown }).provider === "antigravity" ? validAcpId(participant.conversationId) : validConversationId(participant.conversationId))) return null;
   }
   const workflow = normalizeAgentWorkflow({ id: value.id, role: value.active, status: "paused", planner: planner.agent, executor: executor.agent });
   if (!workflow) return null;
   for (const role of ROLES) {
     const participant = role === "planner" ? planner : executor;
-    if (participant.mode != null && (typeof participant.mode !== "string" || !MODES[workflow[role].provider].includes(participant.mode))) return null;
+    if (participant.mode != null && (typeof participant.mode !== "string" || (workflow[role].provider === "antigravity"
+      ? !/^[a-zA-Z0-9_-]{1,128}$/.test(participant.mode) || /plan|architect|read.?only/i.test(participant.mode)
+      : !MODES[workflow[role].provider].includes(participant.mode)))) return null;
   }
   let pending: AgentRoom["pending"] = null;
   if (value.pending != null) {
@@ -198,12 +200,12 @@ export function roomConversationContext(items: ChatItem[], source: HandoffSource
 /** Solo los prefijos explícitos cambian el destino; el llamador decide si puede enviarse. */
 export function routeRoomMessage(text: string, room: AgentRoom): { kind: "plan" | "message"; role: RoomRole; text: string } {
   const ordinary = { kind: "message" as const, role: room.active, text };
-  const match = /^\s*(\/(?:planificar|plan)|@(?:planificador|planner|ejecutor|executor|claude|codex|trex))(?=\s|$)\s*([\s\S]*)$/i.exec(text);
+  const match = /^\s*(\/(?:planificar|plan)|@(?:planificador|planner|ejecutor|executor|claude|codex|trex|antigravity))(?=\s|$)\s*([\s\S]*)$/i.exec(text);
   if (!match || !match[2].trim()) return ordinary;
   const prefix = match[1].toLowerCase();
   let role: RoomRole;
   if (prefix === "@ejecutor" || prefix === "@executor") role = "executor";
-  else if (prefix === "@claude" || prefix === "@codex" || prefix === "@trex") {
+  else if (prefix === "@claude" || prefix === "@codex" || prefix === "@trex" || prefix === "@antigravity") {
     const matches = ROLES.filter(candidate => room[candidate].agent.provider === prefix.slice(1));
     if (matches.length !== 1) return ordinary;
     role = matches[0];

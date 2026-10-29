@@ -33,7 +33,7 @@ function agent(raw: unknown): WorkflowAgent | null {
   const value = object(raw);
   if (!value || typeof value.profileId !== "string" || !value.profileId.trim() || value.profileId.length > 200
     || typeof value.profileName !== "string" || !value.profileName.trim() || value.profileName.length > 200
-    || (value.provider !== "claude" && value.provider !== "codex" && value.provider !== "trex")) return null;
+    || (value.provider !== "claude" && value.provider !== "codex" && value.provider !== "trex" && value.provider !== "antigravity")) return null;
   const launch = normalizeLaunch(value.launch, value.provider);
   if (!launch || launch.profileId !== value.profileId) return null;
   const model = normalizeModelChoice(value.model);

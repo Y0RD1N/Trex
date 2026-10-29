@@ -1,3 +1,4 @@
+import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { browserOptions } from "../browser";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatError, loadHandoff, prepareHandoff } from "../api";
@@ -41,6 +42,7 @@ function ClaudeRuntime({ role, options, publish }: RuntimeProps) {
 function CodexRuntime({ role, options, publish }: RuntimeProps) {
   return <ReportSession role={role} session={useCodexChat(options)} publish={publish} />;
 }
+function AntigravityRuntime({ role, options, publish }: RuntimeProps) { return <ReportSession role={role} session={useAntigravityChat(options)} publish={publish} />; }
 function TrexRuntime({ role, options, publish }: RuntimeProps) {
   return <ReportSession role={role} session={useTrexChat(options)} publish={publish} />;
 }
@@ -288,7 +290,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
 
   const beforeSend = (text: string, images: OutgoingImage[], previews: string[]): boolean | "blocked" | Promise<true | "blocked"> => {
     const current = roomRef.current;
-    if (/^\s*(?:\/plan(?:ificar)?|@(?:planner|executor|planificador|ejecutor|claude|codex|trex))\s*$/i.test(text)) return block("Añade la tarea al mensaje. Tu borrador se conserva.");
+    if (/^\s*(?:\/plan(?:ificar)?|@(?:planner|executor|planificador|ejecutor|claude|codex|trex|antigravity))\s*$/i.test(text)) return block("Añade la tarea al mensaje. Tu borrador se conserva.");
     const route = planIntent ? { kind: "plan" as const, role: "planner" as const, text } : routeRoomMessage(text, current);
     if (operation.current !== null || current.pending || current.phase === "transferring") return block("Espera a que termine la entrega o detén la sala antes de enviar otra tarea.");
     if (!allReady()) return block("Espera a que ambas sesiones y sus colas estén disponibles.");
@@ -519,7 +521,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
         onRunning: () => latest.current.onRunning(latest.current.sessionId),
         onExit: (_id, code) => { if (ROLES.every(candidate => candidate === role || ["failed", "exited"].includes(sessionsRef.current[candidate]?.state.process ?? "starting"))) latest.current.onExit(latest.current.sessionId, code); },
       };
-      const Runtime = participant.agent.provider === "trex" ? TrexRuntime : participant.agent.provider === "claude" ? ClaudeRuntime : CodexRuntime;
+      const Runtime = participant.agent.provider === "antigravity" ? AntigravityRuntime : participant.agent.provider === "trex" ? TrexRuntime : participant.agent.provider === "claude" ? ClaudeRuntime : CodexRuntime;
       return <Runtime key={`${room.id}-${role}-${participant.agent.profileId}`} role={role} options={options} publish={publish} />;
     })}
     {aggregate ? <ChatPanel {...props} browser={browser} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}

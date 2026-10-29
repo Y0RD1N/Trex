@@ -37,6 +37,13 @@ test("normalizes independent participants, conversations, launch snapshots and m
   sameProvider.executor.mode = "acceptEdits";
   assert.equal(normalizeAgentRoom(sameProvider).executor.agent.profileId, "second-claude-account");
 });
+test("Antigravity executors retain opaque ACP session IDs and advertised permission modes", () => {
+  const raw = room();
+  raw.executor = { agent: { ...agent("antigravity", "google"), model: "account-model", launch: { profileId: "google", profileName: "Google", command: "antigravity-acp", args: "", shell: "", launchMode: "arg", env: { GEMINI_HOME: "D:/accounts/google" } } }, conversationId: "opaque/acp-session", mode: "request-review" };
+  const restored = normalizeAgentRoom(raw);
+  assert.equal(restored.executor.conversationId, "opaque/acp-session"); assert.equal(restored.executor.mode, "request-review");
+  assert.equal(routeRoomMessage("@antigravity revisa este cambio", restored).role, "executor");
+});
 
 test("validates all required room fields and participant conversation identities", () => {
   for (const raw of [undefined, null, [], "room", 12, {}]) assert.equal(normalizeAgentRoom(raw), null);

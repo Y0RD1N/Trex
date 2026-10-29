@@ -136,6 +136,8 @@ export type ChatState = {
   /** Uso del plan de la cuenta (sesión de 5 horas, semana…), si el asistente lo da. */
   plan: PlanUsage | null;
   costUsd: number | null;
+  /** Consumo informado por la API en esta conversación; no es el saldo de la cuenta. */
+  apiUsage: import("./tokenUsage").ApiUsage | null;
   /** Bloques del mensaje en curso: índice del bloque → id del elemento. */
   stream: { messageId: string | null; blocks: Record<number, string> };
   /** Mensajes que el CLI confirmó que sobrevivían a una interrupción. */
@@ -182,7 +184,7 @@ export const initialChatState = (mode: string | null = null, model: string | nul
   lastCompletion: null, turnItemStart: null,
   turnStartedAt: null, sessionId: null, turnId: null, turnDiff: null, model: null, models: [],
   modelChoice: normalizeModelChoice(model), effort: normalizeEffortChoice(effort), effortChoice: normalizeEffortChoice(effort), fast: false, fastChoice: null, permissionMode: mode, modeChoice: mode,
-  commands: [], agents: [], skills: [], usage: null, plan: null, costUsd: null,
+  commands: [], agents: [], skills: [], usage: null, plan: null, costUsd: null, apiUsage: null,
   stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null, historyCount: 0, process: "starting", exitCode: null, stderr: [],
 });
 
@@ -268,7 +270,7 @@ export function baseReducer(state: ChatState, action: BaseChatAction): ChatState
       return { ...state, items: state.items.slice(0, index), historyCount: Math.min(state.historyCount, index),
         sessionId: action.sessionId, pendingTurns: 0, pendingMessageIds: [], interruptedMessageIds: [], activeMessageIds: [], completedTurnIds: [],
         turnStartedAt: null, turnId: null, turnDiff: null, lastCompletion: null, turnItemStart: null,
-        usage: null, costUsd: null, stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null };
+        usage: null, costUsd: null, apiUsage: null, stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null };
     }
     case "answer":
       return { ...state, items: state.items.map(item => item.kind === "permission" && item.id === action.id

@@ -152,6 +152,7 @@ function panelModule(env, overrides = {}) {
     "../hooks/useHandoffDelivery": { useHandoffDelivery: () => ({ prepared: { content: "Original request" }, loading: false, sending: false }) },
     "../hooks/useClaudeChat": { useClaudeChat: forbidden("Claude hook") },
     "../hooks/useCodexChat": { useCodexChat: forbidden("Codex hook") },
+    "../hooks/useAntigravityChat": { useAntigravityChat: forbidden("Antigravity hook outside its test host") },
     "../hooks/useTrexChat": { useTrexChat: forbidden("Trex hook outside its mock host") }, ...overrides });
 }
 
@@ -391,6 +392,7 @@ function roomHarness(t, scenario = {}) {
   const roomModule = evaluate("room", env, { "../api": {...api,...scenario.api}, "./ChatView": { ChatPanel },
     "../hooks/useClaudeChat": { useClaudeChat: forbidden("Claude runtime") },
     "../hooks/useCodexChat": { useCodexChat: forbidden("Codex runtime") },
+    "../hooks/useAntigravityChat": { useAntigravityChat: forbidden("Antigravity hook outside its test host") },
     "../hooks/useTrexChat": { useTrexChat: forbidden("Trex runtime") } });
   const participant = role => ({ agent: { provider: "codex", profileId: `offline-${role}`, profileName: role,
     model: null, effort: null, launch: { command: null, args: null, shell: "powershell", env: null } }, conversationId: null, mode: "plan" });

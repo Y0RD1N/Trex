@@ -12,6 +12,7 @@ import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
 import AgentIcon from "./AgentIcon";
 import Select from "./Select";
 import { ArrowRightIcon } from "./Icons";
+import { listAntigravityConversations } from "../antigravityConnection";
 export default function RecoverConversations({
   project,
   settings,
@@ -52,7 +53,8 @@ export default function RecoverConversations({
     setLoading(true);
     // Un lanzador como `claude2` guarda sus conversaciones en su propia carpeta.
     void profileAccountDir(profile, settings.shell)
-      .then((configDir) => listConversations(profile.provider, configDir, project.path, profile.provider === "trex" ? trexProfileName(profile) : undefined))
+      .then((configDir) => profile.provider === "antigravity" ? listAntigravityConversations(profile.command, configDir, project.path)
+        : listConversations(profile.provider, configDir, project.path, profile.provider === "trex" ? trexProfileName(profile) : undefined))
       .then((result) => {
         if (generation.current === request) setItems(result);
       })
@@ -129,7 +131,7 @@ export default function RecoverConversations({
       </div>
       <p className="feature-hint">
         Se abre una terminal nueva con el contexto guardado por{" "}
-        {profile.provider === "trex" ? "Trex CLI" : profile.provider === "claude" ? "Claude Code" : "Codex"}.
+        {profile.provider === "antigravity" ? "Antigravity" : profile.provider === "trex" ? "Trex CLI" : profile.provider === "claude" ? "Claude Code" : "Codex"}.
       </p>
       <div className="conversation-results" aria-busy={loading}>
         {loading ? (

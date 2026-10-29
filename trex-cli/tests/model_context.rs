@@ -448,6 +448,102 @@ fn measured(input: u64, output: u64) -> Value {
 }
 
 #[test]
+fn api_usage_is_live_absolute_and_survives_restore_without_double_counting() {
+    let home = TempDir::new().unwrap();
+    let workspace = TempDir::new().unwrap();
+    let api = MockApi::new();
+    save_profile(home.path(), "TREX1", "custom", &api.endpoint(), "mock");
+    let mut agent = Agent::spawn(home.path(), "TREX1");
+    catalog(
+        &mut agent,
+        &api,
+        json!([{"id":"mock","context_length":64_000}]),
+    );
+    let started = agent.start(workspace.path(), "plan", None);
+    let session = started["sessionId"].as_str().unwrap();
+    agent.turn(session, "metrics", "inspect");
+    answer(
+        api.chat(),
+        Some(
+            json!({"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"cost":0.01,
+        "prompt_tokens_details":{"cached_tokens":60},"completion_tokens_details":{"reasoning_tokens":15}}),
+        ),
+        Some("inspect"),
+    );
+    let first = agent.event("usage/updated", "metrics");
+    assert_eq!(first["params"]["apiUsage"]["totalTokens"], 120);
+    answer(
+        api.chat(),
+        Some(
+            json!({"prompt_tokens":50,"completion_tokens":10,"total_tokens":60,
+        "prompt_cache_hit_tokens":20,"completion_tokens_details":{"reasoning_tokens":3}}),
+        ),
+        None,
+    );
+    let completed = agent.completed("metrics", "completed");
+    let measured = &completed["params"]["apiUsage"];
+    assert_eq!(measured["totalTokens"], 180);
+    assert_eq!(measured["cachedReadTokens"], 80);
+    assert_eq!(measured["reasoningTokens"], 18);
+    assert_eq!(measured["requests"], 2);
+    assert_eq!(measured["costUsd"], 0.01);
+    assert_eq!(measured["costPartial"], true);
+    assert_eq!(completed["params"]["usage"]["contextTokens"], 60);
+    assert_eq!(agent.history(session)["usage"]["apiUsage"], *measured);
+    assert_eq!(agent.history(session)["usage"]["apiUsage"], *measured);
+    let read = agent.rpc("session/usage", json!({"sessionId":session}));
+    assert_eq!(read["usage"]["apiUsage"], *measured);
+    assert!(read.get("items").is_none());
+    drop(agent);
+    let mut restored = Agent::spawn(home.path(), "TREX1");
+    catalog(
+        &mut restored,
+        &api,
+        json!([{"id":"mock","context_length":64_000}]),
+    );
+    assert_eq!(
+        restored.start(workspace.path(), "plan", Some(session))["usage"]["apiUsage"],
+        *measured
+    );
+}
+
+#[test]
+fn interactive_usage_is_local_and_does_not_send_a_provider_prompt() {
+    let home = TempDir::new().unwrap();
+    let workspace = TempDir::new().unwrap();
+    let api = MockApi::new();
+    save_profile(home.path(), "TREX1", "custom", &api.endpoint(), "mock");
+    let mut child = command(home.path())
+        .args(["--profile", "TREX1", "chat", "--mode", "plan", "--cwd"])
+        .arg(workspace.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"/usage\n/exit\n")
+        .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("local /usage tried to wait for a provider");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Measured context and API consumption"));
+    assert!(text.contains("\"usage\": null"));
+}
+
+#[test]
 fn official_minimax_limit_is_available_offline_before_the_first_turn() {
     let home = TempDir::new().unwrap();
     let workspace = TempDir::new().unwrap();

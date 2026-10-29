@@ -72,6 +72,7 @@ function harness(t, provider, extra = {}) {
   let cursor = 0, counter = 0, handlers, active = null, session, unmounted = false, conversation = null, turn = null;
   let conversationCounter = 0, turnCounter = 0;
   const hooks = {
+    useState(value) { const index = cursor++, slot = slots[index] ??= { value }; return [slot.value, next => { slot.value = typeof next === "function" ? next(slot.value) : next; }]; },
     useRef(value) { const index = cursor++; return slots[index] ??= { current: value }; },
     useReducer(reducer, initial, initialize) {
       const index = cursor++, slot = slots[index] ??= { value: initialize ? initialize(initial) : initial };

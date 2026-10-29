@@ -7,6 +7,8 @@ import { canResume } from "./conversations";
 import { parseTrexModels } from "./trexChat";
 import { launchForProfile } from "./profiles";
 import type { LauncherProfile, Settings } from "./types";
+import { openAntigravity } from "./antigravityConnection";
+import { acpConfigs, acpModels } from "./antigravityChat";
 
 type Unlisten = () => void;
 export type ProfileModelTransport = {
@@ -33,6 +35,7 @@ const failure = (error: unknown): Error => error instanceof Error ? error : new 
 export function createProfileModelLoader(transport: ProfileModelTransport, { timeoutMs = 15_000 }: { timeoutMs?: number } = {}) {
   return (profile: LauncherProfile, settings: Settings, cwd: string, signal?: AbortSignal): Promise<ModelInfo[]> => new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new Error("La consulta de modelos se canceló.")); return; }
+    if (profile.provider === "antigravity") { reject(new Error("Antigravity requiere el cargador ACP de loadProfileModels.")); return; }
     const launch = launchForProfile(settings, profile);
     if (!canResume(launch, profile.provider)) { reject(new Error("Este perfil no admite consultar modelos para una conversación nueva.")); return; }
     const codex = profile.provider === "codex" ? codexLaunch(launch.args) : null;
@@ -137,4 +140,15 @@ export function createProfileModelLoader(transport: ProfileModelTransport, { tim
   });
 }
 
-export const loadProfileModels = createProfileModelLoader(nativeTransport);
+const loadNativeProfileModels = createProfileModelLoader(nativeTransport);
+export async function loadProfileModels(profile: LauncherProfile, settings: Settings, cwd: string, signal?: AbortSignal): Promise<ModelInfo[]> {
+  if (profile.provider !== "antigravity") return loadNativeProfileModels(profile, settings, cwd, signal);
+  if (profile.args.trim()) throw new Error("El perfil ACP debe estar libre de argumentos de agy.");
+  const connection = await openAntigravity(profile.command, profile.configDir, cwd, {}, signal);
+  try {
+    // ACP supplies its catalogue during session setup. No prompt or model inference is sent.
+    const result = await connection.rpc.call("session/new", { cwd, mcpServers: [] });
+    return acpModels(acpConfigs(result.configOptions), result.models);
+  } catch { throw new Error("Abre un chat de Antigravity y conecta tu cuenta para consultar sus modelos."); }
+  finally { await connection.close(); }
+}

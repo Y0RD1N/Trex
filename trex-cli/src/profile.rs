@@ -1,7 +1,7 @@
 //! Profile metadata and OS-protected credentials. A persistent sidecar lock
 //! covers each transaction, including credential staging and cleanup.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -65,6 +65,94 @@ pub fn load(name: &str) -> Result<Profile> {
 
 pub fn api_key(profile: &Profile) -> Result<Option<String>> {
     native_store()?.api_key(profile)
+}
+
+/// Fixed-name, private CLI-owned documents share the credential home's checks.
+pub fn read_user_file(name: &str) -> Result<Option<Vec<u8>>> {
+    ensure_user_filename(name)?;
+    let store = native_store()?;
+    let _lock = store.lock()?;
+    read_private_file(&store.directory.join(name))
+}
+pub(crate) fn update_user_file(
+    name: &str,
+    update: impl FnOnce(Option<Vec<u8>>) -> Result<Vec<u8>>,
+) -> Result<()> {
+    ensure_user_filename(name)?;
+    let store = native_store()?;
+    let _lock = store.lock()?;
+    let path = store.directory.join(name);
+    let bytes = update(read_private_file(&path)?)?;
+    ensure!(
+        bytes.len() <= 64 * 1024 * 1024,
+        "private document exceeds 64 MiB"
+    );
+    atomic_write(&path, &bytes)?.require_durable()
+}
+pub fn write_user_file(name: &str, bytes: &[u8]) -> Result<()> {
+    ensure_user_filename(name)?;
+    ensure!(
+        bytes.len() <= 64 * 1024 * 1024,
+        "private document exceeds 64 MiB"
+    );
+    let store = native_store()?;
+    let _lock = store.lock()?;
+    atomic_write(&store.directory.join(name), bytes)?.require_durable()
+}
+pub(crate) fn lock_user_file(name: &str, exclusive: bool) -> Result<File> {
+    ensure_user_filename(name)?;
+    let store = native_store()?;
+    let _lock = store.lock()?;
+    let path = store.directory.join(name);
+    reject_link(&path)?;
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    private_options(&mut options);
+    let file = options.open(path)?;
+    secure_file(&file, true)?;
+    if exclusive {
+        FileExt::try_lock_exclusive(&file)
+    } else {
+        FileExt::try_lock_shared(&file)
+    }
+    .map_err(|_| anyhow!("conversation storage is in use; close sessions before cleanup"))?;
+    Ok(file)
+}
+pub(crate) fn validate_storage_path(path: &Path) -> Result<()> {
+    for ancestor in path.ancestors() {
+        reject_link(ancestor)?;
+    }
+    Ok(())
+}
+fn ensure_user_filename(name: &str) -> Result<()> {
+    if !name.is_empty()
+        && name.len() <= 80
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        && name != "."
+        && name != ".."
+    {
+        Ok(())
+    } else {
+        bail!("invalid private document name")
+    }
+}
+pub(crate) fn global_control_lock() -> Result<File> {
+    let directory = dirs::data_local_dir()
+        .ok_or_else(|| anyhow!("local user directory unavailable"))?
+        .join("trex-agent-system");
+    private_directory(&directory)?;
+    let path = directory.join("desktop.lock");
+    reject_link(&path)?;
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    private_options(&mut options);
+    let file = options.open(path)?;
+    secure_file(&file, true)?;
+    file.try_lock_exclusive()
+        .map_err(|_| anyhow!("another Trex desktop operation is in progress"))?;
+    Ok(file)
 }
 
 fn native_store() -> Result<ProfileStore<platform::Credentials>> {
@@ -616,15 +704,24 @@ fn read_private_file(path: &Path) -> Result<Option<Vec<u8>>> {
     let mut options = OpenOptions::new();
     options.read(true);
     private_options(&mut options);
-    let mut file = match options.open(path) {
+    let file = match options.open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(_) => bail!("could not read profile storage"),
     };
     secure_file(&file, false)?;
+    ensure!(
+        file.metadata()?.len() <= 64 * 1024 * 1024,
+        "private document exceeds 64 MiB"
+    );
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    file.take(64 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
         .map_err(|_| anyhow!("could not read profile storage"))?;
+    ensure!(
+        bytes.len() <= 64 * 1024 * 1024,
+        "private document exceeds 64 MiB"
+    );
     Ok(Some(bytes))
 }
 

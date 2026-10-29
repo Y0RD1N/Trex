@@ -20,6 +20,9 @@ impl std::fmt::Display for GithubUncertain {
 impl std::error::Error for GithubUncertain {}
 
 pub struct GithubProvider;
+pub(crate) fn available() -> bool {
+    find_github().is_some()
+}
 impl ToolProvider for GithubProvider {
     fn definitions(&self, mode: &str) -> Vec<Value> {
         let specs = [

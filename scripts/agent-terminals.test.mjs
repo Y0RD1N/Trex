@@ -14,6 +14,7 @@ function harness(t, provider = "codex") {
     queueMicrotask(() => {
       if (error) { tracker.observe(JSON.stringify({ id: request.id, error: { code: -32601, message: error } }), runtime); return; }
       if (provider === "claude") reply(request, {}, runtime);
+      else if (request.method === "process/write") reply(request, { accepted: true }, runtime);
       else if (/terminate|stop/.test(request.method)) { jobs = jobs.filter(row => (row.processId ?? row.id) !== request.params.processId); reply(request, { terminated: true }, runtime); }
       else if (request.method === "process/read") reply(request, { text: "tail of output", truncated: true }, runtime);
       else reply(request, listOverride ?? (provider === "trex" ? { processes: jobs.map(({processId, ...row}) => ({...row,id:processId,status:"running"})) } : { data: jobs, nextCursor: null }), runtime);
@@ -38,6 +39,20 @@ test("Codex uses owned provider process IDs, preserves peers and does not clear 
   assert.equal(h.tracker.snapshot.entries.find(e => e.id === entry.id).state, "stopped");
   assert.equal(h.tracker.snapshot.entries.filter(e => e.state === "running").length, 1);
   await h.tracker.stop("an-arbitrary-os-pid"); assert.equal(h.requests.filter(r => r.method.includes("terminate")).length, 1);
+});
+
+test("Trex interactive input uses the owned session and refuses finished, foreign and noninteractive terminals", async t => {
+  const h = harness(t, "trex");
+  h.jobs = [{ processId: "pty-1", itemId: "input", command: "interactive command", cwd: "D:/project", interactive: true }];
+  await h.ready();
+  const entry = h.tracker.snapshot.entries[0]; assert.equal(entry.canWrite, true);
+  await h.tracker.sendInput(entry.id, "áé 中文 🦖\n");
+  assert.deepEqual(h.requests.find(r => r.method === "process/write").params, { sessionId: "thread-1", processId: "pty-1", text: "áé 中文 🦖\n" });
+  await assert.rejects(h.tracker.sendInput("foreign", "no\n"));
+  await assert.rejects(h.tracker.sendInput(entry.id, "bad\0"));
+  h.jobs = []; await h.tracker.refresh(); assert.equal(h.tracker.snapshot.entries[0].canWrite, false);
+  await assert.rejects(h.tracker.sendInput(entry.id, "after exit\n"));
+  assert.equal(h.requests.filter(r => r.method === "process/write").length, 1);
 });
 test("Codex output is bounded and joined by thread and item, not by display command", async t => {
   const h = harness(t); await h.ready();

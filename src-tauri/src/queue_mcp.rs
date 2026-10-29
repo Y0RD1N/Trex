@@ -18,6 +18,7 @@ const TOOL_DESCRIPTION: &str = "Lee los mensajes que el usuario ha dejado en col
 struct Launch {
     data_dir: PathBuf,
     queue_id: String,
+    tasks_only: bool,
 }
 
 /// Return true for every invocation of this mode, including invalid arguments,
@@ -33,11 +34,12 @@ pub fn run_if_requested() -> bool {
     };
     let stdin = io::stdin();
     let stdout = io::stdout();
-    if let Err(error) = serve(
+    if let Err(error) = serve_tools(
         stdin.lock(),
         stdout.lock(),
         &launch.data_dir,
         &launch.queue_id,
+        launch.tasks_only,
     ) {
         eprintln!("trex inbox MCP: {error}");
     }
@@ -51,7 +53,9 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Option<Launch>
     let usage = "Uso: --trex-inbox-mcp <appDataDir> <queueId>";
     let data_dir = args.next().ok_or(usage)?;
     let queue_id = args.next().ok_or(usage)?;
-    if data_dir.is_empty() || args.next().is_some() {
+    let option = args.next();
+    let tasks_only = option.as_deref() == Some(std::ffi::OsStr::new("--tasks-only"));
+    if data_dir.is_empty() || option.is_some() && !tasks_only || args.next().is_some() {
         return Err(usage.into());
     }
     let queue_id = queue_id
@@ -60,18 +64,23 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Option<Launch>
     Ok(Some(Launch {
         data_dir: PathBuf::from(data_dir),
         queue_id,
+        tasks_only,
     }))
 }
 
 #[tauri::command]
-pub async fn message_queue_mcp_config(app: AppHandle, queue_id: String) -> Result<Value, String> {
+pub async fn message_queue_mcp_config(app: AppHandle, queue_id: String, tasks_only: Option<bool>) -> Result<Value, String> {
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("No se encontró la carpeta de datos de la app: {error}"))?;
     let executable = std::env::current_exe()
         .map_err(|error| format!("No se encontró el ejecutable de la app: {error}"))?;
-    tauri::async_runtime::spawn_blocking(move || mcp_config(&executable, &data_dir, &queue_id))
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut config = mcp_config(&executable, &data_dir, &queue_id)?;
+        if tasks_only == Some(true) { config["mcp_servers.trex_inbox.args"].as_array_mut().ok_or("Configuración MCP inválida.")?.push(json!("--tasks-only")); }
+        Ok(config)
+    })
         .await
         .map_err(|error| error.to_string())?
 }
@@ -181,11 +190,20 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<Frame>> {
     }
 }
 
+#[cfg(test)]
 fn serve(
+    reader: impl BufRead,
+    writer: impl Write,
+    data_dir: &Path,
+    queue_id: &str,
+) -> Result<(), String> { serve_tools(reader, writer, data_dir, queue_id, false) }
+
+fn serve_tools(
     mut reader: impl BufRead,
     mut writer: impl Write,
     data_dir: &Path,
     queue_id: &str,
+    tasks_only: bool,
 ) -> Result<(), String> {
     // Even initialize must not succeed for an invalid queue. Listing does not
     // create an inbox or claim pending messages.
@@ -201,7 +219,19 @@ fn serve(
                 "La petición MCP supera 64 KiB.",
             )),
             Frame::Json(bytes) => match serde_json::from_slice(&bytes) {
-                Ok(request) => cached_request(request, data_dir, queue_id, &mut replies),
+                Ok(request) => {
+                    let request: Value = request;
+                    if tasks_only && request["method"] == "tools/call" && request["params"]["name"] != TASK_TOOL {
+                        request.get("id").cloned().map(|id| rpc_error(id, -32601, "Esta conexión solo ofrece trex_update_tasks."))
+                    } else {
+                        let listing = request.get("method").and_then(Value::as_str) == Some("tools/list");
+                        let mut response = cached_request(request, data_dir, queue_id, &mut replies);
+                        if tasks_only && listing {
+                            if let Some(tools) = response.as_mut().and_then(|r| r.get_mut("result")).and_then(|r| r.get_mut("tools")).and_then(Value::as_array_mut) { tools.retain(|t| t["name"] == TASK_TOOL); }
+                        }
+                        response
+                    }
+                },
                 Err(_) => Some(rpc_error(Value::Null, -32700, "JSON no válido.")),
             },
         };
@@ -387,6 +417,26 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const QUEUE: &str = "t-mcp-test";
+    #[test]
+    fn tasks_only_connection_cannot_claim_queued_messages() {
+        let dir = TestDir::new();
+        enqueue_in(&dir.0, QUEUE, message("preserved")).unwrap();
+        let before = serde_json::to_value(list_in(&dir.0, QUEUE).unwrap()).unwrap();
+        let requests = [json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), call(json!(2)),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":TASK_TOOL,"arguments":{"plan":[{"step":"Inspect","status":"in_progress"}]}}}),
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":TASK_TOOL,"arguments":{"plan":"bad"}}})];
+        let input = requests.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
+        let mut output = Vec::new();
+        serve_tools(Cursor::new(input), &mut output, &dir.0, QUEUE, true).unwrap();
+        let replies: Vec<Value> = output.split(|b| *b == b'\n').filter(|v| !v.is_empty()).map(|v| serde_json::from_slice(v).unwrap()).collect();
+        assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(replies[0]["result"]["tools"][0]["name"], TASK_TOOL);
+        assert_eq!(replies[1]["error"]["code"], -32601);
+        assert_eq!(replies[2]["result"]["structuredContent"]["plan"][0]["step"], "Inspect");
+        assert!(replies[3].get("error").is_some());
+        assert!(replies[3].get("result").is_none(), "An error cannot gain a result through tools/list filtering.");
+        assert_eq!(serde_json::to_value(list_in(&dir.0, QUEUE).unwrap()).unwrap(), before);
+    }
     static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 
     struct TestDir(PathBuf);

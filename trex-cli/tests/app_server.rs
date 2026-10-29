@@ -586,7 +586,7 @@ fn plan_rejects_unadvertised_write_and_shell_then_delivers_a_final_plan() {
 fn application_tools_obey_planning_and_approval_modes() {
     for mode in ["plan", "ask"] {
         let f = Fixture::new();
-        let mut agent = f.agent();
+        let (_installed, mut agent) = agent_with_github_fixture(&f);
         let started = agent.start(f.workspace.path(), mode, None);
         let session = started["sessionId"].as_str().unwrap();
         agent.turn(
@@ -607,13 +607,14 @@ fn application_tools_obey_planning_and_approval_modes() {
             "blender_run",
             "hyperframes_run",
         ] {
-            assert_eq!(
-                definitions
-                    .iter()
-                    .any(|tool| tool["function"]["name"] == name),
-                mode != "plan",
-                "{name} in {mode}"
-            );
+            if mode == "plan" {
+                assert!(
+                    !definitions
+                        .iter()
+                        .any(|tool| tool["function"]["name"] == name),
+                    "{name} in plan"
+                );
+            }
         }
         request.completion(
             calls(vec![tool(
@@ -639,10 +640,32 @@ fn application_tools_obey_planning_and_approval_modes() {
     }
 }
 
+fn agent_with_github_fixture(f: &Fixture) -> (TempDir, Agent) {
+    // The permission contract must not depend on gh being installed on the
+    // host, and a failed assertion must never reach a real authenticated gh.
+    let installed = tempfile::tempdir().unwrap();
+    fs::copy(
+        upgrade_cases::mcp_binary(),
+        installed
+            .path()
+            .join(format!("gh{}", std::env::consts::EXE_SUFFIX)),
+    )
+    .unwrap();
+    let paths = std::iter::once(installed.path().to_path_buf()).chain(
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()),
+    );
+    let mut command = command(f.home.path());
+    command.env("PATH", std::env::join_paths(paths).unwrap());
+    let agent = Agent::spawn_command(command, "TREX1");
+    (installed, agent)
+}
+
 #[test]
 fn session_guidance_reaches_the_actual_provider_and_is_immutable_only_while_live() {
     let f = Fixture::new();
-    let mut agent = f.agent();
+    let (_installed, mut agent) = agent_with_github_fixture(&f);
     let guidance = "DISCOVERY_GUIDANCE_V1: For computer requests use desktop_status then desktop_screenshot. For applications prefer github_*, blender_run and hyperframes_run when advertised.";
     let start = agent.rpc("session/start",json!({"cwd":f.workspace.path(),"mode":"plan","instructions":guidance,"desktopEnabled":true}));
     assert_eq!(start["instructionsApplied"], true);
@@ -1503,3 +1526,5 @@ mod background_cases;
 mod browser_cases;
 #[path = "team_cases/mod.rs"]
 mod team_cases;
+#[path = "upgrade_cases/mod.rs"]
+mod upgrade_cases;

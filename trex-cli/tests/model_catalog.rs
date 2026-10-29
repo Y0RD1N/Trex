@@ -499,7 +499,7 @@ fn openrouter_filters_only_explicit_non_text_output_and_keeps_unknown_capabiliti
         &discover(home.path(), request(&api, "openrouter")),
         json!([
             {"id":"chat","name":"Chat","contextWindow":32768,"inputModalities":["text","image"]},
-            {"id":"unknown","name":"unknown"}
+            {"id":"unknown","name":"unknown","supportedParameters":["reasoning"],"supportsTools":false}
         ]),
     );
     api.assert_request(Some(KEY));

@@ -55,6 +55,13 @@
 }
 
 .chat-usage-header strong { color: var(--text); font-size: 13px; font-weight: 600; }
+.chat-usage-header strong { margin-right: auto; }
+.chat-usage-header .chat-usage-refresh { flex: 0 0 28px; }
+.chat-usage-close:disabled { cursor: default; opacity: .5; }
+.chat-api-usage { display: grid; gap: 7px; margin: 0; padding: 0 10px 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.chat-api-usage > div { display: flex; justify-content: space-between; gap: 16px; }
+.chat-api-usage dt { color: var(--text-muted); overflow-wrap: anywhere; }
+.chat-api-usage dd { margin: 0; flex-shrink: 0; color: var(--text); font-weight: 500; }
 .chat-usage-close {
   display: grid;
   flex: 0 0 28px;

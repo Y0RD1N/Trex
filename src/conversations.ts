@@ -18,7 +18,7 @@ export const detectAccountDir = (provider: AgentProvider, command: string, shell
   invoke("detect_account_dir", { provider, command, shell });
 /** Carpeta donde guarda sus conversaciones el perfil: la indicada en él o la que elige su lanzador. */
 export const profileAccountDir = async (profile: { provider: AgentProvider; command: string; shell: string; configDir: string }, shell: string): Promise<string> =>
-  profile.configDir.trim() || (profile.provider === "trex" ? "" : await detectAccountDir(profile.provider, profile.command, profile.shell || shell).catch(() => null) || "");
+  profile.configDir.trim() || (profile.provider === "trex" || profile.provider === "antigravity" ? "" : await detectAccountDir(profile.provider, profile.command, profile.shell || shell).catch(() => null) || "");
 /** Mensajes guardados de una conversación de Claude Code, para pintarla en el chat. */
 export const readConversation = (configDir: string, id: string): Promise<unknown[]> =>
   invoke("read_conversation", { configDir, id });
@@ -29,6 +29,7 @@ export function canResume(
 ): boolean {
   if (!launch.command) return false;
   const args = launch.args ?? "";
+  if (provider === "antigravity") return !args.trim();
   return provider === "claude"
     ? !/(^|\s)(--resume(?:=|\s|$)|-r(?:\s|$)|--continue\b|-c\b|--session-id\b|--fork-session\b|--print\b|-p\b|--remote-control\b|--bg\b)/.test(
         args,
@@ -42,7 +43,7 @@ export function resumedLaunch(
   provider: AgentProvider,
   id: string,
 ): SessionLaunch {
-  if (!validConversationId(id))
+  if (!(provider === "antigravity" ? validAcpId(id) : validConversationId(id)))
     throw new Error("La conversación necesita un identificador válido.");
   if (!canResume(launch, provider))
     throw new Error(
@@ -52,8 +53,10 @@ export function resumedLaunch(
   return {
     ...launch,
     args:
-      provider === "claude"
+      provider === "antigravity" ? args : provider === "claude"
         ? `${args} --resume ${id}`.trim()
         : `${args} resume ${id}`.trim(),
   };
 }
+
+export const validAcpId = (id: unknown): id is string => typeof id === "string" && id.length > 0 && id.length <= 512 && !/[\u0000-\u001f\u007f]/.test(id);

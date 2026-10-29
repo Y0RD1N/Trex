@@ -1,4 +1,5 @@
 //! Versioned JSON-RPC stdio transport and durable, single-turn session runner.
+use crate::usage::UsageTotals;
 use crate::{
     artifacts,
     browser::{BrowserConfig, BrowserToolProvider, ExecutionUncertain},
@@ -27,7 +28,6 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 const MAX_FRAME: usize = 32 * 1024 * 1024;
-const MAX_STEPS: usize = 64;
 type CallbackResult = std::result::Result<Value, String>;
 
 struct CachedRequest {
@@ -95,7 +95,11 @@ struct Turn {
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
+    error_details: Option<Value>,
+    #[serde(default)]
     usage: Option<Value>,
+    #[serde(default)]
+    context_cutoff: usize,
     started_at: u64,
 }
 
@@ -119,6 +123,18 @@ struct Execution {
 #[serde(rename_all = "camelCase")]
 struct Journal {
     version: u32,
+    #[serde(default)]
+    stream_sequence: u64,
+    #[serde(default)]
+    context_cutoff: usize,
+    #[serde(default)]
+    context_summary: String,
+    #[serde(default)]
+    compactions: Vec<Value>,
+    #[serde(default)]
+    budget_reserved_estimate_usd: f64,
+    #[serde(default)]
+    budget_reserved_estimate_tokens: u64,
     id: String,
     profile_name: String,
     provider: String,
@@ -154,6 +170,7 @@ struct Active {
 struct Session {
     path: PathBuf,
     _lock: File,
+    _storage_lock: Option<File>,
     data: Mutex<Journal>,
     active: Mutex<Option<Active>>,
     tools: tools::ToolRegistry,
@@ -162,11 +179,64 @@ struct Session {
 impl Session {
     fn persist(&self, data: &mut Journal) -> Result<()> {
         data.updated_at = now();
-        atomic_json(&self.path, data)
+        atomic_json(&self.path, data)?;
+        // A checkpoint includes stream_sequence. A crash before truncation is
+        // harmless: recovery ignores records already represented in this file.
+        let wal = self.path.with_extension("stream");
+        profile::validate_storage_path(&wal)?;
+        if wal.exists() {
+            let file = OpenOptions::new().write(true).open(wal)?;
+            file.set_len(0)?;
+            file.sync_data()?;
+        }
+        Ok(())
     }
 }
 
+fn load_journal(path: &Path) -> Result<Journal> {
+    profile::validate_storage_path(path)?;
+    let mut data: Journal = serde_json::from_slice(&fs::read(path)?)
+        .context("invalid conversation journal; original file was preserved")?;
+    let wal = path.with_extension("stream");
+    profile::validate_storage_path(&wal)?;
+    if wal.exists() {
+        use std::io::{BufRead, BufReader, Read};
+        let file = File::open(wal)?;
+        ensure!(
+            file.metadata()?.len() <= 128 * 1024 * 1024,
+            "stream journal exceeds recovery limit"
+        );
+        let mut reader = BufReader::new(file.take(128 * 1024 * 1024));
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? != 0 {
+            // A killed write can leave an incomplete last frame, never an
+            // executable tool: this WAL contains text/thinking deltas only.
+            if line.last() != Some(&b'\n') {
+                break;
+            }
+            let event: Value = serde_json::from_slice(&line)
+                .context("invalid stream journal; original preserved")?;
+            let sequence = event["sequence"]
+                .as_u64()
+                .context("missing stream sequence")?;
+            if sequence > data.stream_sequence {
+                ensure!(
+                    sequence == data.stream_sequence + 1 && event["method"] == "message/delta",
+                    "invalid stream journal sequence"
+                );
+                project(&mut data.items, "message/delta", &event["params"]);
+                data.events
+                    .push(json!({"method":"message/delta","params":event["params"]}));
+                data.stream_sequence = sequence;
+            }
+            line.clear();
+        }
+    }
+    Ok(data)
+}
+
 fn atomic_json(path: &Path, data: &impl Serialize) -> Result<()> {
+    profile::validate_storage_path(path)?;
     let temporary = path.with_extension(format!("{}.tmp", uid()));
     let result = (|| -> Result<()> {
         let mut file = OpenOptions::new()
@@ -213,6 +283,7 @@ fn atomic_json(path: &Path, data: &impl Serialize) -> Result<()> {
 
 fn conversation_dir() -> Result<PathBuf> {
     let path = profile::home()?.join("conversations");
+    profile::validate_storage_path(&path)?;
     fs::create_dir_all(&path)?;
     #[cfg(unix)]
     {
@@ -229,12 +300,9 @@ pub fn list_sessions(profile_name: Option<&str>) -> Result<Vec<Value>> {
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        let data: Journal = match fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        {
-            Some(data) => data,
-            None => continue,
+        let data = match load_journal(&path) {
+            Ok(data) => data,
+            Err(_) => continue,
         };
         if profile_name.is_some_and(|name| name != data.profile_name) {
             continue;
@@ -252,6 +320,194 @@ pub fn list_sessions(profile_name: Option<&str>) -> Result<Vec<Value>> {
     }
     result.sort_by_key(|item| std::cmp::Reverse(item["updatedAt"].as_u64().unwrap_or(0)));
     Ok(result)
+}
+
+fn locked_conversation(id: &str) -> Result<(PathBuf, Vec<File>, Journal)> {
+    ensure!(
+        Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id),
+        "conversation ID must be a canonical UUID"
+    );
+    let storage = profile::lock_user_file("artifact-gc.lock", false)?;
+    let dir = conversation_dir()?;
+    profile::validate_storage_path(&dir.join(format!("{id}.lock")))?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(format!("{id}.lock")))?;
+    lock.try_lock_exclusive()
+        .context("close the conversation before managing its history")?;
+    let path = dir.join(format!("{id}.json"));
+    let data = load_journal(&path)?;
+    ensure!(data.id == id, "conversation identity mismatch");
+    Ok((path, vec![storage, lock], data))
+}
+pub fn export_session(id: &str, markdown: bool) -> Result<String> {
+    let (_path, _lock, data) = locked_conversation(id)?;
+    if !markdown {
+        return Ok(serde_json::to_string_pretty(&data)?);
+    }
+    let mut text = format!("# Trex conversation {id}\n\n");
+    for item in &data.items {
+        if let Some(content) = item["text"].as_str() {
+            text.push_str(&format!(
+                "## {}\n\n{content}\n\n",
+                item["kind"].as_str().unwrap_or("message")
+            ));
+        } else if item["kind"] == "tool" {
+            text.push_str(&format!(
+                "Tool `{}`: {}\n\n",
+                item["name"].as_str().unwrap_or("unknown"),
+                item["status"].as_str().unwrap_or("unknown")
+            ));
+        }
+    }
+    Ok(text)
+}
+pub fn fork_session(id: &str) -> Result<Value> {
+    let (path, _lock, mut data) = locked_conversation(id)?;
+    recover(&mut data);
+    let new_id = uid();
+    data.id = new_id.clone();
+    data.updated_at = now();
+    for event in &mut data.events {
+        if let Some(params) = event.get_mut("params").and_then(Value::as_object_mut) {
+            params.insert("sessionId".into(), json!(new_id));
+        }
+    }
+    atomic_json(&path.with_file_name(format!("{new_id}.json")), &data)?;
+    Ok(json!({"conversationId":new_id,"forkedFrom":id,"recoveryRequired":data.recovery_required}))
+}
+pub fn remove_session(id: &str) -> Result<Value> {
+    let (path, _lock, mut data) = locked_conversation(id)?;
+    recover(&mut data);
+    let trash = profile::home()?.join("conversation-trash");
+    profile::validate_storage_path(&trash)?;
+    fs::create_dir_all(&trash)?;
+    let destination = trash.join(format!("{id}.json"));
+    ensure!(!destination.exists(), "conversation is already in trash");
+    atomic_json(&destination, &data)?;
+    fs::remove_file(&path)?;
+    let wal = path.with_extension("stream");
+    if wal.exists() {
+        fs::remove_file(wal)?;
+    }
+    Ok(json!({"removed":true,"recoverable":true,"conversationId":id}))
+}
+pub fn restore_session(id: &str) -> Result<Value> {
+    ensure!(
+        Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id),
+        "invalid conversation ID"
+    );
+    let _storage = profile::lock_user_file("artifact-gc.lock", false)?;
+    let lock_path = conversation_dir()?.join(format!("{id}.lock"));
+    profile::validate_storage_path(&lock_path)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+    lock.try_lock_exclusive()
+        .context("conversation is in use")?;
+    let source = profile::home()?
+        .join("conversation-trash")
+        .join(format!("{id}.json"));
+    let destination = conversation_dir()?.join(format!("{id}.json"));
+    ensure!(!destination.exists(), "conversation already exists");
+    let data = load_journal(&source)?;
+    ensure!(data.id == id, "conversation identity mismatch");
+    atomic_json(&destination, &data)?;
+    fs::remove_file(source)?;
+    Ok(json!({"restored":true,"conversationId":id}))
+}
+pub fn artifact_gc(apply: bool) -> Result<Value> {
+    let _storage_lock = profile::lock_user_file("artifact-gc.lock", true)?;
+    let home = profile::home()?;
+    let mut locks = Vec::new();
+    let mut hashes = std::collections::HashSet::new();
+    fn references(value: &Value, hashes: &mut std::collections::HashSet<String>) {
+        match value {
+            Value::Object(object) => {
+                if object.get("storage") == Some(&json!("local")) {
+                    if let Some(id) = object.get("sha256").and_then(Value::as_str) {
+                        hashes.insert(id.to_owned());
+                    }
+                }
+                for value in object.values() {
+                    references(value, hashes);
+                }
+            }
+            Value::Array(array) => {
+                for value in array {
+                    references(value, hashes);
+                }
+            }
+            _ => (),
+        }
+    }
+    for dir in [conversation_dir()?, home.join("conversation-trash")] {
+        profile::validate_storage_path(&dir)?;
+        if !dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .context("invalid conversation filename")?;
+            ensure!(
+                Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id),
+                "invalid conversation filename"
+            );
+            profile::validate_storage_path(&conversation_dir()?.join(format!("{id}.lock")))?;
+            let lock = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(conversation_dir()?.join(format!("{id}.lock")))?;
+            lock.try_lock_exclusive()
+                .context("close all conversations before artifact cleanup")?;
+            locks.push(lock);
+            let data = load_journal(&path)?;
+            references(&serde_json::to_value(data)?, &mut hashes);
+        }
+    }
+    let directory = home.join("artifacts");
+    let mut candidates = Vec::new();
+    let mut bytes = 0u64;
+    profile::validate_storage_path(&directory)?;
+    if directory.is_dir() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let meta = fs::symlink_metadata(&path)?;
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                continue;
+            }
+            let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if path.extension().and_then(|s| s.to_str()) == Some("bin")
+                && id.len() == 64
+                && id.bytes().all(|c| c.is_ascii_hexdigit())
+                && !hashes.contains(id)
+            {
+                bytes = bytes.saturating_add(meta.len());
+                candidates.push(id.to_owned());
+                if apply {
+                    fs::remove_file(path)?;
+                }
+            }
+        }
+    }
+    Ok(
+        json!({"applied":apply,"artifacts":candidates,"bytes":bytes,"trashedConversationsPreserved":true}),
+    )
 }
 
 pub struct Server {
@@ -323,6 +579,8 @@ impl Server {
         summary["browser"] = json!({"enabled":data.browser.enabled,"available":data.browser_available,"profile":data.browser.profile,"clientId":data.browser.client_id.as_deref().unwrap_or(&data.id)});
         summary["desktopEnabled"] = json!(data.desktop_enabled);
         summary["imageSupport"] = json!(self.image_support(&data.model).await);
+        summary["contextManagement"] = json!({"compactions":data.compactions,"archivedMessages":data.context_cutoff,"fullHistoryPreserved":true,"estimateOnly":true});
+        summary["budget"] = json!({"reservedEstimateUsd":data.budget_reserved_estimate_usd,"reservedEstimateTokens":data.budget_reserved_estimate_tokens,"notProviderBill":true});
         if !data.turns.is_empty() || !data.items.is_empty() || !data.messages.is_empty() {
             let (mut usage, _) = restored_usage(data);
             // A measurement belongs to its recorded model, which can differ
@@ -351,6 +609,36 @@ impl Server {
     }
 
     async fn emit(&self, session: &Session, method: &str, params: Value) -> Result<()> {
+        if method == "message/delta" {
+            let mut data = session.data.lock().await;
+            let sequence = data
+                .stream_sequence
+                .checked_add(1)
+                .context("stream sequence exhausted")?;
+            let mut options = OpenOptions::new();
+            profile::validate_storage_path(&session.path.with_extension("stream"))?;
+            options.create(true).append(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(session.path.with_extension("stream"))?;
+            serde_json::to_writer(
+                &mut file,
+                &json!({"sequence":sequence,"method":method,"params":params}),
+            )?;
+            file.write_all(b"\n")?;
+            // Flush to the OS, without syncing/replacing the complete history
+            // for every network fragment. Tool boundaries checkpoint durably.
+            file.flush()?;
+            data.stream_sequence = sequence;
+            project(&mut data.items, method, &params);
+            data.events.push(json!({"method":method,"params":params}));
+            drop(data);
+            self.notification(method, params);
+            return Ok(());
+        }
         {
             let mut data = session.data.lock().await;
             let before = data.clone();
@@ -446,8 +734,7 @@ impl Server {
             .context("conversation already open in another process")?;
         let path = directory.join(format!("{id}.json"));
         let mut data = if path.exists() {
-            let mut data: Journal = serde_json::from_slice(&fs::read(&path)?)
-                .context("invalid conversation journal; original file was preserved")?;
+            let mut data = load_journal(&path)?;
             ensure!(
                 data.version == 1 && data.id == id,
                 "unsupported or mismatched conversation journal"
@@ -477,6 +764,12 @@ impl Server {
             );
             Journal {
                 version: 1,
+                stream_sequence: 0,
+                context_cutoff: 0,
+                context_summary: String::new(),
+                compactions: vec![],
+                budget_reserved_estimate_usd: 0.0,
+                budget_reserved_estimate_tokens: 0,
                 id: id.clone(),
                 profile_name: self.profile.name.clone(),
                 provider: self.profile.provider.clone(),
@@ -517,11 +810,30 @@ impl Server {
         data.desktop_enabled = desktop_enabled;
         data.browser = browser;
         data.browser_available = browser_provider.is_some();
+        let settings = Arc::new(crate::settings::overlay(
+            crate::settings::Settings::load(Some(&self.profile.name))?,
+            params.get("settings"),
+        )?);
+        let mut mcp = Vec::new();
+        let mut unavailable = Vec::new();
+        for config in settings.mcp_servers.iter().filter(|s| s.enabled) {
+            match crate::mcp::McpProvider::connect(config, &data.cwd, &settings.shell).await {
+                Ok(provider) => mcp.push(provider),
+                Err(_) => unavailable.push(config.name.clone()),
+            }
+        }
         let session = Arc::new(Session {
             path,
             _lock: lock,
+            _storage_lock: Some(profile::lock_user_file("artifact-gc.lock", false)?),
             data: Mutex::new(Journal {
                 version: 1,
+                stream_sequence: 0,
+                context_cutoff: 0,
+                context_summary: String::new(),
+                compactions: vec![],
+                budget_reserved_estimate_usd: 0.0,
+                budget_reserved_estimate_tokens: 0,
                 id: String::new(),
                 profile_name: String::new(),
                 provider: String::new(),
@@ -545,14 +857,20 @@ impl Server {
                 desktop_enabled: false,
             }),
             active: Mutex::new(None),
-            tools: tools::ToolRegistry::new(browser_provider)
+            tools: tools::ToolRegistry::configured(browser_provider, settings)
+                .with_mcp(mcp)
+                .with_workspace(data.cwd.clone())
                 .with_desktop(desktop_enabled)
                 .with_team(team.clone())
                 .with_session_instructions(instructions.clone())
                 .with_role_instructions(role_instructions.clone()),
         });
         session.persist(&mut data)?;
+        let notifications = self.output.clone();
+        let process_session = id.clone();
+        session.tools.processes().set_notifier(Arc::new(move|event|{let _=notifications.send(json!({"jsonrpc":"2.0","method":"process/updated","params":{"sessionId":process_session,"event":event}}));}));
         let mut summary = self.session_summary(&data).await;
+        summary["unavailableMcpServers"] = json!(unavailable);
         summary["instructionsApplied"] = json!(instructions.is_some());
         if team.is_some() {
             summary["teamEnabled"] = json!(true);
@@ -593,7 +911,11 @@ impl Server {
             );
             let summary = json!({"accepted":true,"duplicate":true,"sessionId":data.id,"messageId":message_id,"status":turn.status});
             if turn.status != "running" {
-                self.notification("turn/completed",json!({"sessionId":data.id,"messageId":message_id,"status":turn.status,"error":turn.error,"usage":turn.usage}));
+                let mut completed = json!({"sessionId":data.id,"messageId":message_id,"status":turn.status,"error":turn.error,"usage":turn.usage});
+                if let Some(details) = &turn.error_details {
+                    completed["errorDetails"] = details.clone();
+                }
+                self.notification("turn/completed", completed);
             }
             return Ok(summary);
         }
@@ -609,13 +931,16 @@ impl Server {
         }
         data.messages.push(user_message(text, &images));
         data.items.push(json!({"kind":"user","id":message_id,"text":display,"images":images.len(),"previews":previews(&images)}));
+        let context_cutoff = data.context_cutoff;
         data.turns.insert(
             message_id.clone(),
             Turn {
                 request,
                 status: "running".into(),
                 error: None,
+                error_details: None,
                 usage: None,
+                context_cutoff,
                 started_at: now(),
             },
         );
@@ -634,23 +959,43 @@ impl Server {
         let server = self.clone();
         let failure_session_id = session_id.clone();
         tokio::spawn(async move {
-            let result = server
+            let drive = server
                 .clone()
-                .drive(session.clone(), &message_id, cancel.clone())
-                .await;
-            let status = if cancel.is_cancelled() {
+                .drive(session.clone(), &message_id, cancel.clone());
+            tokio::pin!(drive);
+            let (result, timed_out) = tokio::select! {
+                result=&mut drive=>(result,false),
+                _=tokio::time::sleep(Duration::from_millis(session.tools.settings().limits.max_turn_ms))=>{
+                    // Signal first: browser/MCP/desktop adapters must finish
+                    // their cancellation protocol before their futures drop.
+                    cancel.cancel();let _=tokio::time::timeout(Duration::from_secs(10),&mut drive).await;
+                    (Err(anyhow::anyhow!("turn duration budget reached; inspect any unfinished operation")),true)
+                }
+            };
+            let status = if cancel.is_cancelled() && !timed_out {
                 "interrupted"
             } else if result.is_ok() {
                 "completed"
             } else {
                 "failed"
             };
+            let error_details = result.as_ref().err().map(|error| {
+                if let Some(api) = error.downcast_ref::<provider::ApiError>() {
+                    serde_json::to_value(api).unwrap_or(json!({"code":"api_error"}))
+                } else if let Some(incomplete)=error.downcast_ref::<provider::IncompleteCompletion>() {
+                    json!({"code":if incomplete.cancelled{"cancelled"}else{match incomplete.finish_reason.as_deref(){Some("length")=>"output_limit_exceeded",Some("content_filter")=>"content_filter",_=>"incomplete_response"}},"retryable":false,"requestId":incomplete.request_id,"attempts":incomplete.usage.as_ref().and_then(|v|v["trex_request_attempts"].as_u64()).unwrap_or(1)})
+                } else if error.to_string().contains("budget") {
+                    json!({"code":"budget_exceeded","retryable":false})
+                } else {
+                    json!({"code":"turn_failed","retryable":false})
+                }
+            });
             let (usage, error) = match result {
                 Ok(usage) => (usage, None),
                 Err(error) => (None, Some(error.to_string())),
             };
             if let Err(error) = server
-                .finish(&session, &message_id, status, error, usage)
+                .finish(&session, &message_id, status, error, usage, error_details)
                 .await
             {
                 // The caller must never receive a success when journal durability failed.
@@ -670,8 +1015,9 @@ impl Server {
         status: &str,
         error: Option<String>,
         usage: Option<Value>,
+        error_details: Option<Value>,
     ) -> Result<()> {
-        let params;
+        let mut params;
         let receipts;
         {
             let mut data = session.data.lock().await;
@@ -696,6 +1042,7 @@ impl Server {
             if let Some(turn) = data.turns.get_mut(message_id) {
                 turn.status = status.into();
                 turn.error = error.clone();
+                turn.error_details = error_details.clone();
                 turn.usage = usage.clone();
             }
             for item in &mut data.items {
@@ -706,7 +1053,10 @@ impl Server {
                 }
             }
             data.items.push(json!({"kind":"turn","id":format!("{message_id}:turn"),"durationMs":now().saturating_sub(started)}));
-            params = json!({"sessionId":data.id,"messageId":message_id,"status":status,"error":error,"usage":usage,"recoveryRequired":data.recovery_required});
+            params = json!({"sessionId":data.id,"messageId":message_id,"status":status,"error":error,"usage":usage,"apiUsage":restored_usage(&data).0["apiUsage"],"recoveryRequired":data.recovery_required});
+            if let Some(details) = error_details {
+                params["errorDetails"] = details;
+            }
             data.events
                 .push(json!({"method":"turn/completed","params":params}));
             session.persist(&mut data)?;
@@ -717,6 +1067,42 @@ impl Server {
         }
         self.notification("turn/completed", params);
         Ok(())
+    }
+
+    async fn record_usage(
+        &self,
+        session: &Session,
+        message_id: &str,
+        model: &str,
+        totals: &UsageTotals,
+        context: Option<u64>,
+    ) -> Result<Value> {
+        let mut usage = json!({"contextModel":model,"apiUsage":totals.value()});
+        if let (Some(input), Some(output)) = (totals.input_tokens, totals.output_tokens) {
+            usage["inputTokens"] = json!(input);
+            usage["outputTokens"] = json!(output);
+        }
+        if let Some(context) = context {
+            usage["contextTokens"] = json!(context);
+        }
+        if let Some((window, _)) = self.context_window(model).await {
+            usage["contextWindow"] = json!(window);
+        }
+        if let Some(cost) = totals.cost_usd {
+            usage["costUsd"] = json!(cost);
+        }
+        let (session_id, api_usage) = {
+            let mut data = session.data.lock().await;
+            let cutoff = data.context_cutoff;
+            if let Some(turn) = data.turns.get_mut(message_id) {
+                turn.context_cutoff = cutoff;
+                turn.usage = Some(usage.clone());
+            }
+            session.persist(&mut data)?;
+            (data.id.clone(), restored_usage(&data).0["apiUsage"].clone())
+        };
+        self.notification("usage/updated",json!({"sessionId":session_id,"messageId":message_id,"usage":usage,"apiUsage":api_usage}));
+        Ok(usage)
     }
 
     async fn drive(
@@ -732,13 +1118,33 @@ impl Server {
             json!({"sessionId":session_id,"messageId":message_id}),
         )
         .await?;
-        let mut total_in = 0u64;
-        let mut total_out = 0u64;
-        let mut has_tokens = false;
-        let mut actual_cost = 0.0;
-        let mut has_cost = false;
-        for step in 0..MAX_STEPS {
+        let mut api_usage = UsageTotals::default();
+        {
+            let mut data = session.data.lock().await;
+            let model = data.model.clone();
+            if let Some(turn) = data.turns.get_mut(message_id) {
+                turn.usage = Some(json!({"contextModel":model,"apiUsage":api_usage.value()}));
+            }
+            session.persist(&mut data)?;
+        }
+        let settings = session.tools.settings().clone();
+        let workspace = session.data.lock().await.cwd.clone();
+        let privacy = settings.privacy.clone();
+        let guidance =
+            tokio::task::spawn_blocking(move || crate::project::guidance(&workspace, &privacy))
+                .await??;
+        let mut repeated = HashMap::<String, usize>::new();
+        let mut estimated_processed = 0u64;
+        let mut tool_count = 0usize;
+        for step in 0..settings.limits.max_rounds {
             ensure!(!cancel.is_cancelled(), "turn interrupted");
+            let attempted = api_usage.value()["requests"]
+                .as_u64()
+                .unwrap_or(step as u64);
+            ensure!(
+                attempted < settings.limits.max_requests_per_turn,
+                "turn API request budget reached"
+            );
             let (cwd, mode, model, effort, mut messages) = {
                 let data = session.data.lock().await;
                 (
@@ -746,12 +1152,17 @@ impl Server {
                     data.mode.clone(),
                     data.model.clone(),
                     data.effort.clone(),
-                    data.messages.clone(),
+                    crate::context::projection(
+                        &data.messages,
+                        data.context_cutoff,
+                        &data.context_summary,
+                    ),
                 )
             };
             let image_support = self.image_support(&model).await;
             messages = provider::project_history(&messages, image_support);
             let mut policy = system_prompt(&mode);
+            policy.push_str(&guidance);
             if let Some(instructions) = session.tools.session_instructions() {
                 policy.push_str("\n\nClient session guidance (the session's tool permission policy still applies):\n");
                 policy.push_str(instructions);
@@ -764,6 +1175,19 @@ impl Server {
             }
             messages.insert(0, json!({"role":"system","content":policy}));
             let mut definitions = session.tools.definitions(&mode);
+            let metadata = self
+                .models
+                .lock()
+                .await
+                .iter()
+                .find(|m| m["id"] == model)
+                .cloned();
+            ensure!(
+                metadata
+                    .as_ref()
+                    .is_none_or(|m| m["supportsTools"] != false),
+                "selected model explicitly does not support tools; choose a tool-capable model"
+            );
             // A model must be able to inspect a screenshot before it can act on it.
             if image_support != Some(true) {
                 definitions.retain(|tool| {
@@ -772,6 +1196,135 @@ impl Server {
                     })
                 });
             }
+            let window = self
+                .context_window(&model)
+                .await
+                .map(|v| v.0)
+                .or(settings.context.fallback_window);
+            let mut output_limit = settings.provider.max_output_tokens;
+            if let Some(max) = metadata
+                .as_ref()
+                .and_then(|m| m["maxOutputTokens"].as_u64())
+                .filter(|n| *n > 0)
+            {
+                output_limit = output_limit.min(max);
+            }
+            if let Some(window) = window {
+                output_limit = output_limit.min((window / 4).max(1));
+            }
+            let overhead = crate::context::estimate(&json!(definitions));
+            let estimate = crate::context::estimate(&json!(messages)).saturating_add(overhead);
+            if let Some(window) = window {
+                let reserve = settings.context.reserve_tokens.min(window / 8);
+                let desired = window.saturating_sub(output_limit).saturating_sub(reserve);
+                if estimate > desired.min(window * settings.context.threshold_percent / 100)
+                    && settings.context.auto_compact
+                {
+                    let mut data = session.data.lock().await;
+                    if let Some((cutoff, summary)) = crate::context::compact(
+                        &data.messages,
+                        data.context_cutoff,
+                        &data.context_summary,
+                        &settings.context,
+                        estimate > desired,
+                    ) {
+                        data.context_cutoff = cutoff;
+                        data.context_summary = summary;
+                        let record = json!({"at":now(),"cutoff":cutoff,"automatic":true,"method":"extractive","estimatedBefore":estimate});
+                        data.compactions.push(record.clone());
+                        session.persist(&mut data)?;
+                        messages = provider::project_history(
+                            &crate::context::projection(
+                                &data.messages,
+                                cutoff,
+                                &data.context_summary,
+                            ),
+                            image_support,
+                        );
+                        messages.insert(0, json!({"role":"system","content":policy}));
+                        drop(data);
+                        self.notification("context/compacted",json!({"sessionId":session_id,"messageId":message_id,"compaction":record}));
+                    }
+                }
+                let projected = crate::context::estimate(&json!(messages)).saturating_add(overhead);
+                ensure!(projected.saturating_add(output_limit).saturating_add(reserve)<=window,"estimated request exceeds context budget; compact, shorten input, or select a larger context window (estimates are not provider token counts)");
+            }
+            let request_estimate =
+                crate::context::estimate(&json!(messages)).saturating_add(overhead);
+            let totals = api_usage.value();
+            if let Some(limit) = settings.limits.max_turn_tokens {
+                ensure!(
+                    (if totals["partial"] == true {
+                        totals["totalTokens"]
+                            .as_u64()
+                            .unwrap_or(0)
+                            .max(estimated_processed)
+                    } else {
+                        totals["totalTokens"]
+                            .as_u64()
+                            .unwrap_or(estimated_processed)
+                    })
+                    .saturating_add(request_estimate)
+                    .saturating_add(output_limit)
+                        <= limit,
+                    "turn token budget would be exceeded"
+                );
+            }
+            let conversation_usage = {
+                let data = session.data.lock().await;
+                restored_usage(&data).0["apiUsage"].clone()
+            };
+            if let Some(limit) = settings.limits.max_conversation_tokens {
+                let data = session.data.lock().await;
+                ensure!(!(data.budget_reserved_estimate_tokens==0 && data.turns.keys().any(|id|id!=message_id) && (conversation_usage["partial"]==true || conversation_usage["totalTokens"].is_null())),"conversation token budget cannot account for unmeasured legacy history; use a new conversation or a per-turn budget");
+                ensure!(
+                    conversation_usage["totalTokens"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        .max(data.budget_reserved_estimate_tokens)
+                        .saturating_add(request_estimate)
+                        .saturating_add(output_limit)
+                        <= limit,
+                    "conversation token budget would be exceeded"
+                );
+            }
+            if let Some(limit) = settings.limits.max_cost_usd {
+                let configured = settings
+                    .provider
+                    .pricing
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?;
+                let pricing=configured.as_ref().or_else(||metadata.as_ref().and_then(|m|m.get("pricing"))).context("a USD budget requires model pricing; configure provider.pricing, token limits or a provider-enforced budget")?;
+                let input = pricing["inputUsdPerMillion"]
+                    .as_f64()
+                    .context("input price unavailable")?;
+                let output = pricing["outputUsdPerMillion"]
+                    .as_f64()
+                    .context("output price unavailable")?;
+                let reserve =
+                    (request_estimate as f64 * input + output_limit as f64 * output) / 1_000_000.0;
+                let mut data = session.data.lock().await;
+                ensure!(!(data.budget_reserved_estimate_usd==0.0 && data.turns.keys().any(|id|id!=message_id) && conversation_usage["costPartial"]==true),"USD budget cannot account for unpriced prior requests; use a new conversation or token limits");
+                let spent = data
+                    .budget_reserved_estimate_usd
+                    .max(conversation_usage["costUsd"].as_f64().unwrap_or(0.0));
+                ensure!(spent+reserve<=limit,"estimated generation reservation exceeds USD budget; estimates cannot guarantee the provider's final charge");
+                data.budget_reserved_estimate_usd = spent + reserve;
+                session.persist(&mut data)?;
+            }
+            {
+                let mut data = session.data.lock().await;
+                data.budget_reserved_estimate_tokens = data
+                    .budget_reserved_estimate_tokens
+                    .max(conversation_usage["totalTokens"].as_u64().unwrap_or(0))
+                    .saturating_add(request_estimate)
+                    .saturating_add(output_limit);
+                session.persist(&mut data)?;
+            }
+            estimated_processed = estimated_processed
+                .saturating_add(request_estimate)
+                .saturating_add(output_limit);
             {
                 let mut data = session.data.lock().await;
                 let cleared = data
@@ -787,7 +1340,11 @@ impl Server {
                 }
             }
             let (tx, mut rx) = mpsc::unbounded_channel();
-            let completion = provider::complete(
+            let mut provider_options = settings.provider.clone();
+            provider_options.retries = provider_options
+                .retries
+                .min((settings.limits.max_requests_per_turn - attempted - 1) as usize);
+            let completion = provider::complete_configured(
                 &self.profile,
                 &model,
                 effort.as_deref(),
@@ -795,6 +1352,8 @@ impl Server {
                 &definitions,
                 tx,
                 cancel.clone(),
+                &provider_options,
+                output_limit,
             );
             tokio::pin!(completion);
             let mut channel_open = true;
@@ -805,6 +1364,9 @@ impl Server {
                         match result {
                             Ok(completed)=>break completed,
                             Err(error)=>{
+                                let rejected_usage=error.downcast_ref::<provider::ApiError>().map(|e|json!({"trex_request_attempts":e.attempts}));
+                                api_usage.observe(error.downcast_ref::<provider::IncompleteCompletion>().and_then(|v|v.usage.as_ref()).or(rejected_usage.as_ref()));
+                                self.record_usage(&session, message_id, &model, &api_usage, None).await?;
                                 if let Some(incomplete)=error.downcast_ref::<provider::IncompleteCompletion>() {
                                     let mut data=session.data.lock().await;
                                     data.rejected_responses.push(json!({"messageId":message_id,"step":step,"message":incomplete.message,"rawDeltas":incomplete.raw_deltas,"usage":incomplete.usage,"finishReason":incomplete.finish_reason,"cancelled":incomplete.cancelled}));
@@ -837,42 +1399,26 @@ impl Server {
             );
             // Missing counters do not represent a measured zero. Prompt totals
             // already include cache hits, and completion totals include thinking.
-            let measured = completed.usage.as_ref().and_then(provider_token_counts);
-            let context = measured.map(|(input, output)| input.saturating_add(output));
-            if let Some((input, output)) = measured {
-                total_in = total_in.saturating_add(input);
-                total_out = total_out.saturating_add(output);
-                has_tokens = true;
-            }
-            if let Some(usage) = &completed.usage {
-                if let Some(cost) = usage["cost"]
-                    .as_f64()
-                    .filter(|n| n.is_finite() && *n >= 0.0)
-                {
-                    actual_cost += cost;
-                    has_cost = true;
-                }
-            }
-            let mut usage = json!({"contextModel":model});
-            if has_tokens {
-                usage["inputTokens"] = json!(total_in);
-                usage["outputTokens"] = json!(total_out);
-            }
-            if let Some(context) = context {
-                usage["contextTokens"] = json!(context);
-            }
-            if let Some((window, _)) = self.context_window(&model).await {
-                usage["contextWindow"] = json!(window);
-            }
-            if has_cost {
-                usage["costUsd"] = json!(actual_cost);
-            }
+            let context = completed
+                .usage
+                .as_ref()
+                .and_then(provider_token_counts)
+                .map(|(input, output)| input.saturating_add(output));
+            api_usage.observe(completed.usage.as_ref());
+            let usage = self
+                .record_usage(&session, message_id, &model, &api_usage, context)
+                .await?;
             let calls = completed
                 .message
                 .get("tool_calls")
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
+            tool_count = tool_count.saturating_add(calls.len());
+            ensure!(
+                calls.len() <= 128 && tool_count <= settings.limits.max_tool_calls_per_turn,
+                "tool call budget exceeded; no remaining tools were executed"
+            );
             let has_final_text = completed.message["content"]
                 .as_str()
                 .is_some_and(|text| !text.trim().is_empty())
@@ -906,6 +1452,65 @@ impl Server {
                     "provider completed without a visible final answer"
                 );
                 return Ok(Some(usage));
+            }
+            for call in &calls {
+                let name = call["function"]["name"].as_str().unwrap_or("");
+                let arguments: Value =
+                    serde_json::from_str(call["function"]["arguments"].as_str().unwrap_or("{}"))?;
+                if !session.tools.is_mutating(&mode, name, &arguments) {
+                    continue;
+                }
+                let execution_id =
+                    format!("{message_id}:tool:{}", call["id"].as_str().unwrap_or(""));
+                if session
+                    .data
+                    .lock()
+                    .await
+                    .executions
+                    .contains_key(&execution_id)
+                {
+                    continue;
+                }
+                let fingerprint = format!(
+                    "{name}:{}",
+                    call["function"]["arguments"].as_str().unwrap_or("")
+                );
+                repeated.retain(|key, _| key == &fingerprint);
+                let count = repeated.entry(fingerprint).or_default();
+                *count += 1;
+                ensure!(*count<=settings.limits.repeated_tool_limit,"repeated identical tool loop detected; inspect existing results before continuing");
+            }
+            if calls.len() > 1
+                && calls.iter().all(|call| {
+                    matches!(
+                        call["function"]["name"].as_str(),
+                        Some("read_file" | "list_files" | "search")
+                    )
+                })
+            {
+                let fresh = {
+                    let data = session.data.lock().await;
+                    calls.iter().all(|call| {
+                        !data.executions.contains_key(&format!(
+                            "{message_id}:tool:{}",
+                            call["id"].as_str().unwrap_or("")
+                        ))
+                    })
+                };
+                if fresh {
+                    self.parallel_reads(
+                        &session,
+                        &session_id,
+                        message_id,
+                        &cwd,
+                        &mode,
+                        &calls,
+                        cancel.clone(),
+                        settings.tools.parallel_reads,
+                    )
+                    .await?;
+                    continue;
+                }
             }
             let mut ids = BTreeSet::new();
             for call in calls {
@@ -1030,7 +1635,18 @@ impl Server {
                         .state = "executing".into();
                     session.persist(&mut data)?;
                 }
-                if name == "trex_read_messages" {
+                if name == "task_state" || name == "history_search" {
+                    let output = {
+                        let data = session.data.lock().await;
+                        conversation_read(&data, &name, &input)
+                    };
+                    let (output, error) = match output {
+                        Ok(v) => (v, false),
+                        Err(e) => (json!({"error":e.to_string()}), true),
+                    };
+                    self.tool_result(&session, &session_id, message_id, &id, output, error)
+                        .await?;
+                } else if name == "trex_read_messages" {
                     ensure!(
                         input.as_object().is_some_and(|m| m.is_empty()),
                         "trex_read_messages arguments must be an empty object"
@@ -1064,6 +1680,7 @@ impl Server {
                     let (output, is_error) = match result {
                         Ok(output) => {
                             let output = if name.starts_with("browser_")
+                                || name.starts_with("mcp_")
                                 || name == "desktop_screenshot"
                             {
                                 let client_id = session
@@ -1095,6 +1712,10 @@ impl Server {
                         }
                         Err(error)
                             if error.downcast_ref::<ExecutionUncertain>().is_some()
+                                || error.downcast_ref::<crate::mcp::McpUncertain>().is_some()
+                                || error
+                                    .downcast_ref::<tools::ToolExecutionUncertain>()
+                                    .is_some()
                                 || error
                                     .downcast_ref::<crate::desktop::DesktopUncertain>()
                                     .is_some()
@@ -1132,7 +1753,90 @@ impl Server {
                 );
             }
         }
-        bail!("turn exceeded {MAX_STEPS} provider rounds; no work was retried")
+        bail!(
+            "turn exceeded {} provider rounds; no work was retried",
+            settings.limits.max_rounds
+        )
+    }
+
+    async fn parallel_reads(
+        &self,
+        session: &Session,
+        session_id: &str,
+        message_id: &str,
+        cwd: &Path,
+        mode: &str,
+        calls: &[Value],
+        cancel: CancellationToken,
+        concurrency: usize,
+    ) -> Result<()> {
+        use futures_util::StreamExt;
+        let mut jobs = Vec::new();
+        let mut notifications = Vec::new();
+        let mut seen = BTreeSet::new();
+        {
+            let mut data = session.data.lock().await;
+            for call in calls {
+                let provider_id = required(call, "id")?.to_owned();
+                let id = format!("{message_id}:tool:{provider_id}");
+                ensure!(
+                    seen.insert(id.clone()),
+                    "duplicate tool ID in parallel read batch"
+                );
+                let name = required(&call["function"], "name")?.to_owned();
+                let input: Value = serde_json::from_str(
+                    call["function"]["arguments"]
+                        .as_str()
+                        .context("tool arguments missing")?,
+                )?;
+                let operation = uid();
+                data.executions.insert(
+                    id.clone(),
+                    Execution {
+                        name: name.clone(),
+                        input: input.clone(),
+                        state: "executing".into(),
+                        message_id: message_id.into(),
+                        provider_id: Some(provider_id),
+                        output: None,
+                        is_error: false,
+                        operation_id: Some(operation.clone()),
+                    },
+                );
+                let params = json!({"sessionId":session_id,"messageId":message_id,"id":id,"toolName":name,"input":input});
+                project(&mut data.items, "tool/start", &params);
+                data.events
+                    .push(json!({"method":"tool/start","params":params}));
+                notifications.push(params);
+                jobs.push((id, name, input, operation));
+            }
+            session.persist(&mut data)?;
+        }
+        for params in notifications {
+            self.notification("tool/start", params);
+        }
+        let mut reads =
+            futures_util::stream::iter(jobs.into_iter().map(|(id, name, input, operation)| {
+                let cancel = cancel.clone();
+                async move {
+                    let result = session
+                        .tools
+                        .execute(cwd, mode, &name, &input, &operation, cancel)
+                        .await;
+                    (id, result)
+                }
+            }))
+            .buffered(concurrency);
+        while let Some((id, result)) = reads.next().await {
+            let (output, error) = match result {
+                Ok(value) => (value, false),
+                Err(error) => (json!({"error":error.to_string()}), true),
+            };
+            self.tool_result(session, session_id, message_id, &id, output, error)
+                .await?;
+        }
+        ensure!(!cancel.is_cancelled(), "turn interrupted");
+        Ok(())
     }
 
     async fn delta(
@@ -1146,6 +1850,10 @@ impl Server {
         let (kind, text) = match delta {
             ProviderDelta::Text(text) => ("text", text),
             ProviderDelta::Thinking(text) => ("thinking", text),
+            ProviderDelta::Retry { attempt, delay_ms } => {
+                self.notification("provider/retry",json!({"sessionId":session_id,"messageId":message_id,"attempt":attempt,"delayMs":delay_ms}));
+                return Ok(());
+            }
         };
         if text.is_empty() {
             return Ok(());
@@ -1380,7 +2088,7 @@ impl Server {
                     model["contextWindowSource"] = json!(source);
                 }
                 Ok(
-                    json!({"protocolVersion":1,"profile":{"name":self.profile.name,"provider":self.profile.provider,"baseUrl":self.profile.base_url,"model":self.profile.model,"effort":self.profile.effort,"hasApiKey":profile::api_key(&self.profile)?.is_some()},"models":[model],"capabilities":{"streaming":true,"tools":true,"permissions":true,"interrupt":true,"history":true,"inbox":true,"images":true,"modes":["plan","ask","full"],"sessionRecovery":true}}),
+                    json!({"protocolVersion":1,"profile":{"name":self.profile.name,"provider":self.profile.provider,"baseUrl":self.profile.base_url,"model":self.profile.model,"effort":self.profile.effort,"hasApiKey":profile::api_key(&self.profile)?.is_some()},"models":[model],"capabilities":{"streaming":true,"tools":true,"permissions":true,"interrupt":true,"history":true,"inbox":true,"images":true,"modes":["plan","ask","full"],"sessionRecovery":true,"contextCompaction":true,"sessionConfiguration":true,"processInput":true,"processResize":true,"incrementalProcessOutput":true,"mcpClient":true,"nativeCheckpoints":true,"budgets":true,"structuredErrors":true}}),
                 )
             }
             "models/list" => {
@@ -1394,16 +2102,99 @@ impl Server {
                 let data = session.data.lock().await;
                 Ok(self.session_summary(&data).await)
             }
+            "session/compact" => {
+                let session = self.session(params).await?;
+                ensure!(
+                    session.active.lock().await.is_none(),
+                    "cannot compact an active turn"
+                );
+                let mut data = session.data.lock().await;
+                if let Some((cutoff, summary)) = crate::context::compact(
+                    &data.messages,
+                    data.context_cutoff,
+                    &data.context_summary,
+                    &session.tools.settings().context,
+                    true,
+                ) {
+                    data.context_cutoff = cutoff;
+                    data.context_summary = summary;
+                    data.compactions.push(
+                        json!({"at":now(),"cutoff":cutoff,"automatic":false,"method":"extractive"}),
+                    );
+                    session.persist(&mut data)?;
+                }
+                Ok(self.session_summary(&data).await)
+            }
+            "session/configure" => {
+                let session = self.session(params).await?;
+                ensure!(
+                    session.active.lock().await.is_none(),
+                    "cannot configure an active turn"
+                );
+                let mut data = session.data.lock().await;
+                let data_mut = &mut *data;
+                select_model(&mut data_mut.model, &mut data_mut.effort, params)?;
+                session.tools.invalidate_observation();
+                session.persist(&mut data)?;
+                Ok(self.session_summary(&data).await)
+            }
+            "session/close" => {
+                let session = self.session(params).await?;
+                ensure!(
+                    session.active.lock().await.is_none(),
+                    "cannot close an active turn; interrupt it first"
+                );
+                session.tools.shutdown().await;
+                self.sessions
+                    .lock()
+                    .await
+                    .remove(required(params, "sessionId")?);
+                Ok(json!({"closed":true}))
+            }
+            "session/usage" => {
+                let session = self.session(params).await?;
+                let data = session.data.lock().await;
+                let summary = self.session_summary(&data).await;
+                Ok(
+                    json!({"sessionId":data.id,"model":data.model,"contextWindow":summary["contextWindow"],"usage":summary["usage"]}),
+                )
+            }
             "process/list" => {
                 let session = self.session(params).await?;
                 Ok(session.tools.processes().list())
             }
             "process/read" => {
                 let session = self.session(params).await?;
+                session.tools.processes().read_since(
+                    required(params, "processId")?,
+                    params.get("after").and_then(Value::as_u64),
+                )
+            }
+            "process/write" => {
+                let session = self.session(params).await?;
                 session
                     .tools
                     .processes()
-                    .read(required(params, "processId")?)
+                    .write(
+                        required(params, "processId")?,
+                        params["text"].as_str().context("text must be a string")?,
+                    )
+                    .await
+            }
+            "process/resize" => {
+                let session = self.session(params).await?;
+                let rows = params["rows"]
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())
+                    .context("invalid rows")?;
+                let cols = params["cols"]
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())
+                    .context("invalid cols")?;
+                session
+                    .tools
+                    .processes()
+                    .resize(required(params, "processId")?, rows, cols)
             }
             "process/stop" => {
                 let session = self.session(params).await?;
@@ -1577,8 +2368,12 @@ impl Server {
             if let Some(active) = session.active.lock().await.as_ref() {
                 active.cancel.cancel();
             }
-            session.tools.processes().shutdown().await;
+            session.tools.shutdown().await;
         }
+    }
+    pub async fn shutdown(&self) {
+        self.cancel_all().await;
+        self.wait_idle().await;
     }
 
     async fn wait_idle(&self) {
@@ -1603,14 +2398,119 @@ impl Server {
 }
 
 fn provider_token_counts(usage: &Value) -> Option<(u64, u64)> {
-    Some((
-        usage["prompt_tokens"]
-            .as_u64()
-            .or_else(|| usage["input_tokens"].as_u64())?,
-        usage["completion_tokens"]
-            .as_u64()
-            .or_else(|| usage["output_tokens"].as_u64())?,
-    ))
+    crate::usage::token_counts(usage)
+}
+
+fn conversation_read(data: &Journal, name: &str, input: &Value) -> Result<Value> {
+    let input = input
+        .as_object()
+        .context("conversation query must be an object")?;
+    if name == "task_state" {
+        ensure!(
+            input
+                .keys()
+                .all(|k| ["offset", "limit"].contains(&k.as_str())),
+            "unknown task query field"
+        );
+        let offset = input
+            .get("offset")
+            .map(|v| v.as_u64().context("invalid offset"))
+            .transpose()?
+            .unwrap_or(0) as usize;
+        let limit = input
+            .get("limit")
+            .map(|v| v.as_u64().context("invalid limit"))
+            .transpose()?
+            .unwrap_or(10);
+        ensure!((1..=64).contains(&limit), "task limit must be 1..64");
+        let plan = data
+            .events
+            .iter()
+            .rev()
+            .filter(|e| e["method"] == "tool/result")
+            .find_map(|event| {
+                let id = event["params"]["id"].as_str()?;
+                let execution = data.executions.get(id)?;
+                (execution.name == "update_plan"
+                    && execution.state == "done"
+                    && !execution.is_error)
+                    .then(|| execution.output.as_ref()?.get("plan")?.as_array())
+                    .flatten()
+            })
+            .cloned()
+            .unwrap_or_default();
+        return Ok(
+            json!({"plan":plan.iter().skip(offset).take(limit as usize).collect::<Vec<_>>(),"total":plan.len(),"offset":offset}),
+        );
+    }
+    ensure!(
+        input
+            .keys()
+            .all(|k| ["query", "limit"].contains(&k.as_str())),
+        "unknown history query field"
+    );
+    let query = input
+        .get("query")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty() && s.len() <= 1024)
+        .context("query must be 1..1024 bytes")?
+        .to_lowercase();
+    let limit = input
+        .get("limit")
+        .map(|v| v.as_u64().context("invalid limit"))
+        .transpose()?
+        .unwrap_or(10);
+    ensure!((1..=20).contains(&limit), "history limit must be 1..20");
+    let mut results = Vec::new();
+    for (index, message) in data.messages.iter().enumerate().rev() {
+        let text = match &message["content"] {
+            Value::String(s) => {
+                if message["role"] == "tool" {
+                    serde_json::from_str::<Value>(s)
+                        .map(|mut v| {
+                            omit_binary_history(&mut v);
+                            v.to_string()
+                        })
+                        .unwrap_or_else(|_| s.clone())
+                } else {
+                    s.clone()
+                }
+            }
+            Value::Array(a) => a
+                .iter()
+                .filter_map(|v| v["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => continue,
+        };
+        if text.to_lowercase().contains(&query) {
+            results.push(json!({"messageIndex":index,"role":message["role"],"excerpt":crate::context::clip(&text,2000),"truncated":text.len()>2000}));
+            if results.len() >= limit as usize {
+                break;
+            }
+        }
+    }
+    Ok(json!({"matches":results,"fullHistoryPreserved":true}))
+}
+
+fn omit_binary_history(value: &mut Value) {
+    match value {
+        Value::Object(o) => {
+            o.retain(|k, _| !matches!(k.as_str(), "data" | "base64" | "image_url" | "imageUrl"));
+            for v in o.values_mut() {
+                omit_binary_history(v);
+            }
+        }
+        Value::Array(a) => {
+            for v in a {
+                omit_binary_history(v)
+            }
+        }
+        Value::String(s) if s.starts_with("data:image/") => {
+            *s = "[image retained as an artifact]".into()
+        }
+        _ => (),
+    }
 }
 
 fn restored_usage(data: &Journal) -> (Value, Option<String>) {
@@ -1637,6 +2537,7 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
         )
     });
     let mut total = 0u64;
+    let mut api_usage = UsageTotals::default();
     let mut latest = None;
     let mut latest_model = data.model.as_str();
     let mut inherited_model = None;
@@ -1649,8 +2550,10 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
             latest_model = model;
         }
         let Some(usage) = turn.usage.as_ref() else {
+            api_usage.merge(&UsageTotals::recorded(&Value::Null));
             continue;
         };
+        api_usage.merge(&UsageTotals::recorded(usage));
         let recorded_model = usage["contextModel"].as_str().filter(|id| !id.is_empty());
         if let Some(model) = recorded_model {
             inherited_model = Some(model);
@@ -1665,6 +2568,9 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
             continue;
         };
         total = total.saturating_add(input.saturating_add(output));
+        if turn.context_cutoff != data.context_cutoff {
+            continue;
+        }
         let Some(context) = usage["contextTokens"].as_u64() else {
             continue;
         };
@@ -1699,7 +2605,8 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
         latest = None;
         latest_model = data.model.as_str();
     }
-    let mut result = json!({"contextModel":latest_model,"totalTokens":total});
+    let mut result =
+        json!({"contextModel":latest_model,"totalTokens":total,"apiUsage":api_usage.value()});
     let mut measured_turn = None;
     if let Some((context, model, window, id)) = latest {
         measured_turn = Some(id.to_owned());
@@ -1713,7 +2620,7 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
 }
 
 fn system_prompt(mode: &str) -> String {
-    let task_policy = "For multi-step work, publish and maintain your task list with update_plan. Team coordinators publish assignments with trex_team_plan before delegating instead. Never mark unverified work complete.";
+    let task_policy = "For multi-step work, publish and maintain your task list with update_plan. Use task_state to recover actual task statuses after compaction and history_search to retrieve earlier instructions or results without rerunning tools. Team coordinators publish assignments with trex_team_plan before delegating instead. Never mark unverified work complete. Prefer edit_file for precise changes; native checkpoints can review or restore file-tool changes when the user requests it. Shell changes are not included in native checkpoints.";
     let integration_policy = "For GitHub, Blender and HyperFrames requests, prefer advertised github_*, blender_run and hyperframes_run tools. Check installed dependencies, honor the session permissions and inspect the actual results; do not silently install missing programs. Blender scripts run in a new background process, not an existing window. For computer or Windows control use advertised desktop_* tools: desktop_status, desktop_monitors and a fresh desktop_screenshot before each input. If input tools are absent, explain the required opt-in, permissions or vision capability instead of claiming access. For websites prefer advertised browser_* tools, starting with browser_navigate; they are separate from desktop control. Use only the tools actually advertised for this turn.";
     format!("You are Trex, a coding agent working in the user's workspace. Use available tools to inspect files and make precise changes. Follow project instructions. Never claim a tool succeeded without its result. {task_policy} {integration_policy} Your session mode is {mode}. Plan mode is strictly read-only: inspect and deliver a concrete plan; do not mutate files or execute shell commands. Ask mode requires user approval for each mutation or shell command. Full mode allows approved autonomous work. Browser tools, when explicitly enabled, enforce the session policy in the broker. Browser artifact metadata alone does not establish pixel inspection: only inspect pixels when an actual image observation is present. Missing artifacts are unavailable evidence; do not repeat a tool automatically to recreate them. Uncertain operations require user review and must never be automatically replayed. Use trex_read_messages to retrieve durable user or collaborator inbox messages during a long task. Finish with a clear final response describing results and relevant validation. Do not expose secrets.")
 }
@@ -1911,7 +2818,7 @@ fn recover(data: &mut Journal) {
 fn project(items: &mut Vec<Value>, method: &str, params: &Value) {
     match method {
         "message/delta"=>{
-            if let Some(item)=items.iter_mut().find(|item|item["id"]==params["id"]){let text=format!("{}{}",item["text"].as_str().unwrap_or(""),params["text"].as_str().unwrap_or(""));item["text"]=json!(text);}
+            if let Some(item)=items.iter_mut().find(|item|item["id"]==params["id"]){if let Some(Value::String(text))=item.get_mut("text"){text.push_str(params["text"].as_str().unwrap_or(""));}}
             else{items.push(json!({"kind":params["kind"],"id":params["id"],"messageId":params["messageId"],"text":params["text"],"final":false}));}
         }
         "tool/start"=>items.push(json!({"kind":"tool","id":params["id"],"name":params["toolName"],"input":params["input"],"status":"running","output":null,"patch":null})),
@@ -2017,96 +2924,6 @@ pub async fn run(profile: Profile) -> Result<()> {
     Ok(())
 }
 
-pub async fn chat(
-    profile: Profile,
-    cwd: PathBuf,
-    requested_mode: &str,
-    conversation: Option<String>,
-    model: Option<String>,
-    effort: Option<String>,
-) -> Result<()> {
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let server = Server::new(profile, tx);
-    let summary=server.start_session(&json!({"cwd":cwd,"mode":requested_mode,"conversationId":conversation,"model":model,"effort":effort})).await?;
-    let session_id = required(&summary, "sessionId")?.to_string();
-    eprintln!(
-        "Trex {} · {} · conversation {}",
-        env!("CARGO_PKG_VERSION"),
-        summary["mode"].as_str().unwrap_or(""),
-        session_id
-    );
-    eprintln!("/exit to quit; /history to view saved history; /recover after inspecting uncertain tool execution. Ctrl+C interrupts the current turn.");
-    let mut stdin = BufReader::new(tokio::io::stdin()).lines();
-    loop {
-        eprint!("\nyou> ");
-        std::io::stderr().flush()?;
-        let line = match stdin.next_line().await? {
-            Some(line) => line,
-            None => break,
-        };
-        let text = line.trim();
-        if text == "/exit" || text == "/quit" {
-            break;
-        }
-        if text == "/history" {
-            let session = server.session(&json!({"sessionId":session_id})).await?;
-            for item in &session.data.lock().await.items {
-                if let Some(text) = item["text"].as_str() {
-                    println!("{}: {}", item["kind"].as_str().unwrap_or(""), text);
-                }
-            }
-            continue;
-        }
-        if text == "/recover" {
-            server
-                .method(
-                    "session/recover",
-                    &json!({"sessionId":session_id,"action":"acknowledge"}),
-                )
-                .await?;
-            eprintln!("Recovery acknowledged; previous tools will not be replayed.");
-            continue;
-        }
-        if text.is_empty() {
-            continue;
-        }
-        let message_id = uid();
-        if let Err(error) = server
-            .start_turn(&json!({"sessionId":session_id,"messageId":message_id,"text":line}))
-            .await
-        {
-            eprintln!("{error}");
-            continue;
-        }
-        let mut waiting_permission: Option<String> = None;
-        loop {
-            tokio::select! {
-                event=rx.recv()=>{
-                    let Some(event)=event else{break};
-                    match event["method"].as_str(){
-                        Some("message/delta")=>{if event["params"]["kind"]=="text"{print!("{}",event["params"]["text"].as_str().unwrap_or(""));std::io::stdout().flush()?;}},
-                        Some("tool/start")=>eprintln!("\n[{}] {}",event["params"]["toolName"].as_str().unwrap_or("tool"),event["params"]["input"]),
-                        Some("tool/result")=>{if event["params"]["isError"]==true{eprintln!("\n[tool error] {}",event["params"]["output"]);}},
-                        Some("permission/request")=>{eprint!("\nAllow {}? [y/N] ",event["params"]["toolName"].as_str().unwrap_or("tool"));std::io::stderr().flush()?;waiting_permission=event["params"]["id"].as_str().map(str::to_string);},
-                        Some("inbox/read")=>{server.handle(json!({"jsonrpc":"2.0","id":event["id"],"result":{"messages":[]}})).await;},
-                        Some("turn/completed")=>{println!();if event["params"]["status"]!="completed"{eprintln!("{}: {}",event["params"]["status"].as_str().unwrap_or("failed"),event["params"]["error"].as_str().unwrap_or(""));}break;},
-                        _=>(),
-                    }
-                }
-                answer=stdin.next_line(),if waiting_permission.is_some()=>{
-                    let allowed=answer?.is_some_and(|text|matches!(text.trim().to_ascii_lowercase().as_str(),"y"|"yes"));
-                    let id=waiting_permission.take().unwrap_or_default();
-                    let _=server.method("permission/respond",&json!({"id":id,"allowed":allowed})).await;
-                }
-                _=tokio::signal::ctrl_c()=>{let _=server.method("turn/interrupt",&json!({"sessionId":session_id,"messageId":message_id})).await;waiting_permission=None;}
-            }
-        }
-    }
-    server.cancel_all().await;
-    server.wait_idle().await;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2177,6 +2994,7 @@ mod tests {
         let session = Arc::new(Session {
             path: directory.path().join("missing").join("journal.json"),
             _lock: File::create(directory.path().join("lock")).unwrap(),
+            _storage_lock: None,
             data: Mutex::new(data),
             active: Mutex::new(None),
             tools: tools::ToolRegistry::new(None),
@@ -2207,7 +3025,9 @@ mod tests {
                 request: json!({}),
                 status: "running".into(),
                 error: None,
+                error_details: None,
                 usage: None,
+                context_cutoff: 0,
                 started_at: 0,
             },
         );
@@ -2272,6 +3092,7 @@ mod tests {
         let session = Arc::new(Session {
             path: directory.path().join("journal.json"),
             _lock: File::create(directory.path().join("lock")).unwrap(),
+            _storage_lock: None,
             data: Mutex::new(data),
             active: Mutex::new(Some(Active {
                 message_id: "user-1".into(),

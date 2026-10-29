@@ -12,6 +12,7 @@ import { controlLine } from "./claudeChat";
 import { parseClaudeUsage, parseCodexUsage, type PlanUsage } from "./planUsage";
 import { launchForProfile } from "./profiles";
 import type { LauncherProfile, Settings } from "./types";
+import { readAntigravityAccountUsage } from "./antigravityConnection";
 
 const TIMEOUT_MS = 30_000;
 /** Claude Code sin servidores MCP: no hacen falta para leer el uso y tardan en arrancar. */
@@ -22,6 +23,8 @@ let counter = 0;
 
 export function readAccountUsage(profile: LauncherProfile, settings: Settings, cwd: string): Promise<PlanUsage | null> {
   if (profile.provider === "trex") return Promise.resolve(null);
+  if (profile.provider === "antigravity") return profile.args.trim() ? Promise.reject(new Error("El perfil ACP no admite argumentos de agy."))
+    : readAntigravityAccountUsage(profile.command, profile.configDir, cwd);
   const launch = launchForProfile(settings, profile);
   const claude = profile.provider === "claude";
   const product = claude ? "Claude Code" : "Codex";

@@ -1,0 +1,41 @@
+{
+  "defaults": {
+    "limits": {
+      "maxRounds": 64,
+      "maxRequestsPerTurn": 64,
+      "maxToolCallsPerTurn": 256,
+      "maxTurnTokens": 1000000,
+      "maxConversationTokens": null,
+      "maxCostUsd": null,
+      "maxTurnMs": 3600000,
+      "repeatedToolLimit": 3
+    },
+    "context": {
+      "autoCompact": true,
+      "thresholdPercent": 80,
+      "reserveTokens": 2048,
+      "fallbackWindow": null,
+      "keepRecentTurns": 4,
+      "summaryMaxChars": 24000
+    },
+    "provider": {
+      "maxOutputTokens": 16384,
+      "customOutputParameter": "max_tokens",
+      "customEffortParameter": null,
+      "customStreamUsage": false,
+      "requestTimeoutMs": 900000,
+      "retries": 2,
+      "maxRetryDelayMs": 30000
+    },
+    "privacy": {
+      "respectGitignore": true,
+      "allowSensitiveFiles": false,
+      "allowPaths": []
+    },
+    "shell": { "environment": "minimal", "forwardEnv": [] },
+    "tools": { "checkpoints": true, "parallelReads": 4 },
+    "mcpServers": [],
+    "diagnostics": false
+  },
+  "profiles": {}
+}

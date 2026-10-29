@@ -12,6 +12,19 @@ carpeta, con el asistente y el perfil que elijas.
   un perfil, sin depender del proyecto activo en la barra superior.
 - **Perfiles de asistentes**: el botón `+` permite elegir Claude Code, Codex
   o cualquiera de tus perfiles personalizados, dentro de la carpeta del proyecto.
+- **Antigravity (integración inicial)**: añade un perfil desde Ajustes >
+  Asistentes, instala el componente ACP oficial de Google y conecta tu cuenta
+  al abrir el chat. Los modelos y permisos se consultan al servidor. Incluye
+  entrega de imágenes y archivos, tareas y un espacio de Trex Browser por chat.
+  Sus mensajes en cola se envían como turnos completos al terminar la respuesta.
+  Uso y contexto muestra la ocupación informada por ACP, los tokens del chat y
+  las cuotas por grupo de modelos de `/usage`, consultadas con la misma cuenta.
+  La planificación de solo lectura, los equipos y el control de sus terminales
+  internas permanecen deshabilitados mientras se validan esas capacidades.
+  El arranque y la petición de autenticación se han probado en Windows y
+  Fedora 44; los turnos de texto, el contexto y las cuotas también se han
+  comprobado con una cuenta conectada en Windows. Las herramientas autenticadas
+  y los turnos en Fedora todavía requieren validación adicional.
 - **Pestañas**: varias terminales por proyecto, todas vivas a la vez.
   `Ctrl+T` (perfil predeterminado) y `Ctrl+Shift+T` (shell limpio).
 - **Terminal dividida**: dos sesiones en columnas o filas, o hasta cuatro en una

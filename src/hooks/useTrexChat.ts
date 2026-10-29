@@ -1,5 +1,5 @@
 /** Trex CLI owns provider HTTP, credentials and tools; React only speaks its versioned protocol. */
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { agentWrite, agentTeamMcpConfig, trexBrowserResolveSpace, formatError } from "../api";
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
 import { InboxRequests, INBOX_INSTRUCTIONS, type QueueSnapshot } from "../messageQueue";
@@ -30,6 +30,9 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
   const choices = useRef({ mode: planningOnly ? "plan" : options.mode ?? "ask", model: options.model ?? null, effort: options.effort ?? null });
   const nativeConversation = useRef(options.conversationId);
   const recovery = useRef(false), mounted = useRef(true);
+  const [usageLoading, setUsageLoading] = useState(false), [usageError, setUsageError] = useState<string | null>(null);
+  const usageRead = useRef<object | null>(null);
+  const supportsCompact = useRef(false);
   const sending = useRef<{ id: string; controller: AbortController; issued: boolean; displayed: boolean } | null>(null);
   // El terminal del protocolo confirma que también terminó la cancelación de herramientas.
   const activeTurn = useRef<ActiveTurn | null>(null);
@@ -82,6 +85,8 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
         return;
       }
       const turn = activeTurn.current;
+      if (method === "provider/retry" && params.sessionId === nativeConversation.current && turn?.id === params.messageId)
+        notice("info", `La API está temporalmente ocupada. Próximo intento en ${Math.ceil(Number(params.delayMs ?? 0) / 1000)} s.`);
       const terminal = turn !== null && method === "turn/completed" && turn.id === params.messageId
         && turn.process === procId && turn.session === params.sessionId;
       if (terminal && params.recoveryRequired === true) recovery.current = true;
@@ -151,6 +156,8 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       if (!nativeConversation.current) throw new Error("Trex CLI no devolvió el identificador de conversación.");
       agent.bindTerminals?.(nativeConversation.current);
       recovery.current = result.recoveryRequired === true;
+      supportsCompact.current = result.contextManagement !== null && typeof result.contextManagement === "object";
+      if (Array.isArray(result.unavailableMcpServers) && result.unavailableMcpServers.length) notice("warn", `No se pudieron conectar algunos servidores MCP: ${result.unavailableMcpServers.filter(value => typeof value === "string").join(", ")}.`);
       if (!models.some(model => model.value === result.model) && typeof result.model === "string") models.unshift({ value: result.model, resolvedModel: result.model, displayName: result.model, description: "Modelo configurado en el perfil", featured: true, efforts: [] });
       dispatch({ type: "trexReady", result, models });
       if (recovery.current) notice("warn", "La sesión se interrumpió con operaciones pendientes. Revisa los archivos y usa /recover antes de continuar; las herramientas anteriores no se repetirán automáticamente.");
@@ -247,7 +254,20 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
   }, [options.visible]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; startupGeneration.current++; cancelDeferred(); activeTurn.current = null; rejectPending("Se cerró la sesión."); }; }, []);
 
-  return { provider: "trex", state, queue, terminals: agent.terminals, start: async () => {
+  const refreshUsage = async (): Promise<void> => {
+    if (usageRead.current || activeTurn.current || sending.current) return;
+    const proc = processId.current, nativeSession = nativeConversation.current, generation = startupGeneration.current;
+    if (!proc || !nativeSession) return;
+    const request = {}; usageRead.current = request; setUsageLoading(true); setUsageError(null);
+    try {
+      const result = await rpc(proc, "session/usage", { sessionId: nativeSession });
+      if (mounted.current && generation === startupGeneration.current && processId.current === proc && nativeConversation.current === nativeSession)
+        dispatch({ type: "trexUsage", result });
+    } catch (error) { if (mounted.current && generation === startupGeneration.current) setUsageError(formatError(error)); }
+    finally { if (usageRead.current === request) { usageRead.current = null; if (mounted.current) setUsageLoading(false); } }
+  };
+  return { provider: "trex", state, queue, terminals: agent.terminals, supportsCompact: supportsCompact.current,
+    usageControls: { loading: usageLoading, error: usageError, refresh: refreshUsage }, start: async () => {
     if (!mounted.current) return;
     cancelDeferred();
     if (activeTurn.current) dispatch({ type: "cancelSend", id: activeTurn.current.id });
@@ -290,6 +310,18 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
     setFast: () => undefined,
     refreshSkills: async () => undefined,
     runCommand(name) {
+      if (name === "compact") {
+        if (!supportsCompact.current) { notice("warn", "Actualiza Trex CLI para resumir el contexto."); return true; }
+        const proc = processId.current, nativeSession = nativeConversation.current, generation = startupGeneration.current;
+        if (!proc || !nativeSession || activeTurn.current || sending.current) { notice("info", "Espera a que termine el agente antes de resumir."); return true; }
+        void rpc(proc, "session/compact", { sessionId: nativeSession }).then(result => {
+          if (mounted.current && generation === startupGeneration.current && processId.current === proc) {
+            dispatch({ type: "trexReady", result, models: stateRef.current.models });
+            notice("info", "Contexto resumido. El historial completo sigue disponible.");
+          }
+        }).catch(error => notice("error", formatError(error)));
+        return true;
+      }
       if (name !== "recover") return false;
       void recoverSession().then(() => notice("info", "Revisión confirmada. Puedes continuar con un mensaje nuevo.")).catch(error => notice("error", formatError(error)));
       return true;

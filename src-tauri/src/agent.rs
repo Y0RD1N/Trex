@@ -263,13 +263,21 @@ impl AgentState {
         if let Some(path) = path {
             cmd.env("PATH", path);
         }
+        // The ACP account chooses its own authentication. Ambient API keys must
+        // not silently switch a Google subscription to a billed API route.
+        if req.env.as_ref().and_then(|env| env.get("TREX_AGENT_PROTOCOL")).map(String::as_str) == Some("antigravity-acp") {
+            for (key, _) in std::env::vars_os() {
+                let name = key.to_string_lossy().to_ascii_uppercase();
+                if ["GEMINI_", "GOOGLE_", "GCLOUD_", "AGY_", "ANTIGRAVITY_"].iter().any(|prefix| name.starts_with(prefix)) { cmd.env_remove(key); }
+            }
+        }
         // Al abrir trex desde el escritorio puede faltar la locale.
         if !is_windows() && std::env::var_os("LANG").is_none() {
             cmd.env("LANG", "C.UTF-8");
         }
         if let Some(extra) = &req.env {
             for (key, value) in extra {
-                let value = if key == "CODEX_HOME" || key == "CLAUDE_CONFIG_DIR" || key == "TREX_HOME" { expand_config_dir(value) } else { value.clone() };
+                let value = if key == "CODEX_HOME" || key == "CLAUDE_CONFIG_DIR" || key == "TREX_HOME" || key == "GEMINI_HOME" { expand_config_dir(value) } else { value.clone() };
                 cmd.env(key, value);
             }
         }

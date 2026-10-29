@@ -32,10 +32,11 @@ type ContextProps = {
   /** El asistente está trabajando: ahora no se puede resumir. */
   busy: boolean;
   onCompact: () => void;
+  canCompact?: boolean;
 };
 
 /** Desglose compartido por el menú de contexto y el diálogo de uso. */
-export function ContextDetails({ usage, product, busy, onCompact, inline = false, onClose }: ContextProps & {
+export function ContextDetails({ usage, product, busy, onCompact, canCompact, inline = false, onClose }: ContextProps & {
   /** El contenedor ya aporta el título y usa botones normales, como un diálogo. */
   inline?: boolean;
   onClose?: () => void;
@@ -53,7 +54,7 @@ export function ContextDetails({ usage, product, busy, onCompact, inline = false
   const reserve = measured && usage.window && usage.reserve ? usage.reserve : null;
   const free = measured && usage.window ? Math.max(0, usage.window - usage.used - (reserve ?? 0)) : null;
   const share = (tokens: number): string => usage.window ? `${Math.min(100, (tokens / usage.window) * 100)}%` : "0%";
-  const supportsCompact = product !== "Trex CLI";
+  const supportsCompact = canCompact ?? (product === "Claude Code" || product === "Codex");
   const notes = [
     !measured ? "El uso se mostrará cuando el proveedor informe los tokens." : null,
     !usage.window ? "El proveedor no informó el límite de contexto de este modelo." : null,

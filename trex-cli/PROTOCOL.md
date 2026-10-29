@@ -183,8 +183,8 @@ model, switch the selected model, or launch a browser.
 
 The tool registry combines `NativeToolProvider` and an explicitly enabled
 `BrowserToolProvider`. Missing, incompatible, or unavailable browser components
-leave native tools usable. There is no arbitrary MCP connection or command
-passthrough. Discovery checks the fixed sibling `trex-browser.exe` and, on
+leave native tools usable. Browser tools provide no arbitrary MCP command passthrough. Separately,
+user-configured MCP providers follow the bounded client policy described below. Discovery checks the fixed sibling `trex-browser.exe` and, on
 Windows, `HKCU`'s 64-bit `Software\\com.trex.browser\\Install` REG_SZ `InstallDir`
 plus the fixed child `trex-browser.exe`. All path components must be regular
 directories/files without symlinks or reparse points. Executables are never
@@ -346,7 +346,7 @@ Workspace paths are canonicalized and checked; traversal, symlinks/reparse
 points, Windows device/ADS paths, and escapes are rejected. Checks are not an OS
 sandbox against hostile concurrent directory replacement. Full shell is not
 filesystem confined. Native reads and searches are bounded. Write parents must
-already exist; native tools do not create directories. Shell timeout is bounded
+already exist; `make_directory` creates one explicit directory. Shell timeout is bounded
 and kills its process tree on Windows.
 
 `apply_patch` takes a strict JSON **string** in `patch`:
@@ -437,3 +437,74 @@ Ordinary sessions expose read-only `update_plan({plan:[{step,status}]})` with
 tool journal and history items. The app projects it as `TodoWrite`; a failed or
 incomplete tool call cannot replace the visible list. These are agent-reported
 task statuses, unlike team delegation results confirmed by the app.
+
+
+## Extended API agent controls (version 1 additions)
+
+All fields/methods below are additive. Old journals default missing fields;
+restoration does not restore browser/desktop grants or restart processes.
+`initialize.capabilities` advertises `contextCompaction`, `sessionConfiguration`,
+`processInput`, `processResize`, `incrementalProcessOutput`, `mcpClient`,
+`nativeCheckpoints`, `budgets` and `structuredErrors`.
+
+- `session/start.settings`: bounded partial user-settings override (64 KiB).
+  Fields and defaults are documented in README and settings.example.json.
+- `session/compact({sessionId})`: idle only. Returns a complete session summary.
+  `contextManagement` includes `compactions`, `archivedMessages`,
+  `fullHistoryPreserved:true` and `estimateOnly:true`. Usage after compaction
+  invalidates the earlier context reading without changing accumulated API totals.
+- `session/configure({sessionId,model?,effort?})`: idle only; changes the next
+  request's selected model/effort and invalidates screenshot observations.
+- `session/close({sessionId})`: idle only; revokes desktop/MCP access and stops
+  owned background trees before removing the live session.
+- `context/compacted`: notification containing sessionId, messageId and compaction
+  metadata (`at`, `cutoff`, `automatic`, `method:"extractive"`, estimatedBefore).
+- `provider/retry`: session/message-scoped notification with attempt and delayMs.
+- `turn/completed.errorDetails`: optional finite `{code,status?,retryAfterMs?,
+  retryable,requestId,attempts}` for API errors; budget failures use
+  `code:"budget_exceeded"`. Text and usage remain available as before. Durable
+  duplicate turn requests replay the same structured error without another call.
+- `session.budget`: conservative `reservedEstimateUsd`, `reservedEstimateTokens`,
+  `notProviderBill:true`. Reservations persist even when a provider omits usage.
+  It is not a guaranteed financial limit or a provider bill.
+- `unavailableMcpServers`: optional startup diagnostics for configured servers.
+
+Native tools also include `edit_file`, `make_directory`, `rename_file`,
+`remove_file`, `checkpoint_list`, `checkpoint_diff`, `checkpoint_restore`,
+`git_status`, `git_diff`, `task_state`, `history_search`, `process_write` and
+`process_resize`. Each definition provides a strict input schema. Plan mode
+allows only read tools and `update_plan`; unknown names remain mutating.
+`task_state({offset?,limit?})` reads the last durable successful plan, including
+archived tasks. `history_search({query,limit?})` returns bounded retained-history
+excerpts, omitting structured image bytes. Compaction is an extract, not a claim
+that every prior detail remains in the provider's active context.
+
+`shell({command,background:true,interactive?:true,pty?:true,rows?,cols?})`
+starts an owned job; foreground commands do not accept interactive/PTY options.
+Interactive input is accepted into a bounded queue, not confirmed as processed by
+the child. ConPTY/PTY preserves terminal semantics and jobs survive turn completion.
+
+- `process/list` rows add `interactive` and `pty`.
+- `process/read({sessionId,processId,after?})` adds byte `offset`, `nextOffset`
+  and `exitCode`; `truncated` reports overwritten output. Incomplete trailing
+  UTF-8 waits for the next read while a process is active.
+- `process/write({sessionId,processId,text}) -> {accepted:true,bytes}`.
+- `process/resize({sessionId,processId,rows,cols}) -> {resized:true}` (10..500).
+- `process/updated({sessionId,event})` is an advisory activity notification;
+  query current state/output to reconcile. Output notifications carry offsets,
+  not unrestricted output bytes.
+
+CLI session management, config, MCP, checkpoints, exec, diagnostics and eval are
+management commands, not app-server methods. MCP servers are explicit trusted
+user configuration. Their read-only hints must also appear in the user's
+whitelist; errors/interruptions never reconnect or replay operations silently.
+Project instructions cannot add servers or elevate permissions.
+
+Wayland desktop access uses system portal sessions and PipeWire streams. Planning
+creates a capture-only grant. Control requests keyboard/pointer devices and acts
+only within granted streams. Screenshot coordinates are physical pixels mapped
+to the portal's logical geometry. A shared desktop generation invalidates captures
+after another Trex process sends input; observations expire after 30 seconds and
+are consumed by one action. Manual focus changes cannot be detected reliably on
+Wayland: inspect a fresh screenshot before input. Cancellation revokes the session;
+no restore token is retained. `desktop-doctor` probes dependencies without consent.

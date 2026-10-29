@@ -17,6 +17,7 @@ function harness(t, extra = {}) {
   let receipt = { id: "receipt-1", messages: [{ id: "queued-1", text: "Preserva los archivos", images: [], previews: [], createdAt: 1 }] };
   const spawnReady = deferred();
   const hooks = {
+    useState(value) { const i = cursor++, slot = slots[i] ??= { value }; return [slot.value, next => { slot.value = typeof next === "function" ? next(slot.value) : next; }]; },
     useRef(value) { const i = cursor++; return slots[i] ??= { current: value }; },
     useReducer(reducer, initial, init) { const i = cursor++, slot = slots[i] ??= { value: init(initial) }; slot.dispatch ??= action => { actions.push(action); slot.value = reducer(slot.value, action); }; return [slot.value, slot.dispatch]; },
     useEffect(effect, deps) { const i = cursor++; if (!same(slots[i]?.deps, deps)) effects.push(() => { slots[i]?.cleanup?.(); slots[i] = { deps, cleanup: effect() }; }); },
@@ -27,7 +28,7 @@ function harness(t, extra = {}) {
     const p = JSON.parse(raw); writes.push({ process: id, ...p });
     if (p.method === "initialize" && !holdInit) respond(p, { protocolVersion: 1 });
     if (p.method === "models/list") respond(p, { models: [{ id: "deepseek", name: "DeepSeek", efforts: ["high", "max"], contextWindow: 1_000_000 }, { id: "mini", efforts: ["low"], contextWindow: 32_000 }] });
-    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true });
+    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true, ...(extra.compaction ? { contextManagement: { fullHistoryPreserved: true } } : {}) });
     if (p.method === "turn/start" && !holdTurn) respond(p, { accepted: true });
     if (["turn/interrupt", "permission/respond", "session/recover"].includes(p.method)) respond(p, {});
   };
@@ -59,6 +60,21 @@ test("Trex initializes without a model turn and forwards the exact profile, mode
   assert.equal(await h.session.send("Implementa esto", [], []), true);
   assert.equal(h.userWrites[0].params.model, "deepseek"); assert.equal(h.userWrites[0].params.effort, "high");
   h.complete(h.userWrites[0].params.messageId); assert.equal(h.state.pendingTurns, 0);
+});
+
+test("Trex compaction is capability gated, runs idle and preserves model choices and accumulated usage", async t => {
+  const h = harness(t, { compaction: true }); await h.start();
+  assert.equal(h.session.supportsCompact, true);
+  h.session.runCommand("compact", ""); await flush();
+  const compact = h.writes.find(w => w.method === "session/compact"); assert.deepEqual(compact.params, { sessionId: "session" });
+  h.respond(compact, { sessionId: "session", mode: "ask", model: "deepseek", effort: "high", items: [], contextManagement: { archivedMessages: 8 }, usage: { apiUsage: { requests: 2, inputTokens: 100, outputTokens: 20, totalTokens: 120, costUsd: null }, contextModel: "deepseek" } });
+  await flush();
+  assert.equal(h.state.apiUsage.totalTokens, 120); assert.equal(h.state.models[1].value, "mini");
+  assert.equal(h.state.usage.measured, false);
+  await h.session.send("Next task", [], []); h.render();
+  h.session.runCommand("compact", ""); await flush();
+  assert.equal(h.writes.filter(w => w.method === "session/compact").length, 1);
+  h.complete(h.userWrites[0].params.messageId);
 });
 
 for (const acknowledgement of [undefined,null,false]) test(`Trex refuses unconfirmed tool instructions (${acknowledgement}) before sending a user turn`, async t => {

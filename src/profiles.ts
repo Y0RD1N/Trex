@@ -1,6 +1,6 @@
 import type { AgentProvider, LauncherProfile, PersistedTab, SessionLaunch, Settings, TabKind } from "./types";
 
-export const PROVIDER_NAMES: Record<AgentProvider, string> = { claude: "Claude Code", codex: "Codex", trex: "Trex CLI" };
+export const PROVIDER_NAMES: Record<AgentProvider, string> = { claude: "Claude Code", codex: "Codex", trex: "Trex CLI", antigravity: "Antigravity" };
 
 /** Literal fragments work with the native argument parser on Windows and Unix. */
 export function trexProfileArgs(name: string): string {
@@ -41,11 +41,11 @@ export function normalizeProfiles(raw: unknown, legacy: Pick<Settings, "claudeCo
     if (!entry || typeof entry !== "object") continue;
     const rec = entry as Record<string, unknown>;
     if (typeof rec.id !== "string" || !rec.id.trim() || ids.has(rec.id)) continue;
-    if (rec.provider !== "claude" && rec.provider !== "codex" && rec.provider !== "trex") continue;
+    if (rec.provider !== "claude" && rec.provider !== "codex" && rec.provider !== "trex" && rec.provider !== "antigravity") continue;
     ids.add(rec.id);
     const str = (key: string, fallback = ""): string => typeof rec[key] === "string" ? rec[key] as string : fallback;
     profiles.push({ id: rec.id, provider: rec.provider, name: str("name", PROVIDER_NAMES[rec.provider]).trim() || PROVIDER_NAMES[rec.provider],
-      command: str("command", rec.provider === "trex" ? "trex-agent" : rec.provider).trim() || (rec.provider === "trex" ? "trex-agent" : rec.provider), args: str("args"), shell: str("shell"),
+      command: str("command", rec.provider === "antigravity" ? "antigravity-acp" : rec.provider === "trex" ? "trex-agent" : rec.provider).trim() || (rec.provider === "antigravity" ? "antigravity-acp" : rec.provider === "trex" ? "trex-agent" : rec.provider), args: str("args"), shell: str("shell"),
       launchMode: rec.launchMode === "inject" ? "inject" : "arg", configDir: str("configDir").trim() });
   }
   return profiles.length ? profiles : initialProfiles(legacy);
@@ -69,7 +69,7 @@ export function launchForProfile(settings: Settings, profile: LauncherProfile | 
     args: profile?.args.trim() || null,
     shell: profile?.shell || settings.shell,
     launchMode: profile?.launchMode ?? "arg",
-    env: profile?.configDir.trim() ? { [profile.provider === "trex" ? "TREX_HOME" : profile.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]: profile.configDir.trim() } : null,
+    env: profile?.configDir.trim() ? { [profile.provider === "antigravity" ? "GEMINI_HOME" : profile.provider === "trex" ? "TREX_HOME" : profile.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]: profile.configDir.trim() } : null,
   };
 }
 
@@ -77,6 +77,7 @@ export function launchForProfile(settings: Settings, profile: LauncherProfile | 
 export function restoreLaunch(tab: PersistedTab, settings: Settings): SessionLaunch {
   if (tab.launch) return tab.launch;
   if (tab.kind === "shell") return launchForProfile(settings, null);
+  if (tab.kind === "antigravity") return launchForProfile(settings, settings.profiles.find(p => p.provider === "antigravity") ?? { id: "antigravity-default", name: "Antigravity", provider: "antigravity", command: "antigravity-acp", args: "", shell: "", launchMode: "arg", configDir: "" });
   if (tab.kind === "claude" && !settings.autoRunClaude) return launchForProfile(settings, null);
   const profile = settings.profiles.find(item => item.provider === tab.kind);
   // Las pestañas antiguas de Claude conservan los ajustes antiguos, aunque el predeterminado sea Codex.
@@ -105,6 +106,7 @@ export function profilesError(profiles: LauncherProfile[]): string | null {
   for (const profile of profiles) {
     if (!profile.name.trim()) return "Todos los perfiles necesitan un nombre.";
     if (!profile.command.trim()) return `Escribe el comando de «${profile.name}».`;
+    if (profile.provider === "antigravity" && profile.args.trim()) return `Deja vacíos los argumentos de «${profile.name}»: el chat usa el servidor oficial y el modelo se elige dentro de la conversación.`;
     if (/[\r\n\0]/.test(profile.command + profile.args + profile.configDir)) return `Revisa los campos de «${profile.name}»: deben ocupar una sola línea.`;
     if (profile.configDir.trim() && !/^(\/|~[\\/]|[A-Za-z]:[\\/]|\\\\)/.test(profile.configDir.trim())) return `La carpeta de «${profile.name}» debe ser una ruta completa o empezar por ~/.`;
   }

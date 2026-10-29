@@ -33,6 +33,13 @@ export type Suggestion = {
  * los suyos.
  */
 export const LOCAL_COMMANDS: Record<AgentProvider, CommandInfo[]> = {
+  antigravity: [
+    { name: "new", description: "Empieza una conversación nueva", hint: "" },
+    { name: "model", description: "Elige un modelo de Antigravity", hint: "" },
+    { name: "effort", description: "Elige el esfuerzo disponible", hint: "" },
+    { name: "permissions", description: "Elige un modo de Antigravity", hint: "" },
+    { name: "status", description: "Estado del modelo y la conversación", hint: "" },
+  ],
   trex: [
     { name: "recover", description: "Confirma la revisión de una sesión interrumpida antes de continuar", hint: "" },
     { name: "new", description: "Empieza una conversación nueva", hint: "" },

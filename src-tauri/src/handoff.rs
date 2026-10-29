@@ -170,7 +170,7 @@ fn validate_source(
 ) -> Result<(), String> {
     validate_metadata(session_id, "El identificador de la conversación")?;
     validate_metadata(label, "El nombre del perfil")?;
-    if !matches!(provider, "claude" | "codex" | "trex") {
+    if !matches!(provider, "claude" | "codex" | "trex" | "antigravity") {
         return Err("El proveedor de origen no es válido.".into());
     }
     if cwd.is_empty() || cwd.len() > MAX_CWD_BYTES || cwd.contains('\0') || !Path::new(cwd).is_dir()
@@ -543,7 +543,7 @@ fn load_from(data_dir: &Path, id: &str) -> Result<PreparedHandoff, String> {
     if prepared.id != id
         || !matches!(
             prepared.source_provider.as_str(),
-            "claude" | "codex" | "trex"
+            "claude" | "codex" | "trex" | "antigravity"
         )
         || prepared.cwd.is_empty()
         || prepared.cwd.len() > MAX_CWD_BYTES

@@ -101,7 +101,7 @@ export default function UsageDialog({ settings, cwd, onClose, ...motion }: {
           {reading.status === "error" ? <p className="usage-empty error" role="status">No se pudo leer el uso: {reading.message}</p>
             : hasUsage ? <PlanWindows usage={usage} now={now} />
             : reading.status === "loading" ? <p className="usage-empty" role="status"><span className="chat-spinner" aria-hidden="true" /> Leyendo el uso…</p>
-            : <p className="usage-empty">{profile.provider === "trex" ? "Conexión por API. Los tokens y el coste disponible se muestran en cada conversación; consulta el saldo en tu proveedor." : "Esta cuenta no tiene límites de plan (por ejemplo, usa una clave de API)."}</p>}
+            : <p className="usage-empty">{profile.provider === "antigravity" ? "Antigravity no informó cuotas disponibles para esta cuenta." : profile.provider === "trex" ? "Los tokens de entrada, salida, caché, razonamiento y el coste informado se muestran en Uso y contexto de cada chat. Son datos de esa conversación; el saldo y la facturación de la API se consultan en tu proveedor." : "Esta cuenta no tiene límites de plan (por ejemplo, usa una clave de API)."}</p>}
         </section>;
       })}
     </div>

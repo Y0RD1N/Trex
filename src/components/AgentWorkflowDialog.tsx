@@ -194,7 +194,7 @@ function WorkflowStageCard({ stage, role, profileOptions, disabled }: {
 export default function AgentWorkflowDialog({ project, profiles, settings, onClose, onStart, onStartTeam, submitting, error, initialExecutor, ...motion }: AgentWorkflowDialogProps) {
   const [teamMode, setTeamMode] = useState(false);
   const targets = useMemo(() => profiles.map(profile => ({ profile, reason: handoffTargetReason(profile, null, settings) })), [profiles, settings]);
-  const planner = useWorkflowStage(targets, "claude", settings, project.path, !!motion.leaving);
+  const planner = useWorkflowStage(targets.filter(target => target.profile.provider !== "antigravity"), "claude", settings, project.path, !!motion.leaving);
   const executor = useWorkflowStage(targets, "codex", settings, project.path, !!motion.leaving, initialExecutor);
   const available = targets.some(target => !target.reason);
   const profileOptions: SelectOption[] = targets.map(({ profile, reason }) => ({ value: profile.id, label: profile.name,
@@ -226,7 +226,7 @@ export default function AgentWorkflowDialog({ project, profiles, settings, onClo
     </button>}
     {initialExecutor && <p className="workflow-field-hint">Este equipo continuará en tu chat actual. Conserva su perfil en una de las dos etapas para mantener la conversación.</p>}
     <div className="workflow-stages">
-      <WorkflowStageCard stage={planner} role="planner" profileOptions={profileOptions} disabled={submitting} />
+      <WorkflowStageCard stage={planner} role="planner" profileOptions={profileOptions.map(option => targets.find(t => t.profile.id === option.value)?.profile.provider === "antigravity" ? { ...option, disabled: true, description: "Planificación de solo lectura pendiente de validación" } : option)} disabled={submitting} />
       <span className="workflow-direction" aria-hidden="true"><ArrowRightIcon size={17} /></span>
       <WorkflowStageCard stage={executor} role="executor" profileOptions={profileOptions} disabled={submitting} />
     </div>

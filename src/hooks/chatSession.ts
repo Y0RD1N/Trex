@@ -55,6 +55,11 @@ export type ChatSession = {
   state: ChatState;
   queue: ChatMessageQueue;
   terminals?: TerminalSession;
+  /** Native provider choices are discovered rather than guessed. */
+  modes?: { value: string; label: string; description?: string }[];
+  setup?: { busy: boolean; description: string; actions: { label: string; run: () => Promise<void> }[] };
+  usageControls?: { loading: boolean; error: string | null; refresh: () => Promise<void> };
+  supportsCompact?: boolean;
   /** Arranca el proceso o lo reanuda tras cerrarse. */
   start: () => Promise<void>;
   /** Envía un mensaje; `display` es lo que se ve en el hilo si no es el texto enviado. */
@@ -150,6 +155,6 @@ export function useAgentProcess(sessionId: string, handlers: AgentProcessHandler
     };
   }, []);
 
-  const terminals = useMemo<TerminalSession>(() => ({ snapshot: tracker.snapshot, refresh: tracker.refresh, stop: tracker.stop, read: tracker.read }), [tracker, tracker.snapshot]);
+  const terminals = useMemo<TerminalSession>(() => ({ snapshot: tracker.snapshot, refresh: tracker.refresh, stop: tracker.stop, read: tracker.read, write: tracker.sendInput }), [tracker, tracker.snapshot]);
   return useMemo(() => ({ spawn, write, isCurrent, terminals, bindTerminals: tracker.bind }), [spawn, write, isCurrent, terminals, tracker]);
 }

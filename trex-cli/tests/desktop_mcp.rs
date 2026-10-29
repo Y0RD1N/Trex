@@ -4,6 +4,35 @@ use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 };
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wayland_diagnostic_rejects_an_unavailable_portal_without_touching_x11() {
+    let workspace = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_trex-agent"))
+        .args(["desktop-doctor", "--json"])
+        .env("WAYLAND_DISPLAY", "trex-isolated-missing-display")
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!(
+                "unix:path={}",
+                workspace.path().join("missing-bus").display()
+            ),
+        )
+        .env("DISPLAY", ":65530")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["backend"], "waylandPortal");
+    assert_eq!(value["available"], false);
+    assert_eq!(value["portalVerified"], false);
+    assert_eq!(value["inputGranted"], false);
+}
 struct Server {
     child: Child,
     input: ChildStdin,

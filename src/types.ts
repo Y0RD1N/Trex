@@ -15,7 +15,7 @@ import type { ProjectFilter } from "./projectFilter";
 export type LaunchMode = "arg" | "inject";
 
 /** Asistente de la sesión o shell limpio. */
-export type AgentProvider = "claude" | "codex" | "trex";
+export type AgentProvider = "claude" | "codex" | "trex" | "antigravity";
 export type TabKind = AgentProvider | "shell";
 export type CursorStyle = "auto" | "block" | "bar" | "underline";
 export type AgentActivity = "idle" | "working" | "waiting";

@@ -29,6 +29,11 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
+ignore = "0.4"
+httpdate = "1"
+portable-pty = "=0.9.0"
+rustyline = "17"
+tempfile = "3"
 enigo = "=0.6.1"
 jpeg-decoder = { version = "=0.3.2", path = "vendor/jpeg-decoder", default-features = false }
 
@@ -40,11 +45,11 @@ xcap = "=0.9.8"
 keyring = { version = "3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "remote_desktop", "screencast", "screenshot"] }
+libc = "0.2"
+zbus = {version="=5.19.0",default-features=false,features=["tokio"]}
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
 x11rb = "=0.13.2"
-
-[dev-dependencies]
-tempfile = "3"
 
 [profile.release]
 lto = "thin"

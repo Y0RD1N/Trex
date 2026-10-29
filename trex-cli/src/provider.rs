@@ -87,6 +87,7 @@ struct CatalogInput {
 pub enum ProviderDelta {
     Text(String),
     Thinking(String),
+    Retry { attempt: u64, delay_ms: u64 },
 }
 
 #[derive(Debug)]
@@ -96,10 +97,35 @@ pub struct Completion {
     pub finish_reason: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiError {
+    pub attempts: u64,
+    pub code: String,
+    pub status: Option<u16>,
+    pub retry_after_ms: Option<u64>,
+    pub retryable: bool,
+    pub request_id: String,
+}
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "API request failed: {}", self.code)?;
+        if let Some(status) = self.status {
+            write!(f, " (HTTP {status})")?;
+        }
+        if let Some(wait) = self.retry_after_ms {
+            write!(f, "; retry after {wait} ms")?;
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for ApiError {}
+
 /// An unsuccessful response retained for durable diagnostics. Its message may
 /// contain incomplete tool calls and must never be executed or replayed as a
 /// successful assistant turn. Display/Debug intentionally omit provider data.
 pub struct IncompleteCompletion {
+    pub request_id: Option<String>,
     pub message: Value,
     pub usage: Option<Value>,
     pub finish_reason: Option<String>,
@@ -208,6 +234,16 @@ fn is_loopback(url: &Url) -> bool {
 }
 
 fn client(url: &Url) -> Result<Client> {
+    static CLIENTS: std::sync::OnceLock<std::sync::Mutex<[Option<Client>; 2]>> =
+        std::sync::OnceLock::new();
+    let mut clients = CLIENTS
+        .get_or_init(|| std::sync::Mutex::new([None, None]))
+        .lock()
+        .map_err(|_| anyhow!("HTTP client lock unavailable"))?;
+    let index = usize::from(is_loopback(url));
+    if let Some(client) = &clients[index] {
+        return Ok(client.clone());
+    }
     let mut builder = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         // A generation request must never be replayed by the HTTP client.
@@ -218,9 +254,11 @@ fn client(url: &Url) -> Result<Client> {
     if is_loopback(url) {
         builder = builder.no_proxy();
     }
-    builder
+    let result = builder
         .build()
-        .map_err(|_| anyhow!("Cannot initialize provider HTTP client"))
+        .map_err(|_| anyhow!("Cannot initialize provider HTTP client"))?;
+    clients[index] = Some(result.clone());
+    Ok(result)
 }
 
 fn authenticated(request: RequestBuilder, profile: &Profile, url: &Url) -> Result<RequestBuilder> {
@@ -474,42 +512,22 @@ fn contains_secret(value: &Value, key: &str) -> bool {
 /// Normalize model metadata for the CLI/server contract without inventing
 /// capabilities for models that have neither metadata nor documented levels.
 pub async fn models(profile: &Profile) -> Result<Vec<Value>> {
-    let url = endpoint(profile, "models")?;
-    let response = authenticated(client(&url)?.get(url.clone()), profile, &url)?
-        .send()
-        .await
-        .map_err(|_| anyhow!("Provider model request failed"))?;
-    if allows_documented_context(profile)
-        && matches!(response.status().as_u16(), 404 | 405)
-        && !is_loopback(&url)
+    let key = profile::api_key(profile)?.unwrap_or_default();
+    match discover_models(
+        json!({"provider":profile.provider,"baseUrl":profile.base_url,"apiKey":key}),
+    )
+    .await
     {
-        return normalize_models_for_profile(profile, &documented_minimax_models());
-    }
-    if profile.provider == "custom" && matches!(response.status().as_u16(), 404 | 405 | 501) {
-        ensure!(
-            !profile.model.trim().is_empty(),
-            "Custom provider does not expose model discovery; configure a model manually"
-        );
-        return normalize_models(
+        Ok(models) => Ok(models),
+        Err(CatalogError::Unsupported) if profile.provider == "custom" => normalize_models(
             "custom",
-            &[json!({"id": profile.model, "name": profile.model})],
-        );
+            &[json!({"id":profile.model,"name":profile.model})],
+        ),
+        Err(CatalogError::Unsupported) if allows_documented_context(profile) => {
+            normalize_models_for_profile(profile, &documented_minimax_models())
+        }
+        Err(error) => Err(error.into()),
     }
-    ensure!(
-        response.status().is_success(),
-        "Provider model request returned HTTP {}",
-        response.status().as_u16()
-    );
-    let data = read_json(response, None).await?;
-    ensure!(
-        data.get("error").is_none_or(Value::is_null),
-        "Provider rejected model request"
-    );
-    let models = data
-        .get("data")
-        .and_then(Value::as_array)
-        .context("Provider model response has no data array")?;
-    normalize_models_for_profile(profile, models)
 }
 
 fn documented_efforts(provider: &str, model: &str) -> Option<&'static [&'static str]> {
@@ -613,6 +631,8 @@ fn normalize_models_with_context(
 ) -> Result<Vec<Value>> {
     models
         .iter()
+        .filter(|model| provider != "openrouter" || model.pointer("/architecture/output_modalities")
+            .and_then(Value::as_array).is_none_or(|values| values.iter().any(|v| v == "text")))
         .map(|model| {
             let id = model
                 .get("id")
@@ -629,6 +649,19 @@ fn normalize_models_with_context(
                 })
                 .unwrap_or(id);
             let mut normalized = json!({"id": id, "name": name});
+            if let Some(parameters) = model.get("supported_parameters").and_then(Value::as_array) {
+                ensure!(parameters.len() <= 128 && parameters.iter().all(|v| v.as_str().is_some_and(|s| s.len() <= 128)), "invalid supported parameters");
+                normalized["supportedParameters"] = json!(parameters);
+                normalized["supportsTools"] = json!(parameters.iter().any(|v| v == "tools"));
+            }
+            if let Some(max) = model.pointer("/top_provider/max_completion_tokens").and_then(Value::as_u64) {
+                normalized["maxOutputTokens"] = json!(max);
+            }
+            if let (Some(input),Some(output))=(model.pointer("/pricing/prompt").and_then(|v|v.as_str().and_then(|s|s.parse::<f64>().ok()).or_else(||v.as_f64())),model.pointer("/pricing/completion").and_then(|v|v.as_str().and_then(|s|s.parse::<f64>().ok()).or_else(||v.as_f64()))) {
+                if input.is_finite() && output.is_finite() && (0.0..=1000.0).contains(&input) && (0.0..=1000.0).contains(&output) {
+                    normalized["pricing"] = json!({"inputUsdPerMillion":input*1_000_000.0,"outputUsdPerMillion":output*1_000_000.0});
+                }
+            }
             let efforts = string_metadata(model, EFFORT_METADATA_PATHS).or_else(|| {
                 documented_efforts(provider, id)
                     .map(|levels| levels.iter().map(|level| (*level).to_owned()).collect())
@@ -930,6 +963,9 @@ fn request_body(
     if profile.provider != "custom" {
         body["stream_options"] = json!({"include_usage": true});
     }
+    if profile.provider == "openrouter" {
+        body["usage"] = json!({"include": true});
+    }
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.to_vec());
     }
@@ -1023,6 +1059,172 @@ pub async fn complete(
     completion_request(request, tx, cancel).await
 }
 
+/// All retries happen before a successful response/stream. Nothing replays a
+/// completion, partial stream, tool, timeout or ambiguous transport failure.
+pub async fn complete_configured(
+    profile: &Profile,
+    model: &str,
+    effort: Option<&str>,
+    messages: &[Value],
+    tools: &[Value],
+    tx: UnboundedSender<ProviderDelta>,
+    cancel: CancellationToken,
+    options: &crate::settings::ProviderSettings,
+    max_output: u64,
+) -> Result<Completion> {
+    let mut body = request_body(
+        profile,
+        model,
+        if profile.provider == "custom" {
+            None
+        } else {
+            effort
+        },
+        messages,
+        tools,
+    )?;
+    if profile.provider == "custom" {
+        if let Some(effort) = effort {
+            ensure!(
+                !effort.trim().is_empty()
+                    && effort.len() <= 128
+                    && !effort.chars().any(char::is_control),
+                "invalid custom reasoning effort"
+            );
+            match options.custom_effort_parameter.as_deref(){
+                Some("reasoning_effort")=>body["reasoning_effort"]=json!(effort),
+                Some("reasoning.effort")=>body["reasoning"]=json!({"effort":effort}),
+                _=>bail!("configure provider.customEffortParameter for this custom API before selecting an effort"),
+            }
+        }
+    }
+    let parameter = match profile.provider.as_str() {
+        "minimax" => "max_completion_tokens",
+        "custom" => &options.custom_output_parameter,
+        _ => "max_tokens",
+    };
+    body[parameter] = json!(max_output);
+    if profile.provider == "custom" && options.custom_stream_usage {
+        body["stream_options"] = json!({"include_usage":true});
+    }
+    if let Some(v) = options.temperature {
+        ensure!(
+            profile.provider != "minimax",
+            "temperature is not supported by this provider adapter"
+        );
+        body["temperature"] = json!(v);
+    }
+    if let Some(v) = options.top_p {
+        body["top_p"] = json!(v);
+    }
+    let url = endpoint(profile, "chat/completions")?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let started = Instant::now();
+    for attempt in 0..=options.retries {
+        ensure!(!cancel.is_cancelled(), "Provider request cancelled");
+        let request = authenticated(
+            client(&url)?
+                .post(url.clone())
+                .header(ACCEPT, "text/event-stream, application/json")
+                .header("X-Request-ID", &request_id)
+                .json(&body)
+                .timeout(Duration::from_millis(
+                    options
+                        .request_timeout_ms
+                        .saturating_sub(started.elapsed().as_millis() as u64)
+                        .max(1),
+                )),
+            profile,
+            &url,
+        )?;
+        let result = tokio::time::timeout(
+            Duration::from_millis(
+                options
+                    .request_timeout_ms
+                    .saturating_sub(started.elapsed().as_millis() as u64)
+                    .max(1),
+            ),
+            completion_request(request, tx.clone(), cancel.clone()),
+        )
+        .await;
+        match result {
+            Ok(Ok(mut done)) => {
+                attach_attempts(&mut done.usage, (attempt + 1) as u64);
+                crate::diagnostics::record(
+                    profile,
+                    &request_id,
+                    started.elapsed(),
+                    "completed",
+                    done.usage.as_ref(),
+                );
+                return Ok(done);
+            }
+            Ok(Err(mut error)) => {
+                if let Some(api) = error.downcast_ref::<ApiError>() {
+                    if api.retryable && attempt < options.retries {
+                        let wait = api.retry_after_ms.unwrap_or(
+                            500u64.saturating_mul(1 << attempt)
+                                + (uuid::Uuid::new_v4().as_u128() % 200) as u64,
+                        );
+                        if wait <= options.max_retry_delay_ms
+                            && started.elapsed().as_millis() + (wait as u128)
+                                < options.request_timeout_ms as u128
+                        {
+                            let _ = tx.send(ProviderDelta::Retry {
+                                attempt: (attempt + 2) as u64,
+                                delay_ms: wait,
+                            });
+                            tokio::select! { _=cancel.cancelled()=>bail!("Provider request cancelled"),_=tokio::time::sleep(Duration::from_millis(wait))=>{} }
+                            continue;
+                        }
+                    }
+                    let mut api = api.clone();
+                    api.request_id = request_id.clone();
+                    api.attempts = (attempt + 1) as u64;
+                    crate::diagnostics::record(
+                        profile,
+                        &request_id,
+                        started.elapsed(),
+                        &api.code,
+                        None,
+                    );
+                    return Err(api.into());
+                }
+                if let Some(incomplete) = error.downcast_mut::<IncompleteCompletion>() {
+                    incomplete.request_id = Some(request_id.clone());
+                    attach_attempts(&mut incomplete.usage, (attempt + 1) as u64);
+                }
+                crate::diagnostics::record(
+                    profile,
+                    &request_id,
+                    started.elapsed(),
+                    "incomplete_or_transport",
+                    None,
+                );
+                return Err(error);
+            }
+            Err(_) => {
+                return Err(ApiError {
+                    attempts: (attempt + 1) as u64,
+                    code: "deadline_exceeded".into(),
+                    status: None,
+                    retry_after_ms: None,
+                    retryable: false,
+                    request_id,
+                }
+                .into())
+            }
+        }
+    }
+    unreachable!()
+}
+fn attach_attempts(usage: &mut Option<Value>, attempts: u64) {
+    if usage.as_ref().is_none_or(|v| !v.is_object()) {
+        *usage = Some(json!({}));
+    }
+    usage.as_mut().unwrap()["trex_request_attempts"] = json!(attempts);
+}
+
 async fn completion_request(
     request: RequestBuilder,
     tx: UnboundedSender<ProviderDelta>,
@@ -1032,13 +1234,84 @@ async fn completion_request(
     let response = tokio::select! {
         biased;
         _ = cancel.cancelled() => bail!("Provider request cancelled"),
-        response = request.send() => response.map_err(|_| anyhow!("Provider completion request failed (it was not retried)"))?,
+        response = request.send() => response.map_err(|error| ApiError{attempts:1,code:if error.is_timeout(){"transport_timeout"}else if error.is_connect(){"connection_unavailable"}else{"transport_failure"}.into(),status:None,retry_after_ms:None,retryable:false,request_id:String::new()})?,
     };
-    ensure!(
-        response.status().is_success(),
-        "Provider completion returned HTTP {} (it was not retried)",
-        response.status().as_u16()
-    );
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let retry_after_ms = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| {
+                s.parse::<u64>()
+                    .ok()
+                    .map(|s| s.saturating_mul(1000))
+                    .or_else(|| {
+                        httpdate::parse_http_date(s).ok().map(|time| {
+                            time.duration_since(std::time::SystemTime::now())
+                                .unwrap_or_default()
+                                .as_millis()
+                                .min(u64::MAX as u128) as u64
+                        })
+                    })
+            });
+        let mut code = match status {
+            401 => "unauthorized",
+            402 => "insufficient_credit",
+            403 => "forbidden",
+            404 => "model_or_endpoint_unavailable",
+            408 | 504 => "upstream_timeout",
+            429 => "rate_limit",
+            503 => "overloaded",
+            400 | 422 => "invalid_request",
+            _ => "provider_error",
+        }
+        .to_string();
+        // Only finite allowlisted error types survive; provider messages, URLs,
+        // raw metadata and credential echoes are never emitted.
+        if matches!(status, 400 | 422) {
+            let mut stream = response.bytes_stream();
+            let mut bytes = Vec::new();
+            let read = async {
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk?;
+                    if bytes.len() + chunk.len() > 64 * 1024 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                Ok::<_, reqwest::Error>(())
+            };
+            let _ = tokio::time::timeout(Duration::from_secs(2), read).await;
+            if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                for path in ["/error/code", "/error/type", "/error/metadata/error_type"] {
+                    if let Some(value) = value.pointer(path).and_then(Value::as_str) {
+                        if [
+                            "context_length_exceeded",
+                            "max_tokens_exceeded",
+                            "token_limit_exceeded",
+                            "unsupported_parameter",
+                            "model_not_found",
+                        ]
+                        .contains(&value)
+                        {
+                            code = value.into();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return Err(ApiError {
+            attempts: 1,
+            code,
+            status: Some(status),
+            retry_after_ms,
+            retryable: matches!(status, 429 | 503),
+            request_id: String::new(),
+        }
+        .into());
+    }
     let mut chunks = response.bytes_stream();
     let mut decoder = SseDecoder::default();
     let mut accumulator = Accumulator::default();
@@ -1137,33 +1410,6 @@ fn parse_json(bytes: &[u8]) -> Result<Value> {
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
     // Parsing errors must not quote provider text, which could echo a secret.
     serde_json::from_slice(bytes).map_err(|_| anyhow!("Provider returned invalid JSON"))
-}
-
-async fn read_json(
-    response: reqwest::Response,
-    cancel: Option<&CancellationToken>,
-) -> Result<Value> {
-    let mut stream = response.bytes_stream();
-    let mut bytes = Vec::new();
-    loop {
-        let next = if let Some(cancel) = cancel {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => bail!("Provider request cancelled"),
-                next = stream.next() => next,
-            }
-        } else {
-            stream.next().await
-        };
-        let Some(chunk) = next else { break };
-        let chunk = chunk.map_err(|_| anyhow!("Cannot read provider JSON response"))?;
-        ensure!(
-            bytes.len().saturating_add(chunk.len()) <= MAX_RESPONSE_BYTES,
-            "Provider response is too large"
-        );
-        bytes.extend_from_slice(&chunk);
-    }
-    parse_json(&bytes)
 }
 
 /// A byte-oriented SSE parser: UTF-8, CRLF and field names may all cross network
@@ -1528,6 +1774,7 @@ impl Accumulator {
             );
         }
         IncompleteCompletion {
+            request_id: None,
             message: Value::Object(message),
             usage: self.usage.clone(),
             finish_reason: self.finish_reason.clone(),
@@ -2682,11 +2929,11 @@ mod tests {
         let result = normalize_models("openrouter", catalog.as_array().unwrap()).unwrap();
         assert_eq!(
             result[0],
-            json!({"id":"vendor/thinking","name":"Thinking","efforts":["xhigh","high","medium","low"],"contextWindow":200000,"inputModalities":["text","image"]})
+            json!({"id":"vendor/thinking","name":"Thinking","efforts":["xhigh","high","medium","low"],"contextWindow":200000,"inputModalities":["text","image"],"supportedParameters":["tools","reasoning"],"supportsTools":true})
         );
         assert_eq!(
             result[1],
-            json!({"id":"vendor/no-effort","name":"vendor/no-effort","contextWindow":8192})
+            json!({"id":"vendor/no-effort","name":"vendor/no-effort","contextWindow":8192,"supportedParameters":["reasoning"],"supportsTools":false})
         );
         assert!(result[2].get("efforts").is_none());
     }

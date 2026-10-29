@@ -43,11 +43,23 @@ const MAX_PATCH_FILES: usize = 32;
 const SKIP_DIRS: [&str; 3] = [".git", "node_modules", "target"];
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug)]
+pub struct ToolExecutionUncertain(pub String);
+impl std::fmt::Display for ToolExecutionUncertain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f,"{}. Changes may have been applied; inspect the workspace before acknowledging recovery. Never automatically retry this operation.",self.0)
+    }
+}
+impl std::error::Error for ToolExecutionUncertain {}
+
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
 
 /// A deliberately small registry interface; external providers cannot dispatch
 /// arbitrary commands or bypass the session runner's approval journal.
 pub trait ToolProvider: Send + Sync {
+    fn shutdown<'a>(&'a self) -> ToolFuture<'a> {
+        Box::pin(async { Ok(json!({})) })
+    }
     fn invalidate_observation(&self) {}
     fn definitions(&self, mode: &str) -> Vec<Value>;
     fn is_mutating(&self, name: &str, input: &Value) -> bool;
@@ -64,6 +76,7 @@ pub trait ToolProvider: Send + Sync {
 
 pub struct NativeToolProvider {
     processes: std::sync::Arc<crate::processes::ProcessManager>,
+    settings: std::sync::Arc<crate::settings::Settings>,
 }
 impl ToolProvider for NativeToolProvider {
     fn definitions(&self, mode: &str) -> Vec<Value> {
@@ -89,22 +102,84 @@ impl ToolProvider for NativeToolProvider {
         Box::pin(async move {
             check_cancel(&cancel)?;
             match name {
-                "shell" if input["background"] == true => {
-                    self.processes.start(cwd, input, operation_id, &cancel)
-                }
+                "shell" if input["background"] == true => self.processes.start_configured(
+                    cwd,
+                    input,
+                    operation_id,
+                    &cancel,
+                    &self.settings.shell,
+                ),
                 "process_list" => {
                     fields(input, &[], &[])?;
                     Ok(self.processes.list())
                 }
                 "process_output" => {
-                    let obj = fields(input, &["id"], &["id"])?;
-                    self.processes.read(string(obj, "id")?)
+                    let obj = fields(input, &["id", "after"], &["id"])?;
+                    self.processes
+                        .read_since(string(obj, "id")?, obj.get("after").and_then(Value::as_u64))
                 }
                 "process_stop" => {
                     let obj = fields(input, &["id"], &["id"])?;
                     self.processes.stop(string(obj, "id")?).await
                 }
-                _ => execute(cwd, name, input, cancel).await,
+                "process_write" => {
+                    let obj = fields(input, &["id", "text"], &["id", "text"])?;
+                    self.processes
+                        .write(string(obj, "id")?, string(obj, "text")?)
+                        .await
+                }
+                "process_resize" => {
+                    let obj = fields(input, &["id", "rows", "cols"], &["id", "rows", "cols"])?;
+                    self.processes.resize(
+                        string(obj, "id")?,
+                        number(obj, "rows", 24, 10, 500)? as u16,
+                        number(obj, "cols", 100, 10, 500)? as u16,
+                    )
+                }
+                "checkpoint_list" => crate::changes::list(cwd),
+                "checkpoint_diff" => {
+                    let obj = fields(input, &["id"], &["id"])?;
+                    crate::changes::diff(cwd, string(obj, "id")?)
+                }
+                "checkpoint_restore" => {
+                    let obj = fields(input, &["id"], &["id"])?;
+                    crate::changes::undo(cwd, string(obj, "id")?, &self.settings.privacy)
+                }
+                _ => {
+                    let snapshot = if self.settings.tools.checkpoints {
+                        Some(preview_file_changes(
+                            cwd,
+                            name,
+                            input,
+                            &self.settings.privacy,
+                        )?)
+                    } else {
+                        None
+                    };
+                    let checkpoint = snapshot
+                        .as_ref()
+                        .map(|files| crate::changes::prepare(cwd, files.clone()))
+                        .transpose()?
+                        .flatten();
+                    let result = execute_configured(
+                        cwd,
+                        name,
+                        input,
+                        cancel,
+                        self.settings.clone(),
+                        snapshot,
+                    )
+                    .await;
+                    if let Some(id) = &checkpoint {
+                        crate::changes::finish(id,result.is_ok()).map_err(|e|e.context(ToolExecutionUncertain("Cannot finalize the native checkpoint; inspect files before continuing".into())))?;
+                    }
+                    result.map(|mut value| {
+                        if let Some(id) = checkpoint {
+                            value["checkpointId"] = json!(id);
+                        }
+                        value
+                    })
+                }
             }
         })
     }
@@ -116,13 +191,25 @@ pub struct ToolRegistry {
     role_instructions: Option<String>,
     session_instructions: Option<String>,
     processes: std::sync::Arc<crate::processes::ProcessManager>,
+    settings: std::sync::Arc<crate::settings::Settings>,
+    workspace: Option<PathBuf>,
 }
 impl ToolRegistry {
     pub fn new(browser: Option<crate::browser::BrowserToolProvider>) -> Self {
+        Self::configured(
+            browser,
+            std::sync::Arc::new(crate::settings::Settings::default()),
+        )
+    }
+    pub fn configured(
+        browser: Option<crate::browser::BrowserToolProvider>,
+        settings: std::sync::Arc<crate::settings::Settings>,
+    ) -> Self {
         let processes = std::sync::Arc::new(crate::processes::ProcessManager::default());
         let mut providers: Vec<Box<dyn ToolProvider>> = vec![
             Box::new(NativeToolProvider {
                 processes: processes.clone(),
+                settings: settings.clone(),
             }),
             Box::new(crate::github::GithubProvider),
             Box::new(crate::blender::BlenderProvider),
@@ -137,6 +224,32 @@ impl ToolRegistry {
             role_instructions: None,
             session_instructions: None,
             processes,
+            settings,
+            workspace: None,
+        }
+    }
+    pub fn settings(&self) -> &crate::settings::Settings {
+        &self.settings
+    }
+    pub fn with_workspace(mut self, workspace: PathBuf) -> Self {
+        self.workspace = Some(workspace);
+        self
+    }
+    fn enabled(&self, name: &str) -> bool {
+        if name.starts_with("github_") {
+            self.settings.tools.github && (self.workspace.is_none() || crate::github::available())
+        } else if name == "blender_run" {
+            self.settings.tools.blender && (self.workspace.is_none() || crate::blender::available())
+        } else if name == "hyperframes_run" {
+            self.settings.tools.hyperframes
+                && self
+                    .workspace
+                    .as_ref()
+                    .is_none_or(|p| crate::hyperframes::available(p))
+        } else if name.starts_with("git_") {
+            self.workspace.is_none() || find_program("git").is_some()
+        } else {
+            true
         }
     }
     pub fn with_desktop(mut self, enabled: bool) -> Self {
@@ -144,6 +257,14 @@ impl ToolRegistry {
             self.providers
                 .push(Box::new(crate::desktop::DesktopProvider::default()));
         }
+        self
+    }
+    pub fn with_mcp(mut self, providers: Vec<crate::mcp::McpProvider>) -> Self {
+        self.providers.extend(
+            providers
+                .into_iter()
+                .map(|p| Box::new(p) as Box<dyn ToolProvider>),
+        );
         self
     }
     pub fn with_team(mut self, config: Option<crate::team::TeamConfig>) -> Self {
@@ -176,10 +297,19 @@ impl ToolRegistry {
     pub fn processes(&self) -> &crate::processes::ProcessManager {
         &self.processes
     }
+    pub async fn shutdown(&self) {
+        self.processes.shutdown().await;
+        for provider in &self.providers {
+            let _ = tokio::time::timeout(Duration::from_secs(5), provider.shutdown()).await;
+        }
+    }
     pub fn team_config(&self) -> &Option<crate::team::TeamConfig> {
         &self.team
     }
     fn provider(&self, mode: &str, name: &str) -> Option<&dyn ToolProvider> {
+        if !self.enabled(name) {
+            return None;
+        }
         self.providers
             .iter()
             .find(|provider| {
@@ -194,6 +324,7 @@ impl ToolRegistry {
         self.providers
             .iter()
             .flat_map(|provider| provider.definitions(mode))
+            .filter(|tool| self.enabled(tool["function"]["name"].as_str().unwrap_or("")))
             .collect()
     }
     pub fn is_mutating(&self, mode: &str, name: &str, input: &Value) -> bool {
@@ -223,12 +354,25 @@ pub fn definitions() -> Vec<Value> {
         ("list_files", "List workspace text files and directories, skipping symlinks, binary files, .git, node_modules and target. At most 1000 entries and 10000 visited entries. Defaults: path '.', recursive false.", json!({"path":{"type":"string"},"recursive":{"type":"boolean"}}), vec![]),
         ("search", "Search UTF-8 workspace files with a Rust regex. Skips symlinks, binary/oversized files, .git, node_modules and target. One result per matching line. maxResults defaults to 100 (max 1000); scanned bytes and output are bounded.", json!({"pattern":{"type":"string"},"path":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}}), vec!["pattern"]),
         ("write_file", "Atomically replace or create a UTF-8 workspace file (max 1 MiB). Parent directory must already exist. Symlinks and reparse points are rejected.", json!({"path":{"type":"string"},"content":{"type":"string"}}), vec!["path","content"]),
+        ("edit_file","Replace one exact text fragment in a UTF-8 file. Fails on missing or ambiguous matches. Optional expectedHash is the SHA256 from read_file. Preserves all untouched text and line endings.",json!({"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"expectedHash":{"type":"string"}}),vec!["path","oldText","newText"]),
+        ("make_directory","Create one workspace directory; the parent must exist. No recursive creation or links.",json!({"path":{"type":"string"}}),vec!["path"]),
+        ("rename_file","Rename a UTF-8 workspace file without overwriting another file; native checkpoints preserve the change.",json!({"path":{"type":"string"},"destination":{"type":"string"}}),vec!["path","destination"]),
+        ("remove_file","Remove one UTF-8 workspace file, with a private checkpoint when enabled. Never recursively deletes directories.",json!({"path":{"type":"string"}}),vec!["path"]),
+        ("checkpoint_list","List this workspace's native-file checkpoints. Shell changes are not included.",json!({}),vec![]),
+        ("checkpoint_diff","Review a native-file checkpoint's recorded changes.",json!({"id":{"type":"string"}}),vec!["id"]),
+        ("checkpoint_restore","Restore one workspace checkpoint only when every affected file still matches its recorded result. Never overwrites newer changes.",json!({"id":{"type":"string"}}),vec!["id"]),
+        ("git_status","Inspect Git status with optional locks and filesystem-monitor execution disabled.",json!({}),vec![]),
+        ("git_diff","Inspect tracked Git changes; external diff and textconv are disabled. Optional path stays in the workspace.",json!({"path":{"type":"string"},"staged":{"type":"boolean"}}),vec![]),
         ("apply_patch", "Apply a strict JSON patch string: {\"files\":[{\"path\":\"relative/path\",\"before\":\"exact entire current text\",\"after\":\"entire replacement text\"}]}. before:null creates a file. No deletes or directory creation. All preconditions validated before replacements. Max 32 files, 1 MiB/file, 4 MiB patch. Atomic per file; OS commit failures may partially apply a multi-file patch.", json!({"patch":{"type":"string"}}), vec!["patch"]),
-        ("shell", "Run an authorized shell command in the workspace (PowerShell on Windows, /bin/sh elsewhere). Foreground: timeoutMs defaults to 60000, max 600000; cancellation/timeout kills the process tree. Set background:true for servers, watches and monitoring that should continue between turns: omit timeoutMs, retain the returned id, and use process_output/process_stop. Background terminals end when this CLI session closes. stdout/stderr are bounded.", json!({"command":{"type":"string"},"background":{"type":"boolean"},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000}}), vec!["command"]),
+        ("shell", "Run an authorized shell command. Foreground timeoutMs defaults to 60000 (max 600000); interrupted commands may require recovery. Use background:true for servers and watches. Add interactive:true to send stdin, or pty:true for a real interactive terminal. Background mode omits timeoutMs. Retain the owned id for process_output/process_write/process_stop; closing this CLI ends its terminals.", json!({"command":{"type":"string"},"background":{"type":"boolean"},"interactive":{"type":"boolean"},"pty":{"type":"boolean"},"rows":{"type":"integer","minimum":10,"maximum":500},"cols":{"type":"integer","minimum":10,"maximum":500},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000}}), vec!["command"]),
         ("process_list", "List this session's background terminals and their current status. Does not launch or restart commands.", json!({}), vec![]),
-        ("process_output", "Read up to the last 64 KiB of combined output from an owned background terminal.", json!({"id":{"type":"string"}}), vec!["id"]),
+        ("process_output", "Read up to the last 64 KiB of output. Pass the previous nextOffset as after to read incremental output; truncated indicates lost older bytes.", json!({"id":{"type":"string"},"after":{"type":"integer","minimum":0}}), vec!["id"]),
+        ("process_write","Send text to stdin of one owned interactive process or PTY. This can execute commands and follows mutation permissions.",json!({"id":{"type":"string"},"text":{"type":"string","maxLength":32768}}),vec!["id","text"]),
+        ("process_resize","Resize one owned active PTY.",json!({"id":{"type":"string"},"rows":{"type":"integer","minimum":10,"maximum":500},"cols":{"type":"integer","minimum":10,"maximum":500}}),vec!["id","rows","cols"]),
         ("process_stop", "Stop exactly one owned background terminal and its descendants, preserving the chat and other terminals. Never use an OS PID.", json!({"id":{"type":"string"}}), vec!["id"]),
         ("trex_read_messages", "Read newly queued user messages. Handled by the server, not the native tool executor.", json!({}), vec![]),
+        ("task_state","Read the latest durable task list, including after context compaction. offset defaults to 0, limit to 10 (max 64). Does not change tasks.",json!({"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":64}}),vec![]),
+        ("history_search","Search this conversation's full retained text history, including context archived by compaction. Returns bounded text excerpts, never image bytes or opaque reasoning.",json!({"query":{"type":"string","maxLength":1024},"limit":{"type":"integer","minimum":1,"maximum":20}}),vec!["query"]),
         ("update_plan", "Publish or update your visible task list. Keep completed work marked completed, the current step in_progress, and future steps pending. Do not mark unverified work complete. This only updates the plan; it does not execute tasks.", json!({"plan":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"step":{"type":"string","maxLength":2000},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["step","status"],"additionalProperties":false}}}), vec!["plan"]),
     ];
     specs.into_iter().map(|(name, description, properties, required)| json!({
@@ -245,9 +389,15 @@ pub fn is_mutating(name: &str) -> bool {
             | "list_files"
             | "search"
             | "trex_read_messages"
+            | "task_state"
+            | "history_search"
             | "update_plan"
             | "process_list"
             | "process_output"
+            | "checkpoint_list"
+            | "checkpoint_diff"
+            | "git_status"
+            | "git_diff"
             | "github_repos"
             | "github_prs"
             | "github_pr_view"
@@ -263,6 +413,24 @@ pub async fn execute(
     name: &str,
     input: &Value,
     cancel: CancellationToken,
+) -> Result<Value> {
+    execute_configured(
+        cwd,
+        name,
+        input,
+        cancel,
+        std::sync::Arc::new(crate::settings::Settings::default()),
+        None,
+    )
+    .await
+}
+async fn execute_configured(
+    cwd: &Path,
+    name: &str,
+    input: &Value,
+    cancel: CancellationToken,
+    settings: std::sync::Arc<crate::settings::Settings>,
+    snapshot: Option<Vec<crate::changes::FileChange>>,
 ) -> Result<Value> {
     check_cancel(&cancel)?;
     // Validate tool identity before resolving cwd or touching disk.
@@ -298,23 +466,43 @@ pub async fn execute(
             fields(input, &[], &[])?;
             bail!("trex_read_messages must be handled by the server")
         }
-        "read_file" | "list_files" | "search" | "write_file" | "apply_patch" | "shell" => {}
+        "read_file" | "list_files" | "search" | "write_file" | "apply_patch" | "shell"
+        | "edit_file" | "make_directory" | "rename_file" | "remove_file" | "git_status"
+        | "git_diff" => {}
         _ => bail!("unknown tool: {name}"),
     }
     if name == "shell" {
-        return shell(cwd, input, cancel).await;
+        return shell_configured(cwd, input, cancel, &settings.shell).await;
+    }
+    if matches!(name, "git_status" | "git_diff") {
+        return git_read(cwd, name, input, cancel, &settings).await;
     }
     let cwd = cwd.to_owned();
     let name = name.to_owned();
     let input = input.clone();
     tokio::task::spawn_blocking(move || {
-        let ws = Workspace::new(&cwd)?;
+        let mut ws = Workspace::configured(&cwd,settings.privacy.clone())?;
+        ws.expected=snapshot;
         match name.as_str() {
             "read_file" => read_file(&ws, &input, &cancel),
             "list_files" => list_files(&ws, &input, &cancel),
             "search" => search(&ws, &input, &cancel),
             "write_file" => write_file(&ws, &input, &cancel),
             "apply_patch" => apply_patch(&ws, &input, &cancel),
+            "edit_file"=>edit_file(&ws,&input,&cancel),
+            "make_directory"=>{let obj=fields(&input,&["path"],&["path"])?;let path=ws.resolve(string(obj,"path")?,true)?;ws.policy.require(&path)?;fs::create_dir(&path)?;Ok(json!({"created":true,"path":ws.display(&path)}))},
+            "rename_file"=>{
+                let obj=fields(&input,&["path","destination"],&["path","destination"])?;
+                let from=ws.resolve(string(obj,"path")?,false)?;let to=ws.resolve(string(obj,"destination")?,true)?;
+                ws.policy.require(&from)?;ws.policy.require(&to)?;ensure!(!to.exists(),"destination already exists");
+                let before=ws.before(&from,&cancel)?;ensure!(existing_text(&from,&cancel)?==before,"rename source changed since the checkpoint");
+                // Creating a hard link is no-replace on both Windows and Unix.
+                // Remove the original only after publishing succeeds.
+                fs::hard_link(&from,&to)?;
+                fs::remove_file(&from).map_err(|e|anyhow::Error::new(e).context(ToolExecutionUncertain("Rename published its destination but could not remove the original; inspect both files".into())))?;
+                Ok(json!({"renamed":true}))
+            },
+            "remove_file"=>{let obj=fields(&input,&["path"],&["path"])?;let path=ws.resolve(string(obj,"path")?,false)?;ws.policy.require(&path)?;let before=ws.before(&path,&cancel)?;ensure!(existing_text(&path,&cancel)?==before,"remove target changed since the checkpoint");fs::remove_file(path)?;Ok(json!({"removed":true}))},
             _ => unreachable!(),
         }
     })
@@ -366,11 +554,19 @@ fn check_cancel(cancel: &CancellationToken) -> Result<()> {
     Ok(())
 }
 
-struct Workspace {
+pub(crate) struct Workspace {
     root: PathBuf,
+    policy: crate::project::Policy,
+    expected: Option<Vec<crate::changes::FileChange>>,
 }
 impl Workspace {
     fn new(cwd: &Path) -> Result<Self> {
+        Self::configured(cwd, crate::settings::PrivacySettings::default())
+    }
+    pub(crate) fn configured(
+        cwd: &Path,
+        privacy: crate::settings::PrivacySettings,
+    ) -> Result<Self> {
         let root = fs::canonicalize(cwd).context("cannot canonicalize workspace")?;
         ensure!(root.is_dir(), "workspace must be a directory");
         #[cfg(windows)]
@@ -380,7 +576,21 @@ impl Workspace {
                 "only local drive workspaces are supported; UNC/device workspaces are forbidden"
             );
         }
-        Ok(Self { root })
+        let policy = crate::project::Policy::new(&root, privacy)?;
+        Ok(Self {
+            root,
+            policy,
+            expected: None,
+        })
+    }
+
+    fn before(&self, path: &Path, cancel: &CancellationToken) -> Result<Option<String>> {
+        if let Some(files) = &self.expected {
+            if let Some(file) = files.iter().find(|f| f.path == self.display(path)) {
+                return Ok(file.before.clone());
+            }
+        }
+        existing_text(path, cancel)
     }
 
     fn input_root(&self) -> PathBuf {
@@ -397,7 +607,7 @@ impl Workspace {
     }
 
     /// Existing parents only; every component is checked without following links.
-    fn resolve(&self, raw: &str, allow_new: bool) -> Result<PathBuf> {
+    pub(crate) fn resolve(&self, raw: &str, allow_new: bool) -> Result<PathBuf> {
         ensure!(
             !raw.is_empty() && raw.len() <= 4096,
             "path must contain 1..4096 bytes"
@@ -510,6 +720,9 @@ impl Workspace {
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/")
+    }
+    pub(crate) fn require(&self, path: &Path) -> Result<()> {
+        self.policy.require(path)
     }
 }
 
@@ -639,6 +852,7 @@ fn read_file(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Resul
     let offset = number(obj, "offset", 0, 0, usize::MAX as u64)?;
     let limit = number(obj, "limit", 200, 1, 2000)?;
     let path = ws.resolve(string(obj, "path")?, false)?;
+    ws.policy.require(&path)?;
     let text = read_text(&path, cancel)?;
     let lines: Vec<_> = text.split_inclusive('\n').collect();
     let mut content = String::new();
@@ -655,7 +869,7 @@ fn read_file(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Resul
         }
     }
     Ok(
-        json!({"path":ws.display(&path),"content":content,"offset":offset,"linesRead":count,
+        json!({"path":ws.display(&path),"sha256":crate::changes::hash(&text),"content":content,"offset":offset,"linesRead":count,
         "totalLines":lines.len(),"truncated":clipped || offset.saturating_add(count) < lines.len()}),
     )
 }
@@ -737,6 +951,9 @@ fn list_files(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Resu
     Ok(json!({"path":ws.display(&path),"entries":entries,"truncated":truncated}))
 }
 fn is_skipped_entry(ws: &Workspace, path: &Path) -> bool {
+    if !ws.policy.allowed(path, path.is_dir()) {
+        return true;
+    }
     if skipped(Path::new(&ws.display(path))) {
         return true;
     }
@@ -1105,11 +1322,14 @@ fn commit(ws: &Workspace, changes: &[Change], cancel: &CancellationToken) -> Res
                 .iter()
                 .map(|c| ws.display(&c.path))
                 .collect();
-            bail!(
+            return Err(anyhow!(
                 "patch commit failed at {}; already committed {:?}: {error:#}",
                 ws.display(&change.path),
                 committed
-            );
+            )
+            .context(ToolExecutionUncertain(
+                "File replacement stopped during commit".into(),
+            )));
         }
     }
     Ok(())
@@ -1122,13 +1342,282 @@ fn write_file(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Resu
         "content must be text of at most 1 MiB"
     );
     let path = ws.resolve(string(obj, "path")?, true)?;
+    ws.policy.require(&path)?;
     let change = Change {
-        before: existing_text(&path, cancel)?,
+        before: ws.before(&path, cancel)?,
         path,
         after: content.to_owned(),
     };
     commit(ws, std::slice::from_ref(&change), cancel)?;
     Ok(json!({"path":ws.display(&change.path),"bytesWritten":content.len()}))
+}
+fn edited_text(before: &str, input: &Value) -> Result<String> {
+    fields(
+        input,
+        &["path", "oldText", "newText", "expectedHash"],
+        &["path", "oldText", "newText"],
+    )?;
+    let old = input["oldText"].as_str().context("oldText must be text")?;
+    let new = input["newText"].as_str().context("newText must be text")?;
+    ensure!(
+        !old.is_empty() && old.len() <= MAX_FILE_BYTES && new.len() <= MAX_FILE_BYTES,
+        "invalid edit size"
+    );
+    ensure!(
+        before.match_indices(old).count() == 1,
+        "oldText must match exactly once; include more surrounding context"
+    );
+    if let Some(hash) = input.get("expectedHash") {
+        ensure!(
+            hash.as_str() == Some(crate::changes::hash(before).as_str()),
+            "file changed since it was read"
+        );
+    }
+    let after = before.replacen(old, new, 1);
+    ensure!(after.len() <= MAX_FILE_BYTES, "edited file exceeds 1 MiB");
+    Ok(after)
+}
+fn edit_file(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Result<Value> {
+    let path = ws.resolve(input["path"].as_str().context("path is required")?, false)?;
+    ws.policy.require(&path)?;
+    let before = ws.before(&path, cancel)?.context("edit target missing")?;
+    let after = edited_text(&before, input)?;
+    commit(
+        ws,
+        &[Change {
+            path: path.clone(),
+            before: Some(before),
+            after: after.clone(),
+        }],
+        cancel,
+    )?;
+    Ok(
+        json!({"path":ws.display(&path),"sha256":crate::changes::hash(&after),"bytesWritten":after.len()}),
+    )
+}
+pub(crate) fn execute_sync_restore(
+    cwd: &Path,
+    path: &str,
+    text: &str,
+    privacy: &crate::settings::PrivacySettings,
+) -> Result<()> {
+    let ws = Workspace::configured(cwd, privacy.clone())?;
+    write_file(
+        &ws,
+        &json!({"path":path,"content":text}),
+        &CancellationToken::new(),
+    )?;
+    Ok(())
+}
+fn preview_file_changes(
+    cwd: &Path,
+    name: &str,
+    input: &Value,
+    privacy: &crate::settings::PrivacySettings,
+) -> Result<Vec<crate::changes::FileChange>> {
+    use crate::changes::FileChange;
+    if !matches!(
+        name,
+        "write_file" | "apply_patch" | "edit_file" | "rename_file" | "remove_file"
+    ) {
+        return Ok(vec![]);
+    }
+    let ws = Workspace::configured(cwd, privacy.clone())?;
+    let cancel = CancellationToken::new();
+    let read = |raw: &str| -> Result<(String, Option<String>)> {
+        let path = ws.resolve(raw, true)?;
+        ws.require(&path)?;
+        let content = existing_text(&path, &cancel)?;
+        Ok((ws.display(&path), content))
+    };
+    match name {
+        "apply_patch" => {
+            let patch: Value =
+                serde_json::from_str(input["patch"].as_str().context("patch required")?)?;
+            let files = patch["files"].as_array().context("patch files required")?;
+            ensure!(files.len() <= MAX_PATCH_FILES, "too many patch files");
+            files
+                .iter()
+                .map(|file| {
+                    let (path, before) =
+                        read(file["path"].as_str().context("patch path required")?)?;
+                    Ok(FileChange {
+                        path,
+                        before,
+                        after: Some(
+                            file["after"]
+                                .as_str()
+                                .context("patch after text required")?
+                                .into(),
+                        ),
+                    })
+                })
+                .collect()
+        }
+        _ => {
+            let (path, before) = read(input["path"].as_str().context("path required")?)?;
+            if name == "rename_file" {
+                let (destination, other) = read(
+                    input["destination"]
+                        .as_str()
+                        .context("destination required")?,
+                )?;
+                ensure!(other.is_none(), "destination exists");
+                Ok(vec![
+                    FileChange {
+                        path,
+                        before: before.clone(),
+                        after: None,
+                    },
+                    FileChange {
+                        path: destination,
+                        before: None,
+                        after: before,
+                    },
+                ])
+            } else {
+                let after = match name {
+                    "write_file" => Some(
+                        input["content"]
+                            .as_str()
+                            .context("content required")?
+                            .into(),
+                    ),
+                    "edit_file" => Some(edited_text(
+                        before.as_deref().context("edit target missing")?,
+                        input,
+                    )?),
+                    _ => None,
+                };
+                Ok(vec![FileChange {
+                    path,
+                    before,
+                    after,
+                }])
+            }
+        }
+    }
+}
+pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
+    let executable = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.into()
+    };
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .filter(|p| p.is_absolute())
+        .map(|p| p.join(&executable))
+        .find(|p| p.is_file())
+}
+async fn git_run(
+    cwd: &Path,
+    args: &[String],
+    cancel: &CancellationToken,
+    settings: &crate::settings::Settings,
+) -> Result<(Vec<u8>, bool)> {
+    let mut command = Command::new(find_program("git").context("Git is not installed")?);
+    command.args([
+        "--no-optional-locks",
+        "--literal-pathspecs",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+    ]);
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    crate::settings::configure_environment(&mut command, &settings.shell);
+    let (mut child, mut guard) = spawn_owned_command(command)?;
+    let stdout = child.stdout.take().context("Git stdout unavailable")?;
+    let result = tokio::select! {_=cancel.cancelled()=>None,result=tokio::time::timeout(Duration::from_secs(20),async{let(status,output)=tokio::join!(child.wait(),capture(stdout));Ok::<_,anyhow::Error>((status?,output?))})=>Some(result)};
+    match result {
+        Some(Ok(Ok((status, output)))) => {
+            ensure!(status.success(), "Git inspection failed");
+            Ok(output)
+        }
+        _ => {
+            stop_process(&mut child, &mut guard).await;
+            bail!("Git inspection interrupted or timed out")
+        }
+    }
+}
+async fn git_read(
+    cwd: &Path,
+    name: &str,
+    input: &Value,
+    cancel: CancellationToken,
+    settings: &crate::settings::Settings,
+) -> Result<Value> {
+    let ws = Workspace::configured(cwd, settings.privacy.clone())?;
+    if name == "git_status" {
+        fields(input, &[], &[])?;
+        let (bytes, truncated) = git_run(
+            cwd,
+            &[
+                "status".into(),
+                "--porcelain=v1".into(),
+                "--untracked-files=normal".into(),
+            ],
+            &cancel,
+            settings,
+        )
+        .await?;
+        return Ok(json!({"output":String::from_utf8_lossy(&bytes),"truncated":truncated}));
+    }
+    let obj = fields(input, &["path", "staged"], &[])?;
+    ensure!(
+        obj.get("staged").is_none_or(Value::is_boolean),
+        "staged must be a boolean"
+    );
+    let mut args: Vec<String> = ["diff", "--no-ext-diff", "--no-textconv", "--no-color"]
+        .iter()
+        .map(|s| (*s).into())
+        .collect();
+    if obj.get("staged") == Some(&json!(true)) {
+        args.push("--cached".into());
+    }
+    let mut paths = Vec::new();
+    if let Some(path) = obj.get("path") {
+        let path = ws.resolve(path.as_str().context("path must be text")?, true)?;
+        ws.require(&path)?;
+        paths.push(ws.display(&path));
+    } else {
+        let mut names = args.clone();
+        names.extend(["--name-only".into(), "-z".into(), "--".into()]);
+        let (bytes, truncated) = git_run(cwd, &names, &cancel, settings).await?;
+        ensure!(
+            !truncated,
+            "too many changed files; inspect a specific path"
+        );
+        for raw in bytes.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+            let raw =
+                std::str::from_utf8(raw).context("Git path is not UTF-8; inspect it manually")?;
+            if let Ok(path) = ws.resolve(raw, true) {
+                if ws.require(&path).is_ok() {
+                    paths.push(ws.display(&path));
+                }
+            }
+            ensure!(
+                paths.len() <= 512,
+                "too many changed files; inspect a specific path"
+            );
+        }
+    }
+    if paths.is_empty() {
+        return Ok(json!({"output":"","truncated":false,"privacyFiltered":true}));
+    }
+    args.push("--".into());
+    args.extend(paths);
+    let (bytes, truncated) = git_run(cwd, &args, &cancel, settings).await?;
+    Ok(
+        json!({"output":String::from_utf8_lossy(&bytes),"truncated":truncated,"privacyFiltered":true}),
+    )
 }
 fn apply_patch(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Result<Value> {
     let obj = fields(input, &["patch"], &["patch"])?;
@@ -1154,6 +1643,7 @@ fn apply_patch(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Res
             &["path", "before", "after"],
         )?;
         let path = ws.resolve(string(obj, "path")?, true)?;
+        ws.policy.require(&path)?;
         let key = if path.exists() {
             fs::canonicalize(&path)?.to_string_lossy().into_owned()
         } else {
@@ -1303,6 +1793,13 @@ mod windows_job {
             );
             Ok(())
         }
+        pub(super) fn attach_raw(&self, process: std::os::windows::io::RawHandle) -> Result<()> {
+            ensure!(
+                unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), process) } != 0,
+                "cannot contain interactive process"
+            );
+            Ok(())
+        }
         pub(super) fn terminate(&self) {
             unsafe {
                 TerminateJobObject(self.0.as_raw_handle(), 1);
@@ -1328,6 +1825,36 @@ pub(crate) struct ProcessTreeGuard {
     pid: Option<u32>,
     #[cfg(windows)]
     job: windows_job::Job,
+}
+impl ProcessTreeGuard {
+    pub(crate) fn for_pty(child: &dyn portable_pty::Child) -> Result<Self> {
+        #[cfg(windows)]
+        {
+            let job = windows_job::Job::new()?;
+            job.attach_raw(
+                child
+                    .as_raw_handle()
+                    .context("interactive process handle unavailable")?,
+            )?;
+            Ok(Self {
+                pid: child.process_id(),
+                job,
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(Self {
+                pid: child.process_id(),
+            })
+        }
+    }
+    pub(crate) fn terminate(&mut self) {
+        #[cfg(windows)]
+        self.job.terminate();
+        #[cfg(unix)]
+        kill_group(self.pid);
+        self.pid = None;
+    }
 }
 impl Drop for ProcessTreeGuard {
     fn drop(&mut self) {
@@ -1358,21 +1885,40 @@ pub(crate) async fn stop_process(child: &mut tokio::process::Child, guard: &mut 
     let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
     guard.pid = None;
 }
-pub(crate) fn spawn_owned_shell(
+pub(crate) fn spawn_shell_configured(
     cwd: &Path,
     text: &str,
+    settings: &crate::settings::ShellSettings,
+    interactive: bool,
 ) -> Result<(tokio::process::Child, ProcessTreeGuard)> {
     let ws = Workspace::new(cwd)?;
     #[cfg(windows)]
     let mut command = {
-        let mut cmd = Command::new(system_exe("WindowsPowerShell/v1.0/powershell.exe")?);
-        cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", text]);
+        let mut cmd = Command::new(
+            settings
+                .executable
+                .clone()
+                .unwrap_or(system_exe("WindowsPowerShell/v1.0/powershell.exe")?),
+        );
+        let utf8 = format!("[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; {text}");
+        cmd.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &utf8,
+        ]);
         cmd.creation_flags(0x0800_0000 | 0x4); // CREATE_NO_WINDOW | CREATE_SUSPENDED
         cmd
     };
     #[cfg(not(windows))]
     let mut command = {
-        let mut cmd = Command::new("/bin/sh");
+        let mut cmd = Command::new(
+            settings
+                .executable
+                .as_deref()
+                .unwrap_or(Path::new("/bin/sh")),
+        );
         cmd.args(["-c", text]);
         #[cfg(unix)]
         cmd.process_group(0);
@@ -1380,10 +1926,15 @@ pub(crate) fn spawn_owned_shell(
     };
     command
         .current_dir(&ws.root)
-        .stdin(Stdio::null())
+        .stdin(if interactive {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    crate::settings::configure_environment(&mut command, settings);
     #[cfg(windows)]
     let job = windows_job::Job::new()?;
     let child = command.spawn().context("cannot spawn shell")?;
@@ -1398,6 +1949,42 @@ pub(crate) fn spawn_owned_shell(
 }
 
 pub(crate) async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) -> Result<Value> {
+    shell_configured(
+        cwd,
+        input,
+        cancel,
+        &crate::settings::ShellSettings::default(),
+    )
+    .await
+}
+pub(crate) fn spawn_owned_command(
+    mut command: Command,
+) -> Result<(tokio::process::Child, ProcessTreeGuard)> {
+    command.kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        command.creation_flags(0x0800_0000 | 0x4);
+    }
+    #[cfg(unix)]
+    command.process_group(0);
+    #[cfg(windows)]
+    let job = windows_job::Job::new()?;
+    let child = command.spawn()?;
+    let guard = ProcessTreeGuard {
+        pid: child.id(),
+        #[cfg(windows)]
+        job,
+    };
+    #[cfg(windows)]
+    guard.job.attach_and_resume(&child)?;
+    Ok((child, guard))
+}
+pub(crate) async fn shell_configured(
+    cwd: &Path,
+    input: &Value,
+    cancel: CancellationToken,
+    settings: &crate::settings::ShellSettings,
+) -> Result<Value> {
     let obj = fields(input, &["command", "timeoutMs", "background"], &["command"])?;
     let text = string(obj, "command")?;
     ensure!(
@@ -1410,7 +1997,7 @@ pub(crate) async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) 
     );
     let timeout = number(obj, "timeoutMs", 60_000, 1, 600_000)?;
     check_cancel(&cancel)?;
-    let (mut child, mut guard) = spawn_owned_shell(cwd, text)?;
+    let (mut child, mut guard) = spawn_shell_configured(cwd, text, settings, false)?;
     let stdout = child.stdout.take().context("missing stdout pipe")?;
     let stderr = child.stderr.take().context("missing stderr pipe")?;
     let result = {
@@ -1433,14 +2020,17 @@ pub(crate) async fn shell(cwd: &Path, input: &Value, cancel: CancellationToken) 
             let stderr = String::from_utf8_lossy(&stderr);
             let stdout_text = prefix(&stdout, MAX_OUTPUT_BYTES / 2);
             let stderr_text = prefix(&stderr, MAX_OUTPUT_BYTES / 2);
-            Ok(json!({"exitCode":status.code(),"success":status.success(),
+            Ok(
+                json!({"exitCode":status.code(),"success":status.success(),"isError":!status.success(),
                 "stdout":stdout_text,"stderr":stderr_text,
                 "stdoutTruncated":out_truncated || stdout_text.len() < stdout.len(),
-                "stderrTruncated":err_truncated || stderr_text.len() < stderr.len()}))
+                "stderrTruncated":err_truncated || stderr_text.len() < stderr.len()}),
+            )
         }
         Err(error) => {
             stop_process(&mut child, &mut guard).await;
-            Err(error)
+            let reason = error.to_string();
+            Err(error.context(ToolExecutionUncertain(reason)))
         }
     }
 }

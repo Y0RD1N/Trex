@@ -16,10 +16,47 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[cfg(target_os = "linux")]
+mod wayland;
 #[cfg(windows)]
 mod windows;
+pub(crate) struct DesktopLease(std::fs::File);
+impl DesktopLease {
+    pub(crate) fn acquire() -> Result<Self> {
+        Ok(Self(crate::profile::global_control_lock()?))
+    }
+    pub(crate) fn generation(&mut self) -> Result<u64> {
+        use std::io::{Read, Seek, SeekFrom};
+        self.0.seek(SeekFrom::Start(0))?;
+        let mut bytes = [0; 8];
+        match self.0.read_exact(&mut bytes) {
+            Ok(()) => Ok(u64::from_le_bytes(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(0),
+            Err(e) => Err(e.into()),
+        }
+    }
+    pub(crate) fn advance(&mut self) -> Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let n = self
+            .generation()?
+            .checked_add(1)
+            .context("desktop generation exhausted")?;
+        self.0.seek(SeekFrom::Start(0))?;
+        self.0.write_all(&n.to_le_bytes())?;
+        self.0.sync_data()?;
+        Ok(())
+    }
+}
 // Input from different chat sessions must never interleave modifier/button state.
 static DESKTOP_ACCESS: Mutex<()> = Mutex::new(());
+
+pub async fn doctor() -> Result<Value> {
+    #[cfg(target_os = "linux")]
+    if wayland::active() {
+        return Ok(wayland::probe().await);
+    }
+    status()
+}
 
 pub fn read_only(name: &str) -> bool {
     matches!(
@@ -45,6 +82,7 @@ struct Observation {
     origin_x: i32,
     origin_y: i32,
     captured_at: Instant,
+    generation: u64,
     #[cfg(windows)]
     monitor: u32,
     #[cfg(windows)]
@@ -53,13 +91,27 @@ struct Observation {
 #[derive(Default)]
 pub struct DesktopProvider {
     observation: Arc<Mutex<Option<Observation>>>,
+    #[cfg(target_os = "linux")]
+    portal: Arc<tokio::sync::Mutex<wayland::PortalState>>,
 }
 
 impl ToolProvider for DesktopProvider {
     fn invalidate_observation(&self) {
+        #[cfg(target_os = "linux")]
+        if let Ok(mut portal) = self.portal.try_lock() {
+            portal.invalidate();
+        }
         if let Ok(mut state) = self.observation.lock() {
             *state = None;
         }
+    }
+    fn shutdown<'a>(&'a self) -> ToolFuture<'a> {
+        Box::pin(async move {
+            self.invalidate_observation();
+            #[cfg(target_os = "linux")]
+            self.portal.lock().await.close().await;
+            Ok(json!({"closed":true}))
+        })
     }
     fn definitions(&self, mode: &str) -> Vec<Value> {
         let specs = [
@@ -90,6 +142,15 @@ impl ToolProvider for DesktopProvider {
     ) -> ToolFuture<'a> {
         Box::pin(async move {
             ensure!(!cancel.is_cancelled(), "cancelled before desktop operation");
+            #[cfg(target_os = "linux")]
+            if wayland::active() {
+                return self
+                    .portal
+                    .lock()
+                    .await
+                    .run(mode, name, input, cancel)
+                    .await;
+            }
             ensure!(
                 mode != "plan" || read_only(name),
                 "plan mode forbids desktop input"
@@ -174,6 +235,11 @@ fn run(
         .lock()
         .map_err(|_| anyhow::anyhow!("desktop input unavailable"))?;
     ensure!(!cancel.is_cancelled(), "cancelled before desktop operation");
+    let mut lease = if name == "desktop_status" || name == "desktop_monitors" {
+        None
+    } else {
+        Some(DesktopLease::acquire()?)
+    };
     #[cfg(windows)]
     let _dpi = windows::DpiScope::enter()?;
     let mut state = state
@@ -228,6 +294,10 @@ fn run(
             origin_x: x,
             origin_y: y,
             captured_at: Instant::now(),
+            generation: lease
+                .as_mut()
+                .context("desktop lease unavailable")?
+                .generation()?,
             #[cfg(windows)]
             monitor,
             #[cfg(windows)]
@@ -271,6 +341,14 @@ fn run(
         *state = None;
         bail!("desktop observation expired; take a fresh screenshot");
     }
+    ensure!(
+        lease
+            .as_mut()
+            .context("desktop lease unavailable")?
+            .generation()?
+            == observation.generation,
+        "another agent changed the desktop; take a fresh screenshot"
+    );
     // Validate every argument before connecting to the desktop or consuming the token.
     let mut points = None;
     let mut end = None;
@@ -365,6 +443,10 @@ fn run(
         .map_err(|e| anyhow::anyhow!("desktop input unavailable: {e}"))?;
     ensure!(!cancel.is_cancelled(), "cancelled before desktop input");
     *state = None;
+    lease
+        .as_mut()
+        .context("desktop lease unavailable")?
+        .advance()?;
     let result = (|| -> Result<()> {
         if let Some((x, y)) = points {
             move_pointer(&mut enigo, x, y)?;
@@ -474,6 +556,10 @@ fn normalize_virtual_point(x: i32, y: i32, bounds: [i32; 4]) -> Result<(i32, i32
 
 /// No screenshot, input, credential store or private application state is read.
 pub fn status() -> Result<Value> {
+    #[cfg(target_os = "linux")]
+    if wayland::active() {
+        return Ok(wayland::diagnostic());
+    }
     let backend = if cfg!(windows) {
         "windows"
     } else if cfg!(target_os = "linux") {
@@ -645,6 +731,7 @@ mod tests {
             origin_x: 0,
             origin_y: 0,
             captured_at: Instant::now(),
+            generation: 0,
             #[cfg(windows)]
             monitor: 0,
             #[cfg(windows)]

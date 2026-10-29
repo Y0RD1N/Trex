@@ -37,6 +37,7 @@ import type { ChatSession, ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
 import { useTrexChat } from "../hooks/useTrexChat";
+import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { useHandoffDelivery } from "../hooks/useHandoffDelivery";
 import { useAgentWorkflow } from "../hooks/useAgentWorkflow";
 import type { AgentWorkflow } from "../agentWorkflow";
@@ -118,6 +119,7 @@ export type ChatViewProps = ChatSessionOptions & {
 };
 
 const PROVIDERS: Record<AgentProvider, { name: string; product: string; defaultMode: string; modes: SelectOption[]; otherModes: Record<string, string> }> = {
+  antigravity: { name: "Antigravity", product: "Antigravity", defaultMode: "ask", modes: [], otherModes: {} },
   trex: {
     name: "Trex", product: "Trex CLI", defaultMode: "ask",
     modes: [
@@ -219,7 +221,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     return () => { queueActionRef.current.mounted = false; queueActionRef.current.generation++; };
   }, []);
   const [deliveryChoice, setSendDuringWork] = useState("queue");
-  const sendDuringWork = provider === "trex" ? "queue" : deliveryChoice;
+  const sendDuringWork = provider === "trex" || provider === "antigravity" ? "queue" : deliveryChoice;
   const queueWakeRef = useRef({ armed: false, attempted: "", sending: false });
   const summaryCacheRef = useRef<SummaryCache>(new Map());
   // Sugerencias de `@`, `/` y `$`: posición del cursor, opción resaltada y menú descartado con Esc.
@@ -731,7 +733,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   /** Modo de trabajo al que se vuelve al poner en marcha un plan. */
   const workModeRef = useRef(mode === "plan" ? agent.defaultMode : mode);
   useEffect(() => { if (mode !== "plan") workModeRef.current = mode; }, [mode]);
-  const availableModes = props.planningOnly ? agent.modes.filter(option => option.value === "plan") : agent.modes;
+  const nativeModes = session.modes ?? agent.modes;
+  const availableModes = props.planningOnly ? nativeModes.filter(option => option.value === "plan") : nativeModes;
   const modeOptions = availableModes.some(option => option.value === mode) ? availableModes
     : [...availableModes, { value: mode, label: agent.otherModes[mode] ?? mode, icon: <ShieldIcon size={13} /> }];
   const efforts = supportedEfforts(state.models, state.model, state.modelChoice);
@@ -1144,13 +1147,19 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
                 handoffDelivery.retry();
               }}>{props.workflow?.status === "paused" ? "Reanudar flujo" : handoffDelivery.requiresReview && !handoffDelivery.error ? "Enviar contexto" : "Reintentar continuación"}</button>}
         </div>}
+        {!handoffPending && session.setup && state.process !== "exited" && state.process !== "failed" && <div className="chat-ended">
+          <p>{session.setup.description}</p>{session.setup.actions.map(action => <button key={action.label} type="button" className="btn btn-small" disabled={session.setup!.busy}
+            onClick={() => void action.run()}>{session.setup!.busy ? "Conectando…" : action.label}</button>)}
+        </div>}
         {!handoffPending && (state.process === "exited" || state.process === "failed") && <div className="chat-ended">
           <div>
             <strong>{state.process === "failed" ? `${agent.product} no pudo arrancar` : `La sesión de ${agent.product} se cerró`}</strong>
             {state.exitCode !== null && state.exitCode !== 0 && <span> · código {state.exitCode}</span>}
           </div>
           {stderrTail && <pre>{stderrTail}</pre>}
-          <button type="button" className="btn btn-small" onClick={() => void session.start()}>
+          {session.setup && <><p>{session.setup.description}</p>{session.setup.actions.map(action => <button key={action.label} type="button" className="btn btn-small" disabled={session.setup!.busy}
+            onClick={() => void action.run()}>{session.setup!.busy ? "Conectando…" : action.label}</button>)}</>}
+          <button type="button" className="btn btn-small" disabled={session.setup?.busy} onClick={() => void session.start().catch(error => session.notice("error", formatError(error)))}>
             {state.process === "failed" ? "Reintentar" : "Reanudar conversación"}
           </button>
         </div>}
@@ -1288,7 +1297,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
             disabled={submittingEdit || queueSaving || handoffPending}
             onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
-          {(running || hasQueued) && !editing && (provider === "trex" ? <span className="chat-tray-chip chat-message-delivery" title="El agente consulta tus mensajes en cola cuando llega a un punto adecuado">En cola</span> : <Select className="chat-tray-chip chat-tray-select chat-message-delivery" menuClassName="chat-glass-menu" value={sendDuringWork}
+          {(running || hasQueued) && !editing && (provider === "trex" || provider === "antigravity" ? <span className="chat-tray-chip chat-message-delivery" title={provider === "antigravity" ? "Los mensajes en cola se entregan con sus adjuntos al terminar la respuesta" : "El agente consulta tus mensajes en cola cuando llega a un punto adecuado"}>En cola</span> : <Select className="chat-tray-chip chat-tray-select chat-message-delivery" menuClassName="chat-glass-menu" value={sendDuringWork}
             options={[{ value: "queue", label: "En cola", description: "El agente decide cuándo leer el mensaje" },
               { value: "now", label: "Enviar ahora", description: "Entrega el mensaje durante el trabajo en curso" }]}
             align="end" onChange={setSendDuringWork} aria-label="Entrega de mensajes durante el trabajo" />)}
@@ -1310,14 +1319,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           openSignal={menuSignal} />
         {props.browser?.enabled && <BrowserMenu cwd={cwd} browser={props.browser} spaces={props.browserSpaces} onStopAgent={props.onStopBrowserAgent} />}
         <span className="chat-composer-spacer" />
-        {props.onPlanHere && <button type="button" className="chat-tray-chip chat-plan-here" disabled={handoffDisabled}
+        {props.onPlanHere && provider !== "antigravity" && <button type="button" className="chat-tray-chip chat-plan-here" disabled={handoffDisabled}
           onClick={event => { event.currentTarget.focus({ preventScroll: true }); planHere(); }}><MapIcon size={13} /><span>Planear aquí</span></button>}
         {props.onHandoffRequest && <button type="button" className="chat-tray-chip chat-handoff-button tip"
           aria-label="Continuar con otro agente" data-tip={handoffHint} disabled={handoffDisabled}
           onClick={event => { event.currentTarget.focus({ preventScroll: true }); requestHandoff(); }}><span>Continuar con otro agente</span><span className="chat-handoff-arrow" aria-hidden="true">↗</span></button>}
       </div>
       <div className="chat-composer-meta">
-        {(usage || state.plan || state.costUsd !== null) && <UsageMenu usage={usage} plan={state.plan} costUsd={state.costUsd} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
+        {(usage || state.plan || state.costUsd !== null || provider === "trex" || provider === "antigravity") && <UsageMenu usage={usage} plan={state.plan} apiUsage={state.apiUsage} costUsd={state.costUsd} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
+          controls={session.usageControls} canCompact={session.supportsCompact} showUnavailable={provider === "trex" || provider === "antigravity"}
           onOpenAll={() => callbacks.current.onOpenUsage()}
           onCompact={() => {
             stickRef.current = true;
@@ -1348,14 +1358,17 @@ function CodexChat(props: ChatViewProps) {
 
 function ChatView(input: ChatViewProps) {
   const browser = useRef(browserOptions(input.settings, input.sessionId,
-    [input.profileName ?? (input.provider === "claude" ? "Claude Code" : input.provider === "codex" ? "Codex" : "Trex CLI"),input.sessionTitle].filter(Boolean).join(" · "))).current;
+    [input.profileName ?? (input.provider === "claude" ? "Claude Code" : input.provider === "codex" ? "Codex" : input.provider === "antigravity" ? "Antigravity" : "Trex CLI"),input.sessionTitle].filter(Boolean).join(" · "))).current;
   const desktopEnabled = useRef(input.settings.desktopEnabled).current;
   const props = { ...input, browser, desktopEnabled };
-  return props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
+  return props.provider === "antigravity" ? <AntigravityChat {...props} /> : props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
 }
 
 function TrexChat(props: ChatViewProps) {
   return <ChatPanel {...props} historyReadOnly session={useTrexChat(props)} />;
+}
+function AntigravityChat(props: ChatViewProps) {
+  return <ChatPanel {...props} historyReadOnly session={useAntigravityChat(props)} />;
 }
 
 export default memo(ChatView);

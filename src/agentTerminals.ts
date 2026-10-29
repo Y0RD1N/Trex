@@ -13,6 +13,7 @@ export type AgentTerminal = {
   id: string; command: string; cwd: string; startedAt: number | null;
   state: "running" | "stopping" | "completed" | "failed" | "stopped" | "unknown";
   output: string; truncated: boolean; exitCode?: number | null; canStop: boolean;
+  canWrite?: boolean;
 };
 export type TerminalSnapshot = { status: "disconnected" | "loading" | "ready" | "unsupported" | "error"; entries: AgentTerminal[]; error: string | null };
 export type TerminalSession = {
@@ -20,6 +21,7 @@ export type TerminalSession = {
   refresh: () => Promise<void>;
   read: (id: string) => Promise<void>;
   stop: (id: string) => Promise<void>;
+  write?: (id: string, text: string) => Promise<void>;
 };
 type Entry = AgentTerminal & { nativeId: string; thread: string; itemId: string; outputFile: boolean };
 type Pending = { resolve: (value: Json) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
@@ -51,14 +53,14 @@ export class AgentTerminals {
   }
   attach(process: string, cwd: string): void {
     this.detach(); this.process = process; this.cwd = cwd; this.entries.clear(); this.ended.clear(); this.tools.clear(); this.scopes.clear(); this.root = "";
-    this.publish("loading");
+    this.publish(this.provider === "antigravity" ? "unsupported" : "loading");
   }
   detach(): void {
     this.epoch++; clearTimeout(this.timer); this.timer = undefined; this.polling = null; this.process = null;
     for (const timer of this.confirmations) clearTimeout(timer); this.confirmations.clear();
     for (const waiter of this.pending.values()) { clearTimeout(waiter.timer); waiter.reject(new Error("La sesión de la terminal se cerró.")); }
     this.pending.clear();
-    for (const entry of this.entries.values()) if (entry.state === "running" || entry.state === "stopping") { entry.state = "unknown"; entry.canStop = false; }
+    for (const entry of this.entries.values()) if (entry.state === "running" || entry.state === "stopping") { entry.state = "unknown"; entry.canStop = false; entry.canWrite = false; }
     this.publish("disconnected");
   }
   bind = (id: string): void => {
@@ -88,7 +90,7 @@ export class AgentTerminals {
   }
   refresh = (): Promise<void> => {
     if (this.polling) return this.polling;
-    if (!this.process || !this.root || !this.provider || this.provider === "claude") return Promise.resolve();
+    if (!this.process || !this.root || !this.provider || this.provider === "claude" || this.provider === "antigravity") return Promise.resolve();
     const epoch = this.epoch;
     const work = (async () => {
       try {
@@ -111,7 +113,7 @@ export class AgentTerminals {
               this.entries.set(id, { id, nativeId, thread, itemId, outputFile: false, command: string(row.command) || "Terminal", cwd: string(row.cwd) || this.cwd,
                 startedAt: typeof row.startedAt === "number" ? row.startedAt : previous?.startedAt ?? null, state,
                 output: previous?.output || this.tools.get(JSON.stringify([thread, itemId]))?.output || "", truncated: previous?.truncated || this.tools.get(JSON.stringify([thread, itemId]))?.truncated || false,
-                canStop: state === "running" || state === "stopping", exitCode: typeof row.exitCode === "number" ? row.exitCode : null });
+                canStop: state === "running" || state === "stopping", canWrite: this.provider === "trex" && row.interactive === true && state === "running", exitCode: typeof row.exitCode === "number" ? row.exitCode : null });
             }
             cursor = string(result.nextCursor) || null;
             if (cursor && (cursors.has(cursor) || ++pages >= 10)) throw new Error("La lista de terminales excede el límite de consulta.");
@@ -120,7 +122,7 @@ export class AgentTerminals {
         }
         if (epoch !== this.epoch) return;
         for (const [id, entry] of this.entries) if (!live.has(id) && (entry.state === "running" || entry.state === "stopping")) {
-          entry.state = entry.state === "stopping" ? "stopped" : "completed"; entry.canStop = false;
+          entry.state = entry.state === "stopping" ? "stopped" : "completed"; entry.canStop = false; entry.canWrite = false;
         }
         this.prune(); this.publish("ready");
       } catch (error) {
@@ -143,6 +145,13 @@ export class AgentTerminals {
     if (data && data.available !== false && epoch === this.epoch && current) {
       current.output = tail(string(data.text)); current.truncated = data.truncated === true; this.publish();
     }
+  };
+  sendInput = async (id: string, text: string): Promise<void> => {
+    const entry = this.entries.get(id);
+    if (this.provider !== "trex" || !entry?.canWrite || entry.state !== "running" || !this.process) throw new Error("Esta terminal no admite entrada interactiva.");
+    if (!text || bytes(text).length > 32_768 || text.includes("\0")) throw new Error("La entrada debe tener entre 1 byte y 32 KiB y no contener caracteres nulos.");
+    const result = await this.request("process/write", { sessionId: entry.thread, processId: entry.nativeId, text });
+    if (result.accepted !== true) throw new Error("El proveedor no confirmó la entrada.");
   };
   stop = async (id: string): Promise<void> => {
     const entry = this.entries.get(id), epoch = this.epoch;

@@ -1,3 +1,4 @@
+import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { agentTeamClaim, agentTeamFinish, agentTeamOpen, agentTeamPause, agentTeamPoll, agentTeamSnapshot, trexBrowserStatus, trexBrowserSpaces, formatError, loadHandoff, prepareHandoff } from "../api";
 import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, mergeTeamItems, teamCombinedState, teamPlanningContext, teamTaskActive, teamTaskRunnable, type AgentTeam, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
@@ -25,6 +26,7 @@ function Publish({ id, epoch, session, publish }: Omit<RuntimeProps,"options"> &
 }
 function ClaudeRuntime(props: RuntimeProps) { return <Publish {...props} session={useClaudeChat(props.options)} />; }
 function CodexRuntime(props: RuntimeProps) { return <Publish {...props} session={useCodexChat(props.options)} />; }
+function AntigravityRuntime(props: RuntimeProps) { return <Publish {...props} session={useAntigravityChat(props.options)} />; }
 function TrexRuntime(props: RuntimeProps) { return <Publish {...props} session={useTrexChat(props.options)} />; }
 type Attempt = { epoch: string; task: TeamTask; member: TeamMember; session: ChatSession; previous: string | null; users: Set<string>; accepted: boolean };
 const STATUS: Record<TeamTask["status"],string> = { queued:"En espera", claimed:"Preparando", running:"Trabajando", completed:"Completada", failed:"Falló", cancelled:"Cancelada", uncertain:"Requiere revisión" };
@@ -369,7 +371,7 @@ export default function AgentTeamView(props: Props) {
         ...(member.id===team.master.id && !historyOnly?{team:{id:team.id,epoch:team.epoch}}:{}),
         visible:activated.has(member.id) && (openedEpoch===team.epoch || historyOnly && props.visible && !!member.conversationId),
         onRunning:()=>latest.current.onRunning(latest.current.sessionId),onExit:noop};
-      const Runtime=member.agent.provider==="claude"?ClaudeRuntime:member.agent.provider==="codex"?CodexRuntime:TrexRuntime;
+      const Runtime=member.agent.provider==="antigravity"?AntigravityRuntime:member.agent.provider==="claude"?ClaudeRuntime:member.agent.provider==="codex"?CodexRuntime:TrexRuntime;
       return <Runtime key={team.epoch+"-"+member.id} id={member.id} epoch={team.epoch} options={options} publish={publish} />;
     })}
     {aggregate?<ChatPanel {...props} provider={team.master.agent.provider} session={aggregate} browser={{...browser,clientId:team.id+"-"+team.master.id,label:team.master.name,...spaces.find(space=>space.clientId===team.id+"-"+team.master.id),enabled:browser.enabled}} browserSpaces={spaces.map(space=>({...space,active:(sessions[space.clientId.slice(team.id.length+1)]?.state.pendingTurns??0)>0}))} onStopBrowserAgent={clientId=>{const member=members.find(member=>team.id+"-"+member.id===clientId);if(member){sessionsRef.current[member.id]?.interrupt();stop("Se detuvo a "+member.name+". Revisa su tarea antes de reanudar el equipo.");}}}

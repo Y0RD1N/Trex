@@ -1,6 +1,19 @@
 # Fedora
 
 Trex, Trex CLI and the standalone Trex Browser have native Linux launchers.
+
+Trex CLI desktop control on Wayland uses XDG ScreenCast/RemoteDesktop portals.
+GNOME requires `xdg-desktop-portal` and `xdg-desktop-portal-gnome`; KDE uses its
+matching portal backend. Install `pipewire-gstreamer`, `gstreamer1-plugins-base`
+and `gstreamer1-plugins-good` for capture. The system dialog grants the selected
+screens and input devices; grants are never silently restored. Run
+`trex-agent desktop-doctor --json` to check the portal and GStreamer plugins
+without opening a consent dialog. Input cannot bypass the compositor's consent.
+
+Native background terminals use Unix PTYs and process groups. The Windows
+PowerShell encoding adapter is not used on Linux. File/privacy rules, context
+compaction, API limits, MCP, checkpoints and noninteractive exec share the same
+engine on both platforms. See [Trex CLI configuration](../trex-cli/README.md#api-agent-configuration-and-limits).
 The Fedora package is an x86-64 RPM. Building on ARM64 is supported by the
 component builder but has not been runtime-tested on an ARM64 device.
 
@@ -87,7 +100,7 @@ the first `browser_navigate` opens the project's dedicated visible window.
 ## Build and verify
 
 ```sh
-sudo dnf install rust cargo gcc gcc-c++ make pkgconf-pkg-config openssl-devel \
+sudo dnf install rust cargo gcc gcc-c++ make cmake pkgconf-pkg-config openssl-devel \
   webkit2gtk4.1-devel gtk3-devel librsvg2-devel libappindicator-gtk3-devel \
   libxdo-devel dbus-devel rpm-build patchelf file tar xz unzip
 npm ci

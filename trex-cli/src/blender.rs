@@ -6,6 +6,9 @@ use std::path::{Component, Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 
 pub struct BlenderProvider;
+pub(crate) fn available() -> bool {
+    find_blender().is_some()
+}
 impl ToolProvider for BlenderProvider {
     fn definitions(&self, mode: &str) -> Vec<Value> {
         if mode == "plan" {

@@ -85,7 +85,7 @@ export default function AgentTeamDialog({ project, profiles, settings, onClose, 
   const [workers, setWorkers] = useState(() => [draft("worker-1","implementation","trex"), draft("worker-2","review","claude"), draft("worker-3","fix","codex")]);
   const [selections, setSelections] = useState<Record<string, Selection>>({});
   const next = useRef(4);
-  const targets = useMemo(() => profiles.map(profile => ({ profile, reason: handoffTargetReason(profile, null, settings) })), [profiles, settings]);
+  const targets = useMemo(() => profiles.map(profile => ({ profile, reason: profile.provider === "antigravity" ? "Antigravity aún no está habilitado para equipos con funciones de solo lectura." : handoffTargetReason(profile, null, settings) })), [profiles, settings]);
   const select = (id: string, value: Selection): void => setSelections(previous => JSON.stringify(previous[id]) === JSON.stringify(value) ? previous : { ...previous, [id]: value });
   const members = [master, ...workers];
   const ready = workers.length > 0 && members.every(member => member.name.trim() && selections[member.id]?.ready) && !submitting && !motion.leaving;

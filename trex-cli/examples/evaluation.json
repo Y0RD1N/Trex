@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "exact-edit",
+      "prompt": "Change only the exported add function in math.js to add its two arguments. Keep the subtraction function unchanged. When finished, say EDIT_VERIFIED.",
+      "files": {
+        "math.js": "export const add = (a, b) => a - b;\nexport const subtract = (a, b) => a - b;\n"
+      },
+      "expectedFiles": {
+        "math.js": "export const add = (a, b) => a + b;\nexport const subtract = (a, b) => a - b;\n"
+      },
+      "expectedTextContains": ["EDIT_VERIFIED"]
+    },
+    {
+      "id": "inspect-without-change",
+      "prompt": "Read message.txt and reply with its exact contents. Do not change any file.",
+      "files": { "message.txt": "Unicode: áé 中文 🦖\n" },
+      "expectedFiles": { "message.txt": "Unicode: áé 中文 🦖\n" },
+      "expectedTextContains": ["Unicode: áé 中文 🦖"]
+    }
+  ]
+}

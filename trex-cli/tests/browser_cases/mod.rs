@@ -3,6 +3,17 @@ use super::*;
 use std::sync::OnceLock;
 
 const SCREENSHOT: &str = "browser_take_screenshot";
+fn expected_api_usage(
+    input: u64,
+    output: u64,
+    requests: u64,
+    cost: Option<f64>,
+    partial: bool,
+    cost_partial: bool,
+) -> Value {
+    json!({"inputTokens":input,"outputTokens":output,"totalTokens":input+output,"requests":requests,"costUsd":cost,
+        "cachedReadTokens":null,"cachedWriteTokens":null,"reasoningTokens":null,"partial":partial,"costPartial":cost_partial})
+}
 const PNG: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
 
@@ -1019,8 +1030,9 @@ fn cancellation_targets_durable_operation_and_requires_recovery_without_reexecut
     );
     let completed = agent.completed("cancel", "interrupted");
     assert_eq!(completed["params"]["recoveryRequired"], true);
-    let measured_usage =
+    let mut measured_usage =
         json!({"contextModel":"mock","inputTokens":11,"outputTokens":3,"contextTokens":14});
+    measured_usage["apiUsage"] = expected_api_usage(11, 3, 1, None, false, true);
     assert_eq!(completed["params"]["usage"], measured_usage);
     assert_eq!(dispatch["turns"]["cancel"]["usage"], measured_usage);
     let requests = f.wait_calls(2);
@@ -1118,8 +1130,9 @@ fn uncertain_receipts_and_broken_broker_responses_stop_without_provider_continua
         );
         let complete = agent.completed("uncertain", "failed");
         assert_eq!(complete["params"]["recoveryRequired"], true, "{behavior}");
-        let measured_usage =
+        let mut measured_usage =
             json!({"contextModel":"mock","inputTokens":11,"outputTokens":3,"contextTokens":14});
+        measured_usage["apiUsage"] = expected_api_usage(11, 3, 1, None, false, true);
         assert_eq!(complete["params"]["usage"], measured_usage, "{behavior}");
         let journal = f.base.journal(&session);
         assert_eq!(
@@ -1217,11 +1230,19 @@ fn uncertain_browser_failure_preserves_accumulated_usage_cost_and_latest_unknown
         }));
         let completed = agent.completed("measured-failure", "failed");
         assert_eq!(completed["params"]["recoveryRequired"], true);
-        let expected = if last_usage["prompt_tokens"].is_u64() {
+        let mut expected = if last_usage["prompt_tokens"].is_u64() {
             json!({"contextModel":"mock","inputTokens":34,"outputTokens":8,"contextTokens":28,"costUsd":0.375})
         } else {
             json!({"contextModel":"mock","inputTokens":11,"outputTokens":3,"costUsd":if last_usage["cost"].is_number() {0.375} else {0.125}})
         };
+        expected["apiUsage"] = expected_api_usage(
+            expected["inputTokens"].as_u64().unwrap(),
+            expected["outputTokens"].as_u64().unwrap(),
+            2,
+            expected["costUsd"].as_f64(),
+            !last_usage["prompt_tokens"].is_u64(),
+            !last_usage["cost"].is_number(),
+        );
         assert_eq!(completed["params"]["usage"], expected);
         let journal = f.base.journal(&session);
         assert_eq!(journal["turns"]["measured-failure"]["usage"], expected);
@@ -1279,7 +1300,9 @@ fn later_unmeasured_provider_failure_keeps_prior_tokens_without_stale_context() 
         .chat()
         .json(json!({"error":{"message":"offline provider rejection"}}));
     let complete = agent.completed("provider-failure", "failed");
-    let expected = json!({"contextModel":"mock","inputTokens":11,"outputTokens":3,"costUsd":0.125});
+    let mut expected =
+        json!({"contextModel":"mock","inputTokens":11,"outputTokens":3,"costUsd":0.125});
+    expected["apiUsage"] = expected_api_usage(11, 3, 2, Some(0.125), true, true);
     assert_eq!(complete["params"]["usage"], expected);
     assert_eq!(
         f.base.journal(&session)["turns"]["provider-failure"]["usage"],

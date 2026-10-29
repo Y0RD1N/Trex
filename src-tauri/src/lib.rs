@@ -3,6 +3,7 @@
 // El backend expone comandos Tauri para gestionar sesiones PTY, detectar
 // Claude Code en el sistema y persistir la configuración del usuario.
 mod accounts;
+mod antigravity;
 mod agent;
 mod agent_terminal;
 mod agent_team;
@@ -362,6 +363,8 @@ pub fn run() {
             agent_terminal_output,
             detect_claude,
             detect_codex,
+            antigravity::antigravity_runtime,
+            antigravity::antigravity_install,
             integrations::integration_dependencies,
             integrations::github_connection_status,
             trex_cli::trex_cli_status,

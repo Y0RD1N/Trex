@@ -4,12 +4,13 @@ import { RefreshIcon, TerminalIcon } from "../Icons";
 import ComposerPanel from "./ComposerPanel";
 import "./BackgroundTerminals.css";
 
-const COLORS = { claude: "var(--text-muted)", codex: "var(--text-muted)", trex: "var(--text-muted)" };
+const COLORS = { antigravity: "var(--text-muted)", claude: "var(--text-muted)", codex: "var(--text-muted)", trex: "var(--text-muted)" };
 const STATES: Record<AgentTerminal["state"], string> = { running: "Activa", stopping: "Deteniendo…", completed: "Finalizada", failed: "Falló", stopped: "Detenida", unknown: "Sin confirmar" };
 const plain = (value: string): string => value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 export default function BackgroundTerminals({ owners }: { owners: TerminalOwner[] }) {
   const [open, setOpen] = useState(false), [selected, setSelected] = useState<string | null>(null), [message, setMessage] = useState("");
   const [stopping, setStopping] = useState(new Set<string>());
+  const [input, setInput] = useState(""), [writing, setWriting] = useState(false);
   const rows = useMemo(() => owners.flatMap(owner => owner.session.snapshot.entries.map(entry => ({ owner, entry, key: JSON.stringify([owner.id, entry.id]) }))), [owners]);
   const active = rows.filter(row => row.entry.state === "running" || row.entry.state === "stopping");
   const unknown = rows.some(row => row.entry.state === "unknown") || owners.some(owner => ["error", "unsupported"].includes(owner.session.snapshot.status));
@@ -18,6 +19,15 @@ export default function BackgroundTerminals({ owners }: { owners: TerminalOwner[
   // Keep the final output available until an already-open panel is folded.
   const available = active.length > 0 || rows.some(row => row.entry.state === "unknown") || open;
   const reading = current?.owner.session.read, currentId = current?.entry.id, currentState = current?.entry.state;
+  useEffect(() => setInput(""), [current?.key]);
+  const sendInput = async (): Promise<void> => {
+    const write = current?.owner.session.write;
+    if (!current?.entry.canWrite || !write || !input || writing) return;
+    const target = current; const text = input; setWriting(true); setMessage("");
+    try { await write(target.entry.id, `${text}\n`); setInput(""); await target.owner.session.read(target.entry.id); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "No se pudo enviar la entrada."); }
+    finally { setWriting(false); }
+  };
   useEffect(() => {
     if (!open || !currentId || !reading) return;
     let cancelled = false;
@@ -48,6 +58,10 @@ export default function BackgroundTerminals({ owners }: { owners: TerminalOwner[
       {current && <div className="chat-background-output"><div><span>Salida disponible · {current.owner.label}</span><span>{STATES[current.entry.state]}{current.entry.exitCode != null ? ` · código ${current.entry.exitCode}` : ""}</span></div><code className="chat-background-cwd">{current.entry.cwd}</code>
         <pre tabIndex={0} aria-label={`Salida de ${current.entry.command}`}>{plain(current.entry.output) || "El proveedor todavía no ha publicado salida de esta terminal."}</pre>
         {current.entry.truncated && <small>Se muestran los últimos 64 KiB de salida.</small>}
+        {current.entry.canWrite && current.owner.session.write && <form className="chat-background-input" onSubmit={event => { event.preventDefault(); void sendInput(); }}>
+          <input aria-label="Entrada para la terminal seleccionada" placeholder="Escribe una respuesta o un comando…" value={input} maxLength={16_000} disabled={writing} onChange={event => setInput(event.target.value)} />
+          <button type="submit" disabled={writing || !input}>{writing ? "Enviando…" : "Enviar"}</button>
+        </form>}
       </div>}
       {(message || owners.some(owner => owner.session.snapshot.error)) && <p className="chat-background-error" role="status">{message || owners.find(owner => owner.session.snapshot.error)?.session.snapshot.error}</p>}
       <p className="chat-background-hint">Detener finaliza esa terminal y conserva el chat y las demás tareas.</p>

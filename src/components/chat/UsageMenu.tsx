@@ -4,7 +4,8 @@ import { contextPercent, contextTokensLabel, type ContextUsage } from "../../cha
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { accountUsageWindows, headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
 import DropdownMenu from "../DropdownMenu";
-import { AlertIcon, CloseIcon } from "../Icons";
+import { AlertIcon, CloseIcon, RefreshIcon } from "../Icons";
+import type { ApiUsage } from "../../tokenUsage";
 import { ContextDetails } from "./ContextMeter";
 import { PlanWindows } from "./PlanMeter";
 import "./UsageMenu.css";
@@ -13,9 +14,13 @@ type Props = {
   usage: ContextUsage | null;
   plan: PlanUsage | null;
   costUsd?: number | null;
+  apiUsage?: ApiUsage | null;
+  showUnavailable?: boolean;
+  controls?: { loading: boolean; error: string | null; refresh: () => Promise<void> };
   product: string;
   busy: boolean;
   onCompact: () => void;
+  canCompact?: boolean;
   onOpenAll: () => void;
 };
 
@@ -23,7 +28,7 @@ const severityRank: Record<UsageSeverity, number> = { normal: 0, warning: 1, cri
 const percentLabel = (percent: number): string => percent > 0 && percent < 1 ? "<1 %" : `${Math.round(percent)} %`;
 
 /** Un único acceso al contexto de la conversación y a los límites de la cuenta. */
-export default function UsageMenu({ usage, plan, costUsd, product, busy, onCompact, onOpenAll }: Props) {
+export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, busy, controls, showUnavailable, onCompact, canCompact, onOpenAll }: Props) {
   const id = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
@@ -34,10 +39,12 @@ export default function UsageMenu({ usage, plan, costUsd, product, busy, onCompa
   // Las ventanas generales quedan siempre a la vista; los límites por modelo
   // siguen en el desglose y conservan sus avisos en el encabezado.
   const generalWindows = accountUsageWindows(plan);
-  const visibleWindows = plan?.windows.length ? [
+  const general = [
     { key: "session", label: "5 h", window: generalWindows.session },
     { key: "weekly", label: "Semana", window: generalWindows.weekly },
-  ] : [];
+  ];
+  const visibleWindows = general.some(entry => entry.window) ? general
+    : headline ? [{ key: headline.id, label: headline.label, window: headline }] : [];
   const limiting = plan?.windows.reduce((best, window) => !best
     || severityRank[window.severity] > severityRank[best.severity]
     || severityRank[window.severity] === severityRank[best.severity] && window.percent > best.percent
@@ -56,7 +63,10 @@ export default function UsageMenu({ usage, plan, costUsd, product, busy, onCompa
   const planSummary = plan?.windows.length
     ? `Uso del plan: ${plan.windows.map(window => `${window.label}: ${percentLabel(window.percent)}`).join(" · ")}`
     : "Uso del plan: porcentajes no disponibles";
-  const cost = typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd >= 0 ? costUsd.toLocaleString("es", { style: "currency", currency: "USD", maximumFractionDigits: 4 }) : null;
+  const reportedCost = apiUsage?.costUsd ?? costUsd;
+  const money = (value: number): string => value.toLocaleString("es", { style: "currency", currency: "USD", maximumFractionDigits: 6 });
+  const cost = typeof reportedCost === "number" && Number.isFinite(reportedCost) && reportedCost >= 0 ? reportedCost > 0 && reportedCost < .000001 ? `< ${money(.000001)}` : money(reportedCost) : null;
+  const costPartial = apiUsage?.costUsd !== null && apiUsage?.costUsd !== undefined && apiUsage.costPartial;
   const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
   const ringPercent = percent ?? (showPlan ? limiting.percent : 0);
   const ringLength = 2 * Math.PI * 5.5;
@@ -73,7 +83,7 @@ export default function UsageMenu({ usage, plan, costUsd, product, busy, onCompa
     action();
   };
 
-  if (!usage && !plan && cost === null) return null;
+  if (!usage && !plan && !apiUsage && cost === null && !showUnavailable) return null;
 
   return <>
     <button ref={triggerRef} type="button" className={`chat-tray-chip chat-usage-trigger${level}`}
@@ -110,12 +120,18 @@ export default function UsageMenu({ usage, plan, costUsd, product, busy, onCompa
       className="chat-tray-menu chat-glass-menu chat-usage-menu" onClose={close}>
       <div className="chat-usage-header">
         <strong>Uso y contexto</strong>
+        {controls && <button type="button" className="chat-usage-close chat-usage-refresh" aria-label="Actualizar uso" title="Actualizar uso"
+          disabled={busy || controls.loading} aria-busy={controls.loading} onClick={() => void controls.refresh().catch(() => undefined)}>
+          {controls.loading ? <span className="chat-spinner" aria-hidden="true" /> : <RefreshIcon size={14} />}
+        </button>}
         <button type="button" className="chat-usage-close" data-menu-autofocus aria-label="Cerrar uso y contexto"
           title="Cerrar" onClick={closeAndFocus}><CloseIcon size={14} /></button>
       </div>
+      {controls?.error && <p className="chat-context-note error" role="status">No se pudo actualizar el uso: {controls.error} Se conserva la última lectura.</p>}
+      {!usage && showUnavailable && <p className="chat-context-note">El contexto se mostrará cuando el proveedor informe una medición.</p>}
       {usage && <section className={`chat-usage-section chat-context-menu${contextLevel}`} aria-labelledby={`${id}-context`}>
         <h3 id={`${id}-context`} className="chat-menu-label">Contexto</h3>
-        <ContextDetails usage={usage} product={product} busy={busy} inline onCompact={() => runAction(onCompact)} />
+        <ContextDetails usage={usage} product={product} busy={busy} canCompact={canCompact} inline onCompact={() => runAction(onCompact)} />
       </section>}
       {plan && <section className="chat-usage-section" aria-labelledby={`${id}-plan`}>
         <h3 id={`${id}-plan`} className="chat-menu-label">Uso del plan</h3>
@@ -123,8 +139,21 @@ export default function UsageMenu({ usage, plan, costUsd, product, busy, onCompa
         {!plan.windows.length && <p className="chat-menu-empty">No hay ventanas de uso disponibles.</p>}
         <PlanWindows usage={plan} now={Date.now()} />
       </section>}
+      {(apiUsage || showUnavailable) && <section className="chat-usage-section" aria-labelledby={`${id}-tokens`}>
+        <h3 id={`${id}-tokens`} className="chat-menu-label">Consumo de la conversación</h3>
+        {apiUsage ? <>
+          <dl className="chat-api-usage">
+            {([["Entrada", apiUsage.inputTokens], ["Salida", apiUsage.outputTokens], ["Razonamiento", apiUsage.reasoningTokens],
+              ["Lectura de caché", apiUsage.cachedReadTokens], ["Escritura de caché", apiUsage.cachedWriteTokens],
+              ["Total procesado", apiUsage.totalTokens], ["Intentos de API", apiUsage.requests]] as const).filter(([, value]) => value !== null).map(([label, value]) =>
+              <div key={label}><dt>{label}</dt><dd>{value!.toLocaleString("es")}</dd></div>)}
+          </dl>
+          <p className="chat-context-note">{apiUsage.partial ? "El proveedor no informó todos los contadores; el consumo mostrado es parcial. " : ""}Los detalles de caché y razonamiento pueden estar incluidos en entrada o salida; el total no los suma dos veces. El consumo corresponde a este chat.</p>
+        </> : <p className="chat-context-note">Aún sin datos de consumo. Se mostrarán los tokens informados por el proveedor después de responder.</p>}
+      </section>}
       <div className="chat-usage-footer">
-        {cost && <p className="chat-usage-plan-name">Coste informado: <strong>{cost}</strong></p>}
+        {cost ? <p className="chat-usage-plan-name">Coste informado{costPartial ? " (parcial)" : ""}: <strong>{cost}</strong></p>
+          : showUnavailable && <p className="chat-context-note">{product === "Trex CLI" ? "El proveedor no ha informado un coste. Consulta el saldo y la facturación en tu cuenta de API." : "Antigravity no ha informado un coste monetario para esta conversación."}</p>}
         <button type="button" className="context-item chat-plan-all" onClick={() => runAction(onOpenAll)}>
           Ver todas las cuentas
         </button>
