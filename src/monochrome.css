@@ -135,17 +135,19 @@
 :root[data-theme] .tabs-bar { background: var(--bg-app); box-shadow: none; border-color: var(--border); -webkit-backdrop-filter: none; backdrop-filter: none; }
 :root[data-theme] .tabs-bar .agent-icon { color: var(--text-muted); }
 
-/* The chat scrolls behind small header surfaces, without a full-width shelf. */
+/* Chat and terminal sessions share the same header surfaces. Only the chat
+   canvas scrolls behind the header; terminal sizing keeps its reserved space. */
 .main.chat-canvas { --chat-header-space: calc(var(--header-h) + 8px); }
 .main.chat-canvas > .bar-slot { height: 0; transition: none; }
-:root[data-theme] .main.chat-canvas .tabs-bar { gap: 6px; padding-right: 12px; border: 0; background: transparent; box-shadow: none; pointer-events: none; }
-:root[data-theme] .main.chat-canvas .tabs-bar > :is(.workspace-title, .session-create, .window-controls, button) { pointer-events: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-surface); box-shadow: 0 3px 12px -8px rgb(0 0 0 / .25); }
-:root[data-theme] .main.chat-canvas .workspace-title { flex: 0 1 auto; max-width: min(60%, 720px); height: 34px; padding: 0 10px; overflow: hidden; }
-:root[data-theme] .main.chat-canvas .workspace-title-text { flex: 1; min-width: 0; }
-:root[data-theme] .main.chat-canvas .workspace-profile { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-:root[data-theme] .main.chat-canvas .session-create { margin-left: auto; padding: 1px; }
-:root[data-theme] .main.chat-canvas .window-controls { padding: 1px; }
-:root[data-theme] .main.chat-canvas .tabs-bar > button { width: 34px; height: 34px; }
+:root[data-theme] .main > .bar-slot .tabs-bar { gap: 6px; padding-right: 12px; border: 0; background: transparent; box-shadow: none; }
+:root[data-theme] .main.chat-canvas .tabs-bar { pointer-events: none; }
+:root[data-theme] .main > .bar-slot .tabs-bar > :is(.workspace-title, .session-create, .window-controls, button) { pointer-events: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-surface); box-shadow: 0 3px 12px -8px rgb(0 0 0 / .25); }
+:root[data-theme] .main > .bar-slot .workspace-title { flex: 0 1 auto; max-width: min(60%, 720px); height: 34px; padding: 0 10px; overflow: hidden; }
+:root[data-theme] .main > .bar-slot .workspace-title-text { flex: 1; min-width: 0; }
+:root[data-theme] .main > .bar-slot .workspace-profile { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-theme] .main > .bar-slot .session-create { margin-left: auto; padding: 1px; }
+:root[data-theme] .main > .bar-slot .window-controls { padding: 1px; }
+:root[data-theme] .main > .bar-slot .tabs-bar > button { width: 34px; height: 34px; }
 
 /* Menus and dialogs remain opaque, including light mode and nested menus. */
 :root[data-theme] .context-menu.floating-surface, :root[data-theme] .context-menu:not(.chat-glass-menu),
