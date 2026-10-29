@@ -132,7 +132,7 @@
 :root[data-theme] .sidebar-footer-control.sidebar-add:hover { background: var(--hover); color: var(--text); }
 :root[data-theme] .sidebar-reopen { background: var(--bg-surface); border-radius: 7px; box-shadow: var(--shadow-sm); }
 :root[data-theme] .workspace-profile { background: transparent; color: var(--text-muted); border-color: var(--border); border-radius: 6px; }
-:root[data-theme] .tabs-bar { background: var(--bg-app); box-shadow: none; border-color: var(--border); }
+:root[data-theme] .tabs-bar { background: var(--bg-app); box-shadow: none; border-color: var(--border); -webkit-backdrop-filter: none; backdrop-filter: none; }
 :root[data-theme] .tabs-bar .agent-icon { color: var(--text-muted); }
 
 /* The chat scrolls behind small header surfaces, without a full-width shelf. */
