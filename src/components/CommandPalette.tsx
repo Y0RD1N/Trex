@@ -2,8 +2,22 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { filterCommands, type PaletteCommand } from "../commandPalette";
 import { shortcutLabel } from "../shortcuts";
 import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
-import { waitForMotion } from "../motion";
-import { SearchIcon } from "./Icons";
+import { ArrowRightIcon, CloseIcon, FolderIcon, FolderPlusIcon, GaugeIcon, GridIcon, MapIcon, PanelIcon, ProfilesIcon, RefreshIcon, RotateIcon, SearchIcon, SettingsIcon, SparkIcon, SplitIcon, SunIcon, TerminalIcon } from "./Icons";
+import "./CommandPalette.css";
+
+const commandIcons = {
+  split: SplitIcon, grid: GridIcon, rotate: RotateIcon, recover: RefreshIcon,
+  usage: GaugeIcon, settings: SettingsIcon, theme: SunIcon, sidebar: PanelIcon,
+  folder: FolderIcon, add: FolderPlusIcon, shell: TerminalIcon, "agent-workflow": MapIcon,
+};
+
+function CommandIcon({ command }: { command: PaletteCommand }) {
+  const Icon = (Object.prototype.hasOwnProperty.call(commandIcons, command.id) ? commandIcons[command.id as keyof typeof commandIcons] : undefined)
+    ?? (command.group === "Proyectos" ? FolderIcon : command.group === "Sesiones abiertas" ? TerminalIcon
+      : command.group === "Crear sesión" ? ProfilesIcon : SparkIcon);
+  return <Icon size={18} />;
+}
+
 export default function CommandPalette({
   commands,
   onClose,
@@ -15,7 +29,9 @@ export default function CommandPalette({
 } & FeatureDialogMotionProps) {
   const localSurfaceRef = useRef<HTMLDivElement>(null);
   const dialogRef = surfaceRef ?? localSurfaceRef;
+  const inputRef = useRef<HTMLInputElement>(null);
   const executingRef = useRef(false);
+  const pendingActionRef = useRef<(() => void) | null>(null);
   const [query, setQuery] = useState(""),
     [selected, setSelected] = useState(0),
     id = useId();
@@ -23,6 +39,17 @@ export default function CommandPalette({
     () => filterCommands(commands, query),
     [commands, query],
   );
+  // Keep the existing result order and keyboard indexes while labelling each
+  // consecutive category once, rather than repeating it on every row.
+  const sections = useMemo(() => {
+    const result: { group: string; start: number; commands: PaletteCommand[] }[] = [];
+    filtered.forEach((command, position) => {
+      const previous = result[result.length - 1];
+      if (previous?.group === command.group) previous.commands.push(command);
+      else result.push({ group: command.group, start: position, commands: [command] });
+    });
+    return result;
+  }, [filtered]);
   useEffect(() => setSelected(0), [query]);
   const index = Math.min(selected, Math.max(0, filtered.length - 1));
   useEffect(() => {
@@ -30,16 +57,18 @@ export default function CommandPalette({
       .getElementById(`${id}-${index}`)
       ?.scrollIntoView({ block: "nearest" });
   }, [id, index]);
+  useEffect(() => () => {
+    const run = pendingActionRef.current;
+    pendingActionRef.current = null;
+    // FeatureDialog releases background inertness and restores focus during
+    // unmount. Open the chosen action only after that cleanup has completed.
+    if (run) requestAnimationFrame(run);
+  }, []);
   const execute = (command: PaletteCommand): void => {
     if (executingRef.current) return;
     executingRef.current = true;
-    const surface = dialogRef.current;
+    pendingActionRef.current = command.run;
     onClose();
-    // La siguiente acción puede abrir otra ventana: se ejecuta cuando esta
-    // lámina ya ha liberado el fondo y devuelto el foco.
-    requestAnimationFrame(() => {
-      waitForMotion(surface, () => requestAnimationFrame(command.run));
-    });
   };
   return (
     <FeatureDialog
@@ -49,14 +78,17 @@ export default function CommandPalette({
       onClose={onClose}
       className="command-dialog"
       footer={
-        <span className="feature-hint">
-          ↑ ↓ para elegir · Enter para abrir · Esc para cerrar
-        </span>
+        <div className="command-keyboard">
+          <span><kbd>↑</kbd><kbd>↓</kbd> <span>Elegir</span></span>
+          <span><kbd>↵</kbd> <span>Abrir</span></span>
+          <span><kbd>Esc</kbd> <span>Cerrar</span></span>
+        </div>
       }
     >
       <div className="command-search">
         <SearchIcon size={18} />
         <input
+          ref={inputRef}
           data-autofocus
           className="input"
           role="combobox"
@@ -64,6 +96,7 @@ export default function CommandPalette({
           aria-expanded="true"
           aria-controls={`${id}-list`}
           aria-autocomplete="list"
+          aria-describedby={`${id}-summary`}
           aria-activedescendant={filtered.length ? `${id}-${index}` : undefined}
           placeholder="Busca un proyecto, una sesión o una acción…"
           value={query}
@@ -86,6 +119,12 @@ export default function CommandPalette({
             }
           }}
         />
+        {query && <button type="button" className="command-clear" aria-label="Limpiar búsqueda" title="Limpiar búsqueda"
+          onClick={() => { setQuery(""); inputRef.current?.focus({ preventScroll: true }); }}><CloseIcon size={15} /></button>}
+      </div>
+      <div className="command-summary" id={`${id}-summary`}>
+        <span>{query.trim() ? "Resultados de búsqueda" : "Acceso rápido a tu espacio"}</span>
+        <span role="status" aria-live="polite" aria-atomic="true">{filtered.length === 1 ? "1 resultado" : `${filtered.length} resultados`}</span>
       </div>
       <div
         id={`${id}-list`}
@@ -93,28 +132,42 @@ export default function CommandPalette({
         aria-label="Resultados de comandos"
         className="command-results"
       >
-        {filtered.map((command, position) => (
-          <button
-            id={`${id}-${position}`}
-            key={command.id}
-            type="button"
-            role="option"
-            aria-selected={index === position}
-            tabIndex={-1}
-            className={`command-result${index === position ? " selected" : ""}`}
-            onMouseMove={() => setSelected(position)}
-            onClick={() => execute(command)}
-          >
-            <span>
-              <span className="command-group">{command.group}</span>
-              <strong>{command.label}</strong>
-              {command.detail && <small>{command.detail}</small>}
-            </span>
-            {command.shortcut && <kbd>{shortcutLabel(command.shortcut)}</kbd>}
-          </button>
-        ))}
+        {sections.map(section => <div key={`${section.group}-${section.start}`} className="command-section"
+          role="group" aria-labelledby={`${id}-group-${section.start}`}>
+          <div className="command-group" id={`${id}-group-${section.start}`}>{section.group}</div>
+          {section.commands.map((command, offset) => {
+            const position = section.start + offset;
+            return (
+              <button
+                id={`${id}-${position}`}
+                key={command.id}
+                type="button"
+                role="option"
+                aria-selected={index === position}
+                tabIndex={-1}
+                className={`command-result${index === position ? " selected" : ""}`}
+                onMouseMove={() => setSelected(position)}
+                onClick={() => execute(command)}
+              >
+                <span className="command-icon" aria-hidden="true"><CommandIcon command={command} /></span>
+                <span className="command-label">
+                  <strong title={command.label}>{command.label}</strong>
+                  {command.detail && <small title={command.detail}>{command.detail}</small>}
+                </span>
+                <span className="command-tail">
+                  {command.shortcut && <kbd>{shortcutLabel(command.shortcut)}</kbd>}
+                  <span className="command-open" aria-hidden="true"><ArrowRightIcon size={15} /></span>
+                </span>
+              </button>
+            );
+          })}
+        </div>)}
         {!filtered.length && (
-          <p className="feature-empty">No hay resultados para esta búsqueda.</p>
+          <div className="command-empty">
+            <span aria-hidden="true"><SearchIcon size={22} /></span>
+            <strong>No encontramos resultados</strong>
+            <p>Prueba con el nombre de un proyecto, una sesión o una acción.</p>
+          </div>
         )}
       </div>
     </FeatureDialog>
