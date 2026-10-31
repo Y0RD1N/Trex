@@ -1360,7 +1360,7 @@ function ChatView(input: ChatViewProps) {
   const browser = useRef(browserOptions(input.settings, input.sessionId,
     [input.profileName ?? (input.provider === "claude" ? "Claude Code" : input.provider === "codex" ? "Codex" : input.provider === "antigravity" ? "Antigravity" : "Trex CLI"),input.sessionTitle].filter(Boolean).join(" · "))).current;
   const desktopEnabled = useRef(input.settings.desktopEnabled).current;
-  const props = { ...input, browser, desktopEnabled };
+  const props = { ...input, browser, desktopEnabled, integrations: input.settings.integrations };
   return props.provider === "antigravity" ? <AntigravityChat {...props} /> : props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
 }
 

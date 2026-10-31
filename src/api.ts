@@ -1,5 +1,6 @@
 import type { BrowserStatus, BrowserConfig, BrowserCall, BrowserResult, BrowserMode, BrowserProfile, BrowserOptions, BrowserSpace } from "./browser";
 import { validBrowserProfile, browserSpaceLabel } from "./browser";
+import { DEFAULT_INTEGRATIONS, normalizeIntegrations } from "./integrations";
 /**
  * Capa de acceso al backend: envoltorios de `invoke`/`listen` y utilidades
  * compartidas (ids, valores por defecto, normalización y color de acento).
@@ -213,6 +214,7 @@ export const DEFAULT_FONT_FAMILY =
   '"JetBrains Mono Variable", "Hack Nerd Font Mono", "Noto Sans Symbols 2", "Noto Color Emoji", ui-monospace, "Cascadia Mono", monospace';
 
 export const DEFAULT_SETTINGS: Settings = {
+  integrations: { ...DEFAULT_INTEGRATIONS },
   desktopEnabled: false,
   browserEnabled: true,
   browserProfile: "BROWSER1",
@@ -437,6 +439,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   if (bindingError(shortcuts,pasteShortcut)) { pasteShortcut = DEFAULT_PASTE_SHORTCUT; shortcuts = normalizeShortcuts(settingsRaw.shortcuts,pasteShortcut); }
 
   const settings: Settings = {
+    integrations: normalizeIntegrations(settingsRaw.integrations),
     desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
     browserEnabled: asBool(settingsRaw.browserEnabled, DEFAULT_SETTINGS.browserEnabled),
     browserProfile: typeof settingsRaw.browserProfile === "string" && validBrowserProfile(settingsRaw.browserProfile) ? settingsRaw.browserProfile : "BROWSER1",

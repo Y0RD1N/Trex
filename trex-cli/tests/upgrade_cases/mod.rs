@@ -1,5 +1,42 @@
 use super::*;
 
+#[test]
+fn disabled_application_integrations_are_not_advertised_or_executable() {
+    let f = Fixture::new();
+    let (_installed, mut agent) = agent_with_github_fixture(&f);
+    let session=agent.rpc("session/start",json!({"cwd":f.workspace.path(),"mode":"full","settings":{"tools":{"github":false,"blender":false,"hyperframes":false}}}));
+    assert_eq!(
+        session["applicationIntegrations"],
+        json!({"github":false,"blender":false,"hyperframes":false})
+    );
+    let id = session["sessionId"].as_str().unwrap();
+    agent.turn(
+        id,
+        "disabled-integrations",
+        "Inspect the enabled capabilities",
+    );
+    let request = f.api.chat();
+    for name in ["github_", "blender_run", "hyperframes_run"] {
+        assert!(!request.body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["function"]["name"].as_str().unwrap().starts_with(name)));
+    }
+    let policy = messages(&request)[0]["content"].as_str().unwrap();
+    for name in ["GitHub", "Blender", "HyperFrames"] {
+        assert!(!policy.contains(name));
+    }
+    request.completion(
+        calls(vec![tool("forged", "github_repos", json!({}))]),
+        "tool_calls",
+    );
+    let next = f.api.chat();
+    assert!(tool_output(&next, "forged")["error"].is_string());
+    next.final_text("Disabled capabilities were refused");
+    agent.completed("disabled-integrations", "completed");
+}
+
 fn start(f: &Fixture, agent: &mut Agent, mode: &str, settings: Value) -> String {
     agent.rpc(
         "session/start",

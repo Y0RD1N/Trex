@@ -7,13 +7,13 @@ import { acpConfigs, acpEffortConfig, acpModelConfig, acpModes, antigravityReduc
 import { initialChatState, list, record, text, type Json, type OutgoingImage, type PermissionItem } from "../chatState";
 import { connectBrowser } from "../browserConnection";
 import { BROWSER_INSTRUCTIONS } from "../browser";
-import { integrationInstructions } from "../integrations";
+import { integrationContext, integrationInstructions } from "../integrations";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { INBOX_WAKE, messageQueueId, type QueueReceipt } from "../messageQueue";
 import { useMessageQueue } from "./useMessageQueue";
 import { localId, type ChatSession, type ChatSessionOptions } from "./chatSession";
 
-const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${BROWSER_INSTRUCTIONS} ${integrationInstructions("antigravity")} For meaningful multi-step work, use trex_update_tasks on the trex_inbox MCP server to publish and update the chat task list, including in ordinary chats. Use plan:[{step,status}], at most one in_progress. Mark work completed only after verifying it. User messages typed while you work are queued by Trex and delivered as complete subsequent user turns, with their attachments. Do not poll an inbox or claim you received an attachment unless it was delivered.`;
+const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${BROWSER_INSTRUCTIONS} For meaningful multi-step work, use trex_update_tasks on the trex_inbox MCP server to publish and update the chat task list, including in ordinary chats. Use plan:[{step,status}], at most one in_progress. Mark work completed only after verifying it. User messages typed while you work are queued by Trex and delivered as complete subsequent user turns, with their attachments. Do not poll an inbox or claim you received an attachment unless it was delivered.`;
 type Approval = { id: string | number; params: Json; turn: string };
 type Active = { id: string; done: Promise<void>; cancelled: boolean };
 export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
@@ -182,7 +182,7 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
         ...receipt.messages.flatMap((m, i) => acpPrompt(`Mensaje ${i + 1} (${m.id}):\n${m.text}`, m.images, imageSupported))]
         : acpPrompt(value, images, imageSupported);
       // Explicit context travels as text, including on resume; no private or undocumented injection channel.
-      prompt.unshift({ type: "text", text: `<trex_context>\n${INSTRUCTIONS}${latest.current.planningInstruction ? `\n${latest.current.planningInstruction}` : ""}\n</trex_context>` });
+      prompt.unshift({ type: "text", text: `<trex_context>\n${INSTRUCTIONS} ${integrationInstructions("antigravity", integrationContext(latest.current))}${latest.current.planningInstruction ? `\n${latest.current.planningInstruction}` : ""}\n</trex_context>` });
       const id = localId(), native = connection.current, nativeSession = session.current;
       dispatch({ type: "send", id, text: display ?? value, previews, now: Date.now() });
       let settle!: () => void;

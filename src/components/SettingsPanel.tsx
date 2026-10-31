@@ -304,7 +304,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 onChange={(profiles, defaultProfileId) => patch({ profiles, defaultProfileId })} />}
 
               {item.id === "browser" && section === "browser" && <BrowserSettings settings={draft} cwd={cwd} onChange={patch} onBusyChange={changeProfileBusy} />}
-              {item.id === "integrations" && section === "integrations" && <IntegrationSettings cwd={cwd} desktopEnabled={draft.desktopEnabled} onDesktopChange={desktopEnabled => patch({ desktopEnabled })} />}
+              {item.id === "integrations" && section === "integrations" && <IntegrationSettings cwd={cwd} integrations={draft.integrations} onIntegrationsChange={integrations => patch({ integrations })} desktopEnabled={draft.desktopEnabled} onDesktopChange={desktopEnabled => patch({ desktopEnabled })} />}
 
               {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
               {item.id === "notifications" && <NotificationsSettings settings={draft} onChange={patch} />}

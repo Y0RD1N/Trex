@@ -761,16 +761,9 @@ fn session_guidance_is_bounded_and_standalone_sessions_have_tool_guidance() {
     );
     let request = f.api.chat();
     let policy = request.body["messages"][0]["content"].as_str().unwrap();
-    for name in [
-        "GitHub",
-        "Blender",
-        "HyperFrames",
-        "desktop_status",
-        "desktop_screenshot",
-        "browser_navigate",
-    ] {
-        assert!(policy.contains(name));
-    }
+    assert!(policy.contains("integration tools actually advertised"));
+    assert!(!policy.contains("blender_run"));
+    assert!(!policy.contains("desktop_screenshot"));
     request.final_text("Only advertised capabilities are available.");
     agent.completed("builtin-guidance", "completed");
     f.api.assert_quiet();

@@ -27,7 +27,7 @@ import { codexInboxContent, InboxRequests, INBOX_INSTRUCTIONS, INBOX_TOOL, inbox
 import { codexInboxReceiptId } from "../inboxProtocol";
 import { assertCodexPlanningThread, codexPlanningThread, codexPlanningTurn } from "../workflowSafety";
 import { taskInstructions } from "../chatTasks";
-import { integrationInstructions, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
+import { integrationContext, integrationInstructions, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
 const ANSWERED_IN_CHAT = new Set([
@@ -35,7 +35,7 @@ const ANSWERED_IN_CHAT = new Set([
 ]);
 /** Turnos de la conversación recuperada que se muestran al abrirla. */
 const HISTORY_TURNS = 40;
-const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS} ${taskInstructions("codex")} ${integrationInstructions("codex")}`;
+const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS} ${taskInstructions("codex")}`;
 
 /** Approval must not weaken the planner's sandbox, even for a session grant. */
 function planningApprovalAllowed(method: string | undefined, input: Json): boolean {
@@ -114,6 +114,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   stateRef.current = state;
   const callbacks = useRef(options);
   callbacks.current = options;
+  const chatInstructions = () => `${CHAT_INSTRUCTIONS} ${integrationInstructions("codex", integrationContext(callbacks.current))}`;
   const queue = useMessageQueue(options.queueId ?? sessionId);
   const inboxRequests = useRef(new InboxRequests());
   const inboxConfigRef = useRef<Json>({});
@@ -450,7 +451,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     void request("account/rateLimits/read", {}, procId).then(data => dispatch({ type: "plan", data })).catch(() => undefined);
 
     // Archivos y preguntas de la interfaz; las instrucciones de AGENTS.md siguen aparte.
-    const overrides: Json = threadOverrides({ developerInstructions: CHAT_INSTRUCTIONS, ...launch.thread,
+    const overrides: Json = threadOverrides({ developerInstructions: chatInstructions(), ...launch.thread,
       config: { ...record(launch.thread.config), ...inboxConfigRef.current },
       ...(choicesRef.current.model ? { model: choicesRef.current.model } : {}) });
     const resumeId = freshRef.current ? resumeThreadRef.current
@@ -709,7 +710,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       const response = await request<{ thread?: { id?: string }; model?: string }>("thread/fork", threadOverrides({
         threadId: await thread(), beforeTurnId: original.providerTurnId, cwd, excludeTurns: true,
         ...launch.thread,
-        developerInstructions: CHAT_INSTRUCTIONS,
+        developerInstructions: chatInstructions(),
         config: { ...record(launch.thread.config), ...inboxConfigRef.current },
       }));
       if (epoch !== deliveryEpochRef.current) return;
@@ -803,7 +804,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     if (processReadyRef.current || !alive || !threadRef.current) { void start(); return; }
     const parsed = codexLaunch(args);
     if (planningOnly && !parsed) { notice("error", "El perfil de Codex no admite un chat de planificación. Revisa sus argumentos."); return; }
-    const opened = newThread({ developerInstructions: CHAT_INSTRUCTIONS, ...(parsed ?? codexLaunch(null)!).thread }, readyProcessRef.current ?? undefined);
+    const opened = newThread({ developerInstructions: chatInstructions(), ...(parsed ?? codexLaunch(null)!).thread }, readyProcessRef.current ?? undefined);
     threadRef.current = opened;
     opened.catch(error => {
       if (mountedRef.current && threadRef.current === opened) notice("error", `No se pudo abrir la conversación de Codex: ${formatError(error)}`);

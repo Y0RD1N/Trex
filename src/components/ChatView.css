@@ -299,7 +299,7 @@
 
 .chat-markdown strong { color: var(--md-strong); font-weight: 650; }
 .chat-markdown em { color: var(--text); }
-.chat-queue { margin: 12px 7px 8px; padding: 12px; border: 1px solid var(--surface-edge, var(--border)); border-radius: 16px; background: color-mix(in srgb, var(--bg-surface) 76%, transparent); min-width: 0; }
+.chat-queue { margin: 12px 7px 8px; padding: 12px; border: 1px solid var(--surface-edge, var(--border)); border-radius: 16px; background: var(--bg-surface); min-width: 0; }
 /* AgentRoom's lead already contributes 8px beneath its controls. */
 .chat-queue:not(:first-child) { margin-top: 4px; }
 .chat-queue:focus { outline: none; }
@@ -308,24 +308,26 @@
 .chat-queue-head > svg { color: var(--accent-strong); flex: 0 0 auto; }
 .chat-queue-head strong { color: var(--text); font-weight: 600; }
 .chat-queue-head > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
-.chat-queue-continue, .chat-queue-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 30px; max-width: 100%; padding: 5px 9px; border: 1px solid var(--surface-edge, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--bg-elevated) 64%, transparent); color: var(--text-muted); font: inherit; font-size: 11px; line-height: 1.4; text-align: center; white-space: normal; cursor: pointer; transition: color var(--t), background-color var(--t), border-color var(--t); }
+.chat-queue-continue, .chat-queue-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--surface-edge, var(--border)); border-radius: 9px; background: var(--bg-surface); color: var(--text-muted); font: inherit; font-size: 11px; line-height: 1.4; text-align: center; white-space: normal; cursor: pointer; transition: color var(--t), background-color var(--t), border-color var(--t); }
 .chat-queue-action > svg { flex: 0 0 auto; }
-.chat-queue-continue, .chat-queue-action.is-primary { color: var(--accent-strong); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 20%, var(--border)); }
-.chat-queue-continue:hover:not(:disabled), .chat-queue-action:hover:not(:disabled) { color: var(--text); background: var(--hover); border-color: var(--border-strong, var(--border)); }
+.chat-queue-continue, .chat-queue-action.is-primary { color: var(--accent-strong); background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg-surface); border-color: color-mix(in srgb, var(--accent) 20%, var(--border)); }
+.chat-queue-continue:hover:not(:disabled), .chat-queue-action:hover:not(:disabled) { color: var(--text); background: linear-gradient(var(--hover), var(--hover)), var(--bg-surface); border-color: var(--border-strong, var(--border)); }
 .chat-queue-remove:hover:not(:disabled) { color: var(--danger); }
 .chat-queue-continue:focus-visible, .chat-queue-action:focus-visible, .chat-queue-editor textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .chat-queue-continue:disabled, .chat-queue-action:disabled { opacity: .5; cursor: default; }
-.chat-queue-list { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 10px 0 0; padding: 2px; max-height: min(280px, 40vh); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.chat-queue-list { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 14px 0 0; padding: 2px; max-height: min(280px, 40vh); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .chat-queue-list:has(.chat-queue-editor) { max-height: min(380px, 48vh); }
-.chat-queue-list > li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 8px; border: 1px solid var(--surface-edge, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--bg-inset) 24%, transparent); }
+.chat-queue-list > li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated, var(--bg-surface)); }
+.chat-queue-meta { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 10px; }
 .chat-queue-number { flex: 0 0 auto; min-width: 12px; color: var(--text-dim); font-size: 10px; line-height: 18px; font-variant-numeric: tabular-nums; }
 .chat-queue-message { flex: 1; min-width: 0; }
-.chat-queue-message > p { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.chat-queue-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
-.chat-queue-remove { min-width: 30px; padding-inline: 7px; margin-left: auto; }
+.chat-queue-message > p { margin: 0; font-size: 13px; color: var(--text); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.chat-queue-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.chat-queue-remove { min-width: 32px; background: transparent; border-color: transparent; padding-inline: 7px; margin-left: auto; }
 .chat-queue-images { display: flex; gap: 5px; padding-top: 6px; flex-wrap: wrap; }
-.chat-queue-images img { width: 32px; height: 32px; object-fit: cover; border: 1px solid var(--border); border-radius: 9px; }
-.chat-queue-status { display: block; margin-bottom: 4px; color: var(--text-dim); font-size: 10px; line-height: 1.5; }
+.chat-queue-images img { width: 42px; height: 42px; object-fit: cover; border: 1px solid var(--border); border-radius: 9px; }
+.chat-queue-status { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 10px; line-height: 1.5; }
+.chat-queue-status > span { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .65; }
 .chat-queue-status.is-uncertain { color: var(--accent-strong); font-weight: 550; }
 .chat-queue-editor { display: grid; gap: 6px; min-width: 0; }
 .chat-queue-editor > label { color: var(--text); font-size: 11px; font-weight: 550; }
@@ -342,7 +344,7 @@
 @container (max-width: 420px) {
   .chat-queue { padding: 10px; }
   .chat-queue-head > span { flex-basis: calc(100% - 24px); }
-  .chat-queue-list > li { padding: 7px; gap: 6px; }
+  .chat-queue-list > li { padding: 12px; gap: 6px; }
 }
 @media (pointer: coarse) {
   .chat-queue-continue, .chat-queue-action { min-height: 36px; }

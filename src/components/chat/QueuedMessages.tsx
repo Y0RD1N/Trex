@@ -134,11 +134,12 @@ export default function QueuedMessages({ queue, running, busy, onRemove, onConti
         const directReason = state === "pending" ? directDisabledReason?.(message) : null;
         const rowId = `${id}-${message.id}`;
         return <li key={message.id} className={`chat-queue-item is-${state}${draft ? " is-editing" : ""}`} aria-busy={!!pending}>
-          <span className="chat-queue-number" aria-hidden="true">{index + 1}</span>
           <div className="chat-queue-message">
-            {state === "claimed" && <span className="chat-queue-status">En lectura · esperando confirmación</span>}
-            {state === "outbox" && <span className={`chat-queue-status${sendingDirect ? "" : " is-uncertain"}`}>
-              {sendingDirect ? "Enviando…" : "Revisa si se envió"}</span>}
+            <div className="chat-queue-meta"><span className="chat-queue-number">Mensaje {String(index + 1).padStart(2, "0")}</span>
+              <span className={`chat-queue-status${state === "outbox" && !sendingDirect ? " is-uncertain" : ""}`}>
+                <span aria-hidden="true" />{state === "pending" ? "En cola" : state === "claimed" ? "En lectura · esperando confirmación" : state === "outbox" ? sendingDirect ? "Enviando…" : "Revisa si se envió" : "Edición conservada"}
+              </span>
+            </div>
             {!draft && <p title={message.text}>{message.text || "Imágenes adjuntas"}</p>}
             {draft && <div className="chat-queue-editor">
               <label htmlFor={`${rowId}-edit`}>{conflict ? "Tu edición conservada" : `Editar mensaje ${index + 1}`}</label>

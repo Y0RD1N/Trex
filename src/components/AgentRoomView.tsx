@@ -514,7 +514,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     {ROLES.map(role => {
       const participant = room[role], launch = participant.agent.launch;
       const options: ChatSessionOptions = {
-      browser: browsers[role], desktopEnabled, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
+      browser: browsers[role], desktopEnabled, integrations: props.settings.integrations, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort,
         mode: role === "planner" ? "plan" : participant.mode ?? (participant.agent.provider === "claude" ? "default" : "auto"),
         planningOnly: role === "planner", visible: props.visible,

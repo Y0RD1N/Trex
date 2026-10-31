@@ -49,7 +49,13 @@ pub struct LauncherProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+pub struct ApplicationIntegrations { pub github: bool, pub blender: bool, pub hyperframes: bool }
+impl Default for ApplicationIntegrations { fn default()->Self { Self {github:true,blender:true,hyperframes:true} } }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub integrations: ApplicationIntegrations,
     pub desktop_enabled: bool,
     pub browser_enabled: bool,
     pub browser_profile: String,
@@ -88,6 +94,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            integrations: ApplicationIntegrations::default(),
             desktop_enabled: false,
             browser_enabled: true,
             browser_profile: "BROWSER1".into(),
@@ -149,6 +156,15 @@ mod browser_preference_tests {
             let saved = serde_json::to_value(config).unwrap();
             assert_eq!(saved["settings"]["desktopEnabled"], enabled);
         }
+    }
+    #[test]
+    fn application_integration_preferences_roundtrip_independently() {
+        let config:AppConfig=serde_json::from_value(serde_json::json!({"settings":{"integrations":{"github":false,"blender":true,"hyperframes":false}}})).unwrap();
+        assert!(!config.settings.integrations.github);assert!(config.settings.integrations.blender);assert!(!config.settings.integrations.hyperframes);
+        let saved=serde_json::to_value(config).unwrap();
+        assert_eq!(saved["settings"]["integrations"],serde_json::json!({"github":false,"blender":true,"hyperframes":false}));
+        let old:AppConfig=serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
+        assert!(old.settings.integrations.github && old.settings.integrations.blender && old.settings.integrations.hyperframes);
     }
     #[test]
     fn older_configuration_uses_the_frontend_browser_defaults() {

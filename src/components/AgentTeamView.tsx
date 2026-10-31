@@ -363,7 +363,7 @@ export default function AgentTeamView(props: Props) {
       const readOnly=!member.canWrite || historyOnly;
       const space=spaces.find(space=>space.clientId===team.id+"-"+member.id);
       const memberBrowser=space?{enabled:browser.enabled,clientId:space.clientId,profile:space.profile}:{...browser,enabled:false,clientId:team.id+"-"+member.id};
-      const options:ChatSessionOptions={...member.agent.launch,desktopEnabled: !historyOnly && desktopEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
+      const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,desktopEnabled: !historyOnly && desktopEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
         sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
         conversationId:member.conversationId,mode:readOnly?"plan":member.agent.provider==="claude"?"default":"auto",
         model:member.agent.model,effort:member.agent.effort,planningOnly:readOnly,

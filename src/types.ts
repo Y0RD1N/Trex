@@ -68,7 +68,10 @@ export type Project = {
   defaultArgs?: string | null;
 };
 
+export type ApplicationIntegrations = { github: boolean; blender: boolean; hyperframes: boolean };
+
 export type Settings = {
+  integrations: ApplicationIntegrations;
   desktopEnabled: boolean;
   browserEnabled: boolean;
   browserProfile: string;

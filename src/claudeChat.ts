@@ -20,7 +20,7 @@ import { questionInstructions } from "./chatQuestions";
 import { INBOX_INSTRUCTIONS } from "./messageQueue";
 import { taskInstructions } from "./chatTasks";
 import { taskToolInput } from "./taskTools";
-import { integrationInstructions } from "./integrations";
+import { integrationInstructions, type IntegrationContext } from "./integrations";
 
 export type ChatAction =
   | BaseChatAction
@@ -41,7 +41,7 @@ export type ChatAction =
 
 /** Opciones que convierten el CLI en un proceso de chat por stdin/stdout. */
 export function claudeChatFlags(profileArgs: string | null, conversationId: string | null,
-  choices: { model?: string | null; effort?: string | null; mode?: string | null } = {}): string[] {
+  choices: { model?: string | null; effort?: string | null; mode?: string | null; integrations?: IntegrationContext } = {}): string[] {
   const flags = [
     "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--include-partial-messages",
@@ -53,7 +53,7 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
   if (!restricted && !/(^|\s)--(allow-)?dangerously-skip-permissions(\s|=|$)/.test(profileArgs ?? "")) flags.push("--allow-dangerously-skip-permissions");
   // Instrucciones de la interfaz, salvo que el perfil ya defina las del sistema.
   if (!/(^|\s)--(append-)?system-prompt(-file)?(\s|=|$)/.test(profileArgs ?? "")) {
-    flags.push("--append-system-prompt", `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("claude")} ${INBOX_INSTRUCTIONS} ${taskInstructions("claude")} ${integrationInstructions("claude")}`);
+    flags.push("--append-system-prompt", `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("claude")} ${INBOX_INSTRUCTIONS} ${taskInstructions("claude")} ${integrationInstructions("claude", choices.integrations)}`);
   }
   const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
   if (conversationId && !choosesConversation) flags.push("--resume", conversationId);

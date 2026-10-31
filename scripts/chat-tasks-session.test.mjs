@@ -194,9 +194,7 @@ for (const [provider, choices] of Object.entries(modes)) for (const mode of choi
     assert.match(instructions, /HyperFrames/);
     assert.match(instructions, /GitHub/);
     assert.match(instructions, /never execute a mutation in read-only planning mode/);
-    assert.match(instructions, /desktop_status/);
-    assert.match(instructions, /desktop_monitors/);
-    assert.match(instructions, /browser_navigate/);
+    assert.doesNotMatch(instructions, /desktop_status|desktop_monitors|browser_navigate/);
     assert.equal(h.userWrites.length, 0);
     assert.equal(h.state.modeChoice, mode);
   });
@@ -210,7 +208,7 @@ test("Claude's custom system instructions retain precedence", () => {
 
 test("Claude with a custom system prompt still gets capability guidance through the app MCP server", async () => {
   assert.equal(claudeChatFlags('--append-system-prompt "My workflow"',null).includes("--append-system-prompt"),false);
-  const reply=await claudeInboxReply("init-tools",{subtype:"mcp_message",server_name:"trex_inbox",message:{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18"}}},()=>assert.fail("initialization must not read queued messages"));
+  const reply=await claudeInboxReply("init-tools",{subtype:"mcp_message",server_name:"trex_inbox",message:{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18"}}},()=>assert.fail("initialization must not read queued messages"), { desktop: true, browser: true });
   const result=JSON.parse(reply.line).response.response.mcp_response.result;
   for (const term of ["GitHub","Blender","HyperFrames","trex_desktop","desktop_status","desktop_screenshot","browser_navigate"]) assert.ok(result.instructions.includes(term),term);
 });

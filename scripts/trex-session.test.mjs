@@ -28,7 +28,7 @@ function harness(t, extra = {}) {
     const p = JSON.parse(raw); writes.push({ process: id, ...p });
     if (p.method === "initialize" && !holdInit) respond(p, { protocolVersion: 1 });
     if (p.method === "models/list") respond(p, { models: [{ id: "deepseek", name: "DeepSeek", efforts: ["high", "max"], contextWindow: 1_000_000 }, { id: "mini", efforts: ["low"], contextWindow: 32_000 }] });
-    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true, ...(extra.compaction ? { contextManagement: { fullHistoryPreserved: true } } : {}) });
+    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true, ...(extra.compaction ? { contextManagement: { fullHistoryPreserved: true } } : {}), ...(extra.integrationAck === false ? {} : { applicationIntegrations: { github: true, blender: true, hyperframes: true, ...p.params.settings?.tools } }) });
     if (p.method === "turn/start" && !holdTurn) respond(p, { accepted: true });
     if (["turn/interrupt", "permission/respond", "session/recover"].includes(p.method)) respond(p, {});
   };
@@ -180,4 +180,18 @@ test("same-session restart without an optional usage summary preserves the known
   h.line({ method: "turn/completed", params: { sessionId: "session", messageId: h.userWrites[1].params.messageId,
     status: "completed", usage: { contextModel: "deepseek", contextTokens: 2_000, inputTokens: 1_800, outputTokens: 200 } } });
   assert.equal(h.state.usage.total, 3_000);
+});
+
+
+test("Trex sends disabled integration restrictions and hides their announcements before any turn", async t => {
+  const integrations = { github: false, blender: true, hyperframes: false };
+  const h = harness(t, { integrations }); await h.start();
+  const start = h.writes.find(w => w.method === "session/start");
+  assert.deepEqual(start.params.settings, { tools: { github: false, hyperframes: false } });
+  assert.doesNotMatch(start.params.instructions, /GitHub|HyperFrames/); assert.match(start.params.instructions, /Blender/);
+});
+test("Trex refuses an older CLI that ignores disabled integrations", async t => {
+  const h = harness(t, { integrations: { github: false, blender: false, hyperframes: false }, integrationAck: false });
+  await assert.rejects(h.start(), /no confirmó las integraciones/);
+  assert.equal(h.writes.some(w => w.method === "turn/start"), false);
 });

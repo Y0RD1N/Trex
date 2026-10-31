@@ -1,6 +1,6 @@
 import { connectBrowser } from "../browserConnection";
 import { browserMode, OBSERVE_BROWSER_TOOLS } from "../browser";
-import { DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
+import { integrationContext, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
 /**
  * Sesión de Claude Code como chat: `claude -p` con stream-json.
  *
@@ -326,7 +326,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     if (message.type === "control_request" && message.request_id && request?.subtype === "mcp_message" && request.server_name === INBOX_SERVER) {
       void (async () => {
         const reply = await claudeInboxReply(message.request_id!, request,
-          () => inboxRequests.current.read(`${procId}:${message.request_id}`, queue.client.read));
+          () => inboxRequests.current.read(`${procId}:${message.request_id}`, queue.client.read), integrationContext(callbacks.current));
         if (!reply || !isCurrentRef.current(procId)) return;
         await writeRef.current(reply.line);
         if (!isCurrentRef.current(procId)) return;
@@ -427,7 +427,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         finally { if (startupRef.current === startup) browserConnecting.current = false; }
         const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", conversationOverrideRef.current)
           : conversationOverrideRef.current ? withoutConversationArgs(args) : args;
-        const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode });
+        const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations: integrationContext(callbacks.current) });
         if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
           && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
         const teamConfig = callbacks.current.team ? browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell) : null;
@@ -565,7 +565,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await whileCurrent(trexDesktopMcpConfig(browserMode(chosenMode, planningOnly)), request.signal), shell) : null;
       const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", true) : withoutConversationArgs(args);
       const chatFlags = claudeChatFlags(profileArgs, point ? current.sessionId : null,
-        { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode });
+        { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations: integrationContext(callbacks.current) });
       const flags = planningOnly ? claudePlanningFlags(chatFlags) : chatFlags;
       if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
         && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);

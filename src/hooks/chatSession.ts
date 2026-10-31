@@ -12,7 +12,7 @@ import {
   agentKill, agentSpawn, agentWrite, agentTerminalOutput, listenAgentExit, listenAgentLine, listenAgentStderr, type AgentSpawnRequest,
 } from "../api";
 import type { ChatState, OutgoingImage, PermissionItem, QuestionChoice } from "../chatState";
-import type { AgentProvider } from "../types";
+import type { AgentProvider, ApplicationIntegrations } from "../types";
 import type { ChatMessageQueue } from "./useMessageQueue";
 import { AgentTerminals, type TerminalSession } from "../agentTerminals";
 
@@ -24,6 +24,7 @@ export type ChatSessionOptions = {
   team?: { id: string; epoch: string };
   browser?: BrowserOptions;
   desktopEnabled?: boolean;
+  integrations?: ApplicationIntegrations;
   sessionId: string;
   cwd: string;
   command: string | null;

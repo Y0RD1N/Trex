@@ -1,6 +1,6 @@
 import { record, type Json } from "./chatState";
 import { INBOX_SERVER, INBOX_TOOL, inboxContent, inboxTool, type QueueReceipt, type QueueSnapshot } from "./messageQueue";
-import { integrationInstructions } from "./integrations";
+import { integrationInstructions, type IntegrationContext } from "./integrations";
 import { taskInstructions } from "./chatTasks";
 import { TASK_TOOL, taskTool, parseTaskPlan } from "./taskTools";
 export { MCP_TASK_TOOL } from "./taskTools";
@@ -23,7 +23,7 @@ export function codexInboxReceiptId(raw: unknown): string | null {
 }
 
 /** Implements the SDK MCP bridge over Claude's existing control channel. */
-export async function claudeInboxReply(requestId: string, request: Json, read: () => Promise<QueueSnapshot>): Promise<{ line: string; receipt: QueueReceipt | null } | null> {
+export async function claudeInboxReply(requestId: string, request: Json, read: () => Promise<QueueSnapshot>, integrations?: IntegrationContext): Promise<{ line: string; receipt: QueueReceipt | null } | null> {
   if (request.subtype !== "mcp_message" || request.server_name !== INBOX_SERVER) return null;
   const message = record(request.message) ?? {};
   const params = record(message.params) ?? {};
@@ -35,7 +35,7 @@ export async function claudeInboxReply(requestId: string, request: Json, read: (
     const versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
     result = { protocolVersion: versions.includes(String(params.protocolVersion)) ? params.protocolVersion : versions[versions.length - 1],
       capabilities: { tools: {} }, serverInfo: { name: INBOX_SERVER, version: "1.0.0" },
-      instructions: `${integrationInstructions("claude")} ${taskInstructions("claude")}` };
+      instructions: `${integrationInstructions("claude", integrations)} ${taskInstructions("claude")}` };
   } else if (message.method === "tools/list") result = { tools: [inboxTool, taskTool] };
   else if (message.method === "tools/call") {
     if (params.name === TASK_TOOL) {

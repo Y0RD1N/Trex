@@ -122,6 +122,8 @@ struct Execution {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Journal {
+    #[serde(skip)]
+    application_integrations: Option<Value>,
     version: u32,
     #[serde(default)]
     stream_sequence: u64,
@@ -576,6 +578,8 @@ impl Server {
     async fn session_summary(&self, data: &Journal) -> Value {
         let context = self.context_window(&data.model).await;
         let mut summary = json!({"sessionId":data.id,"conversationId":data.id,"model":data.model,"effort":data.effort,"mode":data.mode,"items":data.items,"recoveryRequired":data.recovery_required,"contextWindow":context.map(|(window, _)| window),"contextWindowSource":context.map(|(_, source)| source)});
+        summary["applicationIntegrations"] =
+            data.application_integrations.clone().unwrap_or(Value::Null);
         summary["browser"] = json!({"enabled":data.browser.enabled,"available":data.browser_available,"profile":data.browser.profile,"clientId":data.browser.client_id.as_deref().unwrap_or(&data.id)});
         summary["desktopEnabled"] = json!(data.desktop_enabled);
         summary["imageSupport"] = json!(self.image_support(&data.model).await);
@@ -763,6 +767,7 @@ impl Server {
                 "conversationId does not exist"
             );
             Journal {
+                application_integrations: None,
                 version: 1,
                 stream_sequence: 0,
                 context_cutoff: 0,
@@ -814,6 +819,9 @@ impl Server {
             crate::settings::Settings::load(Some(&self.profile.name))?,
             params.get("settings"),
         )?);
+        data.application_integrations = Some(
+            json!({"github":settings.tools.github,"blender":settings.tools.blender,"hyperframes":settings.tools.hyperframes}),
+        );
         let mut mcp = Vec::new();
         let mut unavailable = Vec::new();
         for config in settings.mcp_servers.iter().filter(|s| s.enabled) {
@@ -827,6 +835,7 @@ impl Server {
             _lock: lock,
             _storage_lock: Some(profile::lock_user_file("artifact-gc.lock", false)?),
             data: Mutex::new(Journal {
+                application_integrations: None,
                 version: 1,
                 stream_sequence: 0,
                 context_cutoff: 0,
@@ -2621,7 +2630,7 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
 
 fn system_prompt(mode: &str) -> String {
     let task_policy = "For multi-step work, publish and maintain your task list with update_plan. Use task_state to recover actual task statuses after compaction and history_search to retrieve earlier instructions or results without rerunning tools. Team coordinators publish assignments with trex_team_plan before delegating instead. Never mark unverified work complete. Prefer edit_file for precise changes; native checkpoints can review or restore file-tool changes when the user requests it. Shell changes are not included in native checkpoints.";
-    let integration_policy = "For GitHub, Blender and HyperFrames requests, prefer advertised github_*, blender_run and hyperframes_run tools. Check installed dependencies, honor the session permissions and inspect the actual results; do not silently install missing programs. Blender scripts run in a new background process, not an existing window. For computer or Windows control use advertised desktop_* tools: desktop_status, desktop_monitors and a fresh desktop_screenshot before each input. If input tools are absent, explain the required opt-in, permissions or vision capability instead of claiming access. For websites prefer advertised browser_* tools, starting with browser_navigate; they are separate from desktop control. Use only the tools actually advertised for this turn.";
+    let integration_policy = "Use only the integration tools actually advertised for this turn. Verify installed dependencies and inspect real results; do not silently install missing programs. For desktop input, follow the advertised screenshot observation and permission requirements. An unavailable integration must never be treated as connected.";
     format!("You are Trex, a coding agent working in the user's workspace. Use available tools to inspect files and make precise changes. Follow project instructions. Never claim a tool succeeded without its result. {task_policy} {integration_policy} Your session mode is {mode}. Plan mode is strictly read-only: inspect and deliver a concrete plan; do not mutate files or execute shell commands. Ask mode requires user approval for each mutation or shell command. Full mode allows approved autonomous work. Browser tools, when explicitly enabled, enforce the session policy in the broker. Browser artifact metadata alone does not establish pixel inspection: only inspect pixels when an actual image observation is present. Missing artifacts are unavailable evidence; do not repeat a tool automatically to recreate them. Uncertain operations require user review and must never be automatically replayed. Use trex_read_messages to retrieve durable user or collaborator inbox messages during a long task. Finish with a clear final response describing results and relevant validation. Do not expose secrets.")
 }
 

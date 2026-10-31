@@ -4,7 +4,7 @@ import { agentWrite, agentTeamMcpConfig, trexBrowserResolveSpace, formatError } 
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
 import { InboxRequests, INBOX_INSTRUCTIONS, type QueueSnapshot } from "../messageQueue";
 import { taskInstructions } from "../chatTasks";
-import { integrationInstructions } from "../integrations";
+import { assertIntegrationRestrictions, integrationContext, integrationInstructions, integrationRestrictions } from "../integrations";
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
@@ -143,10 +143,11 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       assertStartup(procId);
       if(current.browser?.enabled && browser?.enabled === false) notice("warn","Trex Browser no está disponible. Revisa su instalación en Ajustes; el asistente continúa sin navegador.");
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
-        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: `${INBOX_INSTRUCTIONS} ${taskInstructions("trex")} ${integrationInstructions("trex")}`,
+        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: `${INBOX_INSTRUCTIONS} ${taskInstructions("trex")} ${integrationInstructions("trex", integrationContext(current))}`,
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
-        desktopEnabled: current.desktopEnabled === true, ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
+        settings: integrationRestrictions(current.integrations), desktopEnabled: current.desktopEnabled === true, ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
+      assertIntegrationRestrictions(result, current.integrations);
       if (result.instructionsApplied !== true) throw new Error("Trex CLI no confirmó las instrucciones de las herramientas. Actualiza el CLI antes de iniciar esta conversación.");
       if (current.desktopEnabled && result.desktopEnabled !== true) throw new Error("Este Trex CLI no confirmó el control de computadora. Actualiza el CLI antes de activarlo.");
       if (planningOnly && result.mode !== "plan") throw new Error("Trex CLI no confirmó el modo de planificación de solo lectura.");

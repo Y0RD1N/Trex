@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { desktopStatus, formatError, githubConnectionStatus, integrationDependencies, type DesktopStatus, type GitHubConnectionStatus, type IntegrationDependencies } from "../api";
 import "./BrowserSettings.css";
+import "./IntegrationSettings.css";
+import type { ApplicationIntegrations } from "../types";
 import { SystemIcon } from "./Icons";
 
 const guides = {
@@ -11,7 +13,7 @@ const guides = {
 };
 
 /** Availability is a file probe only; it never launches or configures an integration. */
-export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChange }: { cwd?: string; desktopEnabled: boolean; onDesktopChange: (enabled: boolean) => void }) {
+export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChange, integrations, onIntegrationsChange }: { cwd?: string; desktopEnabled: boolean; onDesktopChange: (enabled: boolean) => void; integrations: ApplicationIntegrations; onIntegrationsChange: (value: ApplicationIntegrations) => void }) {
   const [status, setStatus] = useState<IntegrationDependencies | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
@@ -41,11 +43,11 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
     finally { setCheckingGithub(false); }
   };
   const apps = [
-    { name: "Blender", found: status?.blender, description: "Diseño y renderizado 3D", url: guides.blender },
-    { name: "HyperFrames", found: status?.hyperframes, description: status?.hyperframesLocal ? "Detectado en el proyecto actual" : "Creación y renderizado de vídeo", url: guides.hyperframes },
-    { name: "GitHub CLI", found: status?.githubCli, description: "Repositorios y pull requests", url: guides.github },
+    { id: "blender" as const, name: "Blender", found: status?.blender, description: "Diseño y renderizado 3D", url: guides.blender },
+    { id: "hyperframes" as const, name: "HyperFrames", found: status?.hyperframes, description: status?.hyperframesLocal ? "Detectado en el proyecto actual" : "Creación y renderizado de vídeo", url: guides.hyperframes },
+    { id: "github" as const, name: "GitHub CLI", found: status?.githubCli, description: "Repositorios y pull requests", url: guides.github },
   ];
-  return <div className="browser-settings">
+  return <div className="browser-settings integration-settings">
     <div className="browser-settings-card">
       <div className="browser-settings-heading"><div><h4>Control de computadora</h4><p>Escritorio, ratón y teclado para tus agentes</p></div><span className={`browser-settings-status${desktop?.available ? " is-ready" : ""}`} role="status">{desktop?.available ? "Escritorio disponible" : desktopError ? "Revisar instalación" : desktop ? "No disponible" : "Comprobando…"}</span></div>
       <label className="browser-settings-toggle"><span><strong>Permitir el control en nuevos chats</strong><small>Planificar permite observar; los demás modos aplican los permisos del agente.</small></span><input type="checkbox" role="switch" aria-label="Activar control de computadora para los agentes" checked={desktopEnabled} onChange={event => onDesktopChange(event.currentTarget.checked)} /></label>
@@ -54,10 +56,16 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
       {desktopError && <p className="browser-settings-error" role="alert">{desktopError}</p>}
       <p className="browser-settings-note">Trex API, Claude y Codex pueden capturar la pantalla y controlar ratón y teclado. Windows utiliza coordenadas físicas y permite elegir pantalla, incluido el escalado DPI; sigue siendo experimental. No controla ventanas elevadas ni pantallas de seguridad. Se aplica a nuevas sesiones; cierra las sesiones abiertas para retirarles el acceso. La pantalla puede enviarse al proveedor del modelo y requiere visión. Esta comprobación no toma capturas ni envía entrada.</p>
     </div>
-    <div className="browser-settings-card"><div className="browser-settings-heading"><div><h4>Aplicaciones</h4><p>Comprueba qué programas están instalados.</p></div><button type="button" className="btn btn-small" onClick={() => setRevision(value => value + 1)}>Volver a comprobar</button></div>
-      {apps.map(app => <div className="browser-settings-foot" key={app.name}><span><strong>{app.name}</strong><br />{app.description}<br />{status ? app.found ? "Detectado" : "No detectado" : "Comprobando…"}</span><button type="button" className="btn btn-small" onClick={() => guide(app.url)}>Guía de instalación</button></div>)}
-      {status?.githubCli && <div className="browser-settings-foot"><span>Conexión de GitHub<br />{github === "connected" ? "Sesión confirmada" : github === "timeout" ? "La comprobación agotó el tiempo" : github ? "No se pudo confirmar una sesión" : "Aún no comprobada"}</span><button type="button" className="btn btn-small" disabled={checkingGithub} onClick={() => void checkGithub()}>{checkingGithub ? "Comprobando…" : "Comprobar conexión"}</button></div>}
-      {status && <p className="browser-settings-note">Node: {status.node ? "detectado" : "no detectado"} · FFmpeg: {status.ffmpeg ? "detectado" : "no detectado"}. La detección no comprueba versiones. Trex API ofrece GitHub, Blender en segundo plano y comandos de HyperFrames. Claude y Codex pueden utilizar los programas instalados mediante sus herramientas habituales.</p>}
+    <div className="browser-settings-card"><div className="browser-settings-heading"><div><h4>Aplicaciones</h4><p>Elige qué aplicaciones se anuncian a tus agentes.</p></div><button type="button" className="btn btn-small" onClick={() => setRevision(value => value + 1)}>Volver a comprobar</button></div>
+      <div className="integration-apps">{apps.map(app => <div className={`integration-app${integrations[app.id] ? " is-enabled" : ""}`} key={app.id}>
+        <div className="integration-app-title"><strong>{app.name}</strong><span className="integration-app-state">{integrations[app.id] ? "Activada" : "Desactivada"}</span></div>
+        <label className="integration-app-switch"><input type="checkbox" role="switch" aria-label={`Activar ${app.name} para los agentes`} checked={integrations[app.id]}
+          onChange={event => onIntegrationsChange({ ...integrations, [app.id]: event.currentTarget.checked })} /></label>
+        <p>{app.description}</p><div className="integration-app-footer"><span>{status ? app.found ? "Detectado" : "No detectado" : "Comprobando…"}</span><button type="button" className="btn btn-small" onClick={() => guide(app.url)}>Guía de instalación</button></div>
+      </div>)}</div>
+      <p className="integration-session-note">Se aplica al abrir o reiniciar un chat. Las sesiones activas conservan su configuración.</p>
+      {integrations.github && status?.githubCli && <div className="browser-settings-foot"><span>Conexión de GitHub<br />{github === "connected" ? "Sesión confirmada" : github === "timeout" ? "La comprobación agotó el tiempo" : github ? "No se pudo confirmar una sesión" : "Aún no comprobada"}</span><button type="button" className="btn btn-small" disabled={checkingGithub} onClick={() => void checkGithub()}>{checkingGithub ? "Comprobando…" : "Comprobar conexión"}</button></div>}
+      {status && <p className="browser-settings-note">Node: {status.node ? "detectado" : "no detectado"} · FFmpeg: {status.ffmpeg ? "detectado" : "no detectado"}. La detección no comprueba versiones. Las aplicaciones desactivadas no se anuncian como integraciones. Las herramientas generales de cada agente conservan sus propios permisos.</p>}
       {error && <p className="browser-settings-error" role="alert">{error}</p>}
     </div>
   </div>;

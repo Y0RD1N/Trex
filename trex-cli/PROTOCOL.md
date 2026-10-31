@@ -447,6 +447,14 @@ restoration does not restore browser/desktop grants or restart processes.
 `processInput`, `processResize`, `incrementalProcessOutput`, `mcpClient`,
 `nativeCheckpoints`, `budgets` and `structuredErrors`.
 
+Live session summaries also report `applicationIntegrations:{github,blender,hyperframes}`
+from the effective native tool settings. The desktop app sends disabled preferences
+through `session/start.settings.tools`, without enabling a tool disabled in the
+CLI profile, and requires this acknowledgement before accepting a restricted
+session. Disabled application tools are omitted from discovery and refused on
+execution. These application preferences apply when opening/restarting chats;
+they do not revoke the agent's general shell permissions.
+
 - `session/start.settings`: bounded partial user-settings override (64 KiB).
   Fields and defaults are documented in README and settings.example.json.
 - `session/compact({sessionId})`: idle only. Returns a complete session summary.
