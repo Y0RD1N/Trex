@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Trex Browser</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline'">
+<link rel="stylesheet" href="theme.css">
+<style>
+html,body{height:100%;overflow:hidden}
+/* The window itself: a glass frame. Pages sit 7px inside it. */
+/* No app-region here: Electron unions drag regions of every view, so a
+   full-window drag area would swallow all clicks on the bar and the page.
+   The window is dragged from the empty space of the tab row instead. */
+.frame{position:fixed;inset:0;border-radius:18px;border:1px solid var(--edge-strong);
+  background:linear-gradient(160deg,rgba(40,38,44,.78),rgba(18,18,22,.82));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12);transition:background .3s,border-color .3s,box-shadow .3s}
+body.native-glass .frame{background:rgba(255,255,255,.04)}
+body.agent .frame{background:linear-gradient(160deg,rgba(var(--accent-rgb),.38),rgba(70,36,22,.7));border-color:rgba(var(--accent-rgb),.5);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 24px rgba(var(--accent-rgb),.25)}
+body.paused .frame{background:linear-gradient(160deg,rgba(231,195,90,.28),rgba(40,34,18,.75));border-color:rgba(231,195,90,.45)}
+body.maximized .frame{border-radius:0}
+
+/* Agents center */
+.center{position:fixed;inset:7px;border-radius:12px;overflow:hidden;display:none}
+body.center-open .center{display:block}
+.backdrop{position:absolute;inset:-40px;background:#121212 center/cover no-repeat;filter:blur(26px) saturate(.9);transform:scale(1.05)}
+.backdrop::after{content:"";position:absolute;inset:0;background:rgba(10,10,12,.55)}
+.content{position:absolute;inset:0;padding:18px;display:grid;grid-template-rows:auto 1fr;gap:16px}
+.head{display:flex;align-items:center;gap:14px;padding:12px 12px 12px 18px;border-radius:16px}
+.head h2{font-size:17px;letter-spacing:-.01em}
+.proj{font:12px var(--mono);color:var(--muted);padding:3px 8px;border-radius:6px;background:rgba(255,255,255,.07);max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.stats{display:flex;gap:16px;margin-left:8px;color:var(--muted)}.stats b{color:var(--text)}
+.seg{display:flex;padding:3px;border-radius:10px;background:rgba(0,0,0,.25);margin-left:auto}
+.seg button{padding:5px 11px;border-radius:7px;color:var(--muted);font-weight:550}.seg .on{background:rgba(255,255,255,.1);color:var(--text)}
+.search{width:240px;height:32px;border-radius:9px;background:rgba(0,0,0,.25);border:1px solid var(--edge);display:flex;align-items:center;padding:0 10px 0 11px;gap:8px;cursor:text}
+.search:focus-within{border-color:rgba(var(--accent-rgb),.55);background:rgba(0,0,0,.4)}
+.search svg{width:15px;height:15px;flex:none;stroke:var(--dim);fill:none;stroke-width:2;stroke-linecap:round}
+.search:focus-within svg{stroke:var(--muted)}
+.search input{font:12.5px/1 var(--sans);height:100%}
+.search input{flex:1;min-width:0}.search input::placeholder{color:var(--dim)}
+.body{display:grid;grid-template-columns:1fr 300px;gap:16px;min-height:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;align-content:start;overflow:auto;padding-bottom:4px}
+.grid::-webkit-scrollbar{width:0}
+.card{border-radius:16px;padding:8px;display:flex;flex-direction:column;gap:8px}
+.card.working{border-color:rgba(var(--accent-rgb),.38);box-shadow:var(--hi),0 0 0 1px rgba(var(--accent-rgb),.1),0 12px 40px rgba(var(--accent-rgb),.12)}
+.thumb{position:relative;aspect-ratio:16/8.4;border-radius:10px;overflow:hidden;background:radial-gradient(circle at 50% 40%,#2a2422,#141416) center/cover no-repeat;display:grid;place-items:center;color:#8a8a8a;font:600 11px var(--sans)}
+.badge{position:absolute;top:8px;left:8px;display:flex;align-items:center;gap:5px;font:700 9.5px var(--sans);letter-spacing:.06em;padding:3px 7px;border-radius:6px;background:rgba(10,10,12,.72);color:#fff}
+.badge i{width:6px;height:6px;border-radius:50%;background:#ff5d5d}
+.tabs-mini{position:absolute;bottom:8px;right:8px;font:600 10.5px var(--sans);padding:3px 7px;border-radius:6px;background:rgba(10,10,12,.72);color:#ddd}
+.meta{padding:0 6px;display:grid;gap:7px}
+.row{display:flex;align-items:center;gap:8px;min-width:0}
+.name{font-weight:620}.model{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis}
+.pill{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font:600 11px var(--sans);padding:3px 8px;border-radius:999px;flex:none}
+.pill em{width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.working{background:rgba(var(--accent-rgb),.15);color:var(--accent-text)}.pill.idle,.pill.closed{background:rgba(255,255,255,.07);color:var(--muted)}
+.pill.paused{background:rgba(231,195,90,.13);color:var(--warn)}.pill.review{background:rgba(239,125,125,.13);color:var(--danger)}
+.tool{font:11.5px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis}.tool b{color:var(--text);font-weight:500}
+.cur{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:9px;background:rgba(0,0,0,.22);min-width:0}
+.cur div{min-width:0}.cur strong{display:block;font-weight:550;font-size:12px;overflow:hidden;text-overflow:ellipsis}
+.cur small{display:block;font:11px var(--mono);color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+.acts{display:flex;gap:6px;padding:0 6px 4px}.acts .btn{flex:1;height:28px}
+.feed{border-radius:16px;padding:14px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.feed h3{font-size:13px;margin-bottom:8px;display:flex;justify-content:space-between}.feed h3 span{color:var(--dim);font-weight:500}
+.ev{display:grid;grid-template-columns:20px 1fr auto;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.05)}
+.ev p{color:var(--muted);font-size:12px;white-space:normal;min-width:0}.ev p b{color:var(--text);font-weight:550}.ev code{font:11px var(--mono);color:var(--accent-text)}
+.ev time{font:11px var(--mono);color:var(--dim)}
+.hint{color:var(--dim);font-size:12px;padding:6px 2px}
+.empty{color:var(--dim);padding:20px 4px;white-space:normal}
+</style>
+</head>
+<body>
+<div class="frame"></div>
+<section class="center" aria-label="Centro de agentes">
+  <div class="backdrop" id="backdrop"></div>
+  <div class="content">
+    <header class="head glass">
+      <h2>Centro de agentes</h2><span class="proj" id="proj"></span>
+      <div class="stats" id="stats"></div>
+      <div class="seg" id="filter"><button data-f="all" class="on">Todos</button><button data-f="working">Trabajando</button><button data-f="paused">Pausados</button><button data-f="review">Revisar</button></div>
+      <label class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="q" placeholder="Buscar agente o URL" spellcheck="false"></label>
+      <button class="btn" data-close>Esc</button>
+    </header>
+    <div class="body">
+      <div class="grid" id="grid"></div>
+      <aside class="feed glass"><h3>Actividad <span>en vivo</span></h3><div id="feed"></div></aside>
+    </div>
+  </div>
+</section>
+<script type="module" src="index.js"></script>
+</body>
+</html>

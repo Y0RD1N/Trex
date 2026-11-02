@@ -574,8 +574,24 @@ export const trexBrowserMcpConfig = (cwd: string, mode: BrowserMode, clientId: s
 export const trexBrowserCall = (request: BrowserCall): Promise<BrowserResult> => invoke("trex_browser_call", { request });
 export const trexBrowserOpenArtifact = (id: string, cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserResult> => invoke("trex_browser_open_artifact", { id, cwd, mode, clientId, profile });
 export const trexBrowserProfiles = (cwd: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_profiles", { cwd });
-export const trexBrowserSpaces = (cwd: string, members: {clientId:string;label:string}[]): Promise<{spaces: import("./browser").BrowserSpace[]}> => invoke("trex_browser_spaces", {cwd,members});
+export const trexBrowserSpaces = (cwd: string, members: {clientId:string;label:string;model?:string}[]): Promise<{spaces: import("./browser").BrowserSpace[]}> => invoke("trex_browser_spaces", {cwd,members});
 export const trexBrowserListSpaces = (cwd: string): Promise<{spaces: BrowserSpace[]}> => invoke("trex_browser_list_spaces", {cwd});
+/** Per-agent MCP-over-HTTP session (url + bearer token) bound to a permission mode. */
+export const trexBrowserMcpSession = (cwd: string, mode: string, clientId: string, profile: string): Promise<{url: string; token: string; mode: string}> =>
+  invoke("trex_browser_mcp_session", {cwd, mode, clientId, profile});
+/** A person's Trex Browser window without automation: personal, or an agent's closed space (sign-in). */
+export const trexBrowserOpen = (target: { cwd: string; profile: string } | null, url?: string): Promise<{opened: boolean; reason?: string; reused?: boolean}> =>
+  invoke("trex_browser_open", {cwd: target?.cwd ?? null, profile: target?.profile ?? null, url: url ?? null});
+export type BrowserEngineChoice = "auto" | "trex" | "chrome";
+/** Read (or set) which browser opens for agents: Trex Browser or the system Chrome. */
+export const trexBrowserEngine = (engine?: BrowserEngineChoice): Promise<{engine: BrowserEngineChoice; engines: {trex: boolean; chrome: boolean}; active: string | null}> =>
+  invoke("trex_browser_engine", {engine: engine ?? null});
+/** Folders (besides the project) where full-mode agents may save downloads. */
+export const trexBrowserSaveFolders = (action: "list" | "add" | "remove" = "list", folder?: string): Promise<{folders: string[]}> =>
+  invoke("trex_browser_save_folders", {action, folder: folder ?? null});
+/** Host-only: bring a space's Trex Browser window to the front (optionally on one tab). */
+export const trexBrowserFocus = (cwd: string, profile: string, tabId?: string): Promise<{focused: boolean; reason?: string}> =>
+  invoke("trex_browser_focus", {cwd, profile, tabId: tabId ?? null});
 /** Resolve a host-owned identity before creating any model grant; never take over another profile. */
 export async function trexBrowserResolveSpace(cwd: string, options: BrowserOptions, knownStatus?: BrowserStatus): Promise<BrowserOptions> {
   const base = {enabled: options.enabled, clientId: options.clientId, profile: options.profile};

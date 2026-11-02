@@ -238,13 +238,24 @@ impl PortalState {
                         .context("invalid monitor ID")
                 })
                 .transpose()?;
+            // The system can revoke a session at any time (for example "Stop
+            // sharing" in GNOME). Drop it and ask the portal again instead of
+            // failing with "Invalid session" for the rest of the conversation.
+            let fd = match self.fd().await {
+                Ok(fd) => fd,
+                Err(_) => {
+                    self.close().await;
+                    self.initialize(mode, &cancel).await?;
+                    self.fd().await?
+                }
+            };
             let stream = self
                 .streams
                 .iter()
                 .find(|s| selected.is_none_or(|id| s.pipe_wire_node_id() == id))
                 .context("monitor is not part of the granted portal session")?
                 .clone();
-            let bytes = capture(self.fd().await?, stream.pipe_wire_node_id(), &cancel).await?;
+            let bytes = capture(fd, stream.pipe_wire_node_id(), &cancel).await?;
             let dimensions = image::ImageReader::new(std::io::Cursor::new(&bytes))
                 .with_guessed_format()?
                 .into_dimensions()?;

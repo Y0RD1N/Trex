@@ -20,6 +20,11 @@ export function safePath(target, {allowMissing=false}={}) {
   }
   return absolute;
 }
+/** Where the private home lives, without creating or validating anything. */
+export function privateHomePath() {
+  const stateRoot=process.platform==='linux'?(process.env.XDG_STATE_HOME&&path.isAbsolute(process.env.XDG_STATE_HOME)?process.env.XDG_STATE_HOME:path.join(os.homedir(),'.local/state')):null;
+  return path.resolve(process.env.TREX_BROWSER_HOME||(stateRoot?path.join(stateRoot,'trex-browser'):path.join(process.env.LOCALAPPDATA||os.homedir(),process.platform==='win32'?'TrexBrowser':'.trex-browser')));
+}
 export function privateHome() {
   const stateRoot=process.platform==='linux'?(process.env.XDG_STATE_HOME&&path.isAbsolute(process.env.XDG_STATE_HOME)?process.env.XDG_STATE_HOME:path.join(os.homedir(),'.local/state')):null;
   const home=path.resolve(process.env.TREX_BROWSER_HOME||(stateRoot?path.join(stateRoot,'trex-browser'):path.join(process.env.LOCALAPPDATA||os.homedir(),process.platform==='win32'?'TrexBrowser':'.trex-browser')));
@@ -93,4 +98,70 @@ export class Artifacts {
   }
   async add(data,mimeType,kind,ctx,extra={}) {const file=this.temp();writePrivate(file,data);return this.addFile(file,mimeType,kind,ctx,extra);}
   get(id,ctx){if(typeof id!=='string'||! /^[a-f0-9-]{36}$/.test(id))throw new Error('Invalid artifact ID');const a=this.items.find(a=>a.artifactId===id&&a.projectId===ctx.projectId&&a.profile===ctx.profile);if(!a)throw new Error('Artifact not found for this project/profile');const file=path.join(this.dir,id);safePath(file);const stat=fs.statSync(file);if(!stat.isFile()||stat.size!==a.bytes||stat.size>MAX_ARTIFACT)throw new Error('Artifact integrity mismatch');const bytes=readPrivate(file);if(bytes.length!==a.bytes||sha256(bytes)!==a.sha256)throw new Error('Artifact integrity mismatch');return {meta:a,file,bytes};}
+}
+
+// ---- Saving agent downloads outside the private home ----------------------
+// An agent (full mode only) may copy a finished download into its project
+// workspace or into folders the person authorized in trex. Never overwrites,
+// never writes into hidden directories (.git hooks, .config autostart, ...),
+// and created files are never executable.
+const SAVE_FOLDERS='save-folders.json';
+const hiddenPart=rel=>rel.split(path.sep).some(part=>part.startsWith('.'));
+const inside=(root,target)=>{const rel=path.relative(root,target);return rel===''||(!!rel&&!rel.startsWith(`..${path.sep}`)&&rel!=='..'&&!path.isAbsolute(rel));};
+const canonical=p=>process.platform==='win32'?p.toLowerCase():p;
+export function readSaveFolders(home){const value=jsonRead(path.join(home,SAVE_FOLDERS),{folders:[]});return Array.isArray(value?.folders)?value.folders.filter(f=>typeof f==='string'&&path.isAbsolute(f)):[];}
+/** Validates a folder a person wants agents to save into; returns its real path. */
+export function authorizableFolder(home,input){
+  if(typeof input!=='string'||!path.isAbsolute(input)||input.length>4096)throw Object.assign(new Error('Folder must be an absolute path'),{code:'INVALID_FOLDER'});
+  let real;try{real=fs.realpathSync(input);}catch{throw Object.assign(new Error('Folder does not exist'),{code:'INVALID_FOLDER'});}
+  if(!fs.statSync(real).isDirectory())throw Object.assign(new Error('Not a folder'),{code:'INVALID_FOLDER'});
+  const user=fs.realpathSync(os.homedir());
+  if(path.parse(real).root===real||canonical(real)===canonical(user))throw Object.assign(new Error('Choose a specific folder, not the whole disk or home folder'),{code:'INVALID_FOLDER'});
+  if(inside(user,real)&&hiddenPart(path.relative(user,real)))throw Object.assign(new Error('Hidden configuration folders cannot be authorized'),{code:'INVALID_FOLDER'});
+  let homeReal=null;try{homeReal=fs.realpathSync(home);}catch{}
+  if(homeReal&&(inside(homeReal,real)||inside(real,homeReal)))throw Object.assign(new Error('The Trex Browser private folder cannot be authorized'),{code:'INVALID_FOLDER'});
+  return real;
+}
+export function updateSaveFolders(home,action,folder){
+  let folders=readSaveFolders(home);
+  if(action==='add'){const real=authorizableFolder(home,folder);if(!folders.some(f=>canonical(f)===canonical(real)))folders.push(real);if(folders.length>32)throw new Error('At most 32 folders');}
+  else if(action==='remove'){if(typeof folder!=='string')throw new Error('Folder required');folders=folders.filter(f=>f!==folder&&canonical(f)!==canonical(folder));}
+  else if(action!=='list')throw new Error('save-folders: list|add PATH|remove PATH');
+  if(action!=='list')writePrivate(path.join(home,SAVE_FOLDERS),JSON.stringify({folders}));
+  return folders;
+}
+export function safeFileName(name){
+  const base=String(name||'').split(/[\\/]/).pop().replace(/[\x00-\x1f\x7f<>:"|?*]/g,'_').replace(/^[.\s]+|[.\s]+$/g,'').slice(0,180);
+  const reserved=/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i.test(base);
+  return !base||reserved?`descarga${base?`-${base}`:''}`:base;
+}
+/** Where a download may be written: a new file inside the workspace or an authorized folder. */
+export function saveTarget({cwd,home,destination,suggestedName}){
+  if(typeof destination!=='string'||!destination.trim()||destination.length>4096)throw new Error('destination must be a folder or file path');
+  const expanded=destination==='~'||/^~[\\/]/.test(destination)?path.join(os.homedir(),destination.slice(1)):destination;
+  const raw=path.resolve(cwd,expanded),asFolder=/[\\/]$/.test(destination)||(fs.existsSync(raw)&&fs.statSync(raw).isDirectory());
+  if(!asFolder&&path.basename(raw).startsWith('.'))throw Object.assign(new Error('Downloads cannot be saved into hidden files or folders'),{code:'POLICY_DENIED'});
+  let dir=asFolder?raw:path.dirname(raw),name=asFolder?safeFileName(suggestedName):safeFileName(path.basename(raw));
+  // Canonicalize the nearest existing ancestor; the missing tail is created below.
+  let existing=dir,missing=[];while(!fs.existsSync(existing)){missing.unshift(path.basename(existing));const up=path.dirname(existing);if(up===existing)break;existing=up;}
+  dir=path.join(fs.realpathSync(existing),...missing);
+  const roots=[cwd,...readSaveFolders(home)].map(r=>{try{return fs.realpathSync(r);}catch{return null;}}).filter(Boolean);
+  const root=roots.find(r=>inside(r,dir));
+  if(!root)throw Object.assign(new Error('Destination is outside the project and the folders authorized in Trex settings'),{code:'POLICY_DENIED'});
+  if(hiddenPart(path.relative(root,dir))||name.startsWith('.'))throw Object.assign(new Error('Downloads cannot be saved into hidden files or folders'),{code:'POLICY_DENIED'});
+  if(missing.length>8)throw new Error('Too many missing folders');
+  return {root,dir,name};
+}
+/** Writes bytes to a new file in dir; picks "name (n).ext" instead of overwriting. */
+export function writeNewFile(dir,name,bytes){
+  safePath(dir,{allowMissing:true});fs.mkdirSync(dir,{recursive:true,mode:0o755});safePath(dir);
+  const ext=path.extname(name),stem=name.slice(0,name.length-ext.length);
+  for(let i=0;i<100;i++){
+    const file=path.join(dir,i?`${stem} (${i})${ext}`:name);let fd;
+    try{fd=fs.openSync(file,fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_WRONLY|(fs.constants.O_NOFOLLOW||0),0o644);}
+    catch(e){if(e.code==='EEXIST')continue;throw e;}
+    try{fs.writeFileSync(fd,bytes);fs.fsyncSync(fd);}catch(e){fs.closeSync(fd);fd=null;fs.rmSync(file,{force:true});throw e;}finally{if(fd!=null)fs.closeSync(fd);}
+    return file;
+  }
+  throw new Error('Too many files with that name in the destination');
 }

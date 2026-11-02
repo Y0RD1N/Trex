@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { context, workspaceFile, safePath, Artifacts, sha256, childEnvironment } from '../worker/security.mjs';
+import { context, workspaceFile, safePath, Artifacts, sha256, childEnvironment, saveTarget, writeNewFile, safeFileName, updateSaveFolders } from '../worker/security.mjs';
 import { tools, validateArguments } from '../worker/tools.mjs';
 import { BrowserService } from '../worker/browser.mjs';
 
@@ -122,4 +122,35 @@ test('an unfinished response body read releases the queue on cancellation',async
     const resumed=await service.call(ctx,'browser_resume',{},'resume-after-read',1000);assert.equal(resumed.data.paused,false);
     const next=await service.call(ctx,'browser_status',{},'status-after-read',1000);assert.equal(next.data.running,true);
   }finally{fs.rmSync(home,{recursive:true,force:true});}
+});
+
+test('downloads are saved only as new, non-hidden files inside the workspace or authorized folders',()=>{
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-save-')));
+  try{
+    const home=path.join(root,'home'),cwd=path.join(root,'project'),other=path.join(root,'other');
+    for(const d of [home,cwd,other])fs.mkdirSync(d);
+    assert.equal(safeFileName('../../evil.sh'),'evil.sh');
+    assert.equal(safeFileName('a:b?.pdf'),'a_b_.pdf');
+    assert.equal(safeFileName('...'),'descarga');
+    assert.equal(safeFileName('CON.txt'),'descarga-CON.txt');
+    const inProject=saveTarget({cwd,home,destination:'docs/',suggestedName:'informe.pdf'});
+    assert.deepEqual([inProject.dir,inProject.name],[path.join(cwd,'docs'),'informe.pdf']);
+    assert.equal(saveTarget({cwd,home,destination:path.join(cwd,'x.pdf'),suggestedName:'y'}).name,'x.pdf');
+    for(const destination of ['../other/','.git/hooks/pre-commit','sub/.hidden/','.env',other])
+      assert.throws(()=>saveTarget({cwd,home,destination,suggestedName:'f.txt'}),{code:'POLICY_DENIED'},destination);
+    // A link inside the workspace cannot point the write outside of it.
+    fs.symlinkSync(other,path.join(cwd,'escape'));
+    assert.throws(()=>saveTarget({cwd,home,destination:'escape/',suggestedName:'f.txt'}),{code:'POLICY_DENIED'});
+    updateSaveFolders(home,'add',other);
+    assert.equal(saveTarget({cwd,home,destination:other,suggestedName:'f.txt'}).dir,other);
+    assert.throws(()=>updateSaveFolders(home,'add',os.homedir()),{code:'INVALID_FOLDER'});
+    assert.throws(()=>updateSaveFolders(home,'add','/'),{code:'INVALID_FOLDER'});
+    assert.throws(()=>updateSaveFolders(home,'add',home),{code:'INVALID_FOLDER'});
+    assert.deepEqual(updateSaveFolders(home,'remove',other),[]);
+    const first=writeNewFile(path.join(cwd,'docs'),'a.txt',Buffer.from('1'));
+    const second=writeNewFile(path.join(cwd,'docs'),'a.txt',Buffer.from('2'));
+    assert.equal(path.basename(second),'a (1).txt');
+    assert.equal(fs.readFileSync(first,'utf8'),'1');
+    assert.equal(fs.statSync(second).mode&0o111,0);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });

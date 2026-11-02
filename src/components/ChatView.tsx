@@ -11,7 +11,7 @@ import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browse
  */
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { formatError, gitBranch, listProjectFiles, readClipboard, trexBrowserOpenArtifact } from "../api";
+import { formatError, gitBranch, listProjectFiles, readClipboard, trexBrowserOpenArtifact, trexBrowserSpaces } from "../api";
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
 import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from "../chatFiles";
 import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
@@ -730,6 +730,14 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   useEffect(() => {
     callbacks.current.onEffort?.(sessionId, state.effortChoice);
   }, [state.effortChoice, sessionId]);
+  // Trex Browser shows which model drives this chat's space; keep it current
+  // when the user switches model. Allocation never opens a browser window.
+  const browserModelName = (() => { const m = currentModel(state.models, state.model, state.modelChoice); return (m ? modelName(m) : state.model ?? "").slice(0, 60); })();
+  const browserBinding = props.browser;
+  useEffect(() => {
+    if (!browserBinding?.enabled || !browserModelName || props.historyReadOnly || !cwd) return;
+    void trexBrowserSpaces(cwd, [{ clientId: browserBinding.clientId, label: browserBinding.label ?? "Agente", model: browserModelName }]).catch(() => {});
+  }, [browserModelName, cwd, browserBinding?.clientId, browserBinding?.enabled, props.historyReadOnly]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Modo de trabajo al que se vuelve al poner en marcha un plan. */
   const workModeRef = useRef(mode === "plan" ? agent.defaultMode : mode);
   useEffect(() => { if (mode !== "plan") workModeRef.current = mode; }, [mode]);

@@ -58,9 +58,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -70,24 +68,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "url": {
@@ -100,9 +80,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -113,33 +91,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -150,33 +108,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -186,24 +124,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "action": {
@@ -222,9 +142,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -238,30 +156,13 @@
           },
           "frameId": {
             "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -271,24 +172,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "accept": {
@@ -304,14 +187,12 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
       "name": "browser_snapshot",
-      "description": "Read accessibility/DOM snapshot and revision-bound element refs.",
+      "description": "Accessibility tree plus actionable elements as \"ref kind name\" lines. compact:true omits the tree (cheapest; use it to act). selector scopes both to one region. Pass tabId+revision+ref to act.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -321,29 +202,18 @@
           "frameId": {
             "type": "string"
           },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
           "selector": {
             "type": "string"
           },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
+          "compact": {
+            "type": "boolean"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -388,9 +258,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -425,9 +293,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -437,24 +303,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "source": {
@@ -553,9 +401,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -565,24 +411,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "action": {
@@ -623,9 +451,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -635,24 +461,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "key": {
@@ -665,9 +473,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -710,9 +516,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -722,24 +526,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "fields": {
@@ -814,9 +600,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -859,9 +643,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -876,21 +658,6 @@
           "frameId": {
             "type": "string"
           },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
           "function": {
             "type": "string"
           },
@@ -902,9 +669,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -914,24 +679,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "width": {
@@ -948,9 +695,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -960,24 +705,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "colorScheme": {
@@ -1007,9 +734,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1019,24 +744,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "limit": {
@@ -1050,49 +757,30 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
       "name": "browser_network_requests",
-      "description": "Read bounded network request metadata.",
+      "description": "Recent request metadata, newest last. Static assets (images, fonts, styles, media) are skipped unless all:true.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "tabId": {
             "type": "string"
           },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
           "limit": {
             "type": "number"
+          },
+          "all": {
+            "type": "boolean"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -1102,24 +790,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "requestId": {
@@ -1138,9 +808,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -1150,24 +818,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "action": {
@@ -1195,9 +845,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1240,37 +888,53 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
-      "name": "browser_take_screenshot",
-      "description": "Capture viewport, full page or crop to PNG/JPEG. Available even when page controls are paused; use it to inspect an uncertain action without replaying it. Returns image and private artifact ID.",
+      "name": "browser_save_download",
+      "description": "Save a finished download (full mode) to a new file in the project or a folder the user authorized in Trex settings. destination: folder or file path (absolute, ~/..., or project-relative). Without downloadId/artifactId it takes the newest unsaved download, waiting up to wait seconds (default 20) for it to start/finish; click the download button first. Never overwrites: picks \"name (1).ext\".",
       "inputSchema": {
         "type": "object",
         "properties": {
           "tabId": {
             "type": "string"
           },
-          "frameId": {
+          "destination": {
             "type": "string"
           },
-          "ref": {
+          "downloadId": {
             "type": "string"
           },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
+          "artifactId": {
             "type": "string"
           },
-          "role": {
+          "wait": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 25
+          }
+        },
+        "required": [
+          "destination"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false
+      }
+    },
+    {
+      "name": "browser_take_screenshot",
+      "description": "Capture viewport (scaled to 1024 px wide; fullResolution:true for native), full page or a clip, PNG/JPEG. Works while paused, to inspect an uncertain action. Prefer browser_snapshot: images cost far more tokens.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
             "type": "string"
           },
-          "name": {
-            "type": "string"
+          "fullResolution": {
+            "type": "boolean"
           },
           "type": {
             "enum": [
@@ -1313,9 +977,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -1327,24 +989,6 @@
           "tabId": {
             "type": "string"
           },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
           "maxDurationMs": {
             "type": "number"
           }
@@ -1353,9 +997,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1366,33 +1008,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1403,33 +1025,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1440,33 +1042,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1477,33 +1059,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1514,33 +1076,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1551,33 +1093,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1588,33 +1110,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1625,33 +1127,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1703,9 +1185,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -1715,24 +1195,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "artifactId": {
@@ -1751,9 +1213,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -1764,33 +1224,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -1801,33 +1241,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1838,33 +1258,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1875,33 +1275,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     },
     {
@@ -1911,24 +1291,6 @@
         "type": "object",
         "properties": {
           "tabId": {
-            "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
             "type": "string"
           },
           "operationId": {
@@ -1941,9 +1303,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": true
+        "readOnlyHint": true
       }
     },
     {
@@ -1954,33 +1314,13 @@
         "properties": {
           "tabId": {
             "type": "string"
-          },
-          "frameId": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "selector": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
           }
         },
         "required": [],
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "openWorldHint": true
+        "readOnlyHint": false
       }
     }
   ]

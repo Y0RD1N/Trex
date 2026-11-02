@@ -1,12 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { trexBrowserCall, trexBrowserOpenArtifact, trexBrowserStatus, trexBrowserResolveSpace, trexBrowserListSpaces } from "../../api";
+import { trexBrowserCall, trexBrowserFocus, trexBrowserOpen, trexBrowserOpenArtifact, trexBrowserStatus, trexBrowserResolveSpace, trexBrowserListSpaces } from "../../api";
 import { browserResultArtifacts, brokerArtifactId, type BrowserArtifact, type BrowserOptions, type BrowserStatus, type BrowserSpace } from "../../browser";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import DropdownMenu from "../DropdownMenu";
 import { CloseIcon, GlobeIcon, ImageIcon } from "../Icons";
 import "./BrowserMenu.css";
 
-const SPACE_ACTIVITY: Record<string,string>={browser_navigate:"Abriendo página",browser_navigate_back:"Navegando",browser_reload:"Recargando",browser_snapshot:"Inspeccionando",browser_click:"Interactuando",browser_type:"Escribiendo",browser_fill_form:"Completando",browser_take_screenshot:"Tomando captura",browser_evaluate:"Revisando página",browser_wait_for:"Esperando",browser_batch:"Ejecutando pasos",browser_start_video:"Grabando"};
+const SPACE_ACTIVITY: Record<string,string>={browser_navigate:"Abriendo página",browser_navigate_back:"Navegando",browser_reload:"Recargando",browser_snapshot:"Inspeccionando",browser_click:"Interactuando",browser_type:"Escribiendo",browser_fill_form:"Completando",browser_take_screenshot:"Tomando captura",browser_evaluate:"Revisando página",browser_wait_for:"Esperando",browser_save_download:"Guardando descarga",browser_batch:"Ejecutando pasos",browser_start_video:"Grabando"};
 
 /** Explicit human controls use a separate full grant; agent grants remain immutable. */
 export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd: string; browser: BrowserOptions; spaces?:BrowserSpace[]; onStopAgent?:(clientId:string)=>void }) {
@@ -111,6 +111,32 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
     setLoadingTabs(true);setTabs([]);setArtifacts([]);setError("");void refresh();const timer=window.setInterval(()=>void refresh(),3000);
     return()=>{cancelled=true;window.clearInterval(timer);};
   },[anchor,status?.ready,bindingPending,cwd,activeBrowser.clientId,activeBrowser.profile]);
+  // Trex Browser windows are raised by the host, never by an agent's tab selection.
+  // A space running an external Chrome keeps the previous select-only behaviour.
+  const showWindow = async (tabId?: string): Promise<boolean> => {
+    try { const result = await trexBrowserFocus(cwd, activeBrowser.profile, tabId); return result.focused; }
+    catch { return false; }
+  };
+  const openTab = async (tabId: string): Promise<void> => {
+    if (await showWindow(tabId)) { setTabs(before => before.map(tab => ({...tab, selected: tab.tabId === tabId}))); return; }
+    await call("browser_tabs",{action:"select",tabId});
+  };
+  // A person's window has no automation, so sites that refuse automated
+  // browsers (YouTube, Cloudflare, Google sign-in) work there.
+  const [openNote, setOpenNote] = useState("");
+  const openPersonal = async (): Promise<void> => {
+    setOpenNote("");
+    try { await trexBrowserOpen(null); setOpenNote("Ventana personal abierta: úsala para navegar e iniciar sesión en tus cuentas."); }
+    catch { setError("No se pudo abrir Trex Browser."); }
+  };
+  const signInForAgent = async (): Promise<void> => {
+    setOpenNote("");
+    try {
+      const result = await trexBrowserOpen({ cwd, profile: activeBrowser.profile });
+      if (result.opened) setOpenNote("Inicia sesión en esa ventana y ciérrala al terminar: el agente usará la sesión iniciada.");
+      else setError(result.reason === "agent-running" ? "El agente tiene abierto este espacio. Ciérralo o espera a que termine para iniciar sesión." : "No se pudo abrir este espacio para iniciar sesión.");
+    } catch { setError("No se pudo abrir este espacio para iniciar sesión."); }
+  };
   const show = (): void => {
     const version=++showVersion.current;
     setAnchor({ element: trigger.current! }); setError("");setBindingPending(true);
@@ -141,9 +167,12 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
         <form className="chat-browser-address" onSubmit={event => { event.preventDefault(); void call("browser_navigate", { url }); }}>
           <label htmlFor={`${id}-url`}>Abrir una página</label><div><input id={`${id}-url`} type="url" required value={url} onChange={event => {address.current.edited=true;setUrl(event.target.value);}} placeholder="http://localhost:3000" disabled={locked} /><button type="submit" disabled={locked || paused}>Abrir</button></div>
         </form>
-        {(loadingTabs||!!tabs.length)&&<div className="browser-space-tabs" aria-label="Pestañas del espacio">{loadingTabs?<small className="browser-space-loading" role="status">Consultando pestañas…</small>:tabs.map(tab=><button type="button" key={tab.tabId} disabled={locked||paused} aria-pressed={tab.selected} title={tab.url} onClick={()=>void call("browser_tabs",{action:"select",tabId:tab.tabId})}><span>{tab.title||tab.url||"Nueva pestaña"}</span><small>{tab.selected?"Activa":"Abrir"}</small></button>)}</div>}
+        {(loadingTabs||!!tabs.length)&&<div className="browser-space-tabs" aria-label="Pestañas del espacio">{loadingTabs?<small className="browser-space-loading" role="status">Consultando pestañas…</small>:tabs.map(tab=><button type="button" key={tab.tabId} disabled={locked||paused} aria-pressed={tab.selected} title={tab.url} onClick={()=>void openTab(tab.tabId)}><span>{tab.title||tab.url||"Nueva pestaña"}</span><small>{tab.selected?"Activa":"Abrir"}</small></button>)}</div>}
         <div className="chat-browser-actions">
           <button type="button" disabled={locked||paused} onClick={()=>void call("browser_tabs",{action:"new",url})}>+ Nueva pestaña</button>
+          {selected?.running&&<button type="button" onClick={()=>void showWindow()} title="Trae al frente la ventana de este espacio">Mostrar ventana</button>}
+          {!selected?.running&&<button type="button" onClick={()=>void signInForAgent()} title="Abre este espacio sin automatización para que inicies sesión; el agente usará esa sesión">Iniciar sesión para este agente</button>}
+          <button type="button" onClick={()=>void openPersonal()} title="Tu propia ventana de Trex Browser, sin automatización: YouTube, cuentas, navegación normal">Abrir Trex Browser personal</button>
           <button type="button" disabled={locked} onClick={()=>void call("browser_status")}>Actualizar estado</button>
           <button type="button" disabled={locked} onClick={() => void call("browser_take_screenshot")}><ImageIcon size={15} />Tomar captura</button>
           <button type="button" disabled={locked || (paused && !recording)} onClick={() => void call(recording ? "browser_stop_video" : "browser_start_video")}>{recording ? "■ Detener vídeo" : "○ Grabar vídeo"}</button>
@@ -161,6 +190,7 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
         {!!artifacts.length && <div className="chat-browser-recent"><small>Archivos recientes</small>{artifacts.map(artifact => <button type="button" key={artifact.id} disabled={locked || !brokerArtifactId(artifact)} onClick={() => void open(artifact)}>{artifact.mimeType.startsWith("video/") ? "Abrir vídeo" : "Abrir captura"}<span>{Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB ↗</span></button>)}</div>}
       </> : <p className="chat-browser-hint">{!status ? "Comprobando instalación…" : status.error?.message ?? "Selecciona Trex Browser al instalar trex o utiliza su instalador independiente."}</p>}
       {error && <p className="chat-browser-error" role="alert">{error}</p>}
+      {openNote && !error && <p className="chat-browser-note" role="status">{openNote}</p>}
       <div className="chat-browser-foot">Capturas y vídeos guardados en este dispositivo.</div>
     </DropdownMenu>
   </>;

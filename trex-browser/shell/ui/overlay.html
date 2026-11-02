@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline'">
+<link rel="stylesheet" href="theme.css">
+<style>
+html,body{overflow:hidden}
+#root{display:inline-block;padding:16px}  /* room for the shadow inside the view */
+#root .glass{background:rgba(24,24,27,.95);box-shadow:var(--hi),0 4px 12px rgba(0,0,0,.3)}
+
+/* ---- Top bar (part=island): full-width view, bar centred inside ---- */
+body[data-part=island] #root{display:block;padding:0}
+.hot{height:12px}                                   /* collapsed: invisible reveal strip */
+body.revealed #root{padding:10px 16px 18px}
+.topbar{margin:0 auto;width:min(1180px,100%);border-radius:14px;padding:5px 6px 6px;display:grid;gap:4px}
+/* Only when the bar actually appears; re-renders (title, favicon, loading) must not replay it. */
+.topbar.enter{animation:drop .16s cubic-bezier(.2,.8,.2,1)}
+.topbar.out{animation:lift .16s ease-in forwards}
+@keyframes drop{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
+@keyframes lift{to{opacity:0;transform:translateY(-14px)}}
+/* Tabs row: empty space drags the window, like any desktop browser */
+.tabsrow{display:flex;align-items:center;gap:4px;height:34px;-webkit-app-region:drag}
+.tabsrow>*{-webkit-app-region:no-drag}
+.tabsrow>.dragspace{-webkit-app-region:drag;flex:1;min-width:24px;align-self:stretch}
+.tabs{display:flex;gap:3px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabpill{display:flex;align-items:center;gap:8px;height:30px;padding:0 4px 0 9px;border-radius:9px;color:var(--muted);flex:0 1 200px;min-width:96px;max-width:220px;position:relative}
+.tabpill:hover{background:rgba(255,255,255,.06);color:var(--text)}
+.tabpill.on{background:rgba(255,255,255,.12);color:var(--text);box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+.tabpill .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12.5px}
+.tabpill .x{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;color:var(--dim);opacity:0;flex:none}
+.tabpill.on .x,.tabpill:hover .x{opacity:1}
+.tabpill .x:hover{background:rgba(255,255,255,.12);color:var(--text)}
+.tabpill .x svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2}
+.fav.loading{background:none;color:var(--accent)}
+.fav.loading svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;animation:spin .9s linear infinite}
+.newtab{flex:none}
+/* Window controls */
+.wc{display:flex;gap:2px;flex:none}
+.wc button{width:34px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--muted)}
+.wc button:hover{background:rgba(255,255,255,.1);color:var(--text)}
+.wc button.danger:hover{background:#e5484d;color:#fff}
+.wc svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6}
+.wc.mac{gap:7px;padding:0 8px 0 6px}
+.wc.mac button{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.18)}
+.wc.mac button:hover{background:var(--c)}
+/* Toolbar row */
+.toolrow{display:flex;align-items:center;gap:6px;height:36px;padding:0 2px}
+.sep{width:1px;height:20px;background:var(--edge);flex:none}
+.url{display:flex;align-items:center;gap:8px;flex:1;min-width:160px;height:32px;padding:0 12px;border-radius:9px;background:rgba(0,0,0,.28);border:1px solid transparent}
+.url:hover{background:rgba(0,0,0,.36)}
+.url:focus-within{border-color:rgba(var(--accent-rgb),.55);background:rgba(0,0,0,.42)}
+.url svg{width:13px;height:13px;stroke:var(--ok);fill:none;stroke-width:2;flex:none}
+.url svg.insecure{stroke:var(--dim)}
+.url input{flex:1;min-width:0;font:12.5px var(--mono);color:var(--muted)}
+.url input:focus{color:var(--text)}
+.url input::placeholder{color:var(--dim)}
+.agentchip{display:flex;align-items:center;gap:8px;height:30px;padding:0 10px 0 6px;border-radius:9px;background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.3);flex:none}
+.agentchip.idle{background:rgba(255,255,255,.05);border-color:var(--edge)}
+.agentchip.paused{background:rgba(231,195,90,.12);border-color:rgba(231,195,90,.3)}
+.agentchip small{color:var(--accent-text)}.agentchip.paused small{color:var(--warn)}.agentchip.idle small{color:var(--dim)}
+.spin{display:inline-grid;animation:spin .9s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Extra rows: find, permission notices, downloads */
+.row{display:flex;align-items:center;gap:8px;min-height:36px;padding:2px 4px 2px 10px;margin-top:2px;border-top:1px solid var(--edge)}
+.row>svg{width:15px;height:15px;stroke:var(--muted);fill:none;stroke-width:1.8;flex:none}
+.findrow input{flex:1;min-width:0;height:28px;font:13px var(--sans)}
+.findrow input::placeholder{color:var(--dim)}
+.findrow .count{font:11.5px var(--mono);color:var(--muted);min-width:64px;text-align:right}
+.findrow .count.none{color:var(--danger)}
+.notice{background:rgba(var(--accent-rgb),.08);border-radius:10px;border:1px solid rgba(var(--accent-rgb),.25);margin-top:6px;padding:6px 6px 6px 12px}
+.notice>svg{stroke:var(--accent)}
+.notice .msg{flex:1;color:var(--muted);white-space:normal}.notice .msg b{color:var(--text);font-weight:600}
+.zoom{height:22px;padding:0 8px;border-radius:6px;background:rgba(255,255,255,.08);font:600 11px var(--sans);color:var(--text);flex:none}
+.zoom:hover{background:rgba(255,255,255,.14)}
+.ib.dl.busy{color:var(--accent);animation:pulseIcon 1.4s ease-in-out infinite}
+@keyframes pulseIcon{50%{opacity:.55}}
+.panelhead{justify-content:space-between;padding-right:10px}
+.link{color:var(--accent-text);font-size:12px}.link:hover{text-decoration:underline}
+.dllist{display:grid;gap:2px;max-height:260px;overflow:auto;padding:2px 2px 4px}
+.dlitem{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:9px}
+.dlitem:hover{background:rgba(255,255,255,.05)}
+.dlicon{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:rgba(255,255,255,.07);flex:none}
+.dlicon svg{width:14px;height:14px;stroke:var(--muted);fill:none;stroke-width:2}
+.dlitem.completed .dlicon{background:rgba(95,208,138,.14)}.dlitem.completed .dlicon svg{stroke:var(--ok)}
+.dlitem.cancelled,.dlitem.interrupted{opacity:.6}
+.dlmeta{flex:1;min-width:0;display:grid;gap:3px}
+.dlmeta strong{font-weight:550;font-size:12.5px;overflow:hidden;text-overflow:ellipsis}
+.dlmeta small{color:var(--dim);font-size:11.5px}
+.bar{height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:2px;transition:width .25s}
+.bar i.indet{animation:indet 1.1s ease-in-out infinite}
+@keyframes indet{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}
+
+/* ---- Agent cursor (part=cursor): tip at (4,4) of the view ---- */
+body[data-part=cursor] #root{padding:0}
+.agentcursor{position:relative;width:220px;height:44px;pointer-events:none}
+.agentcursor svg{position:absolute;left:0;top:0;width:24px;height:24px;fill:var(--accent);stroke:#fff;stroke-width:1.5;stroke-linejoin:round;filter:drop-shadow(0 2px 4px rgba(0,0,0,.45))}
+.agentcursor span{position:absolute;left:20px;top:20px;max-width:190px;overflow:hidden;text-overflow:ellipsis;background:var(--accent);color:var(--accent-ink);font:650 11px var(--sans);padding:3px 8px;border-radius:7px 7px 7px 2px;box-shadow:0 2px 8px rgba(0,0,0,.35)}
+.agentchip{max-width:340px;min-width:0}
+.agentchip .name{min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.agentchip small{flex:none}
+.agentchip .model{font-style:normal;color:var(--dim);font-size:11.5px;max-width:140px;overflow:hidden;text-overflow:ellipsis}
+
+/* ---- Dock ---- */
+.dock{display:flex;align-items:center;gap:12px;padding:8px 8px 8px 14px;border-radius:14px}
+.dock .msg{color:var(--muted)}.dock .msg b{color:var(--text);font-weight:550}
+.dock code{font:12px var(--mono);color:var(--accent-text)}
+.dock.paused .pulse{background:var(--warn);animation:none}
+</style>
+</head>
+<body><div id="root"></div><script type="module" src="overlay.js"></script></body>
+</html>

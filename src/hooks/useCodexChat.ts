@@ -1,6 +1,6 @@
 import { connectBrowser } from "../browserConnection";
 import { agentTeamMcpConfig, trexDesktopMcpConfig } from "../api";
-import { browserConfigForShell, BROWSER_INSTRUCTIONS } from "../browser";
+import { browserConfigForShell, browserEnv, BROWSER_INSTRUCTIONS, BROWSER_TOKEN_ENV, isBrowserHttp } from "../browser";
 import { browserMode, type BrowserMode } from "../browser";
 /**
  * Sesión de Codex como chat: `codex app-server` por JSON-RPC.
@@ -515,14 +515,15 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId);
         if (!isCurrent()) return;
         for (let attempt = 0; attempt < 2; attempt++) {
-        const browser = callbacks.current.browser?.enabled ? await connectBrowser(callbacks.current.browser, cwd, browserChoice(bindingMode), planningOnly, shell, message => notice("warn", message)) : null;
+        const browser = callbacks.current.browser?.enabled ? await connectBrowser(callbacks.current.browser, cwd, browserChoice(bindingMode), planningOnly, shell, message => notice("warn", message), true) : null;
         if (!isCurrent()) return;
         const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await trexDesktopMcpConfig(bindingMode), shell) : null;
         if (!isCurrent()) return;
         browserBindingRef.current = browser || desktop ? { mode: bindingMode, pending: false } : null;
         inboxConfigRef.current = { ...inboxConfigForShell(config, shell), ...(browser ? {
-          "mcp_servers.trex_browser.command": browser.command,
-          "mcp_servers.trex_browser.args": browser.args,
+          // MCP over HTTP (token read from the environment) or the stdio adapter.
+          ...(isBrowserHttp(browser) ? { "mcp_servers.trex_browser.url": browser.url, "mcp_servers.trex_browser.bearer_token_env_var": BROWSER_TOKEN_ENV }
+            : { "mcp_servers.trex_browser.command": browser.command, "mcp_servers.trex_browser.args": browser.args }),
           "mcp_servers.trex_browser.enabled": true,
           "mcp_servers.trex_browser.required": true,
           "mcp_servers.trex_browser.startup_timeout_sec": 30,
@@ -543,7 +544,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
             "mcp_servers.trex_team.tool_timeout_sec": 1900, "mcp_servers.trex_team.default_tools_approval_mode": "approve",
           });
         }
-        const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags: launch.flags, shell, env });
+        const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags: launch.flags, shell, env: { ...env, ...browserEnv(browser) } });
         if (!procId || !isCurrent() || !agent.isCurrent(procId)) return;
         readyProcessRef.current = procId;
         dispatch({ type: "spawned" });

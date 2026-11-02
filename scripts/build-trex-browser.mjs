@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 // Build-time downloads only. Installed execution uses these private assets,
 // never npm, npx, PATH Node, or an unpinned package resolution.
-import { NODE_VERSION, NODE_ARCHIVES, verifyNodeArchive, assertPinnedLock, cleanBuildEnvironment, assertBrowserMcpHandshake } from './browser-build-common.mjs';
+import { NODE_VERSION, NODE_ARCHIVES, verifyNodeArchive, assertPinnedLock, cleanBuildEnvironment, assertBrowserMcpHandshake, packageShell } from './browser-build-common.mjs';
 export { NODE_VERSION, NODE_ARCHIVES, verifyNodeArchive, assertPinnedLock, cleanBuildEnvironment, assertBrowserMcpHandshake };
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -160,6 +160,9 @@ export async function buildBrowser(argv = process.argv.slice(2)) {
     if (!/^ffmpeg version /m.test(ffmpegVersion)) throw new Error('Playwright ffmpeg version verification failed.');
     const links = join(runtime, 'ffmpeg', '.links');
     if (existsSync(links)) removeBuildTree(links);
+    // Trex Browser shell (Electron) beside the worker; the NSIS installer copies
+    // trex-browser-runtime recursively, so it ships with the component.
+    const shell = packageShell(coreRoot, runtime, { platform: 'win32' });
     const files = walkFiles(payload);
     for (const name of files.filter(name => name.endsWith('.exe'))) assertPe(join(payload, name));
     const assets = files.map(name => ({ path: name.replaceAll('\\', '/'), bytes: lstatSync(join(payload, name)).size,
@@ -167,11 +170,12 @@ export async function buildBrowser(argv = process.argv.slice(2)) {
     writeFileSync(join(runtime, 'runtime-manifest.json'), `${JSON.stringify({ version: packageJson.version,
       hashStage: 'before-code-signing',
       node: NODE_VERSION, nodeArchiveSha256: NODE_ARCHIVES[arch], playwright: packageJson.dependencies.playwright,
-      architecture: arch, ffmpeg: relative(payload, ffmpeg).replaceAll('\\', '/'), assets }, null, 2)}\n`);
+      architecture: arch, ffmpeg: relative(payload, ffmpeg).replaceAll('\\', '/'), shell, assets }, null, 2)}\n`);
     // A real non-launching machine probe checks the assembled layout before it
     // can replace the previous payload. No browser/profile or daemon is started.
     const probe = JSON.parse(run(join(payload, 'trex-browser.exe'), ['doctor', '--json'],
       { cwd: payload, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 15_000 }));
+    if (probe.browser?.channel !== 'trex-shell') throw new Error('The packaged Trex Browser shell was not detected by doctor.');
     if (probe.protocolVersion !== '2025-11-25' || !probe.runtime?.node || !probe.runtime?.playwright) {
       throw new Error('Assembled Browser payload did not pass its runtime doctor.');
     }

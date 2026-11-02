@@ -47,14 +47,37 @@ function nativeHarness(respond = command => assert.fail(`Unexpected native comma
   });
   const { connectBrowser } = instantiate(compiledConnection, { "./api": api, "./browser": browser });
   return { api, calls, warnings, connect: (options, { cwd = "D:/work/with spaces", mode = "default",
-    planningOnly = false, shell = "powershell" } = {}) =>
-    connectBrowser(options, cwd, mode, planningOnly, shell, message => warnings.push(message)) };
+    planningOnly = false, shell = "powershell", allowHttp } = {}) =>
+    allowHttp === undefined ? connectBrowser(options, cwd, mode, planningOnly, shell, message => warnings.push(message))
+      : connectBrowser(options, cwd, mode, planningOnly, shell, message => warnings.push(message), allowHttp) };
 }
 
 const options = Object.freeze({ enabled: true, profile: "BROWSER27", clientId: "chat-client_42" });
 const ready = Object.freeze({ installed: true, ready: true, compatible: true });
 const nativeConfig = Object.freeze({ command: "C:\\Program Files\\Trex\\trex-browser.exe",
   args: Object.freeze(["mcp", "--cwd", "D:\\work\\with spaces", "--profile", "BROWSER27", "literal;$() --flag"]) });
+
+offlineTest("agents that support it get one MCP-over-HTTP endpoint; others, WSL and failures keep stdio", async () => {
+  const session = { url: "http://127.0.0.1:48123/mcp", token: "a".repeat(64), mode: "qa" };
+  let failSession = false;
+  const h = nativeHarness((command, args) => {
+    if (command === "trex_browser_status") return { ...ready, capabilities: { spaces: true, mcpHttp: true } };
+    if (command === "trex_browser_mcp_session") { if (failSession) throw new Error("broker down"); assert.equal(args.mode, "qa"); return session; }
+    assert.equal(command, "trex_browser_mcp_config"); return nativeConfig;
+  });
+  const http = await h.connect(options, { allowHttp: true });
+  assert.deepEqual(http, { kind: "http", url: session.url, token: session.token, cwd: "D:/work/with spaces", clientId: options.clientId, profile: options.profile });
+  assert.deepEqual(browser.browserEnv(http), { TREX_BROWSER_TOKEN: session.token });
+  const server = browser.claudeBrowserServer(http);
+  assert.equal(server.type, "http");
+  assert.equal(server.headers.Authorization, "Bearer ${TREX_BROWSER_TOKEN}", "the token must never be on the command line");
+  assert.equal(JSON.stringify(server).includes(session.token), false);
+  assert.deepEqual(await h.connect(options), nativeConfig, "without allowHttp the stdio adapter is used");
+  assert.deepEqual(await h.connect(options, { allowHttp: true, shell: "wsl" }), browser.browserConfigForShell(nativeConfig, "wsl"), "WSL cannot reach the Windows loopback broker");
+  failSession = true;
+  assert.deepEqual(await h.connect(options, { allowHttp: true }), nativeConfig, "a failed session falls back to stdio");
+  assert.deepEqual(browser.browserEnv(nativeConfig), {});
+});
 
 offlineTest("ordinary chats allocate a private persistent profile before constructing the native MCP grant", async () => {
   const h = nativeHarness((command,args) => {

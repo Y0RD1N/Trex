@@ -26,6 +26,10 @@ const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const ebmlSignature = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const runFile = promisify(execFile);
+// Snapshot elements are "ref kind name" lines (token-efficient); parse them for assertions.
+const parseElement = line => { const [ref, kind, ...rest] = line.split(' '); const m = /^([^\[]+)(?:\[(.+)\])?$/.exec(kind); return { ref, kind: m[1], type: m[2] ?? null, name: rest.join(' ') }; };
+const elementsOf = data => data.elements.map(parseElement);
+
 let root, home, workspace, otherWorkspace, env, fixture;
 const outputs = [];
 const children = new Set();
@@ -89,6 +93,19 @@ function failure(result, code, message) {
   return result.structuredContent;
 }
 async function ok(name, args = {}, overrides = {}) { return success(await call(name, args, overrides)); }
+// Agents (MCP) receive a lean result: text identical to structuredContent, no
+// receipts or ownership metadata. Full artifact metadata stays in the private
+// index, which the test reads to keep verifying profile and integrity.
+async function agentSuccess(result) {
+  assert.equal(result.isError, undefined, result.structuredContent?.error?.message);
+  const sc = result.structuredContent;
+  assert.equal(sc?.ok, true);
+  for (const hostOnly of ['operationId', 'receipt']) assert.equal(hostOnly in sc, false, `${hostOnly} must not reach agents`);
+  assert.deepEqual(JSON.parse(result.content.find(item => item.type === 'text').text), sc);
+  const index = JSON.parse(await fs.readFile(path.join(home, 'artifacts', 'index.json'), 'utf8'));
+  const artifacts = (sc.artifacts || []).map(a => { const full = index.find(item => item.artifactId === a.artifactId); assert.ok(full, 'agent artifact ids must exist'); return full; });
+  return { data: sc, artifacts };
+}
 async function evaluate(fn, arg, overrides = {}) {
   return (await ok('browser_evaluate', { function: typeof fn === 'string' ? fn : fn.toString(), ...(arg === undefined ? {} : { arg }) }, overrides)).data.value;
 }
@@ -360,7 +377,9 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     const full = (await cli(['tools', '--json', '--mode', 'full'])).tools;
     const qa = (await cli(['tools', '--json', '--mode', 'qa'])).tools;
     const observe = (await cli(['tools', '--json', '--mode', 'observe'])).tools;
-    assert.deepEqual(qa.map(tool => tool.name), full.map(tool => tool.name));
+    // Saving downloads outside the private home is the only full-only tool.
+    assert.deepEqual(qa.map(tool => tool.name), full.map(tool => tool.name).filter(name => name !== 'browser_save_download'));
+    assert.equal(doctor.capabilities.saveDownloads, true);
     for (const name of ['browser_start_video', 'browser_stop_video', 'browser_perf_start', 'browser_perf_stop', 'browser_cpu_profile_start', 'browser_heap_snapshot']) assert.ok(full.some(tool => tool.name === name), name);
     for (const name of ['browser_click', 'browser_evaluate', 'browser_file_upload', 'browser_mouse', 'browser_emulate']) assert.equal(observe.some(tool => tool.name === name), false, name);
     assert.ok(observe.every(tool => tool.annotations.readOnlyHint));
@@ -422,7 +441,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     assert.equal(snapshot.data.untrustedContent, true);
     assert.equal(snapshot.data.revision, snapshot.revision);
     assert.match(snapshot.data.accessibility, /Trex local integration fixture/);
-    const button = snapshot.data.elements.find(element => element.name === 'Increment counter');
+    const button = elementsOf(snapshot.data).find(element => element.name === 'Increment counter');
     assert.ok(button?.ref, 'Snapshot must expose a real button reference');
     const clicked = await ok('browser_click', { ref: button.ref, revision: snapshot.revision });
     assert.ok(clicked.revision > snapshot.revision);
@@ -499,7 +518,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     const frame = frames.find(item => item.name === 'fixture-frame');
     assert.ok(frame?.frameId);
     const frameSnapshot = await ok('browser_snapshot', { frameId: frame.frameId });
-    const button = frameSnapshot.data.elements.find(item => item.name === 'Frame action');
+    const button = elementsOf(frameSnapshot.data).find(item => item.name === 'Frame action');
     await ok('browser_click', { frameId: frame.frameId, ref: button.ref, revision: frameSnapshot.revision });
     assert.equal((await ok('browser_evaluate', { frameId: frame.frameId, function: '() => document.querySelector("#frame-button").textContent' })).data.value, 'Frame clicked');
     const initial = (await ok('browser_tabs', { action: 'list' })).data.tabs;
@@ -558,6 +577,36 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     assert.equal((await ok('browser_status')).data.running, true);
   });
 
+  it('saves a finished download into the workspace or an authorized folder without overwriting', async () => {
+    await navigate();
+    await ok('browser_click', { selector: '#download' });
+    const first = await ok('browser_save_download', { destination: 'descargas/' });
+    assert.equal(first.data.saved, true);
+    assert.equal(first.data.name, 'fixture.txt');
+    assert.equal(first.data.sha256, sha256(downloadBytes));
+    assert.deepEqual(await fs.readFile(path.join(workspace, 'descargas', 'fixture.txt')), downloadBytes);
+    failure(await call('browser_save_download', { destination: 'descargas/', wait: 0 }), 'NO_DOWNLOAD');
+    const id = first.data.downloadId;
+    assert.equal((await ok('browser_save_download', { destination: 'descargas/', downloadId: id })).data.name, 'fixture (1).txt');
+    assert.equal((await ok('browser_save_download', { destination: 'descargas/copia.txt', downloadId: id })).data.name, 'copia.txt');
+    failure(await call('browser_save_download', { destination: '.git/hooks/pre-commit', downloadId: id }), 'POLICY_DENIED');
+    failure(await call('browser_save_download', { destination: 'descargas/' }, { mode: 'qa' }), 'POLICY_DENIED');
+    const outside = path.join(root, 'save-target');
+    await fs.mkdir(outside, { recursive: true });
+    failure(await call('browser_save_download', { destination: `${outside}/`, downloadId: id }), 'POLICY_DENIED');
+    assert.ok((await cli(['save-folders', 'add', '--stdin-json'], { folder: outside })).folders.includes(await fs.realpath(outside)));
+    try {
+      const saved = await ok('browser_save_download', { destination: outside, downloadId: id });
+      assert.equal(path.dirname(saved.data.path), await fs.realpath(outside));
+      assert.deepEqual(await fs.readFile(saved.data.path), downloadBytes);
+      assert.equal((await fs.stat(saved.data.path)).mode & 0o111, 0);
+    } finally {
+      assert.deepEqual((await cli(['save-folders', 'remove', '--stdin-json'], { folder: outside })).folders, []);
+    }
+    const homeAttempt = await launch(['save-folders', 'add', '--stdin-json'], { folder: os.homedir() }).result;
+    assert.notEqual(homeAttempt.code, 0);
+  });
+
   it('handles a synchronous alert while browser_evaluate is still pending', { timeout: 60_000 }, async () => {
     await navigate();
     const operationId = randomUUID();
@@ -588,7 +637,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     failure(await call('browser_wait_for', { role: 'button', name: 'Absent loopback action', time: 0.3 }, { timeoutMs: 5_000 }), 'BROWSER_ERROR', /Wait timed out/);
     assert.equal((await ok('browser_wait_for', { role: 'button', name: 'Increment counter', time: 2 })).data.matched, true);
     const snapshot = await ok('browser_snapshot');
-    const button = snapshot.data.elements.find(element => element.name === 'Increment counter');
+    const button = elementsOf(snapshot.data).find(element => element.name === 'Increment counter');
     assert.equal((await ok('browser_wait_for', { ref: button.ref, revision: snapshot.revision, time: 1 })).data.matched, true);
     failure(await call('browser_wait_for', { time: 1000 }), 'BROWSER_ERROR', /outside permitted range/);
     assert.equal((await ok('browser_status')).data.paused, false);
@@ -887,13 +936,13 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       await initializeMcp(session);
       action=await gatedAction();
       const started=performance.now();
-      success(await mcpTool(session,2,'browser_navigate',{url:`${fixture.url}/`}));
-      const tabResult=success(await mcpTool(session,3,'browser_tabs',{action:'new',url:`${fixture.url}/`}));
+      await agentSuccess(await mcpTool(session,2,'browser_navigate',{url:`${fixture.url}/`}));
+      const tabResult=await agentSuccess(await mcpTool(session,3,'browser_tabs',{action:'new',url:`${fixture.url}/`}));
       assert.equal(tabResult.data.tabs.length,2);
-      success(await mcpTool(session,4,'browser_click',{selector:'#increment'}));
-      const page=success(await mcpTool(session,5,'browser_evaluate',{function:'() => ({count:document.querySelector("#count").textContent,storage:localStorage.getItem("parallel-isolation")})'}));
+      await agentSuccess(await mcpTool(session,4,'browser_click',{selector:'#increment'}));
+      const page=await agentSuccess(await mcpTool(session,5,'browser_evaluate',{function:'() => ({count:document.querySelector("#count").textContent,storage:localStorage.getItem("parallel-isolation")})'}));
       assert.equal(page.data.value.count,'1');assert.equal(page.data.value.storage,null);
-      const screenshot=success(await mcpTool(session,6,'browser_take_screenshot'));
+      const screenshot=await agentSuccess(await mcpTool(session,6,'browser_take_screenshot'));
       await checkArtifact(screenshot.artifacts[0],'screenshot','image/png',{profile:peerProfile});
       const workMs=performance.now()-started;
       const owner=await ok('browser_status');
@@ -901,7 +950,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       assert.equal(owner.data.paused,false);
       assert.equal(fixture.isGateHeld(action.gate),true);
       assert.deepEqual((await ok('browser_tabs',{action:'list'})).data.tabs.map(tab=>tab.tabId),before.data.tabs.map(tab=>tab.tabId));
-      success(await mcpTool(session,7,'browser_close'));closed=true;
+      await agentSuccess(await mcpTool(session,7,'browser_close'));closed=true;
       assert.equal((await ok('browser_status')).data.pendingAction.operationId,action.operationId,'Closing the peer must leave the first agent active');
       concurrencyResult('independent-clients-separate-profiles',{result:'parallel-completed',newTabs:1,clickVerified:true,screenshotVerified:true,isolatedStorage:true,ownerStillRunning:true,peerColdLaunchAndWorkMs:Math.round(workMs)});
     } finally {
@@ -920,7 +969,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     const second=added.data.tabs.find(tab=>!before.data.tabs.some(old=>old.tabId===tab.tabId)).tabId;
     try {
       const snapshot=await ok('browser_snapshot',{tabId:first});
-      const button=snapshot.data.elements.find(element=>element.tag==='button'&&element.name==='Increment counter');assert.ok(button);
+      const button=elementsOf(snapshot.data).find(element=>element.kind==='button'&&element.name==='Increment counter');assert.ok(button);
       const peerSnapshot=await ok('browser_snapshot',{tabId:second});
       failure(await call('browser_click',{tabId:second,ref:button.ref,revision:peerSnapshot.data.revision}),'BROWSER_ERROR');
       await ok('browser_click',{tabId:second,selector:'#increment'});
@@ -951,27 +1000,27 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     const a=mcpSession('full',spaces[0]),b=mcpSession('full',spaces[1]);const gate=randomUUID();let held;
     try{
       await Promise.all([initializeMcp(a),initializeMcp(b)]);
-      success(await mcpTool(a,2,'browser_navigate',{url:fixture.url+'/'}));
+      await agentSuccess(await mcpTool(a,2,'browser_navigate',{url:fixture.url+'/'}));
       held=mcpTool(a,3,'browser_evaluate',{function:'async route => { await fetch(route); return true; }',arg:`/gate/${gate}`});
       await eventually(async()=>fixture.isGateHeld(gate),Boolean,'First ordinary chat did not hold its action');
-      success(await mcpTool(b,2,'browser_navigate',{url:fixture.url+'/'}));
-      success(await mcpTool(b,3,'browser_tabs',{action:'new',url:fixture.url+'/'}));
-      success(await mcpTool(b,4,'browser_click',{selector:'#increment'}));
-      const capture=success(await mcpTool(b,5,'browser_take_screenshot'));assert.equal(capture.artifacts[0].profile,spaces[1].profile);
+      await agentSuccess(await mcpTool(b,2,'browser_navigate',{url:fixture.url+'/'}));
+      await agentSuccess(await mcpTool(b,3,'browser_tabs',{action:'new',url:fixture.url+'/'}));
+      await agentSuccess(await mcpTool(b,4,'browser_click',{selector:'#increment'}));
+      const capture=await agentSuccess(await mcpTool(b,5,'browser_take_screenshot'));assert.equal(capture.artifacts[0].profile,spaces[1].profile);
       const overview=await cli(['spaces','list','--cwd',workspace,'--json']);
       const owner=overview.spaces.find(space=>space.profile===spaces[0].profile),peer=overview.spaces.find(space=>space.profile===spaces[1].profile);
       assert.equal(owner.clientId,members[0].clientId);assert.equal(owner.active,true);assert.equal(owner.paused,false);assert.equal(owner.currentTool,'browser_evaluate');
       assert.equal(peer.clientId,members[1].clientId);assert.equal(peer.running,true);assert.equal(peer.tabCount,2);assert.equal(peer.url,fixture.url+'/');
       assert.equal(fixture.isGateHeld(gate),true);
       await ok('browser_pause',{}, {clientId:spaces[1].clientId,profile:spaces[1].profile});
-      success(await mcpTool(b,6,'browser_close'));
+      await agentSuccess(await mcpTool(b,6,'browser_close'));
       const closed=await cli(['spaces','list','--cwd',workspace,'--json']);
       assert.equal(closed.spaces.find(space=>space.profile===spaces[1].profile).running,false);
       assert.equal(closed.spaces.find(space=>space.profile===spaces[0].profile).active,true);
       assert.equal(fixture.isGateHeld(gate),true);
       concurrencyResult('ordinary-chats-automatic-spaces',{allocatedIndependently:true,peerNavigationClickCapture:true,overviewLiveDuringOwnerAction:true,closingPeerLeavesOwnerRunning:true});
     }finally{
-      fixture.releaseGate(gate);if(held)success(await held);
+      fixture.releaseGate(gate);if(held)await agentSuccess(await held);
       await mcpTool(a,4,'browser_close').catch(()=>{});await mcpTool(b,7,'browser_close').catch(()=>{});
       a.child.stdin.end();b.child.stdin.end();assert.equal((await a.closed).code,0);assert.equal((await b.closed).code,0);
     }
@@ -1035,7 +1084,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       await initializeMcp(session);
       session.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'browser_snapshot', arguments: {} } });
       const messages = await eventually(async () => session.messages(), values => values.some(value => value.id === 2), 'MCP adapter never returned its browser result');
-      success(messages.find(message => message.id === 2).result);
+      await agentSuccess(messages.find(message => message.id === 2).result);
     } finally {
       session.child.kill();
       await session.closed;

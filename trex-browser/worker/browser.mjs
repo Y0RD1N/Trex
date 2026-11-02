@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
-import { Artifacts, MAX_ARTIFACT, MAX_IMAGE, jsonRead, writePrivate, safePath, uploadSnapshot, childEnvironment, sha256 } from './security.mjs';
+import { Artifacts, MAX_ARTIFACT, MAX_IMAGE, jsonRead, writePrivate, safePath, uploadSnapshot, childEnvironment, sha256, saveTarget, writeNewFile } from './security.mjs';
 import { validateArguments } from './tools.mjs';
 import { guardBrowser } from './guard.mjs';
+import { detectShell, ShellLink, describe, agentState, spaceLabel, readEngine, profileHolder } from './shell.mjs';
 
 const bounded=(v,min,max,fallback)=>v===undefined?fallback:Math.min(max,Math.max(min,Number(v)));
 const text=v=>String(v).slice(0,32768);
@@ -18,7 +19,10 @@ function imageDimensions(bytes,type){
   if(type==='jpeg'){let offset=2;while(offset+9<bytes.length){if(bytes[offset++]!==0xff)break;let marker=bytes[offset++];while(marker===0xff)marker=bytes[offset++];if(marker===0xd9||marker===0xda)break;const size=bytes.readUInt16BE(offset);if(size<2||offset+size>bytes.length)break;if([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf].includes(marker))return {height:bytes.readUInt16BE(offset+3),width:bytes.readUInt16BE(offset+5)};offset+=size;}}
   return {};
 }
-export function detectBrowser() {
+export function detectBrowser(engine='auto') {
+  // The Trex shell (our own Electron browser) is preferred when installed,
+  // unless the user chose the system Chrome in Trex settings.
+  const shell=detectShell(engine);if(shell)return shell;
   const candidates=process.platform==='win32' ? [
     ['chrome',path.join(process.env.PROGRAMFILES||'C:\\Program Files','Google/Chrome/Application/chrome.exe')],
     ['chrome',path.join(process.env['PROGRAMFILES(X86)']||'C:\\Program Files (x86)','Google/Chrome/Application/chrome.exe')],
@@ -39,6 +43,8 @@ export function isObservation(name,args={}){
     || name==='browser_tabs'&&(!args.action||args.action==='list')
     || name==='browser_artifact'&&!args.open;
 }
+// Page actions whose results carry a compact summary of what visibly changed.
+const EFFECT_TOOLS=new Set(['browser_click','browser_type','browser_fill_form','browser_press_key','browser_select_option','browser_hover','browser_drag','browser_mouse','browser_navigate','browser_navigate_back','browser_reload','browser_file_upload','browser_handle_dialog','browser_evaluate']);
 const PAUSE_CONTROL=new Set(['browser_resume','browser_takeover','browser_artifact','browser_pause','browser_close','browser_stop_video','browser_stop_trace','browser_perf_stop','browser_cpu_profile_stop']);
 function pausedError(s){return Object.assign(new Error(s.pauseReason==='manual'?'Page controls were paused explicitly. Observation, screenshots and logs remain available; resume only when the user is ready.':'A previous page action has an uncertain outcome. Observation remains available: inspect browser_snapshot/browser_take_screenshot, then the owner may call browser_resume. Do not replay the previous action.'),{code:'PAUSED'});}
 export class BrowserService {
@@ -58,9 +64,9 @@ export class BrowserService {
     // An interrupted action must not erase an explicit human pause.
     if(s.paused&&s.pauseReason==='manual'&&reason!=='manual')return;
     if(s.paused&&s.pauseReason==='runtime'&&reason==='uncertain')return;
-    s.paused=true;s.pauseReason=reason;s.pauseOperation=op?{operationId:op.id,tool:op.name}:null;s.revision++;this.invalidateAll(s);
+    s.paused=true;s.pauseReason=reason;s.pauseOperation=op?{operationId:op.id,tool:op.name}:null;s.revision++;this.invalidateAll(s);this.notifyShell(s);
   }
-  unpause(s){s.paused=false;s.pauseReason=null;s.pauseOperation=null;}
+  unpause(s){s.paused=false;s.pauseReason=null;s.pauseOperation=null;this.notifyShell(s);}
   status(s,ctx){return {running:!!s.browser,paused:s.paused,pauseReason:s.paused?s.pauseReason:null,pauseOperation:s.paused?s.pauseOperation:null,pendingAction:s.active?{operationId:s.active.id,tool:s.active.name,cancelRequested:s.active.controller.signal.aborted}:null,observationAvailable:!s.supervisorError&&!s.closing,owner:s.owner===ctx.clientId?'self':s.owner?'other':null,generation:s.generation,capture:s.capture?{kind:s.capture.kind,startedAt:s.capture.startedAt}:null,tabs:s.tabs.size,...(s.supervisorError?{supervisorError:s.supervisorError}:{})};}
   async ensure(s,ctx){
     if(s.closing)throw Object.assign(new Error('This profile is closing; wait for browser_close to finish before reopening it.'),{code:'PROFILE_CLOSING'});
@@ -71,21 +77,30 @@ export class BrowserService {
   }
   async open(s,ctx){
     if(s.guard){await s.guard.stop();s.guard=null;}
-    const browser=detectBrowser();if(!browser.available)throw new Error('Install Google Chrome (or Microsoft Edge) before opening a browser');
+    const browser=detectBrowser(readEngine(this.home));if(!browser.available)throw new Error('Install Google Chrome (or Microsoft Edge) before opening a browser');
     this.createProfile(ctx);const userData=path.join(this.profileDir(ctx),'user-data');safePath(userData,{allowMissing:true});
-    s.startupStage='launch';s.browser=await chromium.launchPersistentContext(userData,{executablePath:browser.executablePath,headless:process.env.TREX_BROWSER_HEADLESS==='1',chromiumSandbox:true,acceptDownloads:true,viewport:{width:1280,height:800},timeout:20000,args:['--disable-component-update'],downloadsPath:path.join(this.home,'artifacts'),env:childEnvironment()});
+    if(profileHolder(userData))throw Object.assign(new Error('This profile is open in a person\'s Trex Browser window (sign-in). Ask the user to close that window, then navigate again.'),{code:'PROFILE_IN_USE'});
+    const space=this.profiles(ctx).find(p=>p.id===ctx.profile)?.space;s.spaceLabel=spaceLabel(space?.label)||ctx.profile;s.spaceModel=typeof space?.model==='string'?space.model:'';s.spaceClientId=space?.clientId||null;
+    // The shell sizes its own tab views; viewport emulation would desynchronise them.
+    // Electron parents JS dialogs to its window; a hidden Wayland window cannot be
+    // exported as a parent, so headless shell runs (tests/CI) use XWayland.
+    const shellArgs=browser.shell&&process.env.TREX_BROWSER_HEADLESS==='1'&&process.platform==='linux'&&process.env.DISPLAY?['--ozone-platform=x11']:[];
+    const shellEnv=browser.shell?{TREX_SPACE_LABEL:s.spaceLabel,TREX_PROJECT_LABEL:path.basename(ctx.cwd),...(process.env.TREX_BROWSER_DEV==='1'&&process.env.TREX_SHELL_DEV==='1'?{TREX_SHELL_DEV:'1'}:{})}:{};
+    s.startupStage='launch';s.browser=await chromium.launchPersistentContext(userData,{executablePath:browser.executablePath,headless:process.env.TREX_BROWSER_HEADLESS==='1',chromiumSandbox:true,acceptDownloads:true,viewport:browser.shell?null:{width:1280,height:800},timeout:20000,args:['--disable-component-update',...shellArgs],downloadsPath:path.join(this.home,'artifacts'),env:{...childEnvironment(),...shellEnv}});
     s.cdps=new Map();s.networkConditions=new WeakMap();s.emulationOffline=false;
     // A single owner owns Playwright/CDP. Never attach to a user's existing browser.
     try{s.guard=await guardBrowser(s.browser,browser.executablePath,phase=>{s.startupStage=phase;},error=>{s.supervisorError=error.message;this.pause(s,'runtime',s.active);s.active?.controller.abort();});s.supervisorError=null;}catch(e){const failed=s.browser;s.browser=null;this.pause(s,'runtime');failed.browser().close().catch(()=>{});throw Object.assign(new Error(`Owned browser supervisor could not establish control (${s.startupStage}); inspect the browser before resuming`),{code:'UNCERTAIN'});}
     s.browser.setDefaultTimeout(10000);s.browser.setDefaultNavigationTimeout(15000);
+    if(browser.shell){s.startupStage='shell';try{s.shell=await ShellLink.connect(s.browser,m=>this.shellEvent(s,m));}catch(e){const failed=s.browser;s.browser=null;failed.close().catch(()=>{});throw e;}}
     s.browser.on('page',p=>this.attachPage(s,p));
-    s.browser.on('close',()=>{s.browser=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();s.capture=null;s.generation++;const guard=s.guard;if(guard){const timer=setTimeout(()=>guard.stop().then(()=>{if(s.guard===guard)s.guard=null;}).catch(()=>{}),3000);timer.unref();}});
+    s.browser.on('close',()=>{s.browser=null;s.shell=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();s.capture=null;s.generation++;const guard=s.guard;if(guard){const timer=setTimeout(()=>guard.stop().then(()=>{if(s.guard===guard)s.guard=null;}).catch(()=>{}),3000);timer.unref();}});
     for(const p of s.browser.pages())this.attachPage(s,p);
-    if(!s.tabs.size)this.attachPage(s,await s.browser.newPage());
+    if(!s.tabs.size)this.attachPage(s,s.shell?await s.shell.newTab():await s.browser.newPage());
     s.startupStage=null;
     if(!s.owner)s.owner=ctx.clientId;
+    this.notifyShell(s);
   }
-  attachPage(s,p){if([...s.tabs.values()].includes(p))return;const id=`tab-${++s.revision}`;s.tabs.set(id,p);this.pageState(s,p);s.selected||=id;
+  attachPage(s,p){if(s.shell?.isUi(p)||[...s.tabs.values()].includes(p))return;const id=`tab-${++s.revision}`;s.tabs.set(id,p);this.pageState(s,p);s.selected||=id;
     p.on('close',()=>{this.invalidate(s,p);s.tabs.delete(id);s.pageStates.delete(p);s.cdps?.delete(p);s.revision++;if(s.selected===id)s.selected=s.tabs.keys().next().value;});
     p.on('domcontentloaded',()=>this.invalidate(s,p));
     p.on('framenavigated',()=>this.invalidate(s,p));
@@ -94,11 +109,107 @@ export class BrowserService {
     p.on('pageerror',e=>{s.events.push({kind:'pageerror',text:text(e.message),tabId:id,at:Date.now()});if(s.events.length>300)s.events.shift();});
     p.on('request',r=>{const requestId=`req-${++s.requestSeq|| (s.requestSeq=1)}`;s.network.set(requestId,{request:r,meta:{requestId,url:text(r.url()),method:r.method(),resourceType:r.resourceType(),tabId:id,at:Date.now()}});if(s.network.size>300)s.network.delete(s.network.keys().next().value);});
     p.on('response',r=>{const entry=[...s.network.values()].find(x=>x.request===r.request());if(entry){entry.response=r;Object.assign(entry.meta,{status:r.status(),contentType:r.headers()['content-type']||'',contentLength:r.headers()['content-length']||null});}});
-    p.on('download',download=>{const file=this.artifacts.temp();download.saveAs(file).then(async()=>{const stat=fs.statSync(file);if(stat.size>MAX_ARTIFACT){fs.rmSync(file,{force:true});return;}const meta=await this.artifacts.addFile(file,'application/octet-stream','download',s.ctx,{suggestedFilename:text(path.basename(download.suggestedFilename()))});s.events.push({kind:'download',artifact:meta,at:Date.now()});while(s.events.length>300)s.events.shift();}).catch(()=>{});});
+    p.on('download',download=>{
+      // Tracked so browser_save_download can wait for it and the action's effect can name it.
+      const name=text(path.basename(download.suggestedFilename())).slice(0,240);
+      const entry={downloadId:`dl-${s.downloadSeq=(s.downloadSeq||0)+1}`,name,tabId:id,state:'progressing',at:Date.now()};
+      s.downloads||=[];s.downloads.push(entry);while(s.downloads.length>50)s.downloads.shift();
+      const file=this.artifacts.temp();
+      entry.done=download.saveAs(file).then(async()=>{const stat=fs.statSync(file);if(stat.size>MAX_ARTIFACT){fs.rmSync(file,{force:true});throw new Error('Download exceeds 64 MiB');}const meta=await this.artifacts.addFile(file,'application/octet-stream','download',s.ctx,{suggestedFilename:name});entry.state='completed';entry.artifactId=meta.artifactId;entry.bytes=meta.bytes;s.events.push({kind:'download',artifact:meta,at:Date.now()});while(s.events.length>300)s.events.shift();})
+        .catch(async e=>{entry.state='failed';entry.error=text(await download.failure().catch(()=>null)||e.message).slice(0,200);fs.rmSync(file,{force:true});});
+    });
+  }
+  // ---- Trex shell: live agent state, agents center and human controls ----
+  spaceClient(s){return s.spaceClientId||s.owner||s.ctx.profile;}
+  displayLabel(label){return spaceLabel(label);}
+  recordActivity(s,op){
+    // Show what the agent targets by name, not by its internal ref.
+    if(op.detail===undefined){const ref=op.args?.ref;let named='';if(ref)for(const state of (s.pageStates||new Map()).values()){const r=state.refs.get(ref);if(r?.name){named=r.name;break;}}op.detail=named||describe(op.name,op.args);}
+    s.lastOp={name:op.name,args:op.args,at:Date.now(),detail:op.detail};
+    if(!['browser_status','browser_artifact','browser_wait_for'].includes(op.name)){s.activity||=[];s.activity.push({id:op.id,at:Date.now(),tool:op.name,detail:op.detail});if(s.activity.length>20)s.activity.shift();}
+    this.notifyShell(s);
+  }
+  notifyShell(s){
+    clearTimeout(s.shellTimer);
+    const state=agentState(s),op=s.active||s.lastOp;
+    const tool=state==='working'?op?.name||'':state==='paused'||state==='review'?s.pauseOperation?.tool||'':'';
+    s.shell?.push('setAgent',{label:s.spaceLabel||s.ctx.profile,model:s.spaceModel||'',state,tool,detail:state==='working'&&op?op.detail??describe(op.name,op.args):'',step:''});
+    // Working decays to idle once no operation has run for a moment.
+    if(state==='working'){s.shellTimer=setTimeout(()=>this.notifyShell(s),1600);s.shellTimer.unref?.();}
+    this.pushSpaces(s.ctx.projectId);
+  }
+  pushSpaces(projectId){
+    this.spacesTimers||=new Map();if(this.spacesTimers.has(projectId))return;
+    const timer=setTimeout(async()=>{this.spacesTimers.delete(projectId);
+      const sessions=[...this.sessions.values()].filter(x=>x.ctx.projectId===projectId);const shells=sessions.filter(x=>x.shell);if(!shells.length)return;
+      const running=await Promise.all(sessions.map(async x=>{const p=x.tabs.get(x.selected);return {clientId:this.spaceClient(x),label:x.spaceLabel||x.ctx.profile,profile:x.ctx.profile,model:x.spaceModel||'',
+        state:agentState(x),...(x.paused?{tool:x.pauseOperation?.tool||'',detail:''}:{tool:x.active?.name||x.lastOp?.name||'',detail:x.active||x.lastOp?(x.active||x.lastOp).detail??describe((x.active||x.lastOp).name,(x.active||x.lastOp).args):''}),
+        tabCount:x.tabs.size,url:p&&!p.isClosed()?p.url():'',title:p&&!p.isClosed()?text(await p.title().catch(()=>'')).slice(0,200):'',thumbnail:x.thumbnail||null,events:(x.activity||[]).slice(-10)};}));
+      const known=new Set(sessions.map(x=>x.ctx.profile));
+      const idle=this.profiles(sessions[0].ctx).filter(p=>p.space&&!known.has(p.id)).map(p=>({clientId:p.space.clientId,label:spaceLabel(p.space.label),model:typeof p.space.model==='string'?p.space.model:'',profile:p.id,state:'closed',tabCount:0}));
+      for(const x of shells)x.shell?.push('setSpaces',[...running,...idle].map(sp=>({...sp,self:sp.profile===x.ctx.profile})));
+    },250);timer.unref?.();this.spacesTimers.set(projectId,timer);
+  }
+  /** Live thumbnails only while some agents center of the project is open. */
+  thumbnails(projectId){
+    this.thumbTimers||=new Map();const open=()=>[...this.sessions.values()].some(x=>x.ctx.projectId===projectId&&x.shell&&x.centerOpen);
+    if(!open()){clearInterval(this.thumbTimers.get(projectId));this.thumbTimers.delete(projectId);return;}
+    if(this.thumbTimers.has(projectId))return;
+    const tick=async()=>{if(!open())return this.thumbnails(projectId);
+      await Promise.all([...this.sessions.values()].filter(x=>x.ctx.projectId===projectId&&x.browser&&!x.centerOpen).map(async x=>{const p=x.tabs.get(x.selected);if(!p||p.isClosed())return;
+        try{const jpeg=await p.screenshot({type:'jpeg',quality:45,scale:'css',timeout:2500});x.thumbnail=`data:image/jpeg;base64,${jpeg.toString('base64')}`;}catch{}}));
+      this.pushSpaces(projectId);};
+    tick();const timer=setInterval(tick,2500);timer.unref?.();this.thumbTimers.set(projectId,timer);
+  }
+  /** Host request (never an agent tool): raise a space's window, optionally on one tab. */
+  async focusSpace(ctx,tabId=null){
+    const s=this.sessions.get(this.key(ctx));
+    if(!s?.browser)return {focused:false,reason:'closed'};
+    if(!s.shell)return {focused:false,reason:'external-browser'};
+    if(tabId){const p=s.tabs.get(tabId);if(!p)throw new Error('Tab not found');s.selected=tabId;await s.shell.select(p);}
+    return {focused:!!await s.shell.focus()};
+  }
+  shellEvent(s,m){
+    if(m?.type==='center'){s.centerOpen=!!m.open;this.thumbnails(s.ctx.projectId);return;}
+    if(m?.type!=='control')return;
+    const t=m.clientId==='self'?s:[...this.sessions.values()].find(x=>x.ctx.projectId===s.ctx.projectId&&this.spaceClient(x)===m.clientId);
+    if(!t)return;
+    // Human controls reuse the explicit pause semantics; uncertain pauses still need inspection by the owner.
+    if(m.action==='pause'||m.action==='takeover'){if(!(t.paused&&t.pauseReason==='manual')){this.pause(t,'manual');t.generation++;}if(m.action==='takeover')t.shell?.focus();}
+    else if(m.action==='resume'){if(t.paused&&t.pauseReason==='manual'&&!t.active?.controller.signal.aborted)this.unpause(t);}
+    else if(m.action==='focus')t.shell?.focus();
+    this.notifyShell(t);
   }
   page(s,args={}){const p=s.tabs.get(args.tabId||s.selected);if(!p)throw new Error('Tab not found; list browser_tabs');return p;}
   frame(s,args){const p=this.page(s,args);if(!args.frameId)return p.mainFrame();const f=this.pageState(s,p).frames.get(args.frameId);if(!f||f.page()!==p||f.isDetached())throw new Error('Frame is stale; list browser_frames');return f;}
-  async locator(s,args){
+  /** Resolves the target of a pointer/keyboard tool and shows the agent cursor there. */
+  async locator(s,args){const target=await this.locate(s,args);this.pointAt(s,target);return target;}
+  pointAt(s,target){
+    if(!s.shell||!target?.boundingBox)return;
+    Promise.race([target.boundingBox(),sleep(600).then(()=>null)]).then(box=>{if(box&&s.shell)s.shell.call('setCursor',{x:box.x+box.width/2,y:box.y+Math.min(box.height/2,24)}).catch(()=>{});}).catch(()=>{});
+    // Selector-based actions: show the element's own text rather than the CSS selector.
+    const op=s.active;if(op&&!op.args?.ref&&op.args?.selector&&op.detail===describe(op.name,op.args))
+      Promise.race([target.evaluate(e=>(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||e.getAttribute('title')||e.getAttribute('name')||'').trim().replace(/\s+/g,' ').slice(0,60)),sleep(600).then(()=>'')])
+        .then(name=>{if(name&&s.active===op){op.detail=name;if(s.lastOp)s.lastOp.detail=name;const last=s.activity?.at(-1);if(last?.id===op.id)last.detail=name;this.notifyShell(s);}}).catch(()=>{});
+  }
+  /** What a page action visibly changed, so the agent needs fewer follow-up reads. */
+  async pageFacts(s,args){
+    const p=s.tabs.get(args?.tabId||s.selected);
+    return {page:p,url:p&&!p.isClosed()?p.url():'',title:p&&!p.isClosed()?await Promise.race([p.title(),sleep(300).then(()=>null)]).catch(()=>null):null,tabs:s.tabs.size,events:s.events.length,dialog:s.dialog,downloads:s.downloads?.length||0,downloadSeq:s.downloadSeq||0};
+  }
+  async effectOf(s,args,before){
+    const after=await this.pageFacts(s,args),effect={};
+    if(after.url&&after.url!==before.url){effect.navigated=true;effect.url=after.url;}
+    if(after.title!=null&&before.title!=null&&after.title!==before.title)effect.title=text(after.title).slice(0,200);
+    if(after.tabs!==before.tabs)effect.tabs=after.tabs;
+    if(s.dialog&&s.dialog!==before.dialog)effect.dialog={type:s.dialog.type,message:s.dialog.message};
+    const errors=s.events.slice(before.events).filter(e=>e.kind==='pageerror'||e.kind==='console'&&e.type==='error').map(e=>e.text.slice(0,200));
+    if(errors.length)effect.consoleErrors=errors.slice(-3);
+    const started=(s.downloads||[]).filter(d=>Number(d.downloadId.slice(3))>before.downloadSeq);
+    if(started.length)effect.downloads=started.map(d=>({downloadId:d.downloadId,name:d.name,state:d.state}));
+    return effect;
+  }
+  async locate(s,args){
     if(args.ref){const state=this.pageState(s,this.page(s,args));if(args.revision!==state.revision)throw Object.assign(new Error('Stale snapshot revision; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});const ref=state.refs.get(args.ref);if(!ref)throw new Error('Unknown ref');if(ref.frame!==this.frame(s,args))throw new Error('Ref belongs to another frame');if(!await ref.handle.evaluate(e=>e.isConnected))throw new Error('Element is detached; refresh snapshot');const current=await ref.handle.evaluate(e=>e.outerHTML.slice(0,8192));if(current!==ref.fingerprint)throw Object.assign(new Error('Element changed; refresh snapshot'),{code:'STALE_SNAPSHOT'});return ref.handle;}
     const f=this.frame(s,args);let locator;
     if(args.role)locator=f.getByRole(args.role,{name:args.name,exact:true});else if(args.selector)locator=f.locator(args.selector);else throw new Error('An element ref/revision or explicit selector/role is required');
@@ -109,7 +220,13 @@ export class BrowserService {
   async interrupt(s){
     if(!s.browser||!s.active)return;const active=s.active,op={name:active.activeTool||active.name,args:active.activeArgs||active.args};
     if(!['browser_navigate','browser_navigate_back','browser_reload','browser_evaluate','browser_type','browser_press_key','browser_click'].includes(op.name))return;
-    try{const p=this.page(s,op.args);const c=await this.cdp(s,p);await c.send('Page.stopLoading');if(op.name==='browser_evaluate')await c.send('Runtime.terminateExecution');}catch{}
+    try{const p=this.page(s,op.args);const c=await this.cdp(s,p);if(op.name==='browser_evaluate'){await c.send('Runtime.terminateExecution');
+      // terminateExecution also terminates the *next* script when none is running (an
+      // evaluate awaiting fetch). Consume it before anything can resume that script;
+      // otherwise its continuation is killed, its promise never settles and the
+      // cancelled action never finishes. Only then stop loading, which aborts the fetch.
+      await c.send('Runtime.evaluate',{expression:'void 0'}).catch(()=>{});}
+      await c.send('Page.stopLoading');}catch{}
   }
   async call(ctx,name,args,operationId,timeoutMs){
     validateArguments(name,args,ctx.mode);
@@ -147,11 +264,14 @@ export class BrowserService {
       if(s.closing&&name!=='browser_close'&&name!=='browser_artifact')throw Object.assign(new Error('This profile is closing; wait for browser_close to finish before reopening it.'),{code:'PROFILE_CLOSING'});
       if(s.paused&&!observation&&!PAUSE_CONTROL.has(name))throw pausedError(s);
       if(s.owner&&s.owner!==ctx.clientId&&!['browser_status','browser_takeover','browser_artifact'].includes(name))throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});
-      op.started=true;if(!observation&&!recoveryTakeover)s.active=op;const abort=()=>{if(!observation){this.pause(s,'uncertain',op);this.interrupt(s).catch(()=>{});}};controller.signal.addEventListener('abort',abort,{once:true});
+      op.started=true;if(!observation&&!recoveryTakeover)s.active=op;this.recordActivity(s,op);const abort=()=>{if(!observation){this.pause(s,'uncertain',op);this.interrupt(s).catch(()=>{});}};controller.signal.addEventListener('abort',abort,{once:true});
       s.refLeases=(s.refLeases||0)+1;
-      try{const pending=this.execute(s,ctx,name,args,controller.signal,operationId);const result=observation?await abortableRead(pending,controller.signal):await pending;if(controller.signal.aborted)throw cancelled();if(observation&&name!=='browser_artifact'&&s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Browser ownership changed during observation'),{code:'OWNERSHIP'});return {...result,generation:s.generation,revision:this.resultRevision(s,args,result)};}
+      if(EFFECT_TOOLS.has(name)||name==='browser_batch')s.lastActionAt=Date.now();
+      try{const before=EFFECT_TOOLS.has(name)&&s.browser?await this.pageFacts(s,args).catch(()=>null):null;
+        const pending=this.execute(s,ctx,name,args,controller.signal,operationId);const result=observation?await abortableRead(pending,controller.signal):await pending;
+        if(before&&result?.data&&typeof result.data==='object'&&!controller.signal.aborted){const effect=await this.effectOf(s,args,before).catch(()=>null);if(effect&&Object.keys(effect).length)result.data={...result.data,effect};}if(controller.signal.aborted)throw cancelled();if(observation&&name!=='browser_artifact'&&s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Browser ownership changed during observation'),{code:'OWNERSHIP'});return {...result,generation:s.generation,revision:this.resultRevision(s,args,result)};}
       catch(e){if(observation&&(controller.signal.aborted||e.name==='TimeoutError'))throw controller.signal.aborted?cancelled():Object.assign(new Error('Observation timed out; browser remains available. Retry the read with a new operationId.'),{code:'READ_TIMEOUT'});if(e.name==='TimeoutError'){this.pause(s,'uncertain',op);await this.interrupt(s);throw Object.assign(new Error('Browser action timed out and may have affected the page; inspect before resuming, do not replay'),{code:'UNCERTAIN',...(e.batchSteps?{batchSteps:e.batchSteps}:{})});}throw e;}
-      finally{controller.signal.removeEventListener('abort',abort);if(s.active===op)s.active=null;s.refLeases--;this.drainRefs(s);}
+      finally{controller.signal.removeEventListener('abort',abort);if(s.active===op)s.active=null;s.refLeases--;this.drainRefs(s);this.notifyShell(s);}
     };
     // Page actions stay serialized; a hung action must not hide the page from
     // screenshots, snapshots, logs or status used to diagnose its outcome.
@@ -185,6 +305,16 @@ export class BrowserService {
     return {data:{steps,completed:steps.length},artifacts,...(image?{image}:{})};
   }
   async execute(s,ctx,name,a,signal,operationId){
+    // A snapshot that races a page navigation (SPA redirects, YouTube) is
+    // re-read once the page settles. Ownership changes are never retried.
+    if(name==='browser_snapshot'&&!a.__retry){
+      for(let attempt=0;;attempt++){
+        const generation=s.generation,owner=s.owner;
+        try{return await this.execute(s,ctx,name,{...a,__retry:true},signal,operationId);}
+        catch(e){if(attempt>=2||e.code!=='STALE_SNAPSHOT'||s.generation!==generation||s.owner!==owner||a.revision!==undefined)throw e;
+          const p=s.tabs.get(a.tabId||s.selected);await p?.waitForLoadState('domcontentloaded',{timeout:3000}).catch(()=>{});await sleep(400);signal.throwIfAborted();}
+      }
+    }
     const out=(data={},artifacts=[])=>({data,artifacts});
     if(name==='browser_batch')return this.executeBatch(s,ctx,a,signal,operationId);
     if(name==='browser_status')return out(this.status(s,ctx));
@@ -192,6 +322,7 @@ export class BrowserService {
     if(name==='browser_resume'){if(s.owner&&s.owner!==ctx.clientId)throw new Error('Only owner may resume');if(s.supervisorError)throw Object.assign(new Error('Browser supervisor is unavailable; close this profile and reopen it before continuing.'),{code:'RUNTIME_UNAVAILABLE'});this.unpause(s);s.owner=ctx.clientId;s.generation++;return out(this.status(s,ctx));}
     if(name==='browser_takeover'){const pendingAction=s.active?.controller.signal.aborted;if(pendingAction)for(const pending of this.operations.values())if(pending.controller.signal!==signal&&!pending.observation&&!pending.finishedAt&&pending.ctx.projectId===ctx.projectId&&pending.ctx.profile===ctx.profile&&pending.ctx.clientId===s.owner)pending.controller.abort();s.owner=ctx.clientId;s.ctx=ctx;if(s.supervisorError)this.pause(s,'runtime');else if(!pendingAction)this.unpause(s);s.generation++;s.revision++;this.invalidateAll(s);return out(this.status(s,ctx));}
     if(name==='browser_artifact')return this.artifact(ctx,a);
+    if(name==='browser_save_download')return this.saveDownload(s,ctx,a,signal);
     if(name==='browser_close'){s.closing=true;try{let artifacts=[];if(s.capture)artifacts=(await this.stopCapture(s,ctx,s.capture.kind)).artifacts;if(s.opening)await s.opening;await this.closeProfile(s);s.owner=null;s.supervisorError=null;this.unpause(s);return out({closed:true,...this.status(s,ctx)},artifacts);}finally{s.closing=false;}}
     await this.ensure(s,ctx);signal.throwIfAborted();if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});const p=this.page(s,a);const actionDone=()=>this.invalidate(s,p);
     switch(name){
@@ -199,19 +330,45 @@ export class BrowserService {
       case 'browser_navigate_back': await p.goBack({waitUntil:'domcontentloaded'});return out({url:p.url()});
       case 'browser_reload': await p.reload({waitUntil:'domcontentloaded'});return out({url:p.url()});
       case 'browser_tabs':{
-        if(a.action==='new'){const tab=await s.browser.newPage();this.attachPage(s,tab);s.selected=[...s.tabs].find(([,v])=>v===tab)[0];if(a.url)await tab.goto(navigateUrl(a.url),{waitUntil:'domcontentloaded'});}
-        if(a.action==='select'){this.page(s,a);s.selected=a.tabId;await this.page(s).bringToFront();}
+        if(a.action==='new'){const tab=s.shell?await s.shell.newTab():await s.browser.newPage();this.attachPage(s,tab);s.selected=[...s.tabs].find(([,v])=>v===tab)[0];if(a.url)await tab.goto(navigateUrl(a.url),{waitUntil:'domcontentloaded'});}
+        if(a.action==='select'){this.page(s,a);s.selected=a.tabId;if(s.shell)await s.shell.select(this.page(s));else await this.page(s).bringToFront();}
         if(a.action==='close')await this.page(s,a).close();
         return out({tabs:await Promise.all([...s.tabs].map(async([tabId,page])=>({tabId,url:page.url(),title:text(await page.title().catch(()=>'')),selected:tabId===s.selected}))),dialog:s.dialog?{type:s.dialog.type,message:s.dialog.message,tabId:s.dialog.tabId}:null});
       }
       case 'browser_frames':{const state=this.pageState(s,p);state.frames.clear();const frames=p.frames().map((frame,i)=>{const frameId=`${[...s.tabs].find(([,v])=>v===p)[0]}-frame-${i}-${s.revision}`;state.frames.set(frameId,frame);return {frameId,url:frame.url(),name:frame.name(),main:frame===p.mainFrame()};});return out({frames});}
       case 'browser_handle_dialog':{if(!s.dialog)throw new Error('No pending dialog');const d=s.dialog;s.dialog=null;if(a.accept)await d.dialog.accept(a.promptText);else await d.dialog.dismiss();actionDone();return out({handled:true});}
       case 'browser_snapshot':{
-        const state=this.pageState(s,p),f=this.frame(s,a),revision=state.revision,generation=s.generation,refs=new Map(),elements=[];const selector='a,button,input,textarea,select,[role],[tabindex],summary';const handles=await f.locator(selector).elementHandles();let published=false;
+        const state=this.pageState(s,p),f=this.frame(s,a),generation=s.generation,refs=new Map(),elements=[];let revision=state.revision;const selector='a,button,input,textarea,select,[role],[tabindex],summary';
+        // Pages that navigate right after load (SPA redirects) destroy the context mid-read: retry briefly.
+        const root=a.selector?f.locator(a.selector).first():f.locator('body');
+        let handles;for(let attempt=0;;attempt++){try{handles=await (a.selector?root.locator(selector):f.locator(selector)).elementHandles();if(attempt)revision=state.revision;break;}catch(e){if(attempt>=3||!/context was destroyed|navigat/i.test(e.message))throw e;await p.waitForLoadState('domcontentloaded',{timeout:3000}).catch(()=>{});await sleep(250);signal.throwIfAborted();}}
+        let published=false;
         try{
-          for(const [i,handle] of handles.slice(0,500).entries()){signal.throwIfAborted();const ref=`${[...s.tabs].find(([,page])=>page===p)[0]}-e${i+1}`;const info=await handle.evaluate(e=>({tag:e.tagName.toLowerCase(),role:e.getAttribute('role'),name:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||e.getAttribute('name')||'').slice(0,500),type:e.getAttribute('type'),fingerprint:e.outerHTML.slice(0,8192)})).catch(()=>null);if(info){refs.set(ref,{handle,frame:f,fingerprint:info.fingerprint});delete info.fingerprint;elements.push({ref,...info});}}
-          const accessibility=await f.locator('body').ariaSnapshot({timeout:2500}).catch(()=>'');signal.throwIfAborted();if(state.revision!==revision||s.generation!==generation||s.owner!==ctx.clientId)throw Object.assign(new Error('Page or browser ownership changed while reading; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});
-          this.retireRefs(s,state.refs);state.revision++;state.refs=refs;published=true;return out({tabId:[...s.tabs].find(([,page])=>page===p)[0],url:f.url(),revision:state.revision,accessibility:text(accessibility),elements,untrustedContent:true});
+          for(const [i,handle] of handles.slice(0,500).entries()){signal.throwIfAborted();const ref=`${[...s.tabs].find(([,page])=>page===p)[0]}-e${i+1}`;const info=await handle.evaluate(e=>{
+              // Visible and actionable: what a compact snapshot keeps (refs stay valid either way).
+              let visible=true;
+              try{const r=e.getBoundingClientRect(),st=getComputedStyle(e);visible=r.width>0&&r.height>0&&st.visibility!=='hidden'&&st.display!=='none'&&!e.closest('[aria-hidden="true"],[hidden],[inert]');}catch{}
+              const tag=e.tagName.toLowerCase(),role=e.getAttribute('role'),type=e.getAttribute('type');
+              const ACT=['button','link','checkbox','radio','switch','tab','menuitem','menuitemcheckbox','menuitemradio','option','combobox','textbox','searchbox','slider','spinbutton','treeitem'];
+              const actionable=!e.disabled&&e.getAttribute('aria-disabled')!=='true'&&(role?ACT.includes(role):(tag==='a'&&!!e.hasAttribute?.('href'))||tag==='button'||tag==='select'||tag==='textarea'||tag==='summary'||(tag==='input'&&type!=='hidden')||!!e.isContentEditable);
+              return {tag,role,name:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||e.getAttribute('title')||e.getAttribute('name')||e.getAttribute('value')||'').slice(0,500),type,visible,actionable,fingerprint:e.outerHTML.slice(0,8192)};
+            }).catch(()=>null);if(info){refs.set(ref,{handle,frame:f,fingerprint:info.fingerprint,name:text(info.name||'').trim().slice(0,80)});delete info.fingerprint;elements.push({ref,...info});}}
+          const flags=new Map(elements.map(e=>[e.ref,{visible:e.visible,actionable:e.actionable}]));for(const e of elements){delete e.visible;delete e.actionable;}
+          const accessibility=a.compact?'':await root.ariaSnapshot({timeout:2500}).catch(()=>'');signal.throwIfAborted();if(state.revision!==revision||s.generation!==generation||s.owner!==ctx.clientId)throw Object.assign(new Error('Page or browser ownership changed while reading; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});
+          this.retireRefs(s,state.refs);state.revision++;state.refs=refs;published=true;let listed=elements,omitted=0;
+          {
+            // Keep only visible, actionable elements; named ones, or unnamed fields (inputs need no label to be typed into).
+            const out=[];let last='';
+            for(const e of elements){
+              const f=flags.get(e.ref),name=(e.name||'').trim().replace(/\s+/g,' ').slice(0,80),field=['input','textarea','select'].includes(e.tag)||['textbox','searchbox','combobox'].includes(e.role);
+              if(!f?.visible||!f?.actionable||(!name&&!field)){omitted++;continue;}
+              const key=name||`#${e.ref}`;if(key===last){omitted++;continue;}last=key; // the same control repeated (button + link, thumbnail + title)
+              // One line per element: "<ref> <kind> <name>" (JSON objects repeated keys on every element).
+              out.push(`${e.ref} ${e.role||e.tag}${e.type&&e.type!=='submit'?`[${e.type}]`:''}${name?` ${name}`:''}`);
+            }
+            listed=out;
+          }
+          return out({tabId:[...s.tabs].find(([,page])=>page===p)[0],url:f.url(),revision:state.revision,...(a.compact?{compact:true,title:text(await p.title().catch(()=>'')).slice(0,200)}:{accessibility:text(accessibility).slice(0,16000),...(accessibility.length>16000?{truncated:'tree cut at 16000 chars: use selector to scope'}:{})}),omitted,elements:listed,untrustedContent:true});
         }finally{if(!published)for(const handle of handles)handle.dispose?.().catch(()=>{});}
       }
       case 'browser_click':await (await this.locator(s,a)).click({button:a.button||'left',clickCount:bounded(a.clickCount,1,3,1),timeout:10000,noWaitAfter:true});actionDone();return out({clicked:true});
@@ -244,11 +401,16 @@ export class BrowserService {
         return out({emulated:true});
       }
       case 'browser_console_messages':{const events=s.events.slice(-bounded(a.limit,1,300,100));if(a.clear)s.events=[];return out({events,untrustedContent:true});}
-      case 'browser_network_requests':return out({requests:[...s.network.values()].slice(-bounded(a.limit,1,300,100)).map(x=>x.meta),untrustedContent:true});
+      case 'browser_network_requests':{const STATIC=new Set(['image','font','stylesheet','media']);const all=[...s.network.values()].map(x=>x.meta);const kept=a.all?all:all.filter(m=>!STATIC.has(m.resourceType));
+        const shortUrl=u=>u.length>160?u.slice(0,157)+'...':u;
+        return out({requests:kept.slice(-bounded(a.limit,1,300,a.all?100:30)).map(({requestId,url,method,resourceType,status,contentType,tabId})=>({requestId,method,url:shortUrl(url),type:resourceType,...(status!==undefined?{status}:{}),...(contentType?{contentType:contentType.split(';')[0]}:{}),tabId})),...(kept.length<all.length?{skippedStatic:all.length-kept.length}:{}),untrustedContent:true});}
       case 'browser_network_body':{const entry=s.network.get(a.requestId);if(!entry)throw new Error('Request ID expired');let body;if(a.kind==='request'){body=entry.request.postDataBuffer()||Buffer.alloc(0);}else{if(!entry.response)throw new Error('Response unavailable');const headers=entry.response.headers();const len=Number(headers['content-length']);if(!Number.isFinite(len)||len<0||len>1024*1024||headers['content-encoding']&&headers['content-encoding']!=='identity')throw new Error('Response body requires uncompressed Content-Length <= 1 MiB');await abortableRead(entry.response.finished(),signal);if(signal.aborted)throw new Error('Read cancelled');body=await abortableRead(entry.response.body(),signal);}if(body.length>1024*1024)throw new Error('Body exceeds 1 MiB');return out({body:body.toString('utf8'),bytes:body.length,untrustedContent:true});}
       case 'browser_route':if(a.action==='clear')await s.browser.unrouteAll({behavior:'wait'});else {if(!a.url||a.url.length>2048||(a.body||'').length>1024*1024)throw new Error('Bounded URL and body required');await s.browser.route(a.url,route=>route.fulfill({status:bounded(a.status,100,599,200),body:a.body||'',contentType:a.contentType||'text/plain'}));}return out({mocked:a.action});
       case 'browser_file_upload':{if(a.paths.length>20)throw new Error('Maximum 20 upload files');const files=[];let total=0;for(const name of a.paths){const file=uploadSnapshot(ctx.cwd,name);total+=file.buffer.length;if(total>MAX_ARTIFACT)throw new Error('Combined uploads exceed 64 MiB');files.push(file);}await (await this.locator(s,a)).setInputFiles(files,{timeout:10000});actionDone();return out({uploaded:files.length});}
-      case 'browser_take_screenshot':{const type=a.type||'png';const bytes=await p.screenshot({type,quality:type==='jpeg'?bounded(a.quality,1,100,80):undefined,fullPage:!!a.fullPage,clip:a.clip,timeout:10000});signal.throwIfAborted();if(bytes.length>MAX_IMAGE)throw new Error('Screenshot exceeds 4 MiB; choose JPEG, lower quality, viewport, or a smaller clip');const meta=await this.artifacts.add(bytes,`image/${type}`,'screenshot',ctx,imageDimensions(bytes,type));return {...out({captured:true},[meta]),image:{type:'image',mimeType:meta.mimeType,data:bytes.toString('base64')}};}
+      case 'browser_take_screenshot':{const type=a.type||'png';let bytes;
+        const vp=!a.fullPage&&!a.clip&&!a.fullResolution&&typeof p.evaluate==='function'?await p.evaluate(()=>({w:innerWidth,h:innerHeight})).catch(()=>null):null;
+        if(vp&&vp.w>1024){const c=await this.cdp(s,p);const shot=await c.send('Page.captureScreenshot',{format:type,...(type==='jpeg'?{quality:bounded(a.quality,1,100,80)}:{}),clip:{x:0,y:0,width:vp.w,height:vp.h,scale:1024/vp.w},captureBeyondViewport:false});bytes=Buffer.from(shot.data,'base64');}
+        else bytes=await p.screenshot({type,quality:type==='jpeg'?bounded(a.quality,1,100,80):undefined,fullPage:!!a.fullPage,clip:a.clip,timeout:10000});signal.throwIfAborted();if(bytes.length>MAX_IMAGE)throw new Error('Screenshot exceeds 4 MiB; choose JPEG, lower quality, viewport, or a smaller clip');const meta=await this.artifacts.add(bytes,`image/${type}`,'screenshot',ctx,imageDimensions(bytes,type));return {...out({captured:true},[meta]),image:{type:'image',mimeType:meta.mimeType,data:bytes.toString('base64')}};}
       case 'browser_start_video':return this.startCapture(s,ctx,'video',p,a);
       case 'browser_start_trace':return this.startCapture(s,ctx,'trace',p,a);
       case 'browser_perf_start':return this.startCapture(s,ctx,'perf',p,a);
@@ -291,6 +453,36 @@ export class BrowserService {
       }
       const mime=kind==='video'?'video/webm':kind==='trace'?'application/zip':'application/json';const meta=await this.artifacts.addFile(c.file,mime,kind,ctx,kind==='video'?{...c.size,durationMs:Date.now()-Date.parse(c.startedAt)}:{});return {data:{finalized:true,kind},artifacts:[meta]};
     }finally{s.capture=null;fs.rmSync(c.file,{force:true});}
+  }
+  /** Copies a finished download into the workspace or an authorized folder (full mode). */
+  async saveDownload(s,ctx,a,signal){
+    const wait=bounded(a.wait,0,25,20)*1000,deadline=Date.now()+wait;
+    const pause=async ms=>{await abortableRead(sleep(ms),signal);};
+    let entry=null,name,bytes;
+    if(a.artifactId){const got=this.artifacts.get(a.artifactId,ctx);if(got.meta.kind!=='download')throw new Error('Only download artifacts can be saved');name=got.meta.suggestedFilename;bytes=got.bytes;}
+    else{
+      // Without an id: the newest download, unless it is already saved or failed
+      // (then wait for a new one). A download older than the last page action may
+      // be stale while the one that action starts is still on its way: give it 2 s.
+      const newest=()=>(s.downloads||[]).at(-1);
+      const usable=d=>d&&!d.savedTo&&d.state!=='failed'?d:null;
+      if(a.downloadId){entry=(s.downloads||[]).find(d=>d.downloadId===a.downloadId);if(!entry)throw new Error('Unknown downloadId for this browser');}
+      else{
+        const first=newest(),grace=Math.min(deadline,Date.now()+2000);
+        if(!first||first.at<(s.lastActionAt||0))while(newest()===first&&Date.now()<grace)await pause(150);
+        entry=usable(newest());
+        while(!entry&&Date.now()<deadline){await pause(200);entry=newest()!==first?usable(newest()):null;}
+      }
+      if(!entry)throw Object.assign(new Error('No new download in this browser. Start it first (click its download button), then call browser_save_download.'),{code:'NO_DOWNLOAD'});
+      if(entry.state==='progressing')await abortableRead(Promise.race([entry.done,sleep(Math.max(0,deadline-Date.now()))]),signal);
+      if(entry.state==='progressing')return {data:{saved:false,downloadId:entry.downloadId,name:entry.name,state:'progressing',hint:'Still downloading; call browser_save_download again with this downloadId.'}};
+      if(entry.state==='failed')throw new Error(`Download failed: ${entry.error||'unknown error'}`);
+      const got=this.artifacts.get(entry.artifactId,ctx);name=entry.name;bytes=got.bytes;
+    }
+    const target=saveTarget({cwd:ctx.cwd,home:this.home,destination:a.destination,suggestedName:name});
+    signal.throwIfAborted();
+    const file=writeNewFile(target.dir,target.name,bytes);if(entry)entry.savedTo=file;
+    return {data:{saved:true,path:file,name:path.basename(file),bytes:bytes.length,sha256:sha256(bytes),...(entry?{downloadId:entry.downloadId}:{})}};
   }
   async artifact(ctx,a){const {meta,file,bytes}=this.artifacts.get(a.artifactId,ctx);const result={data:{artifact:meta},artifacts:[meta]};
     if(a.open){const ext={'image/png':'.png','image/jpeg':'.jpg','video/webm':'.webm'}[meta.mimeType];if(!ext)throw new Error('Only generated PNG/JPEG/WebM artifacts may be opened');const openFile=`${file}${ext}`;safePath(openFile,{allowMissing:true});writePrivate(openFile,bytes);if(process.platform==='win32'){const explorer=path.join(process.env.SystemRoot||'C:\\Windows','explorer.exe');const child=spawn(explorer,[openFile],{windowsHide:true,stdio:'ignore'});child.on('error',()=>{});child.unref();}else{const child=spawn(process.platform==='darwin'?'/usr/bin/open':'/usr/bin/xdg-open',[openFile],{stdio:'ignore'});child.on('error',()=>{});child.unref();}result.data.opened=true;}

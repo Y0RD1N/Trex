@@ -6,7 +6,8 @@ export function ensureSpaces(service, ctx, members) {
   if (!Array.isArray(members) || !members.length || members.length > 9) throw new Error('Expected 1..9 browser space members');
   const seen = new Set();
   for (const member of members) {
-    if (!member || Object.keys(member).some(key => !['clientId','label'].includes(key))
+    if (!member || Object.keys(member).some(key => !['clientId','label','model'].includes(key))
+      || member.model !== undefined && (typeof member.model !== 'string' || member.model.length > 60 || /[\x00-\x1f\x7f]/.test(member.model))
       || typeof member.clientId !== 'string' || !member.clientId.length || member.clientId.length > 128 || /[\x00-\x1f\x7f]/.test(member.clientId)
       || typeof member.label !== 'string' || !member.label.trim() || member.label.length > 100 || /[\x00-\x1f\x7f]/.test(member.label)
       || seen.has(member.clientId)) throw new Error('Invalid or duplicate browser space member');
@@ -24,9 +25,12 @@ export function ensureSpaces(service, ctx, members) {
     const binding = {...ctx,profile:space.profile}; service.createProfile(binding);
     const file = path.join(service.profileDir(binding),'profile.json');
     const manifest = jsonRead(file, {});
-    writePrivate(file, JSON.stringify({...manifest,space:{clientId:space.clientId,label:space.label}}));
+    writePrivate(file, JSON.stringify({...manifest,space:{clientId:space.clientId,label:space.label,...(space.model?{model:space.model}:{})}}));
+    // A running space shows the new label/model right away (e.g. the user switched model).
+    const live = service.sessions.get(service.key(binding));
+    if (live) { live.spaceLabel = service.displayLabel(space.label) || binding.profile; live.spaceModel = space.model || ''; service.notifyShell(live); }
   }
-  return {spaces:planned};
+  return {spaces:planned.map(({clientId,label,profile}) => ({clientId,label,profile}))};
 }
 
 /** Project-scoped host overview. It never creates sessions, launches Chrome, or changes ownership. */

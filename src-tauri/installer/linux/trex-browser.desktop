@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Trex Browser
+GenericName=Navegador web
+Comment=El navegador de trex: tu ventana personal, sin automatización
+Exec=/usr/lib/trex/trex-browser-runtime/shell/trex-browser-shell %U
+Icon=trex-browser
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=trex-browser
+Keywords=browser;navegador;web;internet;trex;

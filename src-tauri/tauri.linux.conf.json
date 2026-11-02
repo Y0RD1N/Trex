@@ -1,16 +1,39 @@
 {
   "bundle": {
-    "targets": ["rpm"],
+    "targets": [
+      "rpm"
+    ],
     "linux": {
       "rpm": {
-        "depends": ["gtk3", "webkit2gtk4.1", "libxdo", "openssl-libs"],
-        "recommends": ["chromium", "gnome-keyring"],
+        "depends": [
+          "gtk3",
+          "webkit2gtk4.1",
+          "libxdo",
+          "openssl-libs"
+        ],
+        "recommends": [
+          "chromium",
+          "gnome-keyring"
+        ],
         "files": {
           "/usr/bin/trex-agent": "installer/payload/trex-agent",
           "/usr/bin/trex-browser": "installer/payload/browser-linux/trex-browser",
-          "/usr/lib/trex/trex-browser-runtime/": "installer/payload/browser-linux/trex-browser-runtime/"
+          "/usr/lib/trex/trex-browser-runtime/": "installer/payload/browser-linux/trex-browser-runtime/",
+          "/usr/share/applications/trex-browser.desktop": "installer/linux/trex-browser.desktop",
+          "/usr/share/icons/hicolor/16x16/apps/trex-browser.png": "../trex-browser/shell/icons/trex-browser-16.png",
+          "/usr/share/icons/hicolor/24x24/apps/trex-browser.png": "../trex-browser/shell/icons/trex-browser-24.png",
+          "/usr/share/icons/hicolor/32x32/apps/trex-browser.png": "../trex-browser/shell/icons/trex-browser-32.png",
+          "/usr/share/icons/hicolor/48x48/apps/trex-browser.png": "../trex-browser/shell/icons/trex-browser-48.png",
+          "/usr/share/icons/hicolor/64x64/apps/trex-browser.png": "../trex-browser/shell/icons/trex-browser-64.png",
+          "/usr/share/icons/hicolor/128x128/apps/trex-browser.png": "../trex-browser/shell/icons/trex-browser-128.png",
+          "/usr/share/icons/hicolor/256x256/apps/trex-browser.png": "../trex-browser/shell/icons/trex-browser-256.png",
+          "/usr/share/icons/hicolor/512x512/apps/trex-browser.png": "../trex-browser/shell/icons/trex-browser-512.png",
+          "/usr/share/icons/hicolor/scalable/apps/trex-browser.svg": "../trex-browser/shell/icons/trex-browser.svg"
         },
-        "compression": {"type": "zstd", "level": 9}
+        "compression": {
+          "type": "zstd",
+          "level": 9
+        }
       }
     }
   }

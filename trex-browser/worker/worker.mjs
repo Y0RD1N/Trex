@@ -7,10 +7,11 @@ import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { privateHome, readPrivate, writePrivate, jsonRead, context, MAX_JSON, safePath, sha256, childEnvironment } from './security.mjs';
+import { privateHome, privateHomePath, readPrivate, writePrivate, jsonRead, context, MAX_JSON, safePath, sha256, childEnvironment, readSaveFolders, updateSaveFolders } from './security.mjs';
 import { BrowserService, detectBrowser, isObservation } from './browser.mjs';
 import { ensureSpaces, listSpaces } from './spaces.mjs';
-import { VERSION, PROTOCOL, tools, MODES, mcpInitialization } from './tools.mjs';
+import { ENGINES, readEngine, detectShell, openHumanWindow, spaceLabel } from './shell.mjs';
+import { VERSION, PROTOCOL, tools, MODES, mcpInitialization, modelView } from './tools.mjs';
 
 const entry=fileURLToPath(import.meta.url);
 function ffmpegRuntime(){
@@ -28,6 +29,14 @@ function encode(value){const body=JSON.stringify(value);if(Buffer.byteLength(bod
 function emit(value){process.stdout.write(encode(value)+'\n');}
 function errorResult(error,operationId,ctx){return {content:[{type:'text',text:cleanError(error.message)}],isError:true,structuredContent:{ok:false,operationId,...(ctx?{projectId:ctx.projectId,profile:ctx.profile}:{}),artifacts:error.batchSteps?.flatMap(step=>step.artifacts||[])||[],...(error.batchSteps?{data:{steps:error.batchSteps}}:{}),error:{code:error.code||'BROWSER_ERROR',message:cleanError(error.message)},receipt:{status:error.code==='UNCERTAIN'?'uncertain':error.code==='CANCELLED'?'cancelled':'rejected',manualReview:error.code==='UNCERTAIN',replaySafe:false}}};}
 function cleanError(message){return String(message||'Browser operation failed').replace(/(?:[A-Za-z]:\\|\/)(?:[^\s:'"<>]+[\\/])+[^\s:'"<>]*/g,'[private path]').slice(0,2000);}
+// Agents (MCP over stdio or HTTP) get a lean result: only what they act on.
+// Text stays identical to structuredContent, as MCP recommends. Hosts (call,
+// the app) keep the full envelope with receipts and ownership metadata.
+function forAgent(result){
+  if(!result||result.isError||!result.structuredContent?.ok)return result;
+  const sc=result.structuredContent,lean={ok:true,...modelView({data:sc.data,revision:sc.revision,artifacts:sc.artifacts})};
+  return {content:[{type:'text',text:encode(lean)},...result.content.filter(c=>c.type!=='text')],structuredContent:lean};
+}
 function toolResult(result,operationId,ctx){const structuredContent={ok:true,operationId,projectId:ctx.projectId,profile:ctx.profile,generation:result.generation,revision:result.revision,data:result.data,artifacts:result.artifacts||[],receipt:{status:'completed',manualReview:false,replaySafe:false}};return {content:[{type:'text',text:encode(structuredContent)},...(result.image?[result.image]:[])],structuredContent};}
 function argMap(argv){const result={_:[]};for(let i=0;i<argv.length;i++){const arg=argv[i];if(arg.startsWith('--')){const key=arg.slice(2);if(['json','stdin-json','version'].includes(key))result[key]=true;else{if(!argv[i+1]||argv[i+1].startsWith('--'))throw new Error(`Missing --${key} value`);result[key]=argv[++i];}}else result._.push(arg);}return result;}
 function boundArgs(args){return context({cwd:args.cwd,mode:args.mode||'observe',clientId:args.client||args['client-id']||'settings',profile:args.profile});}
@@ -69,15 +78,70 @@ async function daemon(){
   try{fd=fs.openSync(lock,'wx',0o600);fs.writeFileSync(fd,String(process.pid));}catch(e){if(e.code!=='EEXIST')throw e;if(await running(home))return;
     const owner=Number(readPrivate(lock).toString());let alive=false;try{process.kill(owner,0);alive=true;}catch{}if(alive)throw new Error('Broker startup already in progress');safePath(lock);fs.rmSync(lock);return daemon();}
   const service=new BrowserService(home);const secret=crypto.randomBytes(32).toString('hex');writePrivate(file(home,'broker.token'),secret);const grants=new Map();
+  // ---- MCP over Streamable HTTP (JSON responses, no SSE) -------------------
+  // Each agent gets its own bearer token bound by the host to {project, client,
+  // profile, mode}. Re-issuing for the same agent returns the same token with
+  // the new mode, so a permission change does not restart the agent.
+  const sessionsFile=file(home,'mcp-sessions.json');
+  const sessions=new Map((jsonRead(sessionsFile,[])||[]).filter(x=>x&&typeof x.token==='string'&&x.ctx&&Date.now()-(x.usedAt||0)<30*86400000).map(x=>[x.token,x]));
+  const saveSessions=()=>writePrivate(sessionsFile,JSON.stringify([...sessions.values()]));
+  const sessionKey=ctx=>`${ctx.projectId}|${ctx.clientId}|${ctx.profile}`;
+  function issueMcpSession(ctx){
+    let entry=[...sessions.values()].find(x=>sessionKey(x.ctx)===sessionKey(ctx));
+    if(!entry){entry={token:crypto.randomBytes(32).toString('hex'),createdAt:Date.now()};sessions.set(entry.token,entry);if(sessions.size>500){const oldest=[...sessions.values()].sort((a,b)=>(a.usedAt||a.createdAt)-(b.usedAt||b.createdAt))[0];sessions.delete(oldest.token);}}
+    entry.ctx={cwd:ctx.cwd,projectId:ctx.projectId,mode:ctx.mode,clientId:ctx.clientId,profile:ctx.profile};entry.usedAt=Date.now();saveSessions();
+    return {token:entry.token,mode:ctx.mode};
+  }
+  const httpPending=new Map();
+  async function mcpHttp(req,res,expected){
+    const reply=(status,value,extra={})=>{const body=value===undefined?'':encode(value);res.writeHead(status,{...(body?{'content-type':'application/json'}:{}),'cache-control':'no-store','x-content-type-options':'nosniff',...extra});res.end(body);};
+    if(req.headers.host!==expected||req.headers.origin!==undefined||!['127.0.0.1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)){reply(403,{error:'Forbidden'});return;}
+    if(req.method!=='POST'){reply(405,{error:'Use POST; this server does not stream'},{allow:'POST'});return;}
+    const bearer=/^Bearer ([0-9a-f]{64})$/.exec(req.headers.authorization||'')?.[1],entry=bearer&&sessions.get(bearer);
+    if(!entry){reply(401,{error:'Invalid or expired Trex Browser session'},{'www-authenticate':'Bearer'});return;}
+    if(!/^application\/json\b/i.test(req.headers['content-type']||'')){reply(415,{error:'application/json required'});return;}
+    let msg;try{let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>1024*1024)throw new Error('Input exceeds 1 MiB');}msg=JSON.parse(raw);}catch(e){reply(400,{jsonrpc:'2.0',id:null,error:{code:-32700,message:cleanError(e.message)}});return;}
+    if(!msg||typeof msg!=='object'||Array.isArray(msg)||msg.jsonrpc!=='2.0'){reply(400,{jsonrpc:'2.0',id:null,error:{code:-32600,message:'Invalid request'}});return;}
+    let ctx;try{ctx=context({...entry.ctx});}catch(e){reply(200,{jsonrpc:'2.0',id:msg.id??null,error:{code:-32603,message:cleanError(e.message)}});return;}
+    entry.usedAt=Date.now();
+    const key=id=>`${bearer}|${JSON.stringify(id)}`;
+    if(msg.id===undefined){ // notifications
+      if(msg.method==='notifications/cancelled')httpPending.get(key(msg.params?.requestId))?.();
+      reply(202);return;
+    }
+    const ok=result=>reply(200,{jsonrpc:'2.0',id:msg.id,result}),fail=(code,message)=>reply(200,{jsonrpc:'2.0',id:msg.id,error:{code,message}});
+    if(msg.method==='initialize')return ok(mcpInitialization(msg.params));
+    if(msg.method==='ping')return ok({});
+    if(msg.method==='tools/list')return ok({tools:tools(ctx.mode)});
+    if(msg.method!=='tools/call')return fail(-32601,'Method not found');
+    const name=msg.params?.name,args=msg.params?.arguments||{},operationId=crypto.randomUUID();
+    if(typeof name!=='string'||!args||typeof args!=='object'||Array.isArray(args))return fail(-32602,'tools/call requires name and an arguments object');
+    let result;const reservation=file(home,`receipts/${sha256(operationId)}.json`);
+    writePrivate(reservation,JSON.stringify({operationId,name,projectId:ctx.projectId,clientHash:sha256(ctx.clientId),profile:ctx.profile,at:new Date().toISOString(),receipt:{status:'uncertain',manualReview:true,replaySafe:false}}));
+    const cancel=()=>{try{service.cancel(ctx,operationId);}catch{}};
+    httpPending.set(key(msg.id),cancel);
+    const disconnected=()=>{if(!res.writableEnded)cancel();};res.once('close',disconnected);
+    try{const r=await service.call(ctx,name,args,operationId,60000);result=toolResult(r,operationId,ctx);}
+    catch(e){result=errorResult(e,operationId,ctx);}
+    finally{httpPending.delete(key(msg.id));res.off('close',disconnected);}
+    writePrivate(reservation,JSON.stringify({operationId,name,projectId:ctx.projectId,clientHash:sha256(ctx.clientId),profile:ctx.profile,at:new Date().toISOString(),receipt:result.structuredContent.receipt}));
+    ok(forAgent(result));
+  }
   const server=http.createServer(async(req,res)=>{
-    const send=(status,value)=>{const body=encode(value);res.writeHead(status,{'content-type':'application/json','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(body);};
+    // Rejections answer before the body is read: drain it and close the
+    // connection, so the client never sees a reset (ECONNRESET) mid-upload.
+    const send=(status,value)=>{const body=encode(value);const early=!req.readableEnded&&status>=400;if(early)req.resume();res.writeHead(status,{'content-type':'application/json','cache-control':'no-store','x-content-type-options':'nosniff',...(early?{connection:'close'}:{})});res.end(body);};
     const expected=`127.0.0.1:${server.address().port}`;const auth=Buffer.from(req.headers.authorization||'');
+    if(req.url==='/mcp'){await mcpHttp(req,res,expected);return;}
     if(req.headers.host!==expected||req.headers.origin!==undefined||req.method!=='POST'||req.headers['content-type']!=='application/json'||!['127.0.0.1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||auth.length!==71||!crypto.timingSafeEqual(auth,Buffer.from(`Bearer ${secret}`))){send(403,{error:'Forbidden'});return;}
     try{let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>1024*1024)throw new Error('Input exceeds 1 MiB');}const body=JSON.parse(raw||'{}');
       if(req.url==='/health'){send(200,{ok:true,version:VERSION,pid:process.pid});return;}
       if(req.url==='/grant'){const ctx=context(body);const grantId=crypto.randomBytes(32).toString('hex');grants.set(grantId,{ctx,expires:Date.now()+120000});if(grants.size>2000)for(const [id,g] of grants)if(g.expires<Date.now())grants.delete(id);send(200,{grantId});return;}
       if(req.url==='/spaces'){const ctx=context(body);send(200,body.action==='list'?listSpaces(service,ctx):ensureSpaces(service,ctx,body.members));return;}
+      // Host only: bring a space's Trex Browser window (and optionally a tab) to the front.
+      if(req.url==='/focus'){const ctx=context(body);send(200,await service.focusSpace(ctx,typeof body.tabId==='string'?body.tabId:null));return;}
       if(req.url==='/profiles'){const ctx=context(body);if(body.action==='create')service.createProfile(ctx);send(200,{profiles:service.profiles(ctx)});return;}
+      if(req.url==='/mcp-session'){const ctx=context(body);send(200,{...issueMcpSession(ctx),url:`http://${expected}/mcp`});return;}
       if(req.url==='/shutdown'){send(200,{stopping:true});setImmediate(()=>shutdown());return;}
       if(req.url!=='/call'){send(404,{error:'Unknown route'});return;}
       const grant=grants.get(body.grantId);if(!grant||grant.expires<Date.now())throw new Error('Grant expired');grants.delete(body.grantId);const ctx=grant.ctx;
@@ -95,7 +159,11 @@ async function daemon(){
     }catch(e){send(400,{error:cleanError(e.message)});}
   });
   server.requestTimeout=10000;server.headersTimeout=5000;server.maxConnections=32;
-  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
+  // Reuse the previous port when free so agents' MCP URLs survive a broker restart.
+  const portFile=file(home,'broker-port');const previous=Number(jsonRead(portFile,{}).port)||0;
+  const listen=port=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',()=>{server.off('error',reject);resolve();});});
+  try{await listen(previous);}catch(e){if(!previous||e.code!=='EADDRINUSE')throw e;await listen(0);}
+  writePrivate(portFile,JSON.stringify({port:server.address().port}));
   writePrivate(file(home,'broker.json'),JSON.stringify({port:server.address().port,pid:process.pid,version:VERSION}));
   let closing=false;async function shutdown(){if(closing)return;closing=true;const killTimer=setTimeout(()=>process.exit(0),15000);killTimer.unref();await service.shutdown();server.close();for(const name of ['broker.json','broker.token','broker.lock']){safePath(file(home,name),{allowMissing:true});fs.rmSync(file(home,name),{force:true});}fs.closeSync(fd);process.exit(0);}
   process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
@@ -109,7 +177,7 @@ async function mcp(args){
       if(req.method==='initialize')result=mcpInitialization(req.params);
       else if(req.method==='ping')result={};
       else if(req.method==='tools/list')result={tools:tools(ctx.mode)};
-      else if(req.method==='tools/call'){if(pending.has(req.id))throw new Error('Duplicate pending JSON-RPC request ID');const op=crypto.randomUUID(),controller=new AbortController();ownedPending={operationId:op,controller};pending.set(req.id,ownedPending);result=await doCall({...ctx,name:req.params?.name,arguments:req.params?.arguments||{},operationId:op},controller.signal);}
+      else if(req.method==='tools/call'){if(pending.has(req.id))throw new Error('Duplicate pending JSON-RPC request ID');const op=crypto.randomUUID(),controller=new AbortController();ownedPending={operationId:op,controller};pending.set(req.id,ownedPending);result=forAgent(await doCall({...ctx,name:req.params?.name,arguments:req.params?.arguments||{},operationId:op},controller.signal));}
       else{emit({jsonrpc:'2.0',id:req.id,error:{code:-32601,message:'Method not found'}});return;}
       emit({jsonrpc:'2.0',id:req.id,result});
     }catch(e){emit({jsonrpc:'2.0',id:req.id,error:{code:-32602,message:cleanError(e.message)}});}finally{if(ownedPending&&pending.get(req.id)===ownedPending)pending.delete(req.id);}})();
@@ -120,8 +188,21 @@ async function mcp(args){
 async function main(){const args=argMap(process.argv.slice(2));const command=args._[0];
   if(command==='--version'||args.version||command==='version'){emit({version:VERSION});return;}
   if(command==='tools'){emit({tools:tools(args.mode||'full')});return;}
+  if(command==='engine'){
+    // Host setting: which browser opens for agents from now on (running spaces keep theirs).
+    let engine=readEngine(privateHomePath());
+    if(args._[1]==='set'){const value=args._[2];if(!ENGINES.includes(value))throw new Error('engine must be auto|trex|chrome');const home=privateHome();writePrivate(path.join(home,'engine.json'),JSON.stringify({engine:value}));engine=value;}
+    emit({engine,engines:{trex:!!detectShell('auto'),chrome:detectBrowser('chrome').available},active:detectBrowser(engine).channel||null});return;
+  }
+  if(command==='save-folders'){
+    // Host setting: folders (besides the project) where full-mode agents may save downloads.
+    const action=args._[1]||'list',home=privateHome();
+    if(action==='list'){emit({folders:readSaveFolders(home)});return;}
+    if(!args['stdin-json'])throw new Error('save-folders add|remove requires --stdin-json {"folder":ABS}');
+    const input=await stdinJson();emit({folders:updateSaveFolders(home,action,input.folder)});return;
+  }
   if(command==='doctor'){
-    const browser=detectBrowser(),ffmpeg=ffmpegRuntime();emit({version:VERSION,protocolVersion:PROTOCOL,runtime:{node:process.versions.node.startsWith('24.'),playwright:true,ffmpeg:ffmpeg.available,nodeVersion:process.versions.node,playwrightVersion:'1.64.1',expectedNodeVersion:'24.22.1',...(!ffmpeg.available?{videoError:ffmpeg.error}:{})},browser,capabilities:{spaces:true,batch:true,pageScopedRefs:true,standalone:true,persistentProfiles:true,sandbox:true,screenshots:true,video:ffmpeg.available,trace:true,cdpDiagnostics:true,authenticatedBroker:true,appPreparation:true,modes:MODES},tools:tools(args.mode||'full')});return;
+    const engine=readEngine(privateHomePath()),browser=detectBrowser(engine),ffmpeg=ffmpegRuntime();emit({version:VERSION,protocolVersion:PROTOCOL,runtime:{node:process.versions.node.startsWith('24.'),playwright:true,ffmpeg:ffmpeg.available,nodeVersion:process.versions.node,playwrightVersion:'1.64.1',expectedNodeVersion:'24.22.1',...(!ffmpeg.available?{videoError:ffmpeg.error}:{})},browser,engine,capabilities:{engine:true,mcpHttp:true,humanWindow:true,saveDownloads:true,spaces:true,batch:true,pageScopedRefs:true,standalone:true,persistentProfiles:true,sandbox:true,screenshots:true,video:ffmpeg.available,trace:true,cdpDiagnostics:true,authenticatedBroker:true,appPreparation:true,modes:MODES},tools:tools(args.mode||'full')});return;
   }
   // The app calls this outside the agent's restrictive MCP process job. Only
   // the authenticated service is prepared; Chrome opens on first navigation.
@@ -132,6 +213,22 @@ async function main(){const args=argMap(process.argv.slice(2));const command=arg
   if(command==='call'){if(!args['stdin-json'])throw new Error('call requires --stdin-json');emit(await doCall(await stdinJson()));return;}
   if(command==='artifact-open'){const input=await stdinJson();emit(await doCall({...input,name:'browser_artifact',arguments:{artifactId:input.artifactId,open:true}}));return;}
   if(command==='spaces'){const listing=args._[1]==='list';if(!listing&&!args['stdin-json'])throw new Error('spaces requires --stdin-json');const input=listing?{cwd:args.cwd}:await stdinJson(),ctx=context({...input,mode:'observe',clientId:'host-spaces'}),home=privateHome();await ensureBroker(home);emit(await ipc(home,'/spaces',{...ctx,...(listing?{action:'list'}:{members:input.members})}));return;}
+  if(command==='mcp-session'){if(!args['stdin-json'])throw new Error('mcp-session requires --stdin-json');const input=await stdinJson(),ctx=context({cwd:input.cwd,mode:input.mode,clientId:input.clientId,profile:input.profile}),home=privateHome();await ensureBroker(home);emit(await ipc(home,'/mcp-session',ctx));return;}
+  if(command==='open'){
+    // Host only: a person's window without automation. {personal:true} or {cwd,profile} (agent sign-in).
+    if(!args['stdin-json'])throw new Error('open requires --stdin-json');
+    const input=await stdinJson(),home=privateHome(),shell=detectShell('auto');
+    if(!shell)throw new Error('Trex Browser shell is not installed');
+    const url=typeof input.url==='string'&&/^https?:\/\//.test(input.url)?input.url:undefined;
+    if(input.personal===true){emit(openHumanWindow({executablePath:shell.executablePath,userData:path.join(home,'personal','user-data'),label:'Personal',url,env:childEnvironment()}));return;}
+    const ctx=context({cwd:input.cwd,mode:'observe',clientId:'host-open',profile:input.profile});
+    if(await running(home)){const listed=await ipc(home,'/spaces',{...ctx,action:'list'});if(listed.spaces?.some(sp=>sp.profile===ctx.profile&&sp.running)){emit({opened:false,reason:'agent-running'});return;}}
+    const dir=path.join(home,'projects',ctx.projectId,ctx.profile),manifest=jsonRead(path.join(dir,'profile.json'),null);
+    if(!manifest){emit({opened:false,reason:'unknown-profile'});return;}
+    safePath(dir);
+    emit(openHumanWindow({executablePath:shell.executablePath,userData:path.join(dir,'user-data'),label:`${spaceLabel(manifest.space?.label)||ctx.profile} · inicio de sesión`,url,env:childEnvironment()}));return;
+  }
+  if(command==='focus'){if(!args['stdin-json'])throw new Error('focus requires --stdin-json');const input=await stdinJson(),ctx=context({cwd:input.cwd,profile:input.profile,mode:'observe',clientId:'host-focus'}),home=privateHome();await ensureBroker(home);emit(await ipc(home,'/focus',{...ctx,tabId:input.tabId}));return;}
   if(command==='profiles'){const ctx=boundArgs(args);const home=privateHome();await ensureBroker(home);emit(await ipc(home,'/profiles',{...ctx,action:args._[1]||'list'}));return;}
   if(['pause','resume','stop','status','takeover'].includes(command)){const home=privateHome();if(command==='stop'&&!args.cwd){if(!await running(home)){emit({stopping:false,running:false});return;}emit(await ipc(home,'/shutdown',{}));return;}emit(await doCall({...boundArgs(args),name:`browser_${command==='stop'?'close':command}`,arguments:{}}));return;}
   throw new Error('Commands: --version, doctor --json, prepare --json, tools --json, profiles list|create --cwd ABS, mcp --cwd ABS --mode observe|qa|full --client ID, call --stdin-json, artifact-open --stdin-json, pause|resume|status|takeover|stop');

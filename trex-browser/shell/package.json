@@ -1,0 +1,19 @@
+{
+  "name": "@trex/browser-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Trex Browser native shell: frameless glass window, tabs per agent space, agents center",
+  "main": "main.mjs",
+  "desktopName": "trex-browser.desktop",
+  "scripts": {
+    "start": "electron .",
+    "link-dev": "node scripts/link-dev.mjs",
+    "spike": "node spike/cdp-spike.mjs",
+    "capture": "node spike/capture.mjs"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "playwright": "1.64.1"
+  }
+}

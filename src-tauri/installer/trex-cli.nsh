@@ -252,6 +252,9 @@ FunctionEnd
 
 Function ${PREFIX}TrexBrowserRemove
   Call ${PREFIX}TrexBrowserPreflight
+  ; Shortcuts first: they point into the runtime removed below.
+  Delete "$SMPROGRAMS\Trex Browser.lnk"
+  Delete "$DESKTOP\Trex Browser.lnk"
   ; Only these program assets are owned here. User data lives outside INSTDIR.
   ClearErrors
   Delete "$INSTDIR\trex-browser.exe"
@@ -379,6 +382,10 @@ Function TrexBrowserInstall
     StrCpy $TrexBrowserFailurePath "$INSTDIR\trex-browser-runtime.previous"
     Call TrexBrowserFailIfNeeded
   ${EndIf}
+  ; Start menu and desktop entries open the person's own Trex Browser window
+  ; (no automation, same profile as "Abrir Trex Browser personal" in trex).
+  CreateShortcut "$SMPROGRAMS\Trex Browser.lnk" "$INSTDIR\trex-browser-runtime\shell\trex-browser-shell.exe" "" "$INSTDIR\trex-browser-runtime\shell\resources\app\icons\trex-browser.ico" 0 SW_SHOWNORMAL "" "Navegador web de trex"
+  CreateShortcut "$DESKTOP\Trex Browser.lnk" "$INSTDIR\trex-browser-runtime\shell\trex-browser-shell.exe" "" "$INSTDIR\trex-browser-runtime\shell\resources\app\icons\trex-browser.ico" 0 SW_SHOWNORMAL "" "Navegador web de trex"
   ClearErrors
 FunctionEnd
 !endif

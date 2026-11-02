@@ -8,6 +8,17 @@ export type BrowserStatus = {
   error?: { code: string; message: string };
 };
 export type BrowserConfig = { command: string; args: string[] };
+/** MCP-over-HTTP connection served by the broker (no process per agent). */
+export type BrowserHttp = { kind: "http"; url: string; token: string; cwd: string; clientId: string; profile: string };
+/** What an agent receives: the stdio adapter command or an HTTP endpoint. */
+export type BrowserTransport = BrowserConfig | BrowserHttp;
+/** The HTTP token travels in the agent's environment, never on its command line. */
+export const BROWSER_TOKEN_ENV = "TREX_BROWSER_TOKEN";
+export const isBrowserHttp = (value: unknown): value is BrowserHttp => !!value && typeof value === "object" && (value as { kind?: unknown }).kind === "http";
+export const browserEnv = (value: BrowserTransport | null | undefined): Record<string, string> => isBrowserHttp(value) ? { [BROWSER_TOKEN_ENV]: value.token } : {};
+/** Claude --mcp-config entry; Claude expands the header from its environment. */
+export const claudeBrowserServer = (value: BrowserTransport): Record<string, unknown> | BrowserConfig => isBrowserHttp(value)
+  ? { type: "http", url: value.url, headers: { Authorization: `Bearer \${${BROWSER_TOKEN_ENV}}` } } : value;
 export const BROWSER_INSTRUCTIONS = "Trex Browser is connected as the trex_browser MCP server. Each app chat has an independently assigned browser space; other agents can work in their own spaces at the same time. Use your bound space; never take over another client's profile without the user's explicit request. For browser work use its browser_navigate tool with the app's http(s) URL; this automatically opens the visible project browser, without the user opening it first. Start the application's dev server with normal workspace tools when necessary. Use browser_batch for ordered typed steps under the same permission; never replay a partial batch. Snapshot refs are page-scoped: retain tabId and revision. Inspect the page with browser_snapshot, screenshots, console, network and other permitted browser tools. Desktop/computer-use integrations control a different browser; their failures do not mean Trex Browser is unavailable. Report Trex Browser errors accurately and respect its bound permissions and manual-review requirements.";
 export type BrowserResult = {
   content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];

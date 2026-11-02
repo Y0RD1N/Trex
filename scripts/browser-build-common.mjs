@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { chmodSync as _chmod, copyFileSync as _copy, cpSync as _cp, existsSync as _exists, lstatSync as _lstat, mkdirSync as _mkdir, readFileSync as _read, readdirSync as _readdir, rmSync as _rm, writeFileSync as _write } from 'node:fs';
+import { join as _join, relative as _relative } from 'node:path';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const NODE_VERSION = '24.22.1';
 export const NODE_ARCHIVES = Object.freeze({
@@ -59,4 +61,55 @@ export function assertBrowserMcpHandshake(output) {
       || !['browser_navigate', 'browser_snapshot', 'browser_status'].every(name => inventory.result.tools.some(tool => tool.name === name))) {
     throw new Error('Assembled Browser payload did not negotiate the Codex MCP protocol and navigation tools.');
   }
+}
+
+// ---- Trex Browser shell (Electron) packaging ------------------------------
+// The pinned Electron runtime goes to trex-browser-runtime/shell with our app
+// as real files in resources/app (no default app). Linux and Windows rename
+// the executable to trex-browser-shell; macOS keeps Electron's bundle layout
+// (helpers are located by name) inside "Trex Browser.app".
+/** Chromium UI locales kept in the package (the rest fall back to en-US). */
+export const SHELL_LOCALES = ['en-US', 'es', 'es-419'];
+export const SHELL_EXECUTABLE = Object.freeze({ linux: 'trex-browser-shell', win32: 'trex-browser-shell.exe', darwin: 'Trex Browser.app/Contents/MacOS/Electron' });
+export function packageShell(core, runtime, { platform = process.platform } = {}) {
+  const source = _join(core, 'shell'), shellPackage = JSON.parse(_read(_join(source, 'package.json'), 'utf8')), pinned = shellPackage.devDependencies?.electron;
+  if (!/^\d+\.\d+\.\d+$/.test(pinned || '')) throw new Error('The Trex Browser shell must pin an exact Electron version.');
+  const dist = _join(source, 'node_modules', 'electron', 'dist');
+  if (!_exists(_join(dist, 'version'))) throw new Error('Electron is not downloaded: run `npm ci` and `npx electron --version` in trex-browser/shell.');
+  if (_read(_join(dist, 'version'), 'utf8').trim().replace(/^v/, '') !== pinned) throw new Error('Downloaded Electron does not match the pinned shell version.');
+  const target = _join(runtime, 'shell'); _mkdir(target, { recursive: true });
+  let appDir;
+  if (platform === 'darwin') {
+    const bundle = _join(target, 'Trex Browser.app');
+    _cp(_join(dist, 'Electron.app'), bundle, { recursive: true, verbatimSymlinks: true });
+    const resources = _join(bundle, 'Contents', 'Resources');
+    _rm(_join(resources, 'default_app.asar'), { force: true });
+    const plist = _join(bundle, 'Contents', 'Info.plist');
+    let info = _read(plist, 'utf8');
+    for (const [key, value] of [['CFBundleDisplayName', 'Trex Browser'], ['CFBundleName', 'Trex Browser'], ['CFBundleIdentifier', 'com.trex.browser']])
+      info = info.replace(new RegExp(`(<key>${key}</key>\\s*<string>)[^<]*(</string>)`), `$1${value}$2`);
+    _write(plist, info);
+    appDir = _join(resources, 'app');
+  } else {
+    for (const item of _readdir(dist, { withFileTypes: true })) {
+      if (item.name === 'resources') continue;
+      if (item.isSymbolicLink()) throw new Error('Electron distribution contains a link.');
+      const name = item.name === 'electron' || item.name === 'electron.exe' ? SHELL_EXECUTABLE[platform] : item.name;
+      _cp(_join(dist, item.name), _join(target, name), { recursive: true });
+    }
+    for (const pak of _readdir(_join(target, 'locales'))) if (!SHELL_LOCALES.includes(pak.replace(/\.pak$/, ''))) _rm(_join(target, 'locales', pak));
+    appDir = _join(target, 'resources', 'app');
+  }
+  _mkdir(appDir, { recursive: true });
+  _write(_join(appDir, 'package.json'), JSON.stringify({ name: shellPackage.name, productName: 'Trex Browser', desktopName: 'trex-browser.desktop', version: shellPackage.version, private: true, type: 'module', main: 'main.mjs' }, null, 2) + '\n');
+  for (const name of ['main.mjs', 'preload.cjs']) _copy(_join(source, name), _join(appDir, name));
+  _cp(_join(source, 'ui'), _join(appDir, 'ui'), { recursive: true });
+  _cp(_join(source, 'icons'), _join(appDir, 'icons'), { recursive: true });
+  if (platform === 'linux') {
+    // The native guard refuses group/other-writable executables.
+    const tighten = path => { const stat = _lstat(path); if (stat.isSymbolicLink()) throw new Error('Linux shell contains a link.'); _chmod(path, stat.mode & 0o755); if (stat.isDirectory()) for (const name of _readdir(path)) tighten(_join(path, name)); };
+    tighten(target);
+    for (const name of [SHELL_EXECUTABLE.linux, 'chrome_crashpad_handler', 'chrome-sandbox']) if (_exists(_join(target, name))) _chmod(_join(target, name), 0o755);
+  }
+  return { electron: pinned, executable: _relative(runtime, _join(target, SHELL_EXECUTABLE[platform])).replaceAll('\\', '/') };
 }

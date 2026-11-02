@@ -27,6 +27,7 @@ const TOOL_NAMES: &[&str] = &[
     "browser_stop_video", "browser_start_trace", "browser_stop_trace", "browser_perf_start", "browser_perf_stop",
     "browser_cpu_profile_start", "browser_cpu_profile_stop", "browser_heap_snapshot", "browser_wait_for", "browser_artifact",
     "browser_status", "browser_pause", "browser_resume", "browser_takeover", "browser_cancel", "browser_close", "browser_batch",
+    "browser_save_download",
 ];
 
 #[derive(Serialize)]
@@ -98,7 +99,7 @@ pub struct BrowserProfiles {
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BrowserSpaceMember { client_id: String, label: String }
+pub struct BrowserSpaceMember { client_id: String, label: String, #[serde(default, skip_serializing_if = "Option::is_none")] model: Option<String> }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserSpace { client_id: String, label: String, profile: String }
@@ -363,7 +364,7 @@ fn doctor_status(bytes: &[u8]) -> Result<BrowserStatus, String> {
         }).collect()), error: None };
     status.error = if !compatible { Some(BrowserError { code: "incompatible".into(), message: "Actualiza Trex Browser para usar este protocolo.".into() }) }
         else if !runtime_ready { Some(BrowserError { code: "missing_runtime".into(), message: "Faltan archivos del runtime de Trex Browser. Reinstala el componente.".into() }) }
-        else if !doctor.browser.available { Some(BrowserError { code: "missing_browser".into(), message: "Instala Chromium, Google Chrome o Microsoft Edge para usar Trex Browser.".into() }) }
+        else if !doctor.browser.available { Some(BrowserError { code: "missing_browser".into(), message: "No se encontró el navegador de Trex ni Chrome. Reinstala Trex Browser o instala Chromium, Google Chrome o Microsoft Edge.".into() }) }
         else { None };
     Ok(status)
 }
@@ -481,6 +482,7 @@ pub async fn trex_browser_spaces(cwd: String, members: Vec<BrowserSpaceMember>) 
         for member in &members {
             validate_context(&cwd, "observe", &member.client_id, None)?;
             if !plain(&member.label, 100) || member.label.trim().is_empty() || !clients.insert(&member.client_id) { return Err(INVALID.into()); }
+            if member.model.as_ref().is_some_and(|model| !plain(model, 60) || model.chars().any(char::is_control)) { return Err(INVALID.into()); }
         }
         let bytes = serde_json::to_vec(&serde_json::json!({"cwd":cwd,"members":members})).map_err(|_| FAILED.to_string())?;
         let output = invoke_at(&installed_browser_path()?, &["spaces","--stdin-json"], Some(bytes), PROBE_TIMEOUT, PROBE_LIMIT)?;
@@ -516,6 +518,113 @@ pub async fn trex_browser_list_spaces(cwd: String) -> Result<BrowserSpaceInvento
         validate_context(&cwd,"observe","host-spaces",None)?;
         let output=invoke_at(&installed_browser_path()?, &["spaces","list","--cwd",&cwd,"--json"],None,PROBE_TIMEOUT,PROBE_LIMIT)?;
         space_inventory(&output,&cwd)
+    }).await
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct BrowserFocus { pub focused: bool, #[serde(default, skip_serializing_if = "Option::is_none")] pub reason: Option<String> }
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct BrowserMcpSession { pub url: String, pub token: String, pub mode: String }
+
+/// Per-agent MCP-over-HTTP session served by the broker. The token is handed to
+/// the agent through its environment, never its command line. Re-issuing for
+/// the same agent keeps the token and only changes the bound mode.
+#[tauri::command]
+pub async fn trex_browser_mcp_session(cwd: String, mode: String, client_id: String, profile: Option<String>) -> Result<BrowserMcpSession, String> {
+    crate::blocking(move || {
+        validate_context(&cwd, &mode, &client_id, profile.as_deref())?;
+        let bytes = serde_json::to_vec(&serde_json::json!({"cwd":cwd,"mode":mode,"clientId":client_id,"profile":profile})).map_err(|_| FAILED.to_string())?;
+        let output = invoke_at(&installed_browser_path()?, &["mcp-session","--stdin-json"], Some(bytes), Duration::from_secs(30), PROBE_LIMIT)?;
+        let session: BrowserMcpSession = serde_json::from_slice(&output).map_err(|_| INVALID.to_string())?;
+        let valid_url = session.url.strip_prefix("http://127.0.0.1:").and_then(|rest| rest.strip_suffix("/mcp"))
+            .is_some_and(|port| port.parse::<u16>().is_ok_and(|p| p > 0));
+        if !valid_url || session.token.len() != 64 || !session.token.bytes().all(|b| b.is_ascii_hexdigit()) || session.mode != mode { return Err(INVALID.into()); }
+        Ok(session)
+    }).await
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct BrowserOpen { pub opened: bool, #[serde(default, skip_serializing_if = "Option::is_none")] pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub reused: Option<bool>, #[serde(default, skip_serializing_if = "Option::is_none")] pub pid: Option<u32> }
+
+/// Opens a person's Trex Browser window without automation: the personal
+/// profile, or (with cwd + profile) an agent's closed space to sign in.
+#[tauri::command]
+pub async fn trex_browser_open(cwd: Option<String>, profile: Option<String>, url: Option<String>) -> Result<BrowserOpen, String> {
+    crate::blocking(move || {
+        if url.as_ref().is_some_and(|u| !plain(u, 4096) || !(u.starts_with("http://") || u.starts_with("https://"))) { return Err(INVALID.into()); }
+        let input = match (&cwd, &profile) {
+            (Some(cwd), Some(profile)) => { validate_context(cwd, "observe", "host-open", Some(profile))?; serde_json::json!({"cwd":cwd,"profile":profile,"url":url}) }
+            (None, None) => serde_json::json!({"personal":true,"url":url}),
+            _ => return Err(INVALID.into()),
+        };
+        let bytes = serde_json::to_vec(&input).map_err(|_| FAILED.to_string())?;
+        let output = invoke_at(&installed_browser_path()?, &["open","--stdin-json"], Some(bytes), PROBE_TIMEOUT, PROBE_LIMIT)?;
+        serde_json::from_slice(&output).map_err(|_| INVALID.to_string())
+    }).await
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct BrowserEngines { pub trex: bool, pub chrome: bool }
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct BrowserEngine { pub engine: String, pub engines: BrowserEngines, pub active: Option<String> }
+
+/// Which browser agents get from now on: "auto" (Trex Browser, else Chrome),
+/// "trex" or "chrome". Without `engine` it only reads the current choice.
+#[tauri::command]
+pub async fn trex_browser_engine(engine: Option<String>) -> Result<BrowserEngine, String> {
+    crate::blocking(move || {
+        let args: Vec<&str> = match engine.as_deref() {
+            None => vec!["engine", "--json"],
+            Some(value @ ("auto" | "trex" | "chrome")) => vec!["engine", "set", value, "--json"],
+            Some(_) => return Err(INVALID.into()),
+        };
+        let output = invoke_at(&installed_browser_path()?, &args, None, PROBE_TIMEOUT, PROBE_LIMIT)?;
+        let result: BrowserEngine = serde_json::from_slice(&output).map_err(|_| INVALID.to_string())?;
+        if !["auto", "trex", "chrome"].contains(&result.engine.as_str()) { return Err(INVALID.into()); }
+        Ok(result)
+    }).await
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct BrowserSaveFolders { pub folders: Vec<String> }
+
+/// Folders (besides each project) where full-mode agents may save their
+/// downloads. Only the person adds or removes them, from Trex settings.
+#[tauri::command]
+pub async fn trex_browser_save_folders(action: Option<String>, folder: Option<String>) -> Result<BrowserSaveFolders, String> {
+    crate::blocking(move || {
+        let action = action.unwrap_or_else(|| "list".into());
+        let browser = installed_browser_path()?;
+        let output = match action.as_str() {
+            "list" => invoke_at(&browser, &["save-folders", "list", "--json"], None, PROBE_TIMEOUT, PROBE_LIMIT)?,
+            "add" | "remove" => {
+                let folder = folder.filter(|f| !f.is_empty() && f.len() <= 4096 && !f.chars().any(char::is_control)).ok_or_else(|| INVALID.to_string())?;
+                if !std::path::Path::new(&folder).is_absolute() { return Err(INVALID.into()); }
+                let bytes = serde_json::to_vec(&serde_json::json!({"folder": folder})).map_err(|_| FAILED.to_string())?;
+                invoke_at(&browser, &["save-folders", action.as_str(), "--stdin-json"], Some(bytes), PROBE_TIMEOUT, PROBE_LIMIT)
+                    .map_err(|_| "No se puede autorizar esa carpeta. Elige una carpeta concreta (no la carpeta personal completa, la raíz del disco ni carpetas ocultas).".to_string())?
+            }
+            _ => return Err(INVALID.into()),
+        };
+        let result: BrowserSaveFolders = serde_json::from_slice(&output).map_err(|_| INVALID.to_string())?;
+        if result.folders.len() > 32 || result.folders.iter().any(|f| f.len() > 4096) { return Err(INVALID.into()); }
+        Ok(result)
+    }).await
+}
+
+/// Host-only: raise a space's Trex Browser window, optionally on one tab.
+/// Agents never get this; selecting a tab as an agent must not steal focus.
+#[tauri::command]
+pub async fn trex_browser_focus(cwd: String, profile: String, tab_id: Option<String>) -> Result<BrowserFocus, String> {
+    crate::blocking(move || {
+        validate_context(&cwd, "observe", "host-focus", Some(&profile))?;
+        if tab_id.as_ref().is_some_and(|id| !plain(id, 64) || !id.starts_with("tab-")) { return Err(INVALID.into()); }
+        let bytes = serde_json::to_vec(&serde_json::json!({"cwd":cwd,"profile":profile,"tabId":tab_id})).map_err(|_| FAILED.to_string())?;
+        let output = invoke_at(&installed_browser_path()?, &["focus","--stdin-json"], Some(bytes), PROBE_TIMEOUT, PROBE_LIMIT)?;
+        if output.len() > PROBE_LIMIT { return Err(INVALID.into()); }
+        serde_json::from_slice(&output).map_err(|_| INVALID.to_string())
     }).await
 }
 
