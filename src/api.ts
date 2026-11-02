@@ -180,6 +180,9 @@ export type GitBranches = { current: string | null; detached: boolean; branches:
 export const listGitBranches = (cwd: string): Promise<GitBranches> => invoke("git_branches", { cwd });
 export const switchGitBranch = (cwd: string, reference: string): Promise<GitBranches> => invoke("git_switch_branch", { cwd, reference });
 export const createGitBranch = (cwd: string, name: string): Promise<GitBranches> => invoke("git_create_branch", { cwd, name });
+export const gitProjectStatus = (cwd: string, fetch = false, remote: string | null = null): Promise<import("./gitPanel").GitProjectStatus> => invoke("git_project_status", { cwd, fetch, remote });
+export const gitProjectDiff = (cwd: string, path: string | null = null, base: string | null = null, remote: string | null = null): Promise<import("./gitPanel").GitProjectDiff> => invoke("git_project_diff", { cwd, path, base, remote });
+export const gitProjectAction = (cwd: string, token: string, action: "commit" | "push" | "pull", paths: string[] = [], message = "", remote: string | null = null): Promise<import("./gitPanel").GitProjectStatus> => invoke("git_project_action", { cwd, token, action, paths, message, remote });
 
 /** Ventana de contexto de cada modelo de Codex (de su caché local); vacío si no se sabe. */
 export const codexContextWindows = (configDir: string): Promise<Record<string, number>> =>
@@ -214,6 +217,7 @@ export const DEFAULT_FONT_FAMILY =
   '"JetBrains Mono Variable", "Hack Nerd Font Mono", "Noto Sans Symbols 2", "Noto Color Emoji", ui-monospace, "Cascadia Mono", monospace';
 
 export const DEFAULT_SETTINGS: Settings = {
+  timeFormat: "24h",
   integrations: { ...DEFAULT_INTEGRATIONS },
   desktopEnabled: false,
   browserEnabled: true,
@@ -439,6 +443,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   if (bindingError(shortcuts,pasteShortcut)) { pasteShortcut = DEFAULT_PASTE_SHORTCUT; shortcuts = normalizeShortcuts(settingsRaw.shortcuts,pasteShortcut); }
 
   const settings: Settings = {
+    timeFormat: settingsRaw.timeFormat === "12h" ? "12h" : "24h",
     integrations: normalizeIntegrations(settingsRaw.integrations),
     desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
     browserEnabled: asBool(settingsRaw.browserEnabled, DEFAULT_SETTINGS.browserEnabled),
@@ -608,7 +613,8 @@ export async function trexBrowserResolveSpace(cwd: string, options: BrowserOptio
 export const trexBrowserCreateProfile = (cwd: string, profile: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_create_profile", { cwd, profile });
 
 export const agentTeamOpen = (team: import("./agentTeam").AgentTeam, cwd: string, resume = false): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_open", {
-  id: team.id, epoch: team.epoch, cwd, resume, members: team.workers.map(member => ({ id: member.id, name: member.name, role: member.role, canWrite: member.canWrite })),
+    id: team.id, epoch: team.epoch, cwd, resume, coordinatorCanWrite: team.master.canWrite,
+    members: team.workers.map(member => ({ id: member.id, name: member.name, role: member.role, canWrite: member.canWrite })),
 });
 export const agentTeamPoll = (binding: import("./agentTeam").TeamBinding): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_poll", binding);
 export const agentTeamSnapshot = (id: string): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_snapshot", { id });

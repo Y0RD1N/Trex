@@ -6,6 +6,7 @@ import { load } from './ts-loader.mjs';
 const teamHelpers=await load('agentTeam'),roomHelpers=await load('agentRoom');
 const profiles=await load('profiles'),state=await load('chatState'),{DEFAULT_SETTINGS}=await load('api');
 const safety=await load('workflowSafety');
+const permissions=await load('agentPermissions');
 const handoff=await load('handoff');
 const source=await readFile(new URL('../src/App.tsx',import.meta.url),'utf8');
 const ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
@@ -14,7 +15,7 @@ function harness(captured=false){
  const project={id:'project',name:'Test',path:'D:/test'},settings={...DEFAULT_SETTINGS},opened=[],prepared=[],errors=[];
  const existing={id:'existing',projectId:'project',activity:'idle',kind:'codex',profileId:'codex-default',profileName:'Codex',conversationId:'550e8400-e29b-41d4-a716-446655440000',command:'codex',args:'',shell:'powershell',launchMode:'arg',env:null,chatMode:'auto'};
  let tabs=captured?[existing]:[];
- const scope={...profiles,...state,...teamHelpers,...safety,...handoff,workflowStartingRef:{current:false},workflowProject:project,configRef:{current:{settings,projects:[project]}},trexInstalledRef:{current:true},IS_WINDOWS:true,handoffTargetReason:()=>null,
+ const scope={...profiles,...state,...teamHelpers,...safety,...handoff,...permissions,workflowStartingRef:{current:false},workflowProject:project,configRef:{current:{settings,projects:[project]}},trexInstalledRef:{current:true},IS_WINDOWS:true,handoffTargetReason:()=>null,
   workflowSourceRef:{current:captured?{context:{source:{sessionId:'existing'},content:'Saved prior discussion'},itemIds:['old-user']}:null},tabsRef:{current:tabs},
   crypto:{randomUUID:()=> '550e8400-e29b-41d4-a716-446655440001'},workflowSurfaceRef:{current:null},setWorkflowError:error=>{if(error)errors.push(error);},setWorkflowSubmitting(){},setWorkflowProject(){},setActiveTabId(){},
   requestAnimationFrame:callback=>callback(),waitForMotion:(_surface,callback)=>callback(),showToast:message=>errors.push(message),formatError:error=>String(error),
@@ -31,6 +32,17 @@ test('saving a two-agent configuration opens an idle chat without an idea or pen
 test('saving an ordered team only creates a chat and keeps first-message setup pending',async()=>{
  const h=harness();const request=teamRequest();request.workers.reverse();await handler('startTeam',h.scope)(request);assert.deepEqual(h.errors,[]);assert.equal(h.prepared.length,0);assert.equal(h.opened.length,1);
  const team=h.opened[0][7];assert.equal(team.initial,null);assert.deepEqual(team.setup,{context:null});assert.deepEqual(team.workers.map(w=>w.id),['review','implement']);assert.equal(team.master.canWrite,false);
+});
+test('workflow setup applies explicit permissions to planner and executor, including an inherited chat',async()=>{
+ const h=harness(true);await handler('startWorkflow',h.scope)({planner:{...choice('claude-default'),mode:'acceptEdits'},executor:{...choice('codex-default'),mode:'full'}});
+ assert.deepEqual(h.errors,[]);const room=h.tabs[0].agentRoom;assert.equal(room.planner.mode,'acceptEdits');assert.equal(room.executor.mode,'full');
+ assert.equal(roomHelpers.normalizeAgentRoom(room).planner.mode,'acceptEdits');
+});
+test('team setup preserves a writable principal and independent native permissions for each member',async()=>{
+ const h=harness();const request=teamRequest();request.master.mode='acceptEdits';request.master.canWrite=true;request.workers[0].mode='full';request.workers[1].mode='plan';
+ await handler('startTeam',h.scope)(request);assert.deepEqual(h.errors,[]);const team=h.opened[0][7];
+ assert.equal(team.master.canWrite,true);assert.equal(team.master.mode,'acceptEdits');assert.equal(team.workers[0].mode,'full');assert.equal(team.workers[1].canWrite,false);
+ assert.match(teamHelpers.teamInstruction(team),/wait:false/);assert.match(teamHelpers.teamInstruction(team),/termina la respuesta/);
 });
 for(const name of ['startWorkflow','startTeam'])test(name+': converting a chat preserves context for the next explicit message without auto-delivery',async()=>{
  const h=harness(true);await handler(name,h.scope)(name==='startTeam'?teamRequest():{planner:choice('claude-default'),executor:choice('codex-default')});assert.deepEqual(h.errors,[]);assert.equal(h.prepared.length,1);assert.equal(h.prepared[0].content,'Saved prior discussion');assert.equal(h.opened.length,0);

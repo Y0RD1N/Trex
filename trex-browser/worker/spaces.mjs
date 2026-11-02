@@ -45,7 +45,7 @@ export function listSpaces(service, ctx) {
     const page=state?.tabs.get(state.selected),operation=live.get(profile.id);
     const capture=state?.capture?.kind;
     return [{clientId,profile:profile.id,label:member?.label ?? `Manual · ${profile.id}`,
-      running:!!state?.browser,paused:state?.paused===true,active:!!operation||!!capture,tabCount:state?.tabs.size??0,
+      running:!!state?.browser,inUse:!!state?.browser||!!state?.opening||!!service.shellHosts?.get(ctx.projectId)?.host?.loaded.has(profile.id),paused:state?.paused===true,active:!!operation||!!capture,tabCount:state?.tabs.size??0,
       currentTool:operation?.name ?? (capture==='video'?'browser_start_video':null),
       url:String(page?.url()??'').slice(0,1024)}];
   })};

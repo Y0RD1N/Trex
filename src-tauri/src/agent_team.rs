@@ -90,6 +90,8 @@ pub struct Snapshot {
     pub heartbeat: u64,
     cwd: String,
     members: Vec<Member>,
+    #[serde(default)]
+    coordinator_can_write: bool,
 }
 fn regular(path: &Path) -> Result<(), String> {
     let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
@@ -271,13 +273,25 @@ fn pause(state: &mut Snapshot) {
         }
     }
 }
+#[cfg(test)]
 fn open(
+    root: &Path,
+    id: &str,
+    epoch: &str,
+    cwd: &str,
+    members: Vec<Member>,
+    resume: bool,
+) -> Result<Snapshot, String> {
+    open_with_permissions(root, id, epoch, cwd, members, resume, false)
+}
+fn open_with_permissions(
     root: &Path,
     id: &str,
     epoch: &str,
     cwd: &str,
     mut members: Vec<Member>,
     resume: bool,
+    coordinator_can_write: bool,
 ) -> Result<Snapshot, String> {
     if !valid_id(epoch)
         || members.is_empty()
@@ -319,12 +333,17 @@ fn open(
             phase: "running".into(),
             cwd: cwd.into(),
             members: members.clone(),
+            coordinator_can_write,
             heartbeat: now(),
             tasks: vec![],
             plan: vec![],
         }
     };
-    if state.id != id || state.cwd != cwd || state.members != members {
+    if state.id != id
+        || state.cwd != cwd
+        || state.members != members
+        || state.coordinator_can_write != coordinator_can_write
+    {
         return Err(
             "Los participantes y el proyecto de un equipo existente son inmutables.".into(),
         );
@@ -513,7 +532,7 @@ pub fn tool_definitions() -> Value {
     json!([
         {"name":"trex_team_plan","description":"Publica la lista de tareas del equipo antes de delegar. No ejecuta trabajo. Usa las mismas taskKey, memberId y task al delegar; el progreso se obtiene de los resultados reales. Puedes revisar pasos aún no enviados, sin ocultar tareas ya emitidas.","inputSchema":{"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"taskKey":{"type":"string","maxLength":100},"memberId":{"type":"string"},"task":{"type":"string","maxLength":16384},"dependsOn":{"type":"array","maxItems":8,"items":{"type":"string"}}},"required":["taskKey","memberId","task"],"additionalProperties":false}}},"required":["steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
         {"name":"trex_team_members","description":"Lista los subagentes configurados, sus funciones y permisos. No crea participantes ni cambia modelos.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true}},
-        {"name":"trex_delegate_task","description":"Delega una tarea a un subagente configurado y espera su resultado. Con wait:false solo encola y devuelve el taskId: úsalo para enviar tareas independientes antes de esperar sus resultados. El plan dependsOn define dependencias; las escrituras son exclusivas y hay hasta cuatro lectores simultáneos. Usa un taskKey único y estable; reutilízalo solo para recuperar la misma tarea, nunca para repetir una tarea incierta o cancelada.","inputSchema":{"type":"object","properties":{"memberId":{"type":"string"},"taskKey":{"type":"string","maxLength":100},"task":{"type":"string","maxLength":16384},"wait":{"type":"boolean","default":true}},"required":["memberId","taskKey","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
+        {"name":"trex_delegate_task","description":"Delega una tarea a un subagente configurado y espera su resultado. Si el principal puede editar, devuelve la tarea en cola y awaitCoordinatorTurnEnd:true: termina el turno para que empiece el subagente. Con wait:false solo encola y devuelve el taskId: úsalo para enviar tareas independientes antes de esperar sus resultados. El plan dependsOn define dependencias; las escrituras son exclusivas y hay hasta cuatro lectores simultáneos. Usa un taskKey único y estable; reutilízalo solo para recuperar la misma tarea, nunca para repetir una tarea incierta o cancelada.","inputSchema":{"type":"object","properties":{"memberId":{"type":"string"},"taskKey":{"type":"string","maxLength":100},"task":{"type":"string","maxLength":16384},"wait":{"type":"boolean","default":true}},"required":["memberId","taskKey","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
         {"name":"trex_task_status","description":"Consulta el estado de las tareas. Con taskId devuelve también el resultado conservado. waitMs (0..30000) espera cambios o la finalización sin ejecutar trabajo ni gastar turnos en consultas repetidas.","inputSchema":{"type":"object","properties":{"taskId":{"type":"string"},"waitMs":{"type":"integer","minimum":0,"maximum":30000}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
     ])
 }
@@ -618,7 +637,10 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
     }
     if name == "trex_team_members" {
         let state = mutate(root, id, epoch, |s| live(s))?;
-        return Ok(result(json!({"members":state.members}), false));
+        return Ok(result(
+            json!({"members":state.members,"coordinatorCanWrite":state.coordinator_can_write}),
+            false,
+        ));
     }
     if name == "trex_task_status" {
         let mut state = mutate(root, id, epoch, |s| live(s))?;
@@ -637,7 +659,8 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             .transpose()?
             .unwrap_or(0);
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
-        while Instant::now() < deadline
+        while !state.coordinator_can_write
+            && Instant::now() < deadline
             && state.tasks.iter().any(|task| {
                 task_id.is_none_or(|id| id == task.id) && ACTIVE.contains(&task.status.as_str())
             })
@@ -713,14 +736,14 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
         settle_blocked(state);
         Ok(())
     })?;
-    if !wait {
+    if !wait || initial.coordinator_can_write {
         let task = initial
             .tasks
             .iter()
             .find(|task| task.id == selected)
             .ok_or("La tarea no está disponible.")?;
         return Ok(result(
-            json!({"task":task,"queued":ACTIVE.contains(&task.status.as_str())}),
+            json!({"task":task,"queued":ACTIVE.contains(&task.status.as_str()),"awaitCoordinatorTurnEnd":initial.coordinator_can_write && ACTIVE.contains(&task.status.as_str())}),
             ["failed", "cancelled", "uncertain"].contains(&task.status.as_str()),
         ));
     }
@@ -774,11 +797,14 @@ pub async fn agent_team_open(
     cwd: String,
     members: Vec<Member>,
     resume: bool,
+    coordinator_can_write: Option<bool>,
 ) -> Result<Snapshot, String> {
     let root = data_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || open(&root, &id, &epoch, &cwd, members, resume))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        open_with_permissions(&root, &id, &epoch, &cwd, members, resume, coordinator_can_write.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn agent_team_snapshot(app: AppHandle, id: String) -> Result<Snapshot, String> {
@@ -1064,6 +1090,26 @@ mod tests {
                 can_write: false,
             },
         ]
+    }
+    #[test]
+    fn writable_coordinator_defers_delegation_and_waits_until_its_turn_ends() {
+        let fixture = Fixture::new();
+        let cwd = fixture.root.to_str().unwrap();
+        let state = open_with_permissions(
+            &fixture.root, "team", "epoch", cwd, members(), false, true,
+        ).unwrap();
+        assert!(state.coordinator_can_write);
+        let result = tool(
+            &fixture.root, "team", "epoch", "trex_delegate_task",
+            &json!({"memberId":"impl","taskKey":"change","task":"Implement the change","wait":true}),
+        ).unwrap();
+        assert_eq!(result["structuredContent"]["task"]["status"], "queued");
+        assert_eq!(result["structuredContent"]["awaitCoordinatorTurnEnd"], true);
+        let stamp = Instant::now();
+        let status = tool(&fixture.root, "team", "epoch", "trex_task_status", &json!({"waitMs":30000})).unwrap();
+        assert!(stamp.elapsed() < Duration::from_secs(2));
+        assert_eq!(status["structuredContent"]["tasks"][0]["status"], "queued");
+        assert!(open_with_permissions(&fixture.root, "team", "epoch", cwd, members(), false, false).is_err());
     }
     #[test]
     fn configuration_is_bound_to_workspace_members_and_fresh_epoch() {

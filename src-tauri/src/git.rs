@@ -75,7 +75,7 @@ pub struct GitBranches {
     pub branches: Vec<GitBranch>,
 }
 
-fn branches(cwd: &str) -> Result<GitBranches, String> {
+pub(crate) fn branches(cwd: &str) -> Result<GitBranches, String> {
     if git(cwd, &["rev-parse", "--is-inside-work-tree"]).as_deref() != Some("true") {
         return Err("Esta carpeta no es un repositorio de Git o Git no está disponible.".into());
     }
@@ -145,12 +145,12 @@ pub async fn git_branches(cwd: String) -> Result<GitBranches, String> {
 
 #[tauri::command]
 pub async fn git_switch_branch(cwd: String, reference: String) -> Result<GitBranches, String> {
-    tauri::async_runtime::spawn_blocking(move || switch_branch(&cwd, &reference)).await.map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || crate::git_panel::with_repo_lock(&cwd, || switch_branch(&cwd, &reference))).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
 pub async fn git_create_branch(cwd: String, name: String) -> Result<GitBranches, String> {
-    tauri::async_runtime::spawn_blocking(move || create_branch(&cwd, &name)).await.map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || crate::git_panel::with_repo_lock(&cwd, || create_branch(&cwd, &name))).await.map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]

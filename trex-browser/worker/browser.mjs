@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { SharedShell } from './shared-shell.mjs';
 import { chromium } from 'playwright';
 import { Artifacts, MAX_ARTIFACT, MAX_IMAGE, jsonRead, writePrivate, safePath, uploadSnapshot, childEnvironment, sha256, saveTarget, writeNewFile } from './security.mjs';
 import { validateArguments } from './tools.mjs';
@@ -48,7 +50,7 @@ const EFFECT_TOOLS=new Set(['browser_click','browser_type','browser_fill_form','
 const PAUSE_CONTROL=new Set(['browser_resume','browser_takeover','browser_artifact','browser_pause','browser_close','browser_stop_video','browser_stop_trace','browser_perf_stop','browser_cpu_profile_stop']);
 function pausedError(s){return Object.assign(new Error(s.pauseReason==='manual'?'Page controls were paused explicitly. Observation, screenshots and logs remain available; resume only when the user is ready.':'A previous page action has an uncertain outcome. Observation remains available: inspect browser_snapshot/browser_take_screenshot, then the owner may call browser_resume. Do not replay the previous action.'),{code:'PAUSED'});}
 export class BrowserService {
-  constructor(home){this.home=home;this.artifacts=new Artifacts(home);this.sessions=new Map();this.operations=new Map();}
+  constructor(home){this.home=home;this.artifacts=new Artifacts(home);this.sessions=new Map();this.operations=new Map();this.shellHosts=new Map();}
   profileDir(ctx){return path.join(this.home,'projects',ctx.projectId,ctx.profile);}
   profiles(ctx){const dir=path.join(this.home,'projects',ctx.projectId);safePath(dir,{allowMissing:true});if(!fs.existsSync(dir))return [];return fs.readdirSync(dir).filter(n=>/^BROWSER[1-9][0-9]?$/.test(n)).map(id=>({id,name:id,projectId:ctx.projectId,...jsonRead(path.join(dir,id,'profile.json'),{})}));}
   createProfile(ctx){const dir=this.profileDir(ctx);safePath(dir,{allowMissing:true});fs.mkdirSync(dir,{recursive:true,mode:0o700});const manifest=path.join(dir,'profile.json');if(!fs.existsSync(manifest))writePrivate(manifest,JSON.stringify({createdAt:new Date().toISOString()}));return this.profiles(ctx).find(p=>p.id===ctx.profile);}
@@ -81,6 +83,7 @@ export class BrowserService {
     this.createProfile(ctx);const userData=path.join(this.profileDir(ctx),'user-data');safePath(userData,{allowMissing:true});
     if(profileHolder(userData))throw Object.assign(new Error('This profile is open in a person\'s Trex Browser window (sign-in). Ask the user to close that window, then navigate again.'),{code:'PROFILE_IN_USE'});
     const space=this.profiles(ctx).find(p=>p.id===ctx.profile)?.space;s.spaceLabel=spaceLabel(space?.label)||ctx.profile;s.spaceModel=typeof space?.model==='string'?space.model:'';s.spaceClientId=space?.clientId||null;
+    if(browser.shell){await this.openSharedShell(s,ctx,browser);return;}
     // The shell sizes its own tab views; viewport emulation would desynchronise them.
     // Electron parents JS dialogs to its window; a hidden Wayland window cannot be
     // exported as a parent, so headless shell runs (tests/CI) use XWayland.
@@ -99,6 +102,34 @@ export class BrowserService {
     s.startupStage=null;
     if(!s.owner)s.owner=ctx.clientId;
     this.notifyShell(s);
+  }
+  async projectShell(ctx,browser){
+    let slot=this.shellHosts.get(ctx.projectId);
+    if(slot?.host?.closing){await slot.host.closing;if(this.shellHosts.get(ctx.projectId)===slot)this.shellHosts.delete(ctx.projectId);slot=null;}
+    if(slot)return slot.promise;
+    slot={};this.shellHosts.set(ctx.projectId,slot);
+    slot.promise=SharedShell.launch({root:path.dirname(this.profileDir(ctx)),executablePath:browser.executablePath,artifacts:path.join(this.home,'artifacts'),projectLabel:path.basename(ctx.cwd),
+      onEvent:message=>{
+        const origin=[...this.sessions.values()].find(state=>state.ctx.projectId===ctx.projectId&&state.ctx.profile===message?.profile)
+          || [...this.sessions.values()].find(state=>state.ctx.projectId===ctx.projectId&&state.sharedHost===slot.host);
+        return origin?this.shellEvent(origin,message):undefined;
+      },
+      onFailure:error=>{for(const state of this.sessions.values())if(state.ctx.projectId===ctx.projectId&&state.sharedHost){state.supervisorError=error.message;this.pause(state,'runtime',state.active);state.active?.controller.abort();}},
+      onClosed:host=>{if(this.shellHosts.get(ctx.projectId)===slot)this.shellHosts.delete(ctx.projectId);},
+    }).then(host=>(slot.host=host)).catch(error=>{if(this.shellHosts.get(ctx.projectId)===slot)this.shellHosts.delete(ctx.projectId);throw error;});
+    return slot.promise;
+  }
+  async openSharedShell(s,ctx,browser){
+    s.startupStage='shared-window';const host=await this.projectShell(ctx,browser);s.sharedHost=host;
+    const scope=await host.open({profile:ctx.profile,label:s.spaceLabel,model:s.spaceModel,clientId:s.spaceClientId||ctx.clientId});
+    s.browser=scope.context;s.shell=scope.link;s.supervisorError=null;
+    s.cdps=new Map();s.networkConditions=new WeakMap();s.emulationOffline=false;
+    const opened=s.browser;
+    opened.on('page',page=>this.attachPage(s,page));
+    opened.on('close',()=>{if(s.browser!==opened)return;s.browser=null;s.shell=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();s.capture=null;s.generation++;});
+    for(const page of opened.pages())this.attachPage(s,page);
+    if(!s.tabs.size)this.attachPage(s,await s.shell.newTab());
+    s.startupStage=null;if(!s.owner)s.owner=ctx.clientId;this.notifyShell(s);
   }
   attachPage(s,p){if(s.shell?.isUi(p)||[...s.tabs.values()].includes(p))return;const id=`tab-${++s.revision}`;s.tabs.set(id,p);this.pageState(s,p);s.selected||=id;
     p.on('close',()=>{this.invalidate(s,p);s.tabs.delete(id);s.pageStates.delete(p);s.cdps?.delete(p);s.revision++;if(s.selected===id)s.selected=s.tabs.keys().next().value;});
@@ -156,7 +187,7 @@ export class BrowserService {
     if(!open()){clearInterval(this.thumbTimers.get(projectId));this.thumbTimers.delete(projectId);return;}
     if(this.thumbTimers.has(projectId))return;
     const tick=async()=>{if(!open())return this.thumbnails(projectId);
-      await Promise.all([...this.sessions.values()].filter(x=>x.ctx.projectId===projectId&&x.browser&&!x.centerOpen).map(async x=>{const p=x.tabs.get(x.selected);if(!p||p.isClosed())return;
+      await Promise.all([...this.sessions.values()].filter(x=>x.ctx.projectId===projectId&&x.browser&&(!x.centerOpen||x.shell?.shared)).map(async x=>{const p=x.tabs.get(x.selected);if(!p||p.isClosed())return;
         try{const jpeg=await p.screenshot({type:'jpeg',quality:45,scale:'css',timeout:2500});x.thumbnail=`data:image/jpeg;base64,${jpeg.toString('base64')}`;}catch{}}));
       this.pushSpaces(projectId);};
     tick();const timer=setInterval(tick,2500);timer.unref?.();this.thumbTimers.set(projectId,timer);
@@ -169,16 +200,34 @@ export class BrowserService {
     if(tabId){const p=s.tabs.get(tabId);if(!p)throw new Error('Tab not found');s.selected=tabId;await s.shell.select(p);}
     return {focused:!!await s.shell.focus()};
   }
-  shellEvent(s,m){
-    if(m?.type==='center'){s.centerOpen=!!m.open;this.thumbnails(s.ctx.projectId);return;}
+  async shellEvent(s,m){
+    if(m?.type==='center'){for(const state of this.sessions.values())if(state===s||s.sharedHost&&state.sharedHost===s.sharedHost)state.centerOpen=!!m.open;this.thumbnails(s.ctx.projectId);return;}
     if(m?.type!=='control')return;
-    const t=m.clientId==='self'?s:[...this.sessions.values()].find(x=>x.ctx.projectId===s.ctx.projectId&&this.spaceClient(x)===m.clientId);
-    if(!t)return;
+    const t=m.clientId==='self'?s:[...this.sessions.values()].find(x=>x.ctx.projectId===s.ctx.projectId&&this.spaceClient(x)===m.clientId&&(!m.profile||x.ctx.profile===m.profile));
+    if(!t||!t.browser)throw new Error('Este espacio ya no está abierto. Actualiza el panel.');
     // Human controls reuse the explicit pause semantics; uncertain pauses still need inspection by the owner.
-    if(m.action==='pause'||m.action==='takeover'){if(!(t.paused&&t.pauseReason==='manual')){this.pause(t,'manual');t.generation++;}if(m.action==='takeover')t.shell?.focus();}
-    else if(m.action==='resume'){if(t.paused&&t.pauseReason==='manual'&&!t.active?.controller.signal.aborted)this.unpause(t);}
-    else if(m.action==='focus')t.shell?.focus();
+    if(m.action==='pause'||m.action==='takeover'){
+      // Inspection must preserve uncertain/runtime pauses, never turn them into a resumable manual pause.
+      if(!t.paused)this.pause(t,'manual');
+      t.generation++;
+      if(t.active&&!t.active.controller.signal.aborted)t.active.controller.abort();
+      if(m.action==='takeover'&&!await t.shell?.focus())throw new Error('El espacio quedó pausado, pero no se pudo mostrar su ventana.');
+    }
+    else if(m.action==='resume'){
+      if(t.supervisorError||t.paused&&t.pauseReason!=='manual')throw new Error('Este espacio requiere revisar la operación anterior antes de reanudarlo desde el agente.');
+      if(t.active?.controller.signal.aborted)throw new Error('La acción anterior aún está terminando. Revisa el espacio antes de reanudar.');
+      if(t.paused){this.unpause(t);t.generation++;}
+    }
+    else if(m.action==='focus'){
+      if(!await t.shell?.focus())throw new Error('No se pudo mostrar la ventana de este espacio.');
+    }
+    else if(m.action==='screenshot'){
+      const result=await this.call(t.ctx,'browser_take_screenshot',{type:'jpeg',quality:80},`shell-${randomUUID()}`,12000);
+      return {ok:true,image:result.image};
+    }
+    else throw new Error('Acción del navegador no disponible.');
     this.notifyShell(t);
+    return {ok:true,action:m.action};
   }
   page(s,args={}){const p=s.tabs.get(args.tabId||s.selected);if(!p)throw new Error('Tab not found; list browser_tabs');return p;}
   frame(s,args){const p=this.page(s,args);if(!args.frameId)return p.mainFrame();const f=this.pageState(s,p).frames.get(args.frameId);if(!f||f.page()!==p||f.isDetached())throw new Error('Frame is stale; list browser_frames');return f;}
@@ -489,6 +538,7 @@ export class BrowserService {
     if(a.read){if(bytes.length>MAX_IMAGE)throw new Error('Artifact read limit 4 MiB; use artifact-open for video');if(meta.mimeType.startsWith('image/'))result.image={type:'image',mimeType:meta.mimeType,data:bytes.toString('base64')};else if(meta.mimeType==='application/json')result.data.text=bytes.toString('utf8');else throw new Error('This artifact is metadata/open only');}return result;
   }
   async closeProfile(s){
+    if(s.sharedHost){const host=s.sharedHost;s.sharedHost=null;await host.release(s.ctx.profile);s.browser=null;s.shell=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();return;}
     const context=s.browser,guard=s.guard;if(!context&&!guard)return;
     let closing=Promise.resolve();if(context){const browser=context.browser();closing=(browser?browser.close({reason:'Trex Browser profile stopped by its owner'}):context.close());}
     if(guard){await Promise.race([closing.catch(()=>{}),sleep(3000)]);try{await guard.stop();}catch(e){this.pause(s,'runtime',s.active);throw Object.assign(new Error(`Owned browser shutdown is uncertain (${e.message}); manual review required`),{code:'UNCERTAIN'});}if(s.guard===guard)s.guard=null;closing.catch(()=>{});s.browser=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();}

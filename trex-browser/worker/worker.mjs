@@ -222,7 +222,7 @@ async function main(){const args=argMap(process.argv.slice(2));const command=arg
     const url=typeof input.url==='string'&&/^https?:\/\//.test(input.url)?input.url:undefined;
     if(input.personal===true){emit(openHumanWindow({executablePath:shell.executablePath,userData:path.join(home,'personal','user-data'),label:'Personal',url,env:childEnvironment()}));return;}
     const ctx=context({cwd:input.cwd,mode:'observe',clientId:'host-open',profile:input.profile});
-    if(await running(home)){const listed=await ipc(home,'/spaces',{...ctx,action:'list'});if(listed.spaces?.some(sp=>sp.profile===ctx.profile&&sp.running)){emit({opened:false,reason:'agent-running'});return;}}
+    if(await running(home)){const listed=await ipc(home,'/spaces',{...ctx,action:'list'});if(listed.spaces?.some(sp=>sp.profile===ctx.profile&&(sp.running||sp.inUse))){emit({opened:false,reason:'agent-running'});return;}}
     const dir=path.join(home,'projects',ctx.projectId,ctx.profile),manifest=jsonRead(path.join(dir,'profile.json'),null);
     if(!manifest){emit({opened:false,reason:'unknown-profile'});return;}
     safePath(dir);

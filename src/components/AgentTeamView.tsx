@@ -11,10 +11,10 @@ import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
 import { useTrexChat } from "../hooks/useTrexChat";
 import { ChatPanel, type ChatViewProps } from "./ChatView";
-import AgentIcon from "./AgentIcon";
-import { RotateIcon, StopIcon } from "./Icons";
+import AgentTeamToolbar from "./AgentTeamToolbar";
+import { agentPermissionLabel, defaultAgentPermission } from "../agentPermissions";
 import { chatTasks, teamTasks } from "../chatTasks";
-import { messageQueueId } from "../messageQueue";
+import { INBOX_WAKE, messageQueueId } from "../messageQueue";
 import "./AgentRoomView.css";
 import "./AgentTeamView.css";
 
@@ -29,7 +29,6 @@ function CodexRuntime(props: RuntimeProps) { return <Publish {...props} session=
 function AntigravityRuntime(props: RuntimeProps) { return <Publish {...props} session={useAntigravityChat(props.options)} />; }
 function TrexRuntime(props: RuntimeProps) { return <Publish {...props} session={useTrexChat(props.options)} />; }
 type Attempt = { epoch: string; task: TeamTask; member: TeamMember; session: ChatSession; previous: string | null; users: Set<string>; accepted: boolean };
-const STATUS: Record<TeamTask["status"],string> = { queued:"En espera", claimed:"Preparando", running:"Trabajando", completed:"Completada", failed:"Falló", cancelled:"Cancelada", uncertain:"Requiere revisión" };
 const noop = (): void => undefined;
 export default function AgentTeamView(props: Props) {
   const { team } = props;
@@ -48,6 +47,7 @@ export default function AgentTeamView(props: Props) {
   const [starting, setStarting] = useState(false);
   const [preparingMessage, setPreparingMessage] = useState(false);
   const sendReservation = useRef<object | null>(null);
+  const schedulerWaiters = useRef<(() => void)[]>([]);
   const [activated, setActivated] = useState(() => new Set([team.master.id,...team.workers.filter(member=>member.conversationId).map(member=>member.id)]));
   const attempt = useRef(new Map<string,Attempt>());
   const epoch = useRef(team.epoch);
@@ -88,6 +88,7 @@ export default function AgentTeamView(props: Props) {
   useEffect(()=>{ change(value=>value.order.length===merged.order.length && value.order.every((id,index)=>id===merged.order[index])?value:{...value,order:merged.order}); },[merged.order,change]);
   const stop = useCallback((reason="Equipo detenido. Revisa los resultados antes de reanudar."):void => {
     generation.current++; attempt.current.clear();waitingReports.current=false;
+    for(const resolve of schedulerWaiters.current.splice(0))resolve();
     sendReservation.current=null;setPreparingMessage(false);
     const binding={id:current.current.id,epoch:current.current.epoch};
     change(value=>({...value,phase:"paused",error:reason}));
@@ -208,7 +209,7 @@ export default function AgentTeamView(props: Props) {
           if(status==="uncertain"){stop("Una delegación se interrumpió. Revisa los archivos y el historial antes de continuar.");return;}
         }
         const finished=value.tasks.filter(task=>task.epoch===binding.epoch && !teamTaskActive(task));
-        if(waitingReports.current && main?.state.process==="ready" && main.state.pendingTurns===0 && main.state.lastCompletion?.status==="completed" && finished.length && !value.tasks.some(teamTaskActive)){
+        if(waitingReports.current && !sendReservation.current && main?.state.process==="ready" && main.state.pendingTurns===0 && main.state.lastCompletion?.status==="completed" && finished.length && !value.tasks.some(teamTaskActive)){
           const key=finished.map(task=>task.id+":"+task.status).sort().join("|");
           if(feedback.current!==key && current.current.phase!=="completed"){
             feedback.current=key;waitingReports.current=false;
@@ -220,6 +221,7 @@ export default function AgentTeamView(props: Props) {
         }
         if(value.tasks.some(task=>["claimed","running"].includes(task.status) && ![...attempt.current.values()].some(active=>active.task.id===task.id))){stop("Se encontró una entrega anterior sin confirmación. No se ha vuelto a ejecutar.");return;}
         for(const queued of value.tasks.filter(task=>task.epoch===binding.epoch && task.status==="queued")){
+          if(current.current.master.canWrite && (sendReservation.current || (sessionsRef.current[current.current.master.id]?.state.pendingTurns??0)>0))break;
           if(attempt.current.has(queued.memberId) || !teamTaskRunnable(value,queued,[current.current.master,...current.current.workers]))continue;
           const member=current.current.workers.find(member=>member.id===queued.memberId);
           if(!member)throw new Error("La tarea apunta a un participante que ya no existe.");
@@ -243,7 +245,7 @@ export default function AgentTeamView(props: Props) {
           profileId:current.current.master.agent.profileId,profileName:current.current.master.agent.profileName,title:"Delegación de "+current.current.master.name,
           projectId:latest.current.projectId??"",projectName:latest.current.projectName,cwd:latest.current.cwd});
         const instructions="Realiza solo la tarea delegada. Tu función es "+TEAM_ROLES[member.role].name+". "+member.instructions
-          +(member.canWrite?" Comprueba el estado actual del proyecto antes de editar. Usa tus permisos normales.":" No modifiques archivos, ejecutes implementaciones ni solicites permisos de escritura.")
+          +(member.canWrite?" Comprueba el estado actual del proyecto antes de editar. Permisos elegidos: "+agentPermissionLabel(member.agent.provider,member.mode)+".":" No modifiques archivos, ejecutes implementaciones ni solicites permisos de escritura.")
           +" Si la tarea tiene varios pasos, publica y actualiza tu propia lista con tus herramientas de tareas disponibles; marca cada paso completado solo tras verificarlo. La tarea asignada del equipo se actualiza según el resultado confirmado de tu delegación. Entrega un informe final con resultado, archivos/evidencias, validaciones realizadas, hallazgos y limitaciones. No delegues a otros agentes.";
         context.content="# Función e instrucciones de esta delegación\n\n"+instructions+"\n\n"+context.content;
         const prepared=await prepareHandoff(context);
@@ -259,7 +261,7 @@ export default function AgentTeamView(props: Props) {
           })().catch(error=>{if(isCurrent())stop("No se pudo entregar la delegación: "+formatError(error));});
         }
       }catch(error){if(isCurrent())stop("No se pudo coordinar el equipo: "+formatError(error));}
-      finally{ticking.current=false;}
+      finally{ticking.current=false;for(const resolve of schedulerWaiters.current.splice(0))resolve();}
     };
     void tick(); const timer=window.setInterval(()=>void tick(),750);
     return()=>{cancelled=true;window.clearInterval(timer);};
@@ -271,42 +273,30 @@ export default function AgentTeamView(props: Props) {
   const paused=["paused","failed"].includes(team.phase);
   const locked=paused || starting || openedEpoch!==team.epoch;
   const block=(message:string):"blocked"=>{latest.current.onMessage(message);return "blocked";};
-  const toolbar=<div className="agent-team-toolbar">
-    <div><strong>{team.master.name}</strong><span>Principal · {TEAM_ROLES.coordinator.name} · {paused?"En pausa":team.setup&&!busy?"Listo para tu idea":team.phase==="completed"?"Listo":"Equipo activo"}</span></div>
-    <div className="agent-team-actions">
-      {paused || team.phase==="completed"?<button type="button" className="btn btn-small btn-ghost" disabled={starting} onClick={()=>void resume()}><RotateIcon size={13} />{paused?"Revisado: reanudar":"Nuevo ciclo"}</button>:null}
-      {!paused && (!team.setup || busy || preparingMessage) && <button type="button" className="btn btn-small btn-ghost" onClick={()=>stop()}><StopIcon size={13} />Detener equipo</button>}
-    </div>
-    {team.error && <p role="status">{team.error}</p>}
-    <details className="agent-team-details"><summary>Cuentas y recuperación · {team.workers.length} subagentes</summary>
-      <div className="agent-team-members">{members.map(member=>{
-        const session=sessions[member.id], state=session?.state, task=snapshot?.tasks.find(task=>task.memberId===member.id && teamTaskActive(task));
-        const model=state?currentModel(state.models,state.model,state.modelChoice):null;
-        return <div className="agent-team-member" key={member.id}><AgentIcon kind={member.agent.provider} size={17} /><div><strong>{member.name}</strong>
-          <span>{TEAM_ROLES[member.role].name} · {member.agent.profileName} · {model?modelName(model):member.agent.model??"Modelo del perfil"}{member.agent.effort?" · "+member.agent.effort:""}</span>
-          <small>{task?STATUS[task.status]:state?.process==="failed"?"No pudo iniciar":member.canWrite?"Permisos normales del asistente":"Solo lectura"}</small></div>
-          <button type="button" className="btn btn-small btn-ghost" disabled={starting || paused && !member.conversationId} onClick={()=>{
-            setActivated(previous=>new Set([...previous,member.id]));
-            if(session && ["failed","exited"].includes(session.state.process))void session.start().catch(error=>latest.current.onMessage(formatError(error)));
-          }}>{paused && !member.conversationId?"Sin historial":state?.process==="failed"?"Reintentar":"Cargar historial"}</button>
-          {session?.recover && state?.process==="ready" && state.pendingTurns===0 && <button type="button" className="btn btn-small btn-ghost" disabled={starting} onClick={()=>{
-            void session.recover!().then(()=>latest.current.onMessage("Revisión de operaciones confirmada para "+member.name+". Las tareas anteriores no se repiten.")).catch(error=>latest.current.onMessage(formatError(error)));
-          }}>Confirmar revisión de operaciones</button>}</div>;
-      })}</div>
-    </details>
-  </div>;
+  const toolbar=<AgentTeamToolbar team={team} states={states} snapshot={snapshot} starting={starting} busy={busy}
+    onStop={()=>stop()} onResume={()=>void resume()}
+    onLoad={member=>{ setActivated(previous=>new Set([...previous,member.id])); const session=sessions[member.id];
+      if(session && ["failed","exited"].includes(session.state.process))void session.start().catch(error=>latest.current.onMessage(formatError(error))); }}
+    canRecover={member=>!!sessions[member.id]?.recover && sessions[member.id].state.process==="ready" && sessions[member.id].state.pendingTurns===0}
+    onRecover={member=>{void sessions[member.id]?.recover?.().then(()=>latest.current.onMessage("Operaciones revisadas para "+member.name)).catch(error=>latest.current.onMessage(formatError(error)));}} />;
   let aggregate:ChatSession|null=null;
   if(main){
     aggregate={...main,state:teamCombinedState(main.state,states,merged.items,team.master.id,merged.owners),
       send:async(text,images,previews,display)=>{
         if(locked || sendReservation.current || ["paused","failed"].includes(current.current.phase))return false;
-        const reservation={};sendReservation.current=reservation;waitingReports.current=false;
+        const reservation={};sendReservation.current=reservation;
         const binding={id:current.current.id,epoch:current.current.epoch}, token=generation.current;
         let dispatched=false;
         const valid=()=>mounted.current && token===generation.current && current.current.epoch===binding.epoch && !["paused","failed"].includes(current.current.phase);
         try{
+          if(current.current.master.canWrite && ticking.current)await new Promise<void>(resolve=>schedulerWaiters.current.push(resolve));
+          if(!valid())return false;
           const value=await agentTeamPoll(binding);
           if(!valid() || value.phase!=="running")return false;
+          if(current.current.master.canWrite && value.tasks.some(task=>["claimed","running"].includes(task.status))){
+            if(text===INBOX_WAKE)return false;
+            await main.queue.enqueue(text,images,previews);return true;
+          }
           const setup=current.current.setup;
           let outgoing=text;
           if(setup){
@@ -318,10 +308,11 @@ export default function AgentTeamView(props: Props) {
                 profileName:current.current.master.agent.profileName,title:"Planificación del equipo",projectId:latest.current.projectId??"",projectName:latest.current.projectName,cwd:latest.current.cwd},prior?.content);
             const prepared=await prepareHandoff(context);
             if(!valid())return false;
-            outgoing=buildHandoffPrompt(prepared,"Atiende la idea del usuario. Planifica, delega según el equipo configurado y revisa los resultados. No implementes directamente.");
+            outgoing=buildHandoffPrompt(prepared,"Atiende la idea del usuario. Planifica, delega según el equipo configurado y revisa los resultados. "+(current.current.master.canWrite?"Puedes editar respetando tus permisos y ceder el proyecto al terminar tu turno.":"No implementes directamente."));
           }
           if(!valid())return false;
           change(value=>({...value,phase:"running",error:null}));
+          waitingReports.current=false;
           dispatched=true;
           const accepted=(await sessionsRef.current[current.current.master.id]!.send(outgoing,images,previews,display??text))===true;
           if(!valid())return false;
@@ -345,10 +336,12 @@ export default function AgentTeamView(props: Props) {
         if(original?.kind!=="permission" || original.state!=="pending"){block("Esta solicitud ya no está pendiente.");return;}
         session!.answer(original,allowed,remember,choices);
       },
-      setMode:()=>{block("El principal coordina en modo de planificación. Los permisos de cada subagente se eligieron al crear el equipo.");},
+      setMode:()=>{block("Los permisos del principal y de cada subagente se eligen al configurar el equipo.");},
       setModel:value=>{if(busy)block("Espera a que termine el turno antes de cambiar el modelo principal.");else main.setModel(value);},
       setEffort:value=>{if(busy)block("Espera a que termine el turno antes de cambiar el esfuerzo principal.");else main.setEffort(value);},
     };
+    if(team.master.canWrite && snapshot?.tasks.some(task=>["claimed","running"].includes(task.status)))
+      aggregate.state={...aggregate.state,pendingTurns:Math.max(1,aggregate.state.pendingTurns)};
   }
   const labels=Object.fromEntries(Object.entries(merged.owners).map(([id,owner])=>{
     const member=members.find(member=>member.id===owner.memberId)!;
@@ -365,7 +358,7 @@ export default function AgentTeamView(props: Props) {
       const memberBrowser=space?{enabled:browser.enabled,clientId:space.clientId,profile:space.profile}:{...browser,enabled:false,clientId:team.id+"-"+member.id};
       const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,desktopEnabled: !historyOnly && desktopEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
         sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
-        conversationId:member.conversationId,mode:readOnly?"plan":member.agent.provider==="claude"?"default":"auto",
+        conversationId:member.conversationId,mode:readOnly?"plan":member.mode??defaultAgentPermission(member.agent.provider),
         model:member.agent.model,effort:member.agent.effort,planningOnly:readOnly,
         ...(readOnly?{planningInstruction:member.id===team.master.id?TEAM_COORDINATOR_POLICY:TEAM_READER_POLICY}:{}),
         ...(member.id===team.master.id && !historyOnly?{team:{id:team.id,epoch:team.epoch}}:{}),
@@ -376,7 +369,7 @@ export default function AgentTeamView(props: Props) {
     })}
     {aggregate?<ChatPanel {...props} provider={team.master.agent.provider} session={aggregate} browser={{...browser,clientId:team.id+"-"+team.master.id,label:team.master.name,...spaces.find(space=>space.clientId===team.id+"-"+team.master.id),enabled:browser.enabled}} browserSpaces={spaces.map(space=>({...space,active:(sessions[space.clientId.slice(team.id.length+1)]?.state.pendingTurns??0)>0}))} onStopBrowserAgent={clientId=>{const member=members.find(member=>team.id+"-"+member.id===clientId);if(member){sessionsRef.current[member.id]?.interrupt();stop("Se detuvo a "+member.name+". Revisa su tarea antes de reanudar el equipo.");}}}
       profileId={team.master.agent.profileId} profileName={team.master.agent.profileName} conversationId={team.master.conversationId}
-      terminalOwners={members.flatMap(member=>{const session=sessions[member.id]?.terminals;return session?[{id:member.id,label:member.name+" · "+TEAM_ROLES[member.role].name,provider:member.agent.provider,session}]:[];})} toolbar={toolbar} itemLabels={labels} taskPlan={taskPlan} taskAuthor={team.master.name+" · Principal"} tasksPaused={paused} historyReadOnly planningOnly inputLocked={locked||preparingMessage}
+      terminalOwners={members.flatMap(member=>{const session=sessions[member.id]?.terminals;return session?[{id:member.id,label:member.name+" · "+TEAM_ROLES[member.role].name,provider:member.agent.provider,session}]:[];})} toolbar={toolbar} itemLabels={labels} taskPlan={taskPlan} taskAuthor={team.master.name+" · Principal"} tasksPaused={paused} historyReadOnly planningOnly={!team.master.canWrite} inputLocked={locked||preparingMessage}
       emptyState={{title:paused?"Tu equipo está en pausa":"Tu equipo está listo",description:paused?"La configuración está guardada. Revisa las cuentas y el historial antes de reanudar.":`Escribe tu idea a ${team.master.name}. Preparará el plan, repartirá las tareas y revisará los resultados contigo.`,
         participants:members.map((member,index)=>({id:member.id,name:member.name,role:index===0?"Principal · planificación y coordinación":TEAM_ROLES[member.role].name,provider:member.agent.provider,model:member.agent.model,effort:member.agent.effort}))}}
       composerPlaceholder="Escribe tu idea para que el principal prepare el plan…"

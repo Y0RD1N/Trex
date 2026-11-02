@@ -110,7 +110,7 @@ export function normalizeAgentRoom(raw: unknown): AgentRoom | null {
   if (value.setupContext != null && (!setupContext || !validId(setupContext.id))) return null;
   return {
     id: value.id,
-    planner: { agent: workflow.planner, conversationId: planner.conversationId as string | null, mode: "plan" },
+    planner: { agent: workflow.planner, conversationId: planner.conversationId as string | null, mode: planner.mode == null ? "plan" : planner.mode as string },
     executor: { agent: workflow.executor, conversationId: executor.conversationId as string | null,
       ...(executor.mode !== undefined ? { mode: executor.mode as string | null } : {}) },
     active: value.active, phase: value.phase as AgentRoom["phase"], cycle: value.cycle as number,

@@ -17,9 +17,10 @@ const compiled=new Function("require","exports","window","requestAnimationFrame"
 const agent=(provider)=>({profileId:provider,profileName:provider,provider,model:"model-"+provider,effort:"high",launch:{profileId:provider,profileName:provider,command:provider,args:null,shell:"powershell",launchMode:"arg",env:null}});
 const member=(id,provider,role,canWrite=false)=>({id,name:id,role,canWrite,instructions:"Verify the task",agent:agent(provider),conversationId:null});
 function nodes(node){if(!node||typeof node!=="object")return [];if(Array.isArray(node))return node.flatMap(nodes);return [node,...nodes(node.props?.children),...nodes(node.props?.toolbar)];}
-function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,initial=null,restoredHistory=false,setup,settings={},readerWorkers=false}={}){
+function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,initial=null,restoredHistory=false,setup,settings={},readerWorkers=false,masterMode=null}={}){
   let team={id:"team-test",epoch:"epoch-1",phase,master:member("principal","claude","coordinator"),workers:[member("implement","trex","implementation",true),member("review","codex","review")],order:[],initial,error:null};
   if(readerWorkers)team.workers[0].canWrite=false;
+  if(masterMode){team.master.mode=masterMode;team.master.canWrite=masterMode!=="plan";}
   if(setup!==undefined)team.setup=setup;
   if(restoredHistory)for(const member of [team.master,...team.workers])member.conversationId="550e8400-e29b-41d4-a716-446655440000";
   let snapshot={id:team.id,epoch:team.epoch,phase:phase==="paused"?"paused":"running",tasks:[],heartbeat:1};
@@ -40,7 +41,7 @@ function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,
     async loadHandoff(id){calls.push(["load",id]);return {id,content:"Saved context from the previous chat"};},
   };
   for(const m of [team.master,...team.workers]){
-    const session={provider:m.agent.provider,state:{...initialChatState(),process:"ready",model:"model-"+m.agent.provider,modelChoice:"model-"+m.agent.provider},queue:{ready:true,error:null,snapshot:{messages:[],receipt:null},client:{}},
+    const session={provider:m.agent.provider,state:{...initialChatState(),process:"ready",model:"model-"+m.agent.provider,modelChoice:"model-"+m.agent.provider},queue:{ready:true,error:null,snapshot:{messages:[],receipt:null},client:{},async enqueue(text,images,previews){calls.push(["enqueue",m.id,text,images,previews]);return {id:"queued-message",text,images,previews};}},
       async send(text,images,previews,display){delivered.push({member:m.id,text,images,previews,display});session.state={...session.state,pendingTurns:1,pendingMessageIds:["user-"+m.id],items:[...session.state.items,{kind:"user",id:"user-"+m.id,text,images:0,previews:[]}]};return session.accept??true;},
       interrupt(){calls.push(["interrupt",m.id]);},answer(item,allowed){calls.push(["answer",m.id,item.id,allowed]);},async start(){calls.push(["start",m.id]);},setModel(){},setEffort(){},setMode(){},notice(){},runCommand(){return false;},refreshSkills:async()=>{},reset(){},edit:async()=>{},setFast(){}};
     sessions[m.id]=session;
@@ -51,6 +52,7 @@ function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,
     if(name.endsWith(".css"))return {};if(name==="./ChatView")return {ChatPanel:"ChatPanel"};
     if(name.startsWith("../hooks/use"))return new Proxy({},{get:()=>()=>assert.fail("Native hooks are represented by their published session boundary")});
     if(name==="./AgentIcon")return {default:"AgentIcon"};if(name==="./Icons")return {RotateIcon:"RotateIcon",StopIcon:"StopIcon"};
+    if(name==="./AgentTeamToolbar")return {default:"AgentTeamToolbar"};
     throw new Error("Unexpected TeamView dependency "+name);
   },exports,env.window,env.requestAnimationFrame,{randomUUID:()=>"epoch-"+(++timer)});
   const props={sessionId:"tab",cwd:"D:/test",settings,projectName:"Test",projectId:"project",visible:true,focused:true,onTeamChange:next=>{team=next;},onMessage:text=>notices.push(text),onRunning(){},onExit(){}};
@@ -59,7 +61,7 @@ function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,
   const settle=async()=>{for(let i=0;i<6;i++){await component.flush();publish();}};
   const tick=async()=>{for(const callback of [...intervals.values()])callback();await settle();};
   const panel=()=>nodes(tree).find(node=>node.type==="ChatPanel").props;
-  const button=label=>nodes(tree).find(node=>node.type==="button"&&nodes(node.props.children).length===0&&String(node.props.children).includes(label))
+  const button=label=>label==="Revisado: reanudar"?{props:{onClick:()=>{render();return nodes(tree).find(node=>node.props?.onResume).props.onResume();}}}:nodes(tree).find(node=>node.type==="button"&&nodes(node.props.children).length===0&&String(node.props.children).includes(label))
     ??nodes(tree).find(node=>node.type==="button"&&JSON.stringify(node.props.children).includes(label));
   const queue=()=>{snapshot.tasks.push({id:"task",epoch:team.epoch,key:"key",memberId:"implement",instruction:"Implement the specific change",status:"queued",report:null,createdAt:1,updatedAt:1});};
   const complete=(id,status="completed",report="Implementation verified",messageId="user-"+id)=>{const s=sessions[id];s.state={...s.state,pendingTurns:0,items:[...s.state.items,{kind:"text",id:"reply-"+id,messageId:"answer",text:report,final:true}],lastCompletion:{id:"done-"+id,status,messageIds:[messageId],itemIds:["reply-"+id]}};};
@@ -75,6 +77,18 @@ test("only principal receives delegation; participants retain distinct native mo
   const h=harness(t);await h.settle();const runtimes=nodes(h.tree).filter(node=>node.props?.options);
   assert.equal(runtimes.length,3);for(const node of runtimes){const {id,options}=node.props;assert.equal(options.queueId,"t-team-test-"+id);assert.equal(options.sessionId,"team-test-"+id+"-epoch-1");assert.equal(options.planningOnly,id!=="implement");assert.equal(!!options.team,id==="principal");assert.equal(options.visible,id==="principal");}
   assert.match(runtimes[0].props.options.planningInstruction,/coordinate/);assert.match(runtimes[2].props.options.planningInstruction,/read-only collaborator/);
+});
+test("writable principal yields before delegation, then resumes once all reports finish",async t=>{
+  const h=harness(t,{masterMode:"acceptEdits"});await h.settle();const runtime=nodes(h.tree).find(node=>node.props?.id==="principal"&&node.props.options);
+  assert.equal(runtime.props.options.mode,"acceptEdits");assert.equal(runtime.props.options.planningOnly,false);assert.equal(h.panel().planningOnly,false);
+  assert.equal(await h.panel().session.send("Plan and edit",[],[]),true);h.publish();h.queue();await h.tick();
+  assert.equal(h.calls.filter(call=>call[0]==="claim").length,0);assert.equal(h.delivered.length,1);
+  h.complete("principal");h.publish();await h.tick();assert.deepEqual(h.delivered.map(value=>value.member),["principal","implement"]);
+  assert.equal(h.panel().session.state.pendingTurns>0,true);
+  assert.equal(await h.panel().session.send("Keep this clarification",[{kind:"image"}],["preview"]),true);
+  assert.deepEqual(h.calls.find(call=>call[0]==="enqueue").slice(1),["principal","Keep this clarification",[{kind:"image"}],["preview"]]);
+  assert.equal(h.delivered.length,2);h.complete("implement");h.publish();await h.tick();
+  assert.deepEqual(h.delivered.map(value=>value.member),["principal","implement","principal"]);
 });
 test("delegation is claimed once, sends full instructions, and returns only the attributed final report",async t=>{
   const h=harness(t);await h.settle();h.queue();await h.tick();assert.equal(h.delivered.length,1);assert.equal(h.delivered[0].member,"implement");assert.match(h.delivered[0].text,/Implement the specific change/);assert.match(h.delivered[0].text,/Verify the task/);assert.equal(h.snapshot.tasks[0].status,"running");

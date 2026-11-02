@@ -1,3 +1,6 @@
+import { formatClock } from "../timeFormat";
+import GitPanel from "./chat/GitPanel";
+import { BranchIcon } from "./Icons";
 import BrowserMenu from "./chat/BrowserMenu";
 import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browser";
 /**
@@ -189,6 +192,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   };
   const [atBottom, setAtBottom] = useState(true);
   const [tasksOpen, setTasksOpen] = useState(props.taskPlan !== undefined && !props.emptyState);
+  const [gitOpen, setGitOpen] = useState(false);
+  const gitToggle = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (tasksOpen) setGitOpen(false); }, [tasksOpen]);
   const hadTasks = useRef(false);
   const taskToggle = useRef<HTMLButtonElement>(null);
   const revealingTask = useRef(false);
@@ -761,7 +767,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       ...(speed ? [`Velocidad: ${state.fast ? "rápida" : "estándar"}`] : []),
       `Permisos: ${modeOptions.find(option => option.value === mode)?.label ?? mode}`,
       ...(usage ? [`Contexto: ${contextTokensLabel(usage)}${percent !== null ? ` (${Math.round(percent)} %)` : ""}`] : []),
-      ...(state.plan?.windows ?? []).map(window => `${window.label}: ${window.percent} %${window.resetsAt !== null ? ` (${resetLabel(window.resetsAt, Date.now())})` : ""}`),
+      ...(state.plan?.windows ?? []).map(window => `${window.label}: ${window.percent} %${window.resetsAt !== null ? ` (${resetLabel(window.resetsAt, Date.now(), props.settings.timeFormat)})` : ""}`),
       ...(state.sessionId ? [`Conversación: ${state.sessionId}`] : []),
     ].join("\n");
   };
@@ -1098,7 +1104,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       addDropped(Array.from(event.dataTransfer.files));
     }}>
     <div className="chat-floating-toolbar" ref={toolbarRef}>{props.toolbar}</div>
-    <div className="chat-task-toolbar"><button ref={taskToggle} type="button" className="chat-task-toggle" aria-expanded={tasksOpen} aria-controls={tasksOpen?`tasks-${sessionId}`:undefined}
+    <div className="chat-task-toolbar">{branch && <button ref={gitToggle} type="button" className="chat-task-toggle chat-git-toggle" aria-expanded={gitOpen} aria-controls={gitOpen ? `git-${sessionId}` : undefined}
+      onClick={() => { setGitOpen(value => !value); setTasksOpen(false); }} title={`Git · ${branch}`}><BranchIcon size={14} />Git<small>{branch}</small></button>}<button ref={taskToggle} type="button" className="chat-task-toggle" aria-expanded={tasksOpen} aria-controls={tasksOpen?`tasks-${sessionId}`:undefined}
       onClick={() => setTasksOpen(value => !value)}><ListIcon size={14} />Tareas{tasks.length>0&&<small>{tasks.filter(task => task.status === "completed").length}/{tasks.length}</small>}</button></div>
     <div className="chat-workspace"><div className="chat-main">
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -1140,7 +1147,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <span className="chat-working-dot" aria-hidden="true" />
           <span className="chat-working-label">{thinking ? "Pensando…" : "Trabajando…"}</span>
           {state.turnStartedAt !== null && <WorkingTime since={state.turnStartedAt} live={visible} />}
-          {state.turnStartedAt !== null && <span className="chat-working-since">desde las {new Date(state.turnStartedAt).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })}</span>}
+          {state.turnStartedAt !== null && <span className="chat-working-since">desde las {formatClock(state.turnStartedAt, props.settings.timeFormat)}</span>}
           <span className="chat-working-hint">Esc para detener</span>
         </div>}
         {handoffPending && <div className="chat-handoff-status" role={handoffDelivery.error ? "alert" : "status"}>
@@ -1354,6 +1361,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     </div>
     {tasksOpen && <TaskPanel panelId={`tasks-${sessionId}`} tasks={tasks} author={props.taskAuthor ?? props.profileName ?? agent.name} paused={props.tasksPaused}
       onClose={() => { setTasksOpen(false); taskToggle.current?.focus({ preventScroll: true }); }} onReveal={revealTask} />}
+    {branch && <GitPanel key={cwd} panelId={`git-${sessionId}`} cwd={cwd} branch={branch} busy={running || submittingEdit} open={gitOpen} visible={visible && gitOpen}
+      onBranch={setBranch} onMessage={message => callbacks.current.onMessage(message)} onClose={() => { setGitOpen(false); gitToggle.current?.focus({ preventScroll: true }); }} />}
     </div>
   </div>;
 }

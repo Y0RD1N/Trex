@@ -129,12 +129,12 @@ describe('Trex Browser shell', { skip: !available && 'Trex shell or display unav
 
   it('applies human pause and resume from the shell to the agent', async () => {
     const s = service.state(A);
-    service.shellEvent(s, { type: 'control', action: 'pause', clientId: 'self' });
+    await service.shellEvent(s, { type: 'control', action: 'pause', clientId: 'self' });
     await assert.rejects(call(A, 'browser_click', { selector: '#go' }), e => e.code === 'PAUSED');
     assert.equal((await shellState(A)).agent.state, 'paused');
     // Observation stays available while paused.
     assert.equal((await call(A, 'browser_snapshot')).data.tabId.startsWith('tab-'), true);
-    service.shellEvent(s, { type: 'control', action: 'resume', clientId: 'self' });
+    await service.shellEvent(s, { type: 'control', action: 'resume', clientId: 'self' });
     await call(A, 'browser_click', { selector: '#go' });
   });
 
@@ -142,9 +142,9 @@ describe('Trex Browser shell', { skip: !available && 'Trex shell or display unav
     await call(B, 'browser_navigate', { url: `${base}/` });
     const spaces = await until(async () => { const l = (await shellState(B)).spaces; return l.length >= 2 && l; }, 'spaces inventory not pushed');
     assert.deepEqual(spaces.map(sp => sp.label).sort(), ['Claude Code', 'Codex · Revisor']);
-    service.shellEvent(service.state(B), { type: 'control', action: 'pause', clientId: 'agent-a' });
+    await service.shellEvent(service.state(B), { type: 'control', action: 'pause', clientId: 'agent-a' });
     await assert.rejects(call(A, 'browser_click', { selector: '#go' }), e => e.code === 'PAUSED');
-    service.shellEvent(service.state(B), { type: 'control', action: 'resume', clientId: 'agent-a' });
+    await service.shellEvent(service.state(B), { type: 'control', action: 'resume', clientId: 'agent-a' });
     await call(A, 'browser_click', { selector: '#go' });
   });
 
@@ -154,6 +154,66 @@ describe('Trex Browser shell', { skip: !available && 'Trex shell or display unav
     assert.deepEqual(await service.focusSpace(A, target.tabId), { focused: true });
     await until(async () => { const st = await shellState(A); return st.tabs.find(t => t.id === st.activeTab).url === target.url; }, 'focus did not select the tab');
     assert.deepEqual(await service.focusSpace(context({ cwd: workspace, mode: 'observe', clientId: 'x', profile: 'BROWSER9' })), { focused: false, reason: 'closed' });
+  });
+  it('applies the actual center buttons through IPC and closes the target center on focus', async () => {
+    const ui = service.state(A).shell.uiPage, other = service.state(B).shell.uiPage;
+    assert.equal(ui, other, 'agent spaces share the project window');
+    await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: true }));
+    await ui.locator('[data-client="agent-a"] [data-a="focus"]').click();
+    await until(async () => !(await shellState(A)).centerOpen, 'Ver did not leave the local grid');
+    await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: true }));
+    const card = ui.locator('[data-client="agent-b"]');
+    await card.locator('[data-a="pause"]').click();
+    await until(async () => service.state(B).paused, 'Pausar did not reach the other space');
+    await card.locator('[data-a="resume"]').click();
+    await until(async () => !(await call(B, 'browser_status')).data.paused, 'Reanudar did not reach the other space');
+    await other.evaluate(() => window.trexShell.command('toggleCenter', { open: true }));
+    await card.locator('[data-a="focus"]').click();
+    await until(async () => !(await shellState(B)).centerOpen, 'Ver did not close the target grid');
+    const focused = await shellState(B);
+    assert.equal(focused.tabs.find(tab => tab.id === focused.activeTab).profile, B.profile);
+    await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: true }));
+    await card.locator('[data-a="takeover"]').click();
+    await until(async () => (await call(B, 'browser_status')).data.paused, 'Tomar control did not pause automation');
+    await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: true }));
+    await card.locator('[data-a="resume"]').click();
+    await until(async () => !(await call(B, 'browser_status')).data.paused, 'manual takeover could not resume');
+    await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: false }));
+  });
+  it('displays a real screenshot from a space that requires review without clearing that review', async () => {
+    service.pause(service.state(B), 'uncertain');
+    const ui = service.state(A).shell.uiPage;
+    await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: true }));
+    await ui.locator('[data-client="agent-b"] [data-a="screenshot"]').click();
+    await ui.locator('dialog[open] img').waitFor();
+    assert.match(await ui.locator('dialog img').getAttribute('src'), /^data:image\/jpeg;base64,/);
+    assert.equal(service.state(B).pauseReason, 'uncertain');
+    await ui.locator('[data-capture-close]').click();
+    await call(B, 'browser_resume');
+    await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: false }));
+  });
+  it('scrolls the full activity list with wheel and keyboard while keeping its heading visible', async () => {
+    if (!service.state(A).shell) await call(A, 'browser_navigate', { url: `${base}/` });
+    await until(async () => (await shellState(A)).spaces.length > 0, 'Space inventory did not arrive');
+    const ui = service.state(A).shell.uiPage;
+    await ui.evaluate(async () => {
+      const state = await window.trexShell.state();
+      const at = Date.now() + 100000;
+      state.spaces[0].events = Array.from({ length: 80 }, (_, index) => ({ id: `scroll-test-${index}`, at: at - index * 1000, tool: 'browser_click', detail: `Actividad del proyecto ${index}` }));
+      await window.trexShell.worker('setSpaces', state.spaces);
+      await window.trexShell.command('toggleCenter', { open: true });
+    });
+    await until(async () => await ui.locator('#feed .ev').count() === 80, 'Activity list was cut short');
+    await ui.locator('.center').waitFor();
+    const layout = await ui.evaluate(() => ({ width: innerWidth, height: innerHeight, display: getComputedStyle(document.querySelector('.feed')).display }));
+    assert.notEqual(layout.display, 'none', JSON.stringify(layout));
+    const list = ui.locator('#feed'), heading = await ui.locator('.feed h3').boundingBox();
+    await list.hover(); await ui.mouse.wheel(0, 500);
+    await until(async () => await list.evaluate(el => el.scrollTop) > 0, 'Wheel did not scroll the activity panel');
+    await list.focus(); await ui.keyboard.press('End');
+    await until(async () => await list.evaluate(el => el.scrollTop + el.clientHeight >= el.scrollHeight - 2), 'Last activity was unreachable');
+    assert.equal(Math.round((await ui.locator('.feed h3').boundingBox()).y), Math.round(heading.y));
+    await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: false }));
   });
 
   it('refuses to open a profile that a person has open for sign-in', { skip: process.platform === 'win32' && 'SingletonLock is a POSIX symlink; Windows uses native single-instance locks' }, async () => {

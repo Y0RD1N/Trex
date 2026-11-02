@@ -71,6 +71,7 @@ export type Project = {
 export type ApplicationIntegrations = { github: boolean; blender: boolean; hyperframes: boolean };
 
 export type Settings = {
+  timeFormat: import("./timeFormat").TimeFormat;
   integrations: ApplicationIntegrations;
   desktopEnabled: boolean;
   browserEnabled: boolean;

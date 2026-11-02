@@ -21,6 +21,7 @@ import AgentIcon from "./AgentIcon";
 import type { CliUpdates } from "../hooks/useCliUpdates";
 import type { CliId } from "../cliUpdates";
 import "./SettingsPanel.css";
+import { formatClock } from "../timeFormat";
 
 type Props = {
   entering: boolean;
@@ -250,6 +251,13 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 </div>
                 <WorkspaceAppearance settings={draft} onChange={patch} />
                 <div className="settings-block">
+                  <SettingField label="Formato de hora" hint="Se aplica a tareas, respuestas, notificaciones y uso de las cuentas.">
+                    <Select aria-label="Formato de hora" value={draft.timeFormat} onChange={value => patch({ timeFormat: value === "12h" ? "12h" : "24h" })}
+                      options={[{ value: "24h", label: "24 horas · 17:40" }, { value: "12h", label: "12 horas · 05:40 p. m." }]} />
+                  </SettingField>
+                  <p className="settings-note">Vista previa: {formatClock(new Date(2026, 0, 1, 17, 40), draft.timeFormat)}</p>
+                </div>
+                <div className="settings-block">
                   <h4 id={`${id}-accent`}>Color de acento</h4>
                   <div className="settings-accents" role="group" aria-labelledby={`${id}-accent`}>
                     {ACCENT_PRESETS.map(preset => <button key={preset.value} type="button" className={`settings-accent${draft.theme === preset.value ? " selected" : ""}`}
@@ -354,7 +362,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                     })}
                   </div>
                   <p className="settings-hint">{cliUpdates.checkedAt
-                    ? `Última comprobación: ${new Date(cliUpdates.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · trex vuelve a mirar cada pocas horas.`
+                    ? `Última comprobación: ${formatClock(cliUpdates.checkedAt, draft.timeFormat)} · trex vuelve a mirar cada pocas horas.`
                     : "trex busca versiones nuevas poco después de abrirse y cada pocas horas."}</p>
                 </div>
               </>}

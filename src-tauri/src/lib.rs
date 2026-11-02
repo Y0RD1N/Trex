@@ -17,6 +17,7 @@ mod conversations;
 mod codex_models;
 mod files;
 mod git;
+mod git_panel;
 mod handoff;
 mod integrations;
 mod message_queue;
@@ -421,6 +422,9 @@ pub fn run() {
             cli_updates::claude_update_channel,
             cli_updates::update_cli,
             git::git_branch,
+            git_panel::git_project_status,
+            git_panel::git_project_diff,
+            git_panel::git_project_action,
             git::git_branches,
             git::git_switch_branch,
             git::git_create_branch,

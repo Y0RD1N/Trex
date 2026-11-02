@@ -1,12 +1,16 @@
 // Trex Browser shell: a frameless glass window whose tabs are WebContentsViews.
 // The worker launches this executable the same way it launched Chrome
 // (Playwright launchPersistentContext over --remote-debugging-pipe), so no
-// debugging port is opened. Each process is one agent space / profile.
+// debugging port is opened. Automated spaces share one project window.
 import { app, BaseWindow, WebContentsView, ipcMain, protocol, net, session, nativeTheme, Menu, clipboard, shell as desktop } from 'electron';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { humanControls } from './human-controls.mjs';
+import { storageCommand, scopedDownload, grantedPermission } from './scope-storage.mjs';
+import { setBounds, setVisible, keepOnTop } from './view-layout.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI_ROOT = path.join(here, 'ui');
@@ -42,12 +46,23 @@ const userDataDir = argValue('user-data-dir');
 const HEADLESS = process.argv.some(a => a === '--headless' || a.startsWith('--headless='));
 // Launched by the worker (Playwright over the CDP pipe) rather than by a person.
 const AUTOMATION = process.argv.includes('--remote-debugging-pipe');
+const SHARED_ROOT = AUTOMATION && process.env.TREX_SHARED_PROJECT_ROOT && path.isAbsolute(process.env.TREX_SHARED_PROJECT_ROOT) ? path.resolve(process.env.TREX_SHARED_PROJECT_ROOT) : null;
 if (userDataDir) app.setPath('userData', path.resolve(userDataDir));
 else if (!AUTOMATION && app.isPackaged) { const personal = personalProfile(); if (personal) app.setPath('userData', personal); }
 app.setName('Trex Browser');
 // One process per profile (Chromium's SingletonLock in userData). A second
 // launch on the same profile hands its URL to the running window and exits.
 if (!app.requestSingleInstanceLock({ url: process.argv.slice(1).find(a => /^https?:\/\//.test(a)) || null })) { app.quit(); process.exit(0); }
+// Windows does not expose Chromium's SingletonLock as a symlink. Advertise a
+// manual sign-in window so shared agent sessions never open its storage too.
+if (!AUTOMATION) {
+  const dir = app.getPath('userData'), marker = path.join(dir, 'trex-human-window.json'), nonce = randomUUID();
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const temp = `${marker}.${nonce}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify({ pid: process.pid, nonce }), { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temp, marker);
+  app.on('will-quit', () => { try { if (JSON.parse(fs.readFileSync(marker, 'utf8')).nonce === nonce) fs.unlinkSync(marker); } catch {} });
+}
 app.on('second-instance', (_e, _argv, _cwd, data) => {
   if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
@@ -62,6 +77,7 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'trex', privileges: { standard: 
 /** @type {WebContentsView} */ let chromeView;        // full-window UI: frame, agents center
 const overlays = new Map();                          // part -> {view, rect}
 const tabs = new Map();                              // id -> {id, view, title, url, favicon, loading}
+const scopes = new Map(), closingScopes = new Set();
 let activeTab = null, nextTab = 1, centerOpen = false;
 let agent = { label: process.env.TREX_SPACE_LABEL || 'Agente', model: '', state: 'idle', tool: '', detail: '', step: '' };
 let spaces = [];                                     // agents center inventory, pushed by the worker
@@ -103,9 +119,10 @@ const uiContents = new WeakSet();
 const isUi = wc => !!wc && uiContents.has(wc);
 
 function snapshot() {
+  if (SHARED_ROOT) agent = scopes.get(tabs.get(activeTab)?.profile)?.agent ?? { label: 'Trex Browser', model: '', state: 'idle', tool: '', detail: '', step: '' };
   return {
-    tabs: [...tabs.values()].map(t => ({ id: t.id, title: t.title, url: t.url, favicon: t.favicon, loading: t.loading })),
-    activeTab, centerOpen, agent, spaces,
+    tabs: [...tabs.values()].map(t => ({ id: t.id, title: t.title, url: t.url, favicon: t.favicon, loading: t.loading, ...(t.profile ? { profile: t.profile, owner: scopes.get(t.profile)?.agent.label || t.profile } : {}) })),
+    activeTab, centerOpen, agent, spaces: SHARED_ROOT ? spaces.map(sp => ({ ...sp, self: sp.profile === tabs.get(activeTab)?.profile })) : spaces,
     canGoBack: tabs.get(activeTab)?.view.webContents.navigationHistory.canGoBack() ?? false,
     canGoForward: tabs.get(activeTab)?.view.webContents.navigationHistory.canGoForward() ?? false,
     maximized: win && !win.isDestroyed() ? win.isMaximized() : false,
@@ -131,33 +148,34 @@ function broadcast() {
 
 function layout() {
   if (!win || win.isDestroyed()) return;
+  if (SHARED_ROOT) snapshot();
   const { width, height } = win.getContentBounds();
-  chromeView.setBounds({ x: 0, y: 0, width, height });
+  setBounds(chromeView, { x: 0, y: 0, width, height });
   const page = { x: FRAME, y: FRAME, width: Math.max(0, width - FRAME * 2), height: Math.max(0, height - FRAME * 2) };
   for (const t of tabs.values()) {
-    t.view.setVisible(t.id === activeTab && !centerOpen);
-    t.view.setBounds(page);
+    // Background agent tabs must keep a live input/render surface. Their views
+    // stay underneath the selected page instead of being hidden by Electron.
+    setVisible(t.view, SHARED_ROOT ? true : t.id === activeTab && !centerOpen);
+    setBounds(t.view, page);
   }
+  const front = centerOpen ? chromeView : tabs.get(activeTab)?.view;
+  keepOnTop(win.contentView, centerOpen ? [chromeView] : [front, ...[...overlays.values()].map(o => o.view)].filter(Boolean));
   for (const [part, o] of overlays) {
     const r = o.rect; if (!r) continue;
     let x, y;
     // Overlay documents keep OVERLAY_PAD px of transparent room for their shadow.
     const inset = FRAME + 10 - OVERLAY_PAD;
     if (part === 'island') { // full-width strip at the top; the bar is centred inside it
-      o.view.setBounds({ x: 0, y: 0, width, height: r.height });
+      setBounds(o.view, { x: 0, y: 0, width, height: r.height });
     } else {
       x = Math.round(width / 2 - r.width / 2); y = height - inset - r.height;
-      o.view.setBounds({ x, y, width: r.width, height: r.height });
+      setBounds(o.view, { x, y, width: r.width, height: r.height });
     }
     if (part === 'cursor') { placeCursor(); continue; }
-    o.view.setVisible(!centerOpen && (part !== 'dock' || agent.state !== 'idle'));
+    setVisible(o.view, !centerOpen && (part !== 'dock' || agent.state !== 'idle'));
     debug('overlay', part, JSON.stringify(o.view.getBounds()), 'visible', o.view.getVisible());
   }
 }
-// Overlays must stay above page views. Only reorder when a page view is added:
-// re-adding a view on every layout would steal keyboard focus from the bar.
-function raiseOverlays() {
-  debug('raise; children', win.contentView.children.length); for (const o of overlays.values()) { win.contentView.removeChildView(o.view); win.contentView.addChildView(o.view); } }
 /** Show the top bar (Ctrl+L, new tab) and optionally focus the address field. */
 function revealBar(focus = false, panel = null) {
   const island = overlays.get('island'); if (!island) return;
@@ -177,10 +195,10 @@ function cursorTarget() {
 function placeCursor() {
   const o = overlays.get('cursor'); if (!o) return;
   const show = !!cursor && !centerOpen && agent.state === 'working' && !HEADLESS;
-  if (!show) { o.view.setVisible(false); cursorShown = null; return; }
+  if (!show) { setVisible(o.view, false); cursorShown = null; return; }
   const p = cursorShown ?? cursorTarget();
-  o.view.setBounds({ x: Math.round(p.x), y: Math.round(p.y), width: 220, height: 44 });
-  o.view.setVisible(true);
+  setBounds(o.view, { x: Math.round(p.x), y: Math.round(p.y), width: 220, height: 44 });
+  setVisible(o.view, true);
 }
 function animateCursor() {
   clearInterval(cursorAnim);
@@ -201,11 +219,11 @@ function contextMenu(tab, p) {
   const wc = tab.view.webContents, history = wc.navigationHistory, items = [];
   const sep = () => { if (items.length && items.at(-1).type !== 'separator') items.push({ type: 'separator' }); };
   if (p.linkURL && /^https?:/i.test(p.linkURL)) {
-    items.push({ label: 'Abrir enlace en pestaña nueva', click: () => createTab(p.linkURL, { activate: false }) },
+    items.push({ label: 'Abrir enlace en pestaña nueva', click: () => createTab(p.linkURL, { activate: false, profile: tab.profile }) },
       { label: 'Copiar dirección del enlace', click: () => clipboard.writeText(p.linkURL) }); sep();
   }
   if (p.mediaType === 'image' && /^(https?|data):/i.test(p.srcURL)) {
-    items.push({ label: 'Abrir imagen en pestaña nueva', click: () => createTab(p.srcURL, { activate: false }) },
+    items.push({ label: 'Abrir imagen en pestaña nueva', click: () => createTab(p.srcURL, { activate: false, profile: tab.profile }) },
       { label: 'Copiar imagen', click: () => wc.copyImageAt(p.x, p.y) },
       { label: 'Guardar imagen como…', click: () => wc.downloadURL(p.srcURL) }); sep();
   }
@@ -216,7 +234,7 @@ function contextMenu(tab, p) {
       { role: 'paste', label: 'Pegar', enabled: p.editFlags.canPaste }, { role: 'selectAll', label: 'Seleccionar todo' }); sep();
   } else if (selection) {
     const short = selection.length > 32 ? `${selection.slice(0, 32)}…` : selection;
-    items.push({ role: 'copy', label: 'Copiar' }, { label: `Buscar «${short}»`, click: () => createTab(searchUrl(selection)) }); sep();
+    items.push({ role: 'copy', label: 'Copiar' }, { label: `Buscar «${short}»`, click: () => createTab(searchUrl(selection), { profile: tab.profile }) }); sep();
   }
   if (!p.isEditable && !selection && !p.linkURL && p.mediaType !== 'image') {
     items.push({ label: 'Atrás', enabled: history.canGoBack(), click: () => history.goBack() },
@@ -247,8 +265,9 @@ function requestPermission(wc, permission, done, details) {
   if (SILENT.has(permission)) return done(true);
   const tab = [...tabs.values()].find(t => t.view.webContents === wc);
   const origin = originOf(details?.requestingUrl || wc.getURL());
+  if (tab && grantedPermission(scopes.get(tab.profile), permission, origin)) return done(true);
   if (!tab || !PROMPTED[permission] || !origin || HEADLESS) return done(false);
-  const key = `${origin}|${permission}`, saved = loadDecisions()[key];
+  const key = `${tab.profile ? tab.profile + '|' : ''}${origin}|${permission}`, saved = loadDecisions()[key];
   if (saved !== undefined) return done(saved);
   const id = nextId++;
   const timer = setTimeout(() => resolvePrompt(id, false, false), 120_000);
@@ -326,12 +345,14 @@ function addOverlay(part) {
 }
 
 const NEW_TAB = 'trex://newtab/';
-function createTab(url = NEW_TAB, { activate = true } = {}) {
+function createTab(url = NEW_TAB, { activate = true, profile = tabs.get(activeTab)?.profile || scopes.keys().next().value } = {}) {
+  const scope = profile && scopes.get(profile);
+  if (SHARED_ROOT && !scope) return null;
   const id = `t${nextTab++}`;
-  const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: !HEADLESS && !AUTOMATION } });
+  const view = new WebContentsView({ webPreferences: { ...(scope ? { session: scope.session } : {}), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: !HEADLESS && !AUTOMATION } });
   view.setBorderRadius(RADIUS);
   view.setBackgroundColor('#121212');
-  const tab = { id, view, title: 'Nueva pestaña', url, favicon: null, loading: true };
+  const tab = { id, view, title: 'Nueva pestaña', url, favicon: null, loading: true, profile };
   tabs.set(id, tab);
   const wc = view.webContents;
   const update = () => { tab.title = wc.getTitle() || tab.title; tab.url = wc.getURL(); broadcast(); };
@@ -341,13 +362,15 @@ function createTab(url = NEW_TAB, { activate = true } = {}) {
   wc.on('did-start-loading', () => { tab.loading = true; broadcast(); });
   wc.on('did-stop-loading', () => { tab.loading = false; update(); });
   wc.once('destroyed', () => {
+    const targetId = targetIds.get(wc);
+    if (profile && targetId) emitToWorker({ type: 'scope-target-close', profile, targetId });
     denyPrompts(id);
     if (!tabs.has(id)) return;
     // Closing the window destroys it before its tabs: only forget the tab then.
     if (closing || app.isQuitting || !win || win.isDestroyed()) { tabs.delete(id); return; }
     win.contentView.removeChildView(view); tabs.delete(id);
     if (activeTab === id) activeTab = [...tabs.keys()].at(-1) ?? null;
-    if (!tabs.size && !app.isQuitting) createTab();
+    if (!app.isQuitting && (SHARED_ROOT ? !closingScopes.has(profile) && ![...tabs.values()].some(t => t.profile === profile) : !tabs.size)) createTab(undefined, { profile, activate: activeTab === null });
     layout(); broadcast();
   });
   wc.on('page-favicon-updated', (_e, icons) => { tab.favicon = icons[0] ?? null; broadcast(); });
@@ -364,14 +387,16 @@ function createTab(url = NEW_TAB, { activate = true } = {}) {
   // navigation simply fails like any unknown address, without a cancelled
   // navigation that automation would wait on forever.
   wc.setWindowOpenHandler(({ url: target }) => {
-    if (/^https?:/.test(target)) createTab(target);
+    if (/^https?:/.test(target)) createTab(target, { profile, activate: !SHARED_ROOT || tabs.get(activeTab)?.profile === profile });
     return { action: 'deny' };
   });
-  win.contentView.addChildView(view);
-  raiseOverlays();
+  // Background tabs start below the visible page and chrome. They never flash
+  // above the foreground while the worker attaches or the first URL loads.
+  win.contentView.addChildView(view, 0);
   wc.loadURL(url).catch(() => {});
   if (activate) activeTab = id;
   layout(); broadcast();
+  if (profile) void targetIdOf(wc).then(targetId => emitToWorker({ type: 'scope-target', profile, targetId })).catch(() => {});
   return id;
 }
 
@@ -381,7 +406,7 @@ function closeTab(id) {
   tab.view.webContents.close();
   tabs.delete(id);
   if (activeTab === id) activeTab = [...tabs.keys()].at(-1) ?? null;
-  if (!tabs.size) createTab();
+  if (SHARED_ROOT ? !closingScopes.has(tab.profile) && ![...tabs.values()].some(t => t.profile === tab.profile) : !tabs.size) createTab(undefined, { profile: tab.profile, activate: activeTab === null });
   layout(); broadcast();
 }
 
@@ -406,7 +431,7 @@ const commands = {
     revealBar(true);
     tabs.get(id)?.view.webContents.once('did-finish-load', () => { if (activeTab === id) revealBar(true); });
   },
-  selectTab: ({ id }) => { if (tabs.has(id)) { if (id !== activeTab) commands.findClose(); activeTab = id; layout(); broadcast(); } },
+  selectTab: ({ id }) => { if (tabs.has(id)) { if (id !== activeTab) commands.findClose(); activeTab = id; const scope=scopes.get(tabs.get(id).profile);if(scope)scope.selectedId=id;layout(); broadcast(); } },
   closeTab: ({ id }) => closeTab(id),
   toggleCenter: async ({ open } = {}) => {
     centerOpen = open ?? !centerOpen;
@@ -414,7 +439,8 @@ const commands = {
     if (centerOpen) backdrop = await tabs.get(activeTab)?.view.webContents.capturePage().then(i => i.resize({ width: 960 }).toDataURL()).catch(() => null);
     layout(); broadcast();
     chromeView.webContents.send('shell:backdrop', backdrop);
-    emitToWorker({ type: 'center', open: centerOpen });
+    if (!centerOpen) tabs.get(activeTab)?.view.webContents.focus();
+    emitToWorker({ type: 'center', open: centerOpen, profile: tabs.get(activeTab)?.profile });
   },
   overlaySize: ({ part, width, height }, sender) => {
     const o = overlays.get(part); if (!o || o.view.webContents !== sender) return;
@@ -458,7 +484,10 @@ const commands = {
   // Site permissions
   permission: ({ id, allow }) => resolvePrompt(Number(id), !!allow, true),
   // Human controls are forwarded to the worker, which owns policy.
-  control: ({ action, clientId = 'self' }) => emitToWorker({ type: 'control', action: String(action), clientId: String(clientId) }),
+  control: args => {
+    const selected = tabs.get(activeTab), scope = scopes.get(selected?.profile);
+    return controls.request(SHARED_ROOT && (!args.clientId || args.clientId === 'self') && scope ? { ...args, clientId: scope.clientId, profile: selected.profile } : args);
+  },
 };
 ipcMain.handle('shell:command', async (event, name, args) => {
   debug('command', name, event.sender.getURL());
@@ -470,11 +499,12 @@ ipcMain.handle('shell:state', event => { if (!isUi(event.sender)) throw new Erro
 // CDP target ids let the worker map Playwright pages to shell tabs and
 // recognise our own UI documents without trusting page URLs.
 const targetIds = new WeakMap();
+const contextIds = new WeakMap();
 async function targetIdOf(wc) {
   if (targetIds.has(wc)) return targetIds.get(wc);
   const dbg = wc.debugger, attached = dbg.isAttached();
   if (!attached) dbg.attach('1.3');
-  try { const { targetInfo } = await dbg.sendCommand('Target.getTargetInfo'); targetIds.set(wc, targetInfo.targetId); return targetInfo.targetId; }
+  try { const { targetInfo } = await dbg.sendCommand('Target.getTargetInfo'); targetIds.set(wc, targetInfo.targetId); contextIds.set(wc, targetInfo.browserContextId); return targetInfo.targetId; }
   finally { if (!attached) dbg.detach(); }
 }
 const tabByTarget = async targetId => { for (const t of tabs.values()) if (await targetIdOf(t.view.webContents) === targetId) return t; return null; };
@@ -483,28 +513,79 @@ const tabByTarget = async targetId => { for (const t of tabs.values()) if (await
 // same pipe Playwright uses) and calls window.trexShell.worker(...). Events go
 // back through a Playwright binding the worker installs on that document.
 const workerApi = {
-  hello: () => ({ version: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome }),
+  openScope: async ({ profile, label, model = '', clientId }) => {
+    if (!SHARED_ROOT || !/^BROWSER[1-9][0-9]?$/.test(profile) || typeof clientId !== 'string' || !clientId || clientId.length > 256) throw new Error('Invalid browser space');
+    let scope = scopes.get(profile);
+    if (!scope) {
+      const storage = path.join(SHARED_ROOT, profile, 'user-data');
+      fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+      const ses = session.fromPath(storage);
+      ses.protocol.handle('trex', request => new URL(request.url).host === 'newtab' ? serveFrom(['newtab'])(request) : Response.error());
+      ses.setUserAgent(webUserAgent(ses.getUserAgent()));
+      ses.setPermissionRequestHandler(requestPermission);
+      ses.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || grantedPermission(scopes.get(profile), permission, originOf(origin)) || loadDecisions()[`${profile}|${originOf(origin)}|${permission}`] === true);
+      scope = { profile, session: ses }; scopes.set(profile, scope);
+      ses.on('will-download', (event, item, wc) => {
+        scopedDownload(scope, item, wc, path.resolve(SHARED_ROOT, '..', '..', 'artifacts'), targetIdOf, emitToWorker);
+        trackDownload(event, item);
+      });
+    }
+    scope.clientId = clientId; scope.agent = { label: String(label || profile).slice(0, 100), model: String(model).slice(0, 100), state: 'idle', tool: '', detail: '', step: '' };
+    scope.permissions = new Map();
+    closingScopes.delete(profile);
+    const existing = [...tabs.values()].find(t => t.profile === profile);
+    const id = existing?.id || createTab(undefined, { profile, activate: !activeTab });
+    const wc = tabs.get(id).view.webContents, targetId = await targetIdOf(wc);
+    return { targetId, browserContextId: contextIds.get(wc), profile };
+  },
+  closeScope: async ({ profile }) => {
+    if (!scopes.has(profile)) return false;
+    closingScopes.add(profile);
+    for (const item of scopes.get(profile).downloads || []) item.cancel();
+    for (const tab of [...tabs.values()]) if (tab.profile === profile) closeTab(tab.id);
+    scopes.get(profile).session.flushStorageData(); await scopes.get(profile).session.cookies.flushStore();
+    return true;
+  },
+  scopeStorage: ({ profile, method, params }) => { const scope=scopes.get(profile);if(!scope)throw new Error('Unknown native session');return storageCommand(scope,method,params); },
+  controlResult: payload => controls.complete(payload),
+  hello: () => ({ version: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome, scopeProtocol: SHARED_ROOT ? 1 : 0 }),
   setAgent: next => {
-    agent = { ...agent, ...next };
+    if (SHARED_ROOT && next.profile) {
+      const scope = scopes.get(next.profile); if (!scope) return false; scope.agent = { ...scope.agent, ...next };
+      // A peer's heartbeat must not reset the visible agent's cursor or dock.
+      if (tabs.get(activeTab)?.profile !== next.profile) { broadcast(); return true; }
+      agent = scope.agent;
+    }
+    else agent = { ...agent, ...next };
     // The cursor fades out shortly after the agent stops acting.
     clearTimeout(cursorTimer);
     if (agent.state !== 'working' && cursor) cursorTimer = setTimeout(() => { cursor = null; layout(); }, 1200);
     layout(); broadcast(); return true;
   },
-  setCursor: ({ x, y }) => {
+  setCursor: ({ x, y, profile }) => {
+    if (SHARED_ROOT && profile !== tabs.get(activeTab)?.profile) return false;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
     clearTimeout(cursorTimer);
     cursor = { x, y }; animateCursor(); return true;
   },
   setSpaces: list => { spaces = Array.isArray(list) ? list : []; broadcast(); return true; },
-  newTab: async ({ url, activate = true } = {}) => {
-    const id = createTab(url && /^https?:\/\//.test(url) ? url : undefined, { activate });
+  newTab: async ({ url, activate = true, profile } = {}) => {
+    const id = createTab(url && /^https?:\/\//.test(url) ? url : undefined, { activate, profile });
+    if (!id) throw new Error('No browser space selected');
+    const scope=scopes.get(profile);if(scope)scope.selectedId=id;
     return { id, targetId: await targetIdOf(tabs.get(id).view.webContents) };
   },
   selectTab: ({ id }) => commands.selectTab({ id }),
-  selectTarget: async ({ targetId }) => { const t = await tabByTarget(targetId); if (!t) return false; commands.selectTab({ id: t.id }); return true; },
+  selectTarget: async ({ targetId, profile, background }) => { const t = await tabByTarget(targetId); if (!t || profile && t.profile !== profile) return false;
+    const scope=scopes.get(profile);if(scope)scope.selectedId=t.id;
+    if(!background||!SHARED_ROOT||tabs.get(activeTab)?.profile===profile){commands.selectTab({ id: t.id });cursor = null;}return true; },
   uiTargets: () => Promise.all([chromeView, ...[...overlays.values()].map(o => o.view)].map(v => targetIdOf(v.webContents))),
-  focusWindow: () => { if (HEADLESS) return true; if (win.isMinimized()) win.restore(); win.show(); win.focus(); return true; },
+  focusWindow: async ({ profile, targetId } = {}) => {
+    if (profile) { const t = targetId ? await tabByTarget(targetId) : tabs.get(scopes.get(profile)?.selectedId)||[...tabs.values()].find(t => t.profile === profile); if (!t || t.profile !== profile) return false; commands.selectTab({ id: t.id }); }
+    if (centerOpen) { centerOpen = false; layout(); broadcast(); emitToWorker({ type: 'center', open: false, profile: tabs.get(activeTab)?.profile }); }
+    if (HEADLESS) return true;
+    if (win.isMinimized()) win.restore(); win.show(); win.focus(); tabs.get(activeTab)?.view.webContents.focus(); return true;
+  },
   tabs: () => snapshot().tabs,
   // Development only: compose the window from its layers (no desktop capture
   // permission needed). Returns a PNG data URL.
@@ -523,7 +604,8 @@ ipcMain.handle('shell:worker', (event, name, args) => {
   if (event.sender !== chromeView.webContents || !Object.hasOwn(workerApi, name)) throw new Error('Worker call rejected');
   return workerApi[name](args ?? {});
 });
-function emitToWorker(message) { chromeView.webContents.send('shell:to-worker', message); }
+function emitToWorker(message) { if(chromeView&&!chromeView.webContents.isDestroyed())chromeView.webContents.send('shell:to-worker', message); }
+const controls = humanControls(emitToWorker);
 
 // Present as plain Chromium: the "TrexBrowser/x" and "Electron/x" tokens make
 // Google (YouTube playback, sign-in) and Cloudflare treat us as an embedded app.
@@ -542,7 +624,7 @@ app.whenReady().then(() => {
     ...(process.platform === 'darwin' ? { vibrancy: 'under-window', visualEffectState: 'active', titleBarStyle: 'hidden' } : {}),
     ...(process.platform === 'win32' ? { backgroundMaterial: 'acrylic' } : {}),
     ...(process.platform !== 'darwin' ? { icon: path.join(here, 'icons', process.platform === 'win32' ? 'trex-browser.ico' : 'trex-browser-256.png') } : {}),
-    title: process.env.TREX_SPACE_LABEL ? `Trex Browser — ${process.env.TREX_SPACE_LABEL}` : 'Trex Browser',
+    title: SHARED_ROOT ? `Trex Browser — ${process.env.TREX_PROJECT_LABEL || 'Proyecto'}` : process.env.TREX_SPACE_LABEL ? `Trex Browser — ${process.env.TREX_SPACE_LABEL}` : 'Trex Browser',
   });
   chromeView = new WebContentsView({ webPreferences: uiPrefs });
   uiContents.add(chromeView.webContents);
@@ -551,13 +633,13 @@ app.whenReady().then(() => {
   chromeView.webContents.loadURL(`${UI_ORIGIN}/index.html`);
   for (const part of ['cursor', 'island', 'dock']) addOverlay(part);
   const initial = process.argv.slice(1).find(a => /^https?:\/\//.test(a));
-  if (initial || !restoreSession()) createTab(initial);
+  if (!SHARED_ROOT && (initial || !restoreSession())) createTab(initial);
   // Start with the keyboard on the page, not on our UI.
   tabs.get(activeTab)?.view.webContents.once('did-finish-load', () => { if (!tabs.get(activeTab)?.url.startsWith('trex://newtab')) tabs.get(activeTab)?.view.webContents.focus(); });
   win.on('resize', layout);
   win.on('maximize', broadcast); win.on('unmaximize', broadcast);
   win.on('close', () => { saveSession(true); closing = true; });
-  win.on('closed', () => { closing = true; });
+  win.on('closed', () => { closing = true; controls.close(); });
   win.on('closed', () => app.quit());
   layout();
 });

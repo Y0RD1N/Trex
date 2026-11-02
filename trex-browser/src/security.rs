@@ -972,6 +972,11 @@ fn chromium_profile_path(home: &Path, path: &Path) -> bool {
     let Some(profile) = parts[2].to_str() else {
         return false;
     };
+    // The shared project window has its own Chromium UI session. Agent data
+    // remains in the existing BROWSERn paths with the same narrow ACL rules.
+    if profile.eq_ignore_ascii_case("browser-window") {
+        return true;
+    }
     let profile = profile.to_ascii_uppercase();
     let Some(number) = profile.strip_prefix("BROWSER") else {
         return false;
@@ -1583,6 +1588,18 @@ mod tests {
         assert!(chromium_profile_path(home, &home.join(PROFILE_DATA)));
         assert!(chromium_profile_path(
             home,
+            &home.join("projects/0123456789abcdef01234567/browser-window/user-data")
+        ));
+        assert!(!chromium_managed_data_child(
+            home,
+            &home.join("projects/0123456789abcdef01234567/browser-window/user-data")
+        ));
+        assert!(chromium_managed_data_child(
+            home,
+            &home.join("projects/0123456789abcdef01234567/browser-window/user-data/Network")
+        ));
+        assert!(chromium_profile_path(
+            home,
             &home.join("personal/user-data")
         ));
         assert!(!chromium_managed_data_child(
@@ -1599,6 +1616,9 @@ mod tests {
             "personal/profile.json",
             "personal-other/user-data",
             "projects/short/BROWSER1/user-data",
+            "projects/short/browser-window/user-data",
+            "projects/0123456789abcdef01234567/browser-window-other/user-data",
+            "projects/0123456789abcdef01234567/browser-window/profile.json",
             "projects/0123456789abcdef01234567/BROWSER0/user-data",
             "projects/0123456789abcdef01234567/BROWSER100/user-data",
             "projects/0123456789abcdef01234567/BROWSER1/profile.json",

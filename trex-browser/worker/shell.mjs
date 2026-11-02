@@ -63,7 +63,12 @@ export class ShellLink {
       if (Date.now() > deadline) throw new Error('Trex Browser shell UI documents were not all found');
       await sleep(40);
     }
-    await ui.exposeBinding('__trexWorkerEvent', (_source, message) => { try { onEvent(message); } catch {} });
+    await ui.exposeBinding('__trexWorkerEvent', async (_source, message) => {
+      let result;
+      try { result = await onEvent(message); }
+      catch (error) { result = { ok: false, error: String(error?.message || error).slice(0, 1000) }; }
+      if (message?.requestId) await link.call('controlResult', { requestId: message.requestId, result }).catch(() => {});
+    });
     await ui.evaluate(() => window.trexShell.onWorkerEvent(m => window.__trexWorkerEvent(m)));
     return link;
   }
@@ -124,6 +129,13 @@ export function spaceLabel(label) {
 // Cloudflare, Google sign-in) work there. Agent spaces stay honestly automated.
 /** pid of the browser holding a Chromium user-data dir, or 0. */
 export function profileHolder(userData) {
+  try {
+    const file = path.join(userData, 'trex-human-window.json'), stat = fs.lstatSync(file);
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size < 1024) {
+      const { pid } = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (Number.isSafeInteger(pid) && pid > 0) { process.kill(pid, 0); return pid; }
+    }
+  } catch {}
   try {
     const target = fs.readlinkSync(path.join(userData, 'SingletonLock')); // "<host>-<pid>"
     const pid = Number(target.slice(target.lastIndexOf('-') + 1));

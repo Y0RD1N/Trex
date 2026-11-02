@@ -16,8 +16,8 @@ test("team snapshots support mixed providers and independent model/effort on the
   const result=normalizeAgentTeam(raw);assert.equal(result.master.agent.model,"model-claude");assert.equal(result.workers[0].agent.model,"different-model");assert.equal(result.workers[0].agent.effort,"max");
   assert.deepEqual(normalizeAgentTeam(JSON.parse(JSON.stringify(result))),result);
 });
-test("team configuration rejects duplicate identities, invalid launches, too many members and writable principals",()=>{
-  for(const mutation of [t=>t.master.canWrite=true,t=>t.workers=[],t=>t.workers=Array.from({length:9},(_,i)=>member("w-"+i,"codex","review")),t=>t.workers[0].id=t.master.id,t=>t.workers[0].role="coordinator",t=>t.workers[0].role="__proto__",t=>t.workers[0].agent.provider="shell",t=>t.workers[0].agent.launch.profileId="different",t=>t.workers[0].conversationId="not-a-conversation",t=>t.master.agent.model="--bad model",t=>t.epoch="../epoch",t=>t.master.id="x".repeat(25)]){
+test("team configuration rejects duplicate identities, invalid launches, too many members and inconsistent permissions",()=>{
+  for(const mutation of [t=>{t.master.mode="plan";t.master.canWrite=true;},t=>{t.workers[0].mode="full";t.workers[0].canWrite=false;},t=>t.workers=[],t=>t.workers=Array.from({length:9},(_,i)=>member("w-"+i,"codex","review")),t=>t.workers[0].id=t.master.id,t=>t.workers[0].role="coordinator",t=>t.workers[0].role="__proto__",t=>t.workers[0].agent.provider="shell",t=>t.workers[0].agent.launch.profileId="different",t=>t.workers[0].conversationId="not-a-conversation",t=>t.master.agent.model="--bad model",t=>t.epoch="../epoch",t=>t.master.id="x".repeat(25)]){
     const value=team();mutation(value);assert.equal(normalizeAgentTeam(value),null);
   }
 });

@@ -3,8 +3,10 @@ import { browserOptions } from "../browser";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatError, loadHandoff, prepareHandoff } from "../api";
 import { mergeRoomItems, roomConversationContext, roomQueueAddress, roomQueueSnapshot, routeRoomMessage, type AgentRoom, type RoomRole } from "../agentRoom";
-import { completedWorkflowPlan, IMPLEMENTATION_INSTRUCTION, PLANNING_INSTRUCTION, workflowClarifications, workflowPlanContext } from "../agentWorkflow";
+import { completedWorkflowPlan, IMPLEMENTATION_INSTRUCTION, workflowPlanningInstruction, workflowClarifications, workflowPlanContext } from "../agentWorkflow";
 import { conversationTitle, initialChatState, type ChatState, type OutgoingImage } from "../chatState";
+import { TEAM_READER_POLICY } from "../agentTeam";
+import { defaultAgentPermission } from "../agentPermissions";
 import { chatTasks, roomTasks } from "../chatTasks";
 import { buildHandoffPrompt, handoffAlreadySent, sanitizeHandoffText, type HandoffSource, type PreparedHandoff } from "../handoff";
 import { type ChatSession, type ChatSessionOptions } from "../hooks/chatSession";
@@ -96,7 +98,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     change(current => {
       const participant = current[role], state = session.state;
       const conversationId = state.sessionId && state.items.some(item => item.kind === "user") ? state.sessionId : participant.conversationId;
-      const mode = role === "planner" ? "plan" : state.modeChoice ?? participant.mode;
+      const mode = state.modeChoice ?? participant.mode;
       if (conversationId === participant.conversationId && mode === participant.mode
         && state.modelChoice === participant.agent.model && state.effortChoice === (participant.agent.effort ?? null)) return current;
       return { ...current, [role]: { ...participant, conversationId, mode,
@@ -171,8 +173,8 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       if (role === "planner" && (newCycle || resume || original.current?.cycle !== cycle)) {
         original.current = { cycle, prepared, start: sessionsRef.current.planner?.state.items.length ?? 0 };
       }
-      const instruction = `Atiende la solicitud actual del usuario indicada al principio del contexto transferido. ${kind === "plan" ? PLANNING_INSTRUCTION
-        : kind === "execute" ? IMPLEMENTATION_INSTRUCTION : role === "planner" ? "Responde sin modificar archivos ni implementar." : "Comprueba el estado actual del proyecto antes de actuar."}`;
+      const instruction = `Atiende la solicitud actual del usuario indicada al principio del contexto transferido. ${kind === "plan" ? workflowPlanningInstruction((before.planner.mode??"plan")!=="plan")
+        : kind === "execute" ? IMPLEMENTATION_INSTRUCTION : "Comprueba el estado actual del proyecto antes de actuar y respeta los permisos elegidos."}`;
       const reference = { id: prepared.id, sourceLabel: prepared.sourceLabel, pending: true, instruction };
       pendingKinds.current.set(prepared.id, kind);
       attachments.current.set(prepared.id, { images, previews, display: task });
@@ -218,7 +220,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
         const initialTask = /^# Solicitud (?:actual del usuario|del usuario)\s*\n+([\s\S]*?)(?=\n\n(?:---\n|##)|$)/.exec(prepared.content)?.[1]?.trim();
         const display = outgoing?.display ?? (kind === "execute" ? `Implementa el plan definitivo de ${roomRef.current.planner.agent.profileName}.`
           : initialTask || "Continúa la planificación con el contexto de esta conversación.");
-        const accepted = await session.send(buildHandoffPrompt(prepared, pending.reference.instruction ?? (role === "planner" ? PLANNING_INSTRUCTION : IMPLEMENTATION_INSTRUCTION)),
+        const accepted = await session.send(buildHandoffPrompt(prepared, pending.reference.instruction ?? (role === "planner" ? workflowPlanningInstruction((roomRef.current.planner.mode??"plan")!=="plan") : IMPLEMENTATION_INSTRUCTION)),
           outgoing?.images ?? [], outgoing?.previews ?? [], display);
         if (!currentOperation(token, cycle) || roomRef.current.pending?.id !== pending.id) return;
         if (accepted === false) throw new Error("El agente no confirmó la recepción. Revisa el historial antes de reanudar.");
@@ -503,7 +505,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
         if (originalItem?.kind !== "permission" || originalItem.state !== "pending") { block("Esta solicitud ya no está pendiente."); return; }
         session!.answer(originalItem, allowed, remember, choices);
       },
-      setMode: value => { if (roomRef.current.active === "executor") sessionsRef.current.executor?.setMode(value); },
+      setMode: value => sessionsRef.current[roomRef.current.active]?.setMode(value),
       setModel: value => sessionsRef.current[roomRef.current.active]?.setModel(value),
       setEffort: value => sessionsRef.current[roomRef.current.active]?.setEffort(value),
       setFast: value => sessionsRef.current[roomRef.current.active]?.setFast(value),
@@ -516,21 +518,22 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       const options: ChatSessionOptions = {
       browser: browsers[role], desktopEnabled, integrations: props.settings.integrations, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort,
-        mode: role === "planner" ? "plan" : participant.mode ?? (participant.agent.provider === "claude" ? "default" : "auto"),
-        planningOnly: role === "planner", visible: props.visible,
+        mode: participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner"),
+        planningOnly: (participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner")) === "plan",
+        ...(role === "executor" && participant.mode === "plan" ? { planningInstruction: TEAM_READER_POLICY } : {}), visible: props.visible,
         onRunning: () => latest.current.onRunning(latest.current.sessionId),
         onExit: (_id, code) => { if (ROLES.every(candidate => candidate === role || ["failed", "exited"].includes(sessionsRef.current[candidate]?.state.process ?? "starting"))) latest.current.onExit(latest.current.sessionId, code); },
       };
       const Runtime = participant.agent.provider === "antigravity" ? AntigravityRuntime : participant.agent.provider === "trex" ? TrexRuntime : participant.agent.provider === "claude" ? ClaudeRuntime : CodexRuntime;
-      return <Runtime key={`${room.id}-${role}-${participant.agent.profileId}`} role={role} options={options} publish={publish} />;
+      return <Runtime key={`${room.id}-${role}-${participant.agent.profileId}-${options.planningOnly ? "read" : "write"}`} role={role} options={options} publish={publish} />;
     })}
     {aggregate ? <ChatPanel {...props} browser={browser} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}
       profileName={room[room.active].agent.profileName} conversationId={room[room.active].conversationId}
       terminalOwners={ROLES.flatMap(role=>{const session=sessions[role]?.terminals;return session?[{id:role,label:room[role].agent.profileName+" · "+(role==="planner"?"Planificación":"Implementación"),provider:room[role].agent.provider,session}]:[];})} session={aggregate} toolbar={toolbar} composerLead={composerLead} itemLabels={itemLabels} taskPlan={roomTaskPlan} taskAuthor={roomTaskPlan[0]?.owner ?? room[room.active].agent.profileName} inputLocked={lock}
       emptyState={{title:"Tu flujo está listo",description:"Escribe tu idea en este chat. Primero se preparará el plan y después el ejecutor lo implementará; aquí podrás conversar con ambos.",
-        participants:ROLES.map(role=>({id:role,name:room[role].agent.profileName,role:role==="planner"?"Planificación · solo lectura":"Implementación",provider:room[role].agent.provider,model:room[role].agent.model,effort:room[role].agent.effort}))}}
+        participants:ROLES.map(role=>({id:role,name:room[role].agent.profileName,role:role==="planner"?"Planificación":"Implementación",provider:room[role].agent.provider,model:room[role].agent.model,effort:room[role].agent.effort}))}}
       composerPlaceholder={room.active==="planner"?"Escribe tu idea para preparar el plan…":"Escribe una indicación para el ejecutor…"}
-      historyReadOnly planningOnly={room.active === "planner"} onBeforeSend={beforeSend}
+      historyReadOnly planningOnly={(room[room.active].mode ?? defaultAgentPermission(room[room.active].agent.provider, room.active !== "planner")) === "plan"} onBeforeSend={beforeSend}
       queuedSendReason={queuedSendReason} onQueuedSend={message => sendRoomMessage(roomQueueAddress(message.id).role, message.text, message.images, message.previews, undefined, true)}
       localCommandReason={localCommandReason}
       onConversation={noop} onMode={noop} onModel={noop} onEffort={noop} onHandoffRequest={undefined} onPlanHere={undefined} />

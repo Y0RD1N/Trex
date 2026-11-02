@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { AgentRoom, RoomRole } from "../agentRoom";
+import { agentPermissionLabel } from "../agentPermissions";
 import { chatActivity, effortLabel, supportedEfforts, type ChatState } from "../chatState";
 import AgentIcon from "./AgentIcon";
 import { MapIcon, SettingsIcon, StopIcon } from "./Icons";
@@ -31,10 +32,10 @@ export default function AgentRoomToolbar({ room, states, disabled, busy, onSelec
         const effort = state?.effortChoice ?? state?.effort ?? participant.agent.effort ?? "";
         return <div key={role} className={`agent-room-participant${room.active === role ? " is-selected" : ""}`}>
           <button type="button" className="agent-room-person" aria-pressed={room.active === role} disabled={disabled && room.active !== role}
-            onClick={() => onSelect(role)} title={`${ROLE_NAMES[role]} · ${participant.agent.profileName}${role === "planner" ? " · Solo lectura" : ""}\n${model || "Modelo del perfil"} · ${effort ? effortLabel(effort) : "Esfuerzo del perfil"}`}>
+            onClick={() => onSelect(role)} title={`${ROLE_NAMES[role]} · ${participant.agent.profileName} · ${agentPermissionLabel(participant.agent.provider, participant.mode, role !== "planner")}\n${model || "Modelo del perfil"} · ${effort ? effortLabel(effort) : "Esfuerzo del perfil"}`}>
             <AgentIcon kind={participant.agent.provider} size={15} activity={state ? chatActivity(state) : "idle"} />
             <span><strong>{ROLE_NAMES[role]}</strong><small>{participant.agent.profileName}</small></span>
-            {role === "planner" && <span className="sr-only">Solo lectura</span>}
+            <span className="sr-only">{agentPermissionLabel(participant.agent.provider, participant.mode, role !== "planner")}</span>
           </button>
           {configuring && <div className="agent-room-settings">
             {models.length ? <Select aria-label={`Modelo del ${ROLE_NAMES[role].toLowerCase()}`} value={model} disabled={disabled}
@@ -44,6 +45,7 @@ export default function AgentRoomToolbar({ room, states, disabled, busy, onSelec
               placeholder="Esfuerzo del perfil" options={efforts.map(value => ({ value, label: effortLabel(value) }))}
               onChange={value => onEffort(role, value)} /> : <span>{effort ? effortLabel(effort) : "Esfuerzo del perfil"}</span>}
           </div>}
+          {configuring && <p className="agent-room-permission"><span>Permisos</span>{agentPermissionLabel(participant.agent.provider, participant.mode, role !== "planner")}</p>}
           {state && ["failed", "exited"].includes(state.process) && <div className="agent-room-runtime-error">
             <span>Sin conexión</span><button type="button" className="agent-room-action" disabled={busy}
               onClick={() => onRetry(role)} aria-label={`Reintentar ${ROLE_NAMES[role].toLowerCase()}`}>Reintentar</button>

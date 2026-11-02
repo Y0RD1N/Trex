@@ -1,3 +1,4 @@
+import { formatClock } from "./timeFormat";
 import { browserResultArtifacts, browserToolResultText } from "./browser";
 /**
  * Protocolo de Claude Code en modo chat (`claude -p` con stream-json).
@@ -399,7 +400,7 @@ function applyEvent(state: ChatState, raw: unknown, now: number): ChatState {
       const info = record(event.rate_limit_info) ?? {};
       const plan = claudeRateLimitUsage(state.plan, info);
       if (info.status === "allowed" || info.status === "allowed_warning" || typeof info.status !== "string") return { ...state, plan };
-      const reset = typeof info.resetsAt === "number" ? new Date(info.resetsAt * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+      const reset = typeof info.resetsAt === "number" ? formatClock(info.resetsAt * 1000) : null;
       return { ...state, plan, items: addNotice(state.items, "warn",
         reset ? `Alcanzaste el límite de uso. Se restablece a las ${reset}.` : "Alcanzaste el límite de uso de tu cuenta.", "r") };
     }

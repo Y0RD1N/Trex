@@ -6,7 +6,7 @@ import { load } from "./ts-loader.mjs";
 
 // Run the actual components, workflow/provider hooks and reducers. Only React's
 // scheduler/JSX, DOM surfaces, queue storage and native process IPC are mocked.
-const names = ["agentRoom", "agentWorkflow", "handoff", "chatState", "chatTimes", "chatMessages", "chatCommands", "chatQuestions",
+const names = ["agentPermissions", "agentTeam", "timeFormat", "agentRoom", "agentWorkflow", "handoff", "chatState", "chatTimes", "chatMessages", "chatCommands", "chatQuestions",
   "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "agentNotices",
   "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));
@@ -104,7 +104,7 @@ function uiModule(name) {
 }
 const uiPaths = new Set(["./chat/BrowserMenu","./AgentIcon", "./AgentRoomToolbar", "./Select", "./Icons", "./chat/ChatItems", "./chat/ModelMenu",
   "./chat/ComposerSettings", "./chat/UsageMenu", "./chat/SharedFiles", "./ImageViewer", "./chat/QuestionPanel",
-  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/QueuedMessages", "./chat/ComposerPanel", "./chat/BackgroundTerminals", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome"]);
+  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/GitPanel", "./chat/QueuedMessages", "./chat/ComposerPanel", "./chat/BackgroundTerminals", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome"]);
 function environment() {
   let counter = 0;
   const timers = new Map();

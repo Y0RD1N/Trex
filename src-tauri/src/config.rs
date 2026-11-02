@@ -55,6 +55,7 @@ impl Default for ApplicationIntegrations { fn default()->Self { Self {github:tru
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub time_format: String,
     pub integrations: ApplicationIntegrations,
     pub desktop_enabled: bool,
     pub browser_enabled: bool,
@@ -94,6 +95,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            time_format: "24h".into(),
             integrations: ApplicationIntegrations::default(),
             desktop_enabled: false,
             browser_enabled: true,
@@ -134,6 +136,13 @@ impl Default for Settings {
 #[cfg(test)]
 mod browser_preference_tests {
     use super::*;
+    #[test]
+    fn time_format_migrates_to_24_hours_and_preserves_12_hours() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.time_format, "24h");
+        let changed: Settings = serde_json::from_str(r#"{"timeFormat":"12h"}"#).unwrap();
+        assert_eq!(serde_json::to_value(changed).unwrap()["timeFormat"], "12h");
+    }
     #[test]
     fn browser_permission_and_profile_survive_native_configuration_roundtrip() {
         for enabled in [false,true] {

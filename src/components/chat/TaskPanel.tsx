@@ -1,3 +1,5 @@
+import { formatClock } from "../../timeFormat";
+import { useTimeFormat } from "../../hooks/useTimeFormat";
 import { useEffect, useId, useState } from "react";
 import { formatDuration } from "../../chatState";
 import { TASK_STATES, type ChatTask } from "../../chatTasks";
@@ -26,7 +28,8 @@ export default function TaskPanel({ tasks, author, paused, onClose, onReveal, pa
   const starts = tasks.flatMap(task => task.startedAt ?? []), ends = tasks.flatMap(task => task.completedAt ?? []);
   const allDone = tasks.length > 0 && done === tasks.length;
   const totalMs = starts.length ? (allDone && ends.length ? Math.max(...ends) : running ? now : Math.max(...ends, ...starts)) - Math.min(...starts) : null;
-  const clock = (ms: number) => new Date(ms).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+  const timeFormat = useTimeFormat();
+  const clock = (ms: number) => formatClock(ms, timeFormat);
   return <aside id={panelId} className="chat-task-panel" aria-labelledby={id}>
     <header><div><h2 id={id}><ListIcon size={16} />Tareas</h2><p>{tasks.length ? `Por ${author}` : "Organiza el trabajo de este chat"}</p></div>
       <button type="button" className="icon-btn" onClick={onClose} aria-label="Contraer lista de tareas"><CloseIcon size={14} /></button></header>

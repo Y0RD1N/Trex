@@ -1,3 +1,5 @@
+import { formatClock } from "../timeFormat";
+import { useTimeFormat } from "../hooks/useTimeFormat";
 import { useRef, useState } from "react";
 import type { AgentNotice } from "../types";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
@@ -20,6 +22,7 @@ type Props = {
 
 export default function NotificationCenter({ notices, soundEnabled, liveTabIds, onOpenSession,
   onMarkRead, onClear, onToggleSound, onPreviewSound }: Props) {
+  const timeFormat = useTimeFormat();
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const unread = notices.filter(notice => !notice.read).length;
@@ -44,7 +47,7 @@ export default function NotificationCenter({ notices, soundEnabled, liveTabIds, 
           <span className={`notification-symbol ${notice.kind}`} aria-hidden="true">{notice.kind === "ready" ? <CheckIcon size={16} /> : <AlertIcon size={16} />}</span>
           <span className="notification-copy"><span className="notification-item-heading"><span className="notification-item-title">{noticeLabel(notice.kind)}</span>
           <time className="notification-time" dateTime={new Date(notice.createdAt).toISOString()}>
-            {new Date(notice.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></span>
+            {formatClock(notice.createdAt, timeFormat)}</time></span>
             <span className="notification-session" title={notice.sessionName}>{notice.sessionName}</span>
             <span className="notification-project"><AgentIcon kind={notice.provider} size={12} /><span>{notice.projectName}</span>{!liveTabIds.has(notice.tabId) && <span className="notification-closed">Cerrada</span>}{!notice.read && <span className="notification-unread-dot" aria-label="Sin leer" />}</span>
           </span>

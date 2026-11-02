@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { AgentProvider, LauncherProfile, Project, Settings } from "../types";
 import { handoffTargetReason } from "./HandoffDialog";
 import { TEAM_ROLES, MAX_TEAM_WORKERS, type TeamRole } from "../agentTeam";
+import { agentPermissionOptions, defaultAgentPermission } from "../agentPermissions";
 import { useWorkflowStage } from "./AgentWorkflowDialog";
 import type { WorkflowRequest } from "./AgentWorkflowDialog";
 import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
@@ -28,8 +29,9 @@ function MemberEditor({ draft, targets, settings, cwd, disabled, leaving, initia
   const stage = useWorkflowStage(targets, draft.provider, settings, cwd, leaving, initial);
   const latest = useRef(onSelection); latest.current = onSelection;
   const field = useId();
-  useEffect(() => latest.current(draft.id, { profileId: stage.profileId, model: stage.model || null, effort: stage.effort, ready: stage.ready }),
-    [draft.id, stage.profileId, stage.model, stage.effort, stage.ready]);
+  const mode = stage.mode ?? (stage.profile ? defaultAgentPermission(stage.profile.provider, draft.canWrite) : "plan");
+  useEffect(() => latest.current(draft.id, { profileId: stage.profileId, model: stage.model || null, effort: stage.effort, mode, ready: stage.ready }),
+    [draft.id, stage.profileId, stage.model, stage.effort, stage.ready, mode]);
   const principal = draft.role === "coordinator";
   return <section className="team-member-editor" aria-label={principal ? "Agente principal" : draft.name}>
     <header><span className="workflow-eyebrow">{principal ? "Agente principal" : `Subagente ${position}`}</span>
@@ -45,7 +47,7 @@ function MemberEditor({ draft, targets, settings, cwd, disabled, leaving, initia
         <label className="workflow-field-label" htmlFor={field + "-role"}>Función</label>
         <Select id={field + "-role"} value={draft.role} disabled={disabled} align="start"
           options={Object.entries(TEAM_ROLES).filter(([role]) => role !== "coordinator").map(([value, role]) => ({ value, label: role.name, description: role.description }))}
-          onChange={value => { const role = value as TeamRole; onChange({ role, canWrite: TEAM_ROLES[role].writes, instructions: TEAM_ROLES[role].description }); }} />
+          onChange={value => { const role = value as TeamRole; stage.setMode(null); onChange({ role, canWrite: TEAM_ROLES[role].writes, instructions: TEAM_ROLES[role].description }); }} />
       </div>}
     </div>
     <div className="workflow-field">
@@ -71,10 +73,13 @@ function MemberEditor({ draft, targets, settings, cwd, disabled, leaving, initia
       <textarea className="input" rows={2} maxLength={2000} value={draft.instructions} disabled={disabled}
         onChange={event => onChange({ instructions: event.currentTarget.value })} />
     </label>
-    {principal ? <p className="team-member-policy"><ShieldIcon size={13} />Planifica y delega sin editar el proyecto directamente.</p>
-      : <label className="team-member-policy"><input type="checkbox" checked={draft.canWrite} disabled={disabled} onChange={event => onChange({ canWrite: event.currentTarget.checked })} />
-        Puede implementar y ejecutar con los permisos normales de su asistente
-      </label>}
+    <div className="workflow-field"><label className="workflow-field-label" htmlFor={field + "-permissions"}>Permisos de archivos y acciones</label>
+      <Select id={field + "-permissions"} value={mode ?? ""} align="start" disabled={disabled || !stage.profile}
+        options={agentPermissionOptions(stage.profile?.provider ?? "claude")} onChange={value => { stage.setMode(value || null); onChange({ canWrite: value !== "plan" }); }} />
+    </div>
+    <p className="team-member-policy"><ShieldIcon size={13} />{principal
+      ? mode === "plan" ? "Planifica y delega sin editar directamente." : "También puede editar. El principal y sus delegaciones se turnan para utilizar el proyecto."
+      : mode === "plan" ? "La lectura no puede ampliarse desde una aprobación del agente." : "El asistente aplicará este modo a sus archivos, comandos e integraciones habilitadas."}</p>
   </section>;
 }
 const draft = (id: string, role: TeamRole, provider: AgentProvider): Draft => ({
@@ -95,7 +100,8 @@ export default function AgentTeamDialog({ project, profiles, settings, onClose, 
     const next = [...previous]; [next[index],next[target]] = [next[target],next[index]]; return next;
   });
   const choice = (member: Draft): TeamMemberChoice => ({ id: member.id, name: member.name.trim(), role: member.role,
-    instructions: member.instructions.trim(), canWrite: member.canWrite, profileId: selections[member.id].profileId, model: selections[member.id].model, effort: selections[member.id].effort });
+    instructions: member.instructions.trim(), canWrite: selections[member.id].mode !== "plan", mode: selections[member.id].mode,
+    profileId: selections[member.id].profileId, model: selections[member.id].model, effort: selections[member.id].effort });
   return <FeatureDialog {...motion} title="Equipo con agente principal" onClose={onClose} className="agent-workflow-dialog agent-team-dialog"
     footer={<><span className="feature-hint">Tu idea se escribe en el chat.</span>
       <button type="button" className="btn btn-ghost" disabled={submitting} onClick={onBack}>Flujo de dos agentes</button>

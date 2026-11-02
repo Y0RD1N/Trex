@@ -1,3 +1,4 @@
+import { formatClock } from "./timeFormat";
 import { browserResultArtifacts, browserToolResultText } from "./browser";
 import { taskToolInput } from "./taskTools";
 /**
@@ -702,7 +703,7 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
       state = { ...state, plan: parseCodexUsage(params, state.plan) };
       if (!limits.rateLimitReachedType) return state;
       const reset = record(limits.primary)?.resetsAt;
-      const time = typeof reset === "number" ? new Date(reset * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+      const time = typeof reset === "number" ? formatClock(reset * 1000) : null;
       return { ...state, items: addNotice(state.items, "warn",
         time ? `Alcanzaste el límite de uso de Codex. Se restablece a las ${time}.` : "Alcanzaste el límite de uso de Codex.", "r") };
     }

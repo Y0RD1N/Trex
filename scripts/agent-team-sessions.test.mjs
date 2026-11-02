@@ -10,6 +10,19 @@ body=body.replaceAll('{ thread: { id: conversation }, model: "offline-model" }',
 const base=await new (Object.getPrototypeOf(async function(){}).constructor)("assert","readFile","ts","load",body+"\nreturn {harness,flush,dependencies};")(assert,readFile,ts,load);
 const binding={id:"team-1",epoch:"epoch-1"}, config={command:"C:\\Trex\\trex.exe",args:["--trex-team-mcp","C:\\private","team-1","epoch-1"],callArgs:["--trex-team-call","C:\\private","team-1","epoch-1"]};
 for(const provider of ["claude","codex","trex"]){
+  test(provider+": a writable principal retains delegation tools and the selected native write policy",async t=>{
+    const mode=provider==="claude"?"acceptEdits":"full";
+    const h=base.harness(t,provider,{planningOnly:false,mode,team:binding,teamConfig:config,model:"offline-model"});
+    assert.equal(await h.session.send("Inspect and edit with the selected permissions",[],[]),true);h.render();
+    if(provider==="claude"){
+      const flags=h.spawns[0].request.flags;assert.equal(flags[flags.indexOf("--permission-mode")+1],mode);assert.ok(flags.includes("--allowedTools"));
+    }else if(provider==="codex"){
+      const turn=h.writes.find(w=>w.method==="turn/start");assert.equal(turn.params.sandboxPolicy.type,"dangerFullAccess");assert.equal(turn.params.approvalPolicy,"never");
+      assert.ok(h.writes.find(w=>w.method==="thread/start").params.config["mcp_servers.trex_team.command"]);
+    }else{
+      const start=h.writes.find(w=>w.method==="session/start");assert.equal(start.params.mode,"full");assert.deepEqual(start.params.team,{command:config.command,args:config.callArgs});
+    }
+  });
   test(provider+": principal receives only the fixed team tools and custom read-only role policy",async t=>{
     const h=base.harness(t,provider,{planningOnly:true,mode:"plan",team:binding,teamConfig:config,planningInstruction:"Coordinate using the configured collaborators. Never implement directly.",model:"offline-model",effort:"max"});
     assert.equal(await h.session.send("Delegate implementation and review",[],[]),true);h.render();const spawn=h.spawns[0].request;

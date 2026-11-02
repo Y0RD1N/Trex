@@ -4,6 +4,7 @@ const shell = window.trexShell;
 const $ = id => document.getElementById(id);
 let state = null, filter = 'all', query = '';
 const feed = [];          // [{at, label, tool, detail, color}]
+const cards = new Map(), controls = new Map(), activityRows = new Map();
 let lastAgentKey = '';
 
 const COLORS = ['#e8834a', '#7d6bff', '#38b6c9', '#e7c35a', '#ef7d7d', '#5fd08a', '#d36bd0'];
@@ -30,19 +31,76 @@ function card(sp, backdrop) {
     : st === 'paused' ? `<button class="btn" data-a="focus">${icons.eye}Ver</button><button class="btn primary" data-a="resume">${icons.play}Reanudar</button><button class="btn" data-a="takeover">Tomar control</button>`
     : st === 'review' ? `<button class="btn" data-a="focus">${icons.eye}Ver</button><button class="btn" data-a="screenshot">${icons.camera}Captura</button><button class="btn" data-a="takeover">Tomar control</button>`
     : `<button class="btn" data-a="focus">${icons.eye}Ver</button><button class="btn" data-a="pause">${icons.pause}Pausar</button><button class="btn" data-a="takeover">Tomar control</button>`;
-  return `<article class="card glass ${live ? 'working' : ''}" data-client="${esc(sp.clientId)}">
+  return `<article class="card glass ${live ? 'working' : ''}" data-client="${esc(sp.clientId)}" data-profile="${esc(sp.profile || '')}" data-self="${!!sp.self}">
     <div class="thumb" style="${thumb ? `background-image:url('${esc(thumb)}')` : ''}">${thumb ? '' : st === 'closed' ? 'Sin abrir' : 'Sin vista previa'}
       ${live ? '<span class="badge"><i></i>EN VIVO</span>' : ''}${sp.tabCount ? `<span class="tabs-mini">${sp.tabCount} ${sp.tabCount === 1 ? 'pestaña' : 'pestañas'}</span>` : ''}</div>
     <div class="meta">
-      <div class="row"><span class="av" style="--c:${colorFor(sp.clientId)}">${initial(sp.label)}</span><span class="name">${esc(sp.label)}</span><span class="model">${esc(sp.model || sp.profile || '')}</span><span class="pill ${esc(st)}"><em></em>${esc(STATE_LABEL[st] || st)}</span></div>
-      <div class="tool">${tool}</div>
-      <div class="cur">${favicon({ url: sp.url || '', title: sp.title || sp.profile || '' })}<div><strong>${esc(sp.title || sp.profile || 'Sin página')}</strong><small>${esc(sp.url || 'perfil persistente')}</small></div></div>
+      <div class="row"><span class="av" style="--c:${colorFor(sp.clientId)}">${initial(sp.label)}</span><span class="name" title="${esc(sp.label)}">${esc(sp.label)}</span><span class="model" title="${esc(sp.model || sp.profile || '')}">${esc(sp.model || sp.profile || '')}</span><span class="pill ${esc(st)}"><em></em>${esc(STATE_LABEL[st] || st)}</span></div>
+      <div class="tool" title="${esc(sp.tool || sp.detail || '')}">${tool}</div>
+      <div class="cur">${favicon({ url: sp.url || '', title: sp.title || sp.profile || '' })}<div><strong title="${esc(sp.title || sp.profile || '')}">${esc(sp.title || sp.profile || 'Sin página')}</strong><small title="${esc(sp.url || '')}">${esc(sp.url || 'perfil persistente')}</small></div></div>
     </div>
     <div class="acts">${acts}</div>
   </article>`;
 }
+const cardKey = sp => JSON.stringify([sp.profile || '', sp.clientId]);
+function renderCards(shown) {
+  const grid = $('grid'), used = new Set();
+  if (shown.length) grid.querySelector(':scope > .empty')?.remove();
+  shown.forEach((sp, index) => {
+    const key = cardKey(sp); used.add(key);
+    const template = document.createElement('template'); template.innerHTML = card(sp, backdropUrl);
+    const next = template.content.firstElementChild;
+    let entry = cards.get(key);
+    if (!entry) {
+      entry = { node: next, parts: {} }; next.dataset.key = key;
+      const feedback = document.createElement('p'); feedback.className = 'feedback'; feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite'); next.append(feedback);
+      cards.set(key, entry);
+    }
+    entry.node.className = next.className;
+    entry.node.dataset.self = next.dataset.self;
+    for (const selector of ['.thumb', '.meta', '.acts']) {
+      const markup = next.querySelector(selector).innerHTML;
+      const style = next.querySelector(selector).getAttribute('style') || '';
+      const signature = markup + '\0' + style;
+      if (entry.parts[selector] !== signature) {
+        const target = entry.node.querySelector(selector);
+        target.innerHTML = markup; target.setAttribute('style', style); entry.parts[selector] = signature;
+      }
+    }
+    const control = controls.get(key), feedback = entry.node.querySelector('.feedback');
+    entry.node.querySelectorAll('.acts button').forEach(button => { button.disabled = !!control?.pending; });
+    feedback.textContent = control?.message || ''; feedback.classList.toggle('error', !!control?.error);
+    feedback.setAttribute('role', control?.error ? 'alert' : 'status');
+    if (grid.children[index] !== entry.node) grid.insertBefore(entry.node, grid.children[index] ?? null);
+  });
+  for (const [key, entry] of cards) if (!used.has(key)) { entry.node.remove(); cards.delete(key); }
+  if (!shown.length && !grid.children.length) grid.innerHTML = '<p class="empty">No hay agentes con este filtro.</p>';
+}
 
 let backdropUrl = null;
+function renderFeed() {
+  const list = $('feed'), previousTop = list.scrollTop, followNewest = previousTop <= 1;
+  const top = list.getBoundingClientRect().top;
+  const anchor = followNewest ? null : [...list.children].find(row => row.dataset.event && row.getBoundingClientRect().bottom > top);
+  const anchorKey = anchor?.dataset.event, offset = anchor ? anchor.getBoundingClientRect().top - top : 0;
+  const used = new Set();
+  if (feed.length) list.querySelector(':scope > .empty')?.remove();
+  feed.forEach((event, index) => {
+    const key = event.id ?? JSON.stringify([event.at, event.label, event.tool, event.detail]); used.add(key);
+    let row = activityRows.get(key);
+    if (!row) { const node = document.createElement('div'); node.className = 'ev'; node.dataset.event = key; row = { node }; activityRows.set(key, row); }
+    const markup = `<span class="av" style="--c:${event.color}">${initial(event.label)}</span><p><b>${esc(event.label)}</b> <code>${esc(event.tool)}</code>${event.detail ? ` “${esc(event.detail)}”` : ''}</p><time>${ago(event.at)}</time>`;
+    if (row.markup !== markup) { row.node.innerHTML = markup; row.markup = markup; }
+    if (list.children[index] !== row.node) list.insertBefore(row.node, list.children[index] ?? null);
+  });
+  for (const [key, row] of activityRows) if (!used.has(key)) { row.node.remove(); activityRows.delete(key); }
+  if (!feed.length && !list.children.length) list.innerHTML = '<p class="empty">La actividad de los agentes aparecerá aquí.</p>';
+  // Keep the same visible event even when newer entries arrive above it.
+  const retained = anchorKey && activityRows.get(anchorKey)?.node;
+  if (retained) list.scrollTop += retained.getBoundingClientRect().top - list.getBoundingClientRect().top - offset;
+  else list.scrollTop = followNewest ? 0 : previousTop;
+  $('activity-count').textContent = feed.length ? `${feed.length} · en vivo` : 'en vivo';
+}
 function renderCenter() {
   const s = state; if (!s) return;
   document.body.classList.toggle('center-open', s.centerOpen);
@@ -55,9 +113,8 @@ function renderCenter() {
   const working = all.filter(sp => sp.state === 'working').length, tabs = all.reduce((n, sp) => n + (sp.tabCount || 0), 0);
   const count = (n, one, many) => `<span><b>${n}</b> ${n === 1 ? one : many}</span>`;
   $('stats').innerHTML = count(all.length, 'espacio', 'espacios') + count(working, 'trabajando', 'trabajando') + count(tabs, 'pestaña', 'pestañas');
-  $('grid').innerHTML = shown.length ? shown.map(sp => card(sp, backdropUrl)).join('') : '<p class="empty">No hay agentes con este filtro.</p>';
-  $('feed').innerHTML = feed.length ? feed.slice(0, 40).map(e => `<div class="ev"><span class="av" style="--c:${e.color}">${initial(e.label)}</span><p><b>${esc(e.label)}</b> <code>${esc(e.tool)}</code>${e.detail ? ` “${esc(e.detail)}”` : ''}</p><time>${ago(e.at)}</time></div>`).join('')
-    : '<p class="empty">La actividad de los agentes aparecerá aquí.</p>';
+  renderCards(shown);
+  renderFeed();
   fixFavicons($('grid'));
 }
 
@@ -85,14 +142,28 @@ $('filter').addEventListener('click', e => {
 });
 $('q').addEventListener('input', e => { query = e.target.value.trim().toLowerCase(); renderCenter(); });
 document.querySelector('[data-close]').addEventListener('click', () => shell.command('toggleCenter', { open: false }));
-$('grid').addEventListener('click', e => {
+$('grid').addEventListener('click', async e => {
   const b = e.target.closest('[data-a]'); if (!b) return;
-  const clientId = b.closest('[data-client]').dataset.client;
-  if (b.dataset.a === 'focus' && clientId === 'self') return shell.command('toggleCenter', { open: false });
-  shell.command('control', { action: b.dataset.a, clientId });
+  const card = b.closest('[data-client]'), { client: clientId, profile, key } = card.dataset, action = b.dataset.a;
+  if (controls.get(key)?.pending) return;
+  controls.set(key, { pending: true, message: 'Aplicando…' }); renderCenter();
+  try {
+    const result = action === 'focus' && !state?.automation && (card.dataset.self === 'true' || clientId === 'self')
+      ? await shell.command('toggleCenter', { open: false })
+      : await shell.command('control', { action, clientId, ...(profile ? { profile } : {}) });
+    if (action === 'screenshot') {
+      const image = result?.image;
+      if (!image || !['image/png', 'image/jpeg'].includes(image.mimeType) || typeof image.data !== 'string') throw new Error('No se pudo obtener la captura de este espacio.');
+      $('capture').querySelector('img').src = `data:${image.mimeType};base64,${image.data}`; $('capture').showModal();
+    }
+    controls.set(key, { message: action === 'pause' ? 'Automatización pausada' : action === 'resume' ? 'Automatización reanudada' : action === 'takeover' ? 'Control manual: el agente permanece pausado' : '' });
+  } catch (error) { controls.set(key, { error: true, message: error?.message || 'No se pudo aplicar la acción. Vuelve a intentarlo.' }); }
+  renderCenter();
 });
+$('capture').querySelector('[data-capture-close]').addEventListener('click', () => { $('capture').close(); $('capture').querySelector('img').removeAttribute('src'); });
 addEventListener('keydown', e => {
-  if (e.key === 'Escape' && state?.centerOpen) shell.command('toggleCenter', { open: false });
+  if (e.key === 'Escape' && $('capture').open) { e.preventDefault(); $('capture').close(); $('capture').querySelector('img').removeAttribute('src'); }
+  else if (e.key === 'Escape' && state?.centerOpen) shell.command('toggleCenter', { open: false });
 });
 shell.onBackdrop(data => { backdropUrl = data; $('backdrop').style.backgroundImage = data ? `url('${data}')` : ''; renderCenter(); });
 shell.onState(render);

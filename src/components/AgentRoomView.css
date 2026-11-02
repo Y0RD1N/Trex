@@ -12,6 +12,8 @@
 .agent-room-settings { display: flex; align-items: center; gap: 7px; padding-top: 5px; min-width: 0; color: var(--text-muted); font-size: 10px; }
 .agent-room-settings > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-room-settings > span + span { margin-left: auto; }
+.agent-room-permission { display: flex; flex-wrap: wrap; gap: 6px; justify-content: space-between; margin: 7px 0 0; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.agent-room-permission > span { color: var(--text-dim); }
 .agent-room-runtime-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 7px; color: var(--text-muted); font-size: 10px; }
 .agent-room-settings .select-trigger { min-height: 24px; padding: 2px 5px; border: 0; background: transparent; font-size: 10px; width: auto; max-width: 70%; }
 .agent-room-settings .select-trigger:last-child { margin-left: auto; max-width: 43%; }

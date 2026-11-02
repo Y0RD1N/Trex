@@ -76,14 +76,14 @@ test("reuses agent validation for model, effort, provider and launcher identity"
   }
 });
 
-test("normalizes planner mode to plan and validates independent provider-specific executor modes", () => {
+test("preserves independently configured native permissions for both participants", () => {
   for (const provider of ["claude", "codex"]) {
     const modes = provider === "claude" ? ["default", "acceptEdits", "plan", "bypassPermissions", "auto", "dontAsk", "manual"] : ["read-only", "auto", "plan", "full"];
     for (const mode of modes) {
       const raw = room(); raw.planner.agent = agent(provider, "planner-account"); raw.executor.agent = agent(provider, "executor-account");
       raw.planner.mode = mode; raw.executor.mode = mode;
       const result = normalizeAgentRoom(raw);
-      assert.equal(result.planner.mode, "plan");
+      assert.equal(result.planner.mode, mode);
       assert.equal(result.executor.mode, mode);
     }
   }

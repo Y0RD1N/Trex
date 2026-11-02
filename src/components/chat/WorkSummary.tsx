@@ -1,3 +1,5 @@
+import { formatClock, formatDateTime } from "../../timeFormat";
+import { useTimeFormat } from "../../hooks/useTimeFormat";
 import { memo, useMemo, useState, type CSSProperties } from "react";
 import { formatDuration, formatTokens } from "../../chatState";
 import type { ApiUsage } from "../../tokenUsage";
@@ -36,10 +38,11 @@ function ChangeRow({ node, depth = 0, allDiffs }: { node: ChangeNode; depth?: nu
   </li>;
 }
 
-const clock = (ms: number, seconds = false) => new Date(ms).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}) });
-const fullDate = (ms: number) => new Date(ms).toLocaleString("es", { dateStyle: "medium", timeStyle: "medium" });
 /** Start → end of a response and the tokens it used, with the breakdown on hover. */
 export function TurnMeta({ startedAt, endedAt, usage }: { startedAt?: number; endedAt?: number; usage?: ApiUsage | null }) {
+  const timeFormat = useTimeFormat();
+  const clock = (ms: number, seconds = false) => formatClock(ms, timeFormat, seconds);
+  const fullDate = (ms: number) => formatDateTime(ms, timeFormat);
   const total = usage?.totalTokens ?? (usage ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) : null);
   const breakdown = usage ? ([["Entrada", usage.inputTokens], ["Salida", usage.outputTokens], ["Razonamiento", usage.reasoningTokens],
     ["Lectura de caché", usage.cachedReadTokens], ["Escritura de caché", usage.cachedWriteTokens]] as const)

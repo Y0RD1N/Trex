@@ -1,4 +1,5 @@
 import { icons, esc, favicon, fixFavicons, hostOf, ACTIVITY } from './icons.js';
+import { patchMarkup } from './patch-dom.js';
 
 const part = new URLSearchParams(location.search).get('part');
 const root = document.getElementById('root');
@@ -52,7 +53,8 @@ const overBar = (x, y) => { const r = barRect(); return !!r && x >= r.left - 8 &
 const insideBar = (x, y) => { const r = barRect(); return !!r && x > r.left && x < r.right && y > r.top && y < r.bottom - 4; };
 
 function tabPill(t, active) {
-  return `<div class="tabpill ${active ? 'on' : ''}" data-tab="${esc(t.id)}" title="${esc(t.title || t.url)}">
+  return `<div class="tabpill ${active ? 'on' : ''}" data-tab="${esc(t.id)}" title="${esc(t.owner ? `${t.owner} · ${t.title || t.url}` : t.title || t.url)}">
+    ${t.owner ? `<span class="tab-owner" title="${esc(t.owner)}">${esc(t.owner.slice(0,1).toUpperCase())}</span>` : ''}
     ${t.loading ? `<span class="fav loading">${icons.reload}</span>` : favicon(t)}<span class="t">${esc(t.title || 'Nueva pestaña')}</span>
     <button class="x" data-close="${esc(t.id)}" title="Cerrar pestaña (Ctrl+W)">${icons.close}</button></div>`;
 }
@@ -74,14 +76,14 @@ function downloadsButton(s) {
 const findCount = f => f.query ? (f.total ? `${f.active}/${f.total}` : 'Sin resultados') : '';
 function findRow(f) {
   if (!f.open) return '';
-  return `<div class="row findrow">${icons.search}<input class="find" spellcheck="false" placeholder="Buscar en la página" value="${esc(f.query)}">
+  return `<div class="row findrow" data-key="find">${icons.search}<input class="find" spellcheck="false" placeholder="Buscar en la página" value="${esc(f.query)}">
     <span class="count ${f.query && !f.total ? 'none' : ''}">${esc(findCount(f))}</span>
     <button class="ib" data-c="findprev" title="Anterior (Mayús+Intro)">${icons.up}</button><button class="ib" data-c="findnext" title="Siguiente (Intro)">${icons.down}</button>
     <button class="ib" data-c="findclose" title="Cerrar (Esc)">${icons.close}</button></div>`;
 }
 
 function promptRows(s) {
-  return s.prompts.map(p => `<div class="row notice">${icons.shield}<span class="msg"><b>${esc(hostOf(p.origin) || p.origin)}</b> quiere ${esc(p.label)}</span>
+  return s.prompts.map(p => `<div class="row notice" data-key="permission-${p.id}">${icons.shield}<span class="msg"><b>${esc(hostOf(p.origin) || p.origin)}</b> quiere ${esc(p.label)}</span>
     <button class="btn" data-perm="${p.id}" data-allow="0">Bloquear</button><button class="btn primary" data-perm="${p.id}" data-allow="1">Permitir</button></div>`).join('');
 }
 
@@ -93,39 +95,27 @@ function downloadsPanel(s) {
       : d.state === 'completed' ? `Completado · ${bytes(d.received)}` : d.state === 'cancelled' ? 'Cancelado' : 'Interrumpido';
     const acts = d.state === 'progressing' ? `<button class="btn" data-dl="cancel" data-id="${d.id}">Cancelar</button>`
       : d.state === 'completed' ? `<button class="btn" data-dl="open" data-id="${d.id}">Abrir</button><button class="ib" data-dl="show" data-id="${d.id}" title="Mostrar en la carpeta">${icons.folder}</button>` : '';
-    return `<div class="dlitem ${esc(d.state)}"><span class="dlicon">${icons.download}</span><div class="dlmeta"><strong title="${esc(d.name)}">${esc(d.name)}</strong>
+    return `<div class="dlitem ${esc(d.state)}" data-key="download-${d.id}"><span class="dlicon">${icons.download}</span><div class="dlmeta"><strong title="${esc(d.name)}">${esc(d.name)}</strong>
       ${d.state === 'progressing' ? `<div class="bar"><i class="${pct == null ? 'indet' : ''}" style="width:${pct ?? 30}%"></i></div>` : ''}<small>${esc(status)}</small></div>${acts}</div>`;
   };
-  return `<div class="row panelhead"><b>Descargas</b><button class="link" data-c="dlclear">Limpiar</button></div><div class="dllist">${s.downloads.map(item).join('')}</div>`;
+  return `<div class="row panelhead" data-key="downloads-heading"><b>Descargas</b><button class="link" data-c="dlclear">Limpiar</button></div><div class="dllist">${s.downloads.map(item).join('')}</div>`;
 }
 
-let wasPinned = false;
+let wasPinned = false, lastActiveTab = null;
 function renderIsland(s) {
   const pin = pinned();
   if (pin && !revealed) { revealed = true; entering = true; }
   // Leaving the new tab page (or finishing an edit) releases the bar.
   if (wasPinned && !pin && !(lastPointer && overBar(lastPointer.x, lastPointer.y))) scheduleHide(900);
   wasPinned = pin;
-  if (revealed && typing() && root.querySelector('.topbar')) { // don't clobber what the user is typing; refresh everything else
-    const tab = s.tabs.find(t => t.id === s.activeTab) ?? {};
-    root.querySelector('.tabs').innerHTML = s.tabs.map(t => tabPill(t, t.id === s.activeTab)).join('');
-    root.querySelector('[data-c=back]').disabled = !s.canGoBack;
-    root.querySelector('[data-c=forward]').disabled = !s.canGoForward;
-    root.querySelector('[data-c=reload]').innerHTML = tab.loading ? `<span class="spin">${icons.reload}</span>` : icons.reload;
-    root.querySelector('.agentchip')?.replaceWith(Object.assign(document.createElement('template'), { innerHTML: agentChip(s.agent) }).content);
-    const count = root.querySelector('.findrow .count');
-    if (count) { count.textContent = findCount(s.find); count.classList.toggle('none', !!s.find.query && !s.find.total); }
-    if (!s.find.open) root.querySelector('.findrow')?.remove();
-    return;
-  }
   document.body.classList.toggle('revealed', revealed);
-  if (!revealed) { root.innerHTML = '<div class="hot" aria-hidden="true"></div>'; return; }
+  if (!revealed) { lastActiveTab = null; patchMarkup(root, '<div class="hot" aria-hidden="true"></div>'); return; }
   const tab = s.tabs.find(t => t.id === s.activeTab) ?? { url: '' };
   const internal = tab.url.startsWith('trex:');  // new tab page
   const secure = tab.url.startsWith('https:') || /^http:\/\/(localhost|127\.0\.0\.1)/.test(tab.url);
   const mac = s.platform === 'darwin';
-  const enterClass = entering ? 'enter' : ''; entering = false;
-  root.innerHTML = `<div class="topbar glass ${enterClass} ${leaving ? 'out' : ''}">
+  const enterClass = entering || root.querySelector('.topbar.enter') ? 'enter' : ''; entering = false;
+  patchMarkup(root, `<div class="topbar glass ${enterClass} ${leaving ? 'out' : ''}">
     <div class="tabsrow">
       ${mac ? windowControls(true) : ''}
       <div class="tabs">${s.tabs.map(t => tabPill(t, t.id === s.activeTab)).join('')}</div>
@@ -145,21 +135,9 @@ function renderIsland(s) {
       <button class="ib ${s.centerOpen ? 'on' : ''}" data-c="center" title="Centro de agentes (Ctrl+Shift+A)">${icons.grid}</button>
     </div>
     ${findRow(s.find)}${promptRows(s)}${downloadsPanel(s)}
-  </div>`;
-  const input = root.querySelector('.url input');
-  input.addEventListener('focus', () => input.select());
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && input.value.trim()) { cmd('navigate', { url: input.value }); input.blur(); }
-    if (e.key === 'Escape') { input.blur(); render(state); }
-  });
-  const findInput = root.querySelector('input.find');
-  if (findInput) {
-    findInput.addEventListener('input', () => cmd('find', { text: findInput.value }));
-    findInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); cmd('find', { text: findInput.value, forward: !e.shiftKey, next: true }); }
-    });
-  }
-  root.querySelector('.tabpill.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  </div>`);
+  if (lastActiveTab !== s.activeTab) root.querySelector('.tabpill.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  lastActiveTab = s.activeTab;
   applyFocus();
 }
 
@@ -167,13 +145,13 @@ function renderDock(s) {
   const a = s.agent;
   const paused = a.state === 'paused';
   const doing = paused ? 'está en pausa' : `${(ACTIVITY[a.tool] || 'está trabajando').toLowerCase()}`;
-  root.innerHTML = `<div class="dock glass ${paused ? 'paused' : ''}">
+  patchMarkup(root, `<div class="dock glass ${paused ? 'paused' : ''}">
     <span class="pulse"></span>
     <span class="msg"><b>${esc(a.label)}</b> ${esc(doing)}${a.detail ? ` <b>“${esc(a.detail)}”</b>` : ''}</span>
     ${a.tool ? `<code>${esc(a.tool)}${a.step ? ' · ' + esc(a.step) : ''}</code>` : ''}
     ${paused ? `<button class="btn primary" data-k="resume">${icons.play}Reanudar</button>`
              : `<button class="btn" data-k="pause">${icons.pause}Pausar</button><button class="btn primary" data-k="takeover">${icons.takeover}Tomar control</button>`}
-  </div>`;
+  </div>`);
 }
 
 // Report our size to the main process after every render. A view that is
@@ -185,14 +163,34 @@ function reportSize() {
   cmd('overlaySize', { part, width: r.width, height: r.height });
 }
 function renderCursor(s) {
-  root.innerHTML = `<div class="agentcursor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3l7 18 2.5-7.5L21 11z"/></svg><span>${esc(s.agent.label)}</span></div>`;
+  patchMarkup(root, `<div class="agentcursor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3l7 18 2.5-7.5L21 11z"/></svg><span>${esc(s.agent.label)}</span></div>`);
 }
-function render(s) {
+let lastRender = '';
+function render(s, force = false) {
   state = s; if (!s) return;
+  const visible = part === 'island' ? { tabs: s.tabs, activeTab: s.activeTab, canGoBack: s.canGoBack, canGoForward: s.canGoForward,
+    zoom: s.zoom, find: s.find, prompts: s.prompts, downloads: s.downloads, platform: s.platform, centerOpen: s.centerOpen,
+    agent: { label: s.agent.label, model: s.agent.model, state: s.agent.state } } : part === 'cursor' ? s.agent.label : s.agent;
+  const signature = JSON.stringify([visible, revealed, leaving, panel, focusPending, entering]);
+  if (!force && signature === lastRender) return;
+  lastRender = signature;
   if (part === 'island') renderIsland(s); else if (part === 'cursor') renderCursor(s); else renderDock(s);
   fixFavicons(root);
   reportSize();
 }
+
+root.addEventListener('animationend', e => { if (e.animationName === 'drop') e.target.classList.remove('enter'); });
+root.addEventListener('focusin', e => { if (e.target.matches('.url input')) e.target.select(); });
+root.addEventListener('input', e => { if (e.target.matches('input.find')) cmd('find', { text: e.target.value }); });
+root.addEventListener('keydown', e => {
+  const input = e.target;
+  if (input.matches('.url input')) {
+    if (e.key === 'Enter' && input.value.trim()) { cmd('navigate', { url: input.value }); input.blur(); }
+    if (e.key === 'Escape') { input.blur(); render(state, true); }
+  } else if (input.matches('input.find') && e.key === 'Enter') {
+    e.preventDefault(); cmd('find', { text: input.value, forward: !e.shiftKey, next: true });
+  }
+});
 
 root.addEventListener('click', e => {
   const t = e.target.closest('button,[data-tab],[data-c]'); if (!t) return;

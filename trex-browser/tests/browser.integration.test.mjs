@@ -275,11 +275,14 @@ async function ownedBrowserProcesses(brokerHome, projectId, profiles) {
   assert.ok(identity?.createdAt && identity.executablePath, 'Must identify the exact private broker before inspecting children');
   assert.ok(identity.commandLine?.includes('worker.mjs') && /\bdaemon\b/.test(identity.commandLine), 'Recorded broker PID must belong to this worker daemon');
   const direct = await windowsProcesses('children', [broker.pid]);
+  const sharedDataDir = windowsPath(path.join(brokerHome, 'projects', projectId, 'browser-window', 'user-data'));
+  const sharedRoots = direct.filter(item => item.parentPid === broker.pid && browserProcessName(item.name) && windowsPath(item.commandLine).includes(sharedDataDir) && !/(?:^|\s)--type(?:=|\s)/.test(item.commandLine));
+  assert.ok(sharedRoots.length <= 1, 'A project may have only one shared native browser root');
   const browsers = new Map();
   const guards = new Map();
   for (const profile of profiles) {
     const dataDir = windowsPath(path.join(brokerHome, 'projects', projectId, profile, 'user-data'));
-    const roots = direct.filter(item => item.parentPid === broker.pid && browserProcessName(item.name) && windowsPath(item.commandLine).includes(dataDir) && !/(?:^|\s)--type(?:=|\s)/.test(item.commandLine));
+    const roots = sharedRoots.length ? sharedRoots : direct.filter(item => item.parentPid === broker.pid && browserProcessName(item.name) && windowsPath(item.commandLine).includes(dataDir) && !/(?:^|\s)--type(?:=|\s)/.test(item.commandLine));
     assert.equal(roots.length, 1, `Expected one Chrome root owned by this broker for ${profile}`);
     assert.ok(roots[0].executablePath && roots[0].createdAt, 'Chrome identity must include executable and creation time');
     browsers.set(profile, roots[0]);
@@ -290,10 +293,11 @@ async function ownedBrowserProcesses(brokerHome, projectId, profiles) {
     assert.ok(windowsPath(helpers[0].commandLine).includes(windowsPath(roots[0].executablePath)), 'Guard must name the exact owned Chrome executable');
     guards.set(profile, helpers[0]);
   }
-  return { broker: identity, browsers, guards };
+  return { broker: identity, browsers, guards, sharedWindow: sharedRoots.length === 1 };
 }
 
 async function ownedChromeTree(roots) {
+  roots = [...new Map(roots.map(root => [root.pid, root])).values()];
   const records = [...roots];
   let frontier = [...roots];
   for (let depth = 0; frontier.length && depth < 8; depth++) {
@@ -1151,7 +1155,10 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     await ok('browser_close');
     assert.equal((await ok('browser_status')).data.running, false);
     if (owned) {
-      await waitForProcessesExit([owned.browsers.get('BROWSER1'), owned.guards.get('BROWSER1')], 'Closing BROWSER1 must stop its exact Chrome root and guard');
+      if (owned.sharedWindow) {
+        assert.equal(owned.browsers.get('BROWSER1').pid, owned.browsers.get('BROWSER2').pid, 'Agent profiles share one native process');
+        await assertProcessesAlive([owned.browsers.get('BROWSER1'), owned.guards.get('BROWSER1')], 'Closing one profile must preserve the shared window and guard');
+      } else await waitForProcessesExit([owned.browsers.get('BROWSER1'), owned.guards.get('BROWSER1')], 'Closing BROWSER1 must stop its exact Chrome root and guard');
       await assertProcessesAlive([owned.browsers.get('BROWSER2'), owned.guards.get('BROWSER2')], 'Closing BROWSER1 must leave BROWSER2 and its guard alive');
     }
     await ok('browser_click', { selector: '#increment' }, { profile: 'BROWSER2' });

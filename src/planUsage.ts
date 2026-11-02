@@ -1,3 +1,4 @@
+import { formatClock, getTimeFormat, type TimeFormat } from "./timeFormat";
 /**
  * Uso del plan de cada cuenta: cuánto queda de la sesión de 5 horas, de la
  * semana y del uso extra, según lo cuenta cada asistente.
@@ -211,7 +212,7 @@ export function accountUsageWindows(usage: PlanUsage | null): { session: PlanWin
 }
 
 /** Cuándo se reinicia una ventana, en palabras: «en 3 h 20 min», «el jueves a las 18:59». */
-export function resetLabel(resetsAt: number | null, now: number): string | null {
+export function resetLabel(resetsAt: number | null, now: number, timeFormat: TimeFormat = getTimeFormat()): string | null {
   if (resetsAt === null) return null;
   const minutes = Math.round((resetsAt - now) / 60_000);
   if (minutes <= 0) return "se reinicia ahora";
@@ -222,7 +223,7 @@ export function resetLabel(resetsAt: number | null, now: number): string | null 
   }
   const date = new Date(resetsAt);
   const day = date.toLocaleDateString("es", { weekday: "long" });
-  const time = date.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+  const time = formatClock(date, timeFormat);
   return minutes < 7 * 24 * 60 ? `se reinicia el ${day} a las ${time}`
     : `se reinicia el ${date.toLocaleDateString("es", { day: "numeric", month: "short" })} a las ${time}`;
 }

@@ -1,0 +1,56 @@
+.chat-git-panel { width: 360px; flex-basis: 360px; }
+.chat-git-panel[hidden] { display: none; }
+.chat-git-toggle { max-width: min(220px, 40vw); }
+.chat-git-toggle small { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-heading-actions { display: flex; gap: 4px; }
+.git-panel-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.git-branch-card { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin: 0 12px 12px; padding: 12px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 10px; }
+.git-branch-card > .chat-branch-trigger { flex: 1; max-width: 220px; color: var(--text); padding: 4px 0; }
+.git-branch-card > small { flex-basis: 100%; overflow-wrap: anywhere; color: var(--text-dim); font-size: 10px; }
+.git-branch-card > .select-trigger { width: 100%; }
+.git-sync-count { display: inline-flex; gap: 9px; color: var(--text-muted); font: 11px var(--font-mono); }
+.git-sync-count span { color: var(--accent-strong); }
+.git-sync-actions { display: flex; gap: 7px; width: 100%; }
+.git-sync-actions > button { flex: 1; display: inline-flex; gap: 7px; align-items: center; justify-content: center; }
+.git-sync-actions small { font-size: 10px; color: var(--accent-strong); }
+.git-hint { margin: 0; color: var(--text-dim); line-height: 1.65; font-size: 10px; }
+.git-banner { margin: 0 15px 12px; }
+.git-error { color: var(--danger); overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.7; font-size: 11px; }
+.git-error button, .git-selection button { padding: 3px 0; background: none; border: 0; color: var(--accent-strong); font: inherit; cursor: pointer; }
+.git-error button { display: block; }
+.git-success { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--text-muted); }
+.git-sections { display: flex; gap: 5px; padding: 0 12px 10px; border-bottom: 1px solid var(--border); }
+.git-sections button { flex: 1; padding: 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-dim); font: 500 11px var(--font-ui); cursor: pointer; }
+.git-sections button[aria-selected=true] { background: var(--bg-elevated); color: var(--text); }
+.git-sections small { margin-left: 6px; font-size: 10px; color: var(--accent-strong); }
+.git-comparison { padding: 12px; display: grid; gap: 6px; }
+.git-comparison > .select-trigger { max-width: 100%; width: 100%; }
+.git-selection { display: flex; justify-content: space-between; align-items: center; padding: 9px 14px 4px; color: var(--text-dim); font-size: 10px; }
+.git-file-list { list-style: none; margin: 0; padding: 5px 8px 10px; }
+.git-file-list li { display: flex; align-items: center; gap: 6px; border-radius: 7px; padding-left: 6px; }
+.git-file-list li:hover, .git-file-list li.selected { background: var(--bg-elevated); }
+.git-file-list input { width: 13px; height: 13px; accent-color: var(--accent); flex-shrink: 0; }
+.git-file-list button { display: flex; gap: 7px; align-items: center; flex: 1; min-width: 0; padding: 9px 6px; background: transparent; border: 0; color: var(--text-muted); font: 11px var(--font-ui); text-align: left; cursor: pointer; }
+.git-file-list button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.git-file-list button > svg { flex-shrink: 0; color: var(--text-dim); }
+.git-file-list small { font-size: 9px; color: var(--text-dim); }
+.git-file-list small.conflicted { color: var(--danger); }
+.git-empty { margin: 0; padding: 22px 15px; color: var(--text-dim); font-size: 11px; line-height: 1.8; }
+.git-preview { margin: 0 12px 12px; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.git-preview header { display: flex; gap: 8px; padding: 9px; border-bottom: 1px solid var(--border); align-items: center; }
+.git-preview strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 500; }
+.git-preview header small { font: 10px var(--font-mono); color: var(--text-dim); white-space: nowrap; }
+.git-preview pre { margin: 0; padding: 10px; max-height: 280px; overflow: auto; background: var(--bg-inset); color: var(--text-muted); font: 10px/1.7 var(--font-mono); tab-size: 4; }
+.git-preview pre span { display: block; min-width: max-content; }
+.git-preview pre .add { background: var(--accent-soft); color: var(--text); }
+.git-preview pre .del { background: var(--hover); color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-dim); }
+.git-preview pre .gap { color: var(--accent-strong); }
+.git-preview > p { padding: 9px; }
+.git-commit { display: grid; gap: 9px; padding: 14px; border-top: 1px solid var(--border); }
+.git-commit > label { font-size: 11px; font-weight: 550; }
+.git-commit textarea { resize: vertical; min-height: 64px; max-height: 160px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-inset); color: var(--text); font: 11px/1.7 var(--font-ui); }
+.git-commit > small { color: var(--text-dim); font-size: 10px; line-height: 1.6; }
+.chat-git-panel > footer { font-size: 9px; line-height: 1.6; }
+.chat-git-panel :is(button,textarea,input):focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.chat-git-panel button:disabled { opacity: .45; cursor: default; }
+@container chat (max-width: 760px) { .chat-git-panel { width: auto; max-height: min(70%, max(160px, calc(100% - var(--chat-header-space, 0px) - var(--chat-toolbar-space, 0px) - 78px))); } .chat-git-panel .git-panel-scroll { overflow: visible; } }

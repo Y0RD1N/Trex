@@ -47,7 +47,8 @@ test('Linux native broker survives adapter process-group death and reaps only it
     async function processes(broker, projectId, profile) {
       const all = (await Promise.all((await fs.readdir('/proc')).filter(p => /^\d+$/.test(p)).map(p => identity(+p)))).filter(Boolean);
       const directory = path.join(home, 'projects', projectId, profile, 'user-data');
-      const browsers = all.filter(p => p.parent === broker.pid && p.args.includes(`--user-data-dir=${directory}`));
+      const shared = path.join(home, 'projects', projectId, 'browser-window', 'user-data');
+      const browsers = all.filter(p => p.parent === broker.pid && (p.args.includes(`--user-data-dir=${directory}`) || p.args.includes(`--user-data-dir=${shared}`)));
       assert.equal(browsers.length, 1, 'One exact native Chromium root must belong to this broker/profile');
       const guards = all.filter(p => p.parent === broker.pid && p.args.includes('__guard-browser') && p.args.includes(String(browsers[0].pid)));
       assert.equal(guards.length, 1, 'One native pidfd guard must supervise the exact browser');
@@ -56,7 +57,7 @@ test('Linux native broker survives adapter process-group death and reaps only it
         tree.push(...all.filter(p => p.parent === tree[i].pid && p.executable === browsers[0].executable));
       }
       assert.ok(tree.length > 1, 'Lifecycle test must include real Chromium descendants');
-      return [...tree, ...guards];
+      return { owned: [...tree, ...guards], sharedWindow: browsers[0].args.includes(`--user-data-dir=${shared}`) };
     }
     try {
       adapter = spawn(native, ['mcp', '--cwd', cwd, '--mode', 'full', '--client', 'linux-lifecycle'], { env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -74,14 +75,18 @@ test('Linux native broker survives adapter process-group death and reaps only it
       const firstOwned = await processes(broker, first.projectId, 'BROWSER1');
       const secondOwned = await processes(broker, first.projectId, 'BROWSER2');
       await call('browser_close');
-      await until(async () => (await Promise.all(firstOwned.map(p => identity(p.pid)))).every((p, i) => !same(firstOwned[i], p)), 'Profile close did not reap its root and guard');
-      for (const p of secondOwned) assert.ok(same(p, await identity(p.pid)), 'Other profile was affected by close');
+      if (firstOwned.sharedWindow) {
+        assert.equal(firstOwned.owned[0].pid, secondOwned.owned[0].pid, 'Profiles must share the same project window');
+        for (const p of [firstOwned.owned[0], firstOwned.owned.at(-1)]) assert.ok(same(p, await identity(p.pid)), 'Profile close affected the shared root or guard');
+      } else await until(async () => (await Promise.all(firstOwned.owned.map(p => identity(p.pid)))).every((p, i) => !same(firstOwned.owned[i], p)), 'Profile close did not reap its root and guard');
+      const survivors = secondOwned.sharedWindow ? [secondOwned.owned[0], secondOwned.owned.at(-1)] : secondOwned.owned;
+      for (const p of survivors) assert.ok(same(p, await identity(p.pid)), 'Other profile was affected by close');
       await call('browser_click', { selector: '#increment' }, 'BROWSER2');
       await call('browser_navigate', { url: fixture.url });
       const reopened = await processes(broker, first.projectId, 'BROWSER1');
       assert.equal(await fs.readlink(`/proc/${broker.pid}/exe`), broker.executable);
       process.kill(broker.pid, 'SIGKILL');
-      const owned = [...reopened, ...secondOwned];
+      const owned = [...new Map([...reopened.owned, ...secondOwned.owned].map(p => [p.pid, p])).values()];
       await until(async () => (await Promise.all(owned.map(p => identity(p.pid)))).every((p, i) => !same(owned[i], p)), 'Broker death left an owned browser or native guard alive');
       await call('browser_navigate', { url: fixture.url });
       const fresh = await identity(JSON.parse(await fs.readFile(path.join(home, 'broker.json'), 'utf8')).pid);

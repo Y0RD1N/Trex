@@ -1,3 +1,4 @@
+import { useTimeFormat } from "../../hooks/useTimeFormat";
 /**
  * Uso del plan de la cuenta en la bandeja del chat: cuánto se ha gastado de la
  * ventana que más importa ahora y, al pulsarlo, todas las ventanas con su
@@ -15,6 +16,7 @@ const shortLabel = (window: PlanWindow): string =>
 
 /** Filas de uso: nombre, barra y cuándo se reinicia. Las comparte la ventana de todas las cuentas. */
 export function PlanWindows({ usage, now }: { usage: PlanUsage; now: number }) {
+  const timeFormat = useTimeFormat();
   const extra = extraLabel(usage.extra);
   return <>
     <ul className="plan-windows">
@@ -27,7 +29,7 @@ export function PlanWindows({ usage, now }: { usage: PlanUsage; now: number }) {
           aria-label={`${window.label}: ${window.percent} % usado`}>
           <i style={{ width: `${Math.max(window.percent, window.percent > 0 ? 2 : 0)}%` }} />
         </div>
-        {window.resetsAt !== null && <small>{resetLabel(window.resetsAt, now)}</small>}
+        {window.resetsAt !== null && <small>{resetLabel(window.resetsAt, now, timeFormat)}</small>}
       </li>)}
     </ul>
     {(extra || usage.resetCredits > 0) && <p className="plan-note">

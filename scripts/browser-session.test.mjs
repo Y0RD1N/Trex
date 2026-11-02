@@ -359,7 +359,7 @@ for (const [plannerProvider, executorProvider] of [["claude", "codex"], ["codex"
       effort: null, launch: { command: null, args: null, shell: "powershell", env: null } }, conversationId: null, mode });
     const props = { ...components.baseProps(), settings: { browserEnabled: true, browserProfile: browser.profile },
       room: { id: "room-browser-client", active: "planner", phase: "idle", cycle: 1, order: [],
-        planner: participant(plannerProvider, "full"), executor: participant(executorProvider, executorProvider === "claude" ? "bypassPermissions" : "full") }, onRoomChange() {} };
+        planner: participant(plannerProvider, "plan"), executor: participant(executorProvider, executorProvider === "claude" ? "bypassPermissions" : "full") }, onRoomChange() {} };
     const render = input => host.render(() => module.default(input));
     const runtimes = tree => [...components.elements(tree)].filter(node => typeof node.type === "function" && node.props.options && node.props.role);
     const initial = runtimes(render(props));

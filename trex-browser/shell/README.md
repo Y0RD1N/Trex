@@ -11,9 +11,11 @@ The worker launches the shell exactly like it launched Chrome:
 
 - **CDP over `--remote-debugging-pipe`.** No debugging port is opened. Playwright
   and every existing `browser_*` tool keep working.
-- **One process per agent space.** The `--user-data-dir` Playwright passes
-  becomes Electron's `userData`, so every profile (`BROWSERn`) keeps its own
-  isolated storage. Session partitions would collapse into one Playwright context.
+- **One window and process per project.** Each agent owns tabs backed by its
+  existing persistent `BROWSERn/user-data` session. Private scoped CDP connections
+  expose only that agent's targets to Playwright, preserving independent cookies,
+  storage, permissions and operation queues. Background agents keep working
+  without changing the human-selected tab. Personal browser windows stay separate.
 - **The native guard** verifies the shell executable and its same-binary
   descendants, the same way it does for Chrome.
 - **Our UI is also WebContents.** The UI views (frame, top bar, dock, agent cursor)
@@ -30,6 +32,11 @@ The worker launches the shell exactly like it launched Chrome:
   **Shell → worker:** human controls (`pause`, `resume`, `takeover`, `focus`) and
   center open/close, delivered through a Playwright binding. Human controls reuse
   the explicit pause semantics: the agent's next page action gets `PAUSED`.
+
+Native views retain their bounds, visibility and parent while agent status changes.
+New background tabs are inserted below the foreground, and view ordering changes
+in place only when the selected tab or agents center changes. Overlay updates
+patch existing controls so focus, pressed buttons and CSS animations survive.
 
 ## UI
 

@@ -71,6 +71,8 @@ import { filterProjects, includeAddedProject, normalizeProjectFilter, type Proje
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, profilesForInstallation, restoreLaunch } from "./profiles";
 import { applyDesign } from "./visualDesign";
+import { applyTimeFormat } from "./timeFormat";
+import { defaultAgentPermission, validAgentPermission } from "./agentPermissions";
 import type { ClipboardContent } from "./paste";
 import { resumedLaunch } from "./conversations";
 import { codexChatSupported } from "./codexChat";
@@ -283,6 +285,7 @@ function AppShell() {
         normalized.settings.colorScheme,
       );
       applyDesign(normalized.settings);
+      applyTimeFormat(normalized.settings.timeFormat);
       if (failed) showToast("No se pudo cargar la configuración; se usarán valores por defecto.");
     })();
 
@@ -395,6 +398,7 @@ function AppShell() {
 
   // Tema y acento se aplican en vivo cuando cambia la configuración y, si la
   // apariencia es "system", también cuando el sistema cambia de modo.
+  useEffect(() => { if (config) applyTimeFormat(config.settings.timeFormat); }, [config?.settings.timeFormat]);
   useEffect(() => {
     if (!config) return;
     applyTheme(config.settings.appearance, config.settings.theme || DEFAULT_SETTINGS.theme, config.settings.colorScheme);
@@ -896,9 +900,13 @@ function AppShell() {
       }
       const id = crypto.randomUUID();
       const inherited = captured ? await prepareHandoff(captured.context) : null;
-      const room: AgentRoom = { id: `room-${id}`, planner: { agent: planner, conversationId: sourceRole === "planner" ? sourceTab!.conversationId : null, mode: "plan" },
+      const permission = (choice: WorkflowRequest["planner"], agent: WorkflowAgent, planning: boolean): string | null => {
+        if (choice.mode != null && !validAgentPermission(agent.provider, choice.mode)) throw new Error("El modo de permisos no es válido para este asistente.");
+        return choice.mode ?? defaultAgentPermission(agent.provider, !planning);
+      };
+      const room: AgentRoom = { id: `room-${id}`, planner: { agent: planner, conversationId: sourceRole === "planner" ? sourceTab!.conversationId : null, mode: permission(request.planner, planner, true) },
         executor: { agent: executor, conversationId: sourceRole === "executor" ? sourceTab!.conversationId : null,
-          mode: sourceRole === "executor" ? sourceTab!.chatMode : executor.provider === "claude" ? "acceptEdits" : "auto" },
+          mode: request.executor.mode !== undefined ? permission(request.executor, executor, false) : sourceRole === "executor" ? sourceTab!.chatMode : defaultAgentPermission(executor.provider) },
         active: "planner", phase: "idle", cycle: 0, pending: null,
         setupContext: inherited ? { id: inherited.id, sourceLabel: inherited.sourceLabel, pending: false } : null,
         order: sourceRole ? captured!.itemIds.map(item => `${sourceRole}::${item}`) : [], plan: null, error: null };
@@ -937,8 +945,10 @@ function AppShell() {
         if (choice.model !== null && !model || choice.effort !== null && !effort) throw new Error("Modelo o esfuerzo no válidos.");
         const launch = launchForProfile(config.settings, profile);
         if (profile.provider === "claude") launch.args = claudePlanningArgs(launch.args, IS_WINDOWS && launch.shell !== "wsl");
+        const mode = choice.mode ?? defaultAgentPermission(profile.provider, choice.canWrite);
+        if (mode != null && !validAgentPermission(profile.provider, mode)) throw new Error("El modo de permisos no es válido para esta cuenta.");
         return { id: choice.id, name: sanitizeHandoffText(choice.name), role: principal ? "coordinator" : choice.role,
-          instructions: sanitizeHandoffText(choice.instructions), canWrite: !principal && choice.canWrite,
+          instructions: sanitizeHandoffText(choice.instructions), canWrite: mode !== "plan", mode,
           agent: { profileId: profile.id, profileName: profile.name, provider: profile.provider, model, effort, launch }, conversationId: null };
       };
       const master = pick(request.master, true), workers = request.workers.map(worker => pick(worker));

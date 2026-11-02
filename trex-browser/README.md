@@ -127,6 +127,18 @@ remain visible and each human control targets the selected instance only.
 Ownership still covers a whole project/profile. Independent clients cannot
 create tabs in another owner's profile; shared identities serialize page inputs.
 Different allocated profiles run concurrently with separate browser storage.
+Trex Browser presents those profiles as owned tabs inside one native window per
+project. Opening another agent's space reuses that window; cookies, local storage,
+permissions, downloads, operation queues and Playwright target connections remain
+scoped to each profile. Background agents do not change the human-selected tab.
+The agents center's View/Pause/Take control actions select and control the requested
+profile. Closing one profile leaves its peers running; the last close stops the
+project window. Existing profile storage is opened in place, preserving sign-ins.
+A profile loaded by that window cannot also be opened in a separate sign-in window
+until the shared window closes. Personal browser windows remain independent.
+Playwright action traces can run concurrently across agents. Raw Chromium
+performance tracing is browser-wide and requires exclusive use of the project
+window; starting another space while such a trace is active is rejected explicitly.
 The team scheduler supports up to four independent read-only tasks. Tasks that
 can write the shared workspace remain exclusive. `trex_team_plan.dependsOn: []`
 marks independent work; prerequisites must be earlier plan keys. Omitted

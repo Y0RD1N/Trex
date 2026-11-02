@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { formatError } from "../api";
 import { workflowEffortLevels } from "../agentWorkflow";
+import { agentPermissionOptions, defaultAgentPermission, validAgentPermission } from "../agentPermissions";
 import { EFFORT_LEVELS, modelDescription, modelName, normalizeEffortChoice, normalizeModelChoice, type ModelInfo } from "../chatState";
 import { loadProfileModels } from "../profileModels";
 import { PROVIDER_NAMES } from "../profiles";
@@ -14,8 +15,8 @@ import "./AgentWorkflowDialog.css";
 import AgentTeamDialog, { type TeamRequest } from "./AgentTeamDialog";
 
 export type WorkflowRequest = {
-  planner: { profileId: string; model: string | null; effort: string | null };
-  executor: { profileId: string; model: string | null; effort: string | null };
+  planner: { profileId: string; model: string | null; effort: string | null; mode?: string | null };
+  executor: { profileId: string; model: string | null; effort: string | null; mode?: string | null };
 };
 
 export type AgentWorkflowDialogProps = {
@@ -47,6 +48,7 @@ export function useWorkflowStage(targets: Target[], provider: AgentProvider, set
   const [modelChoices, setModelChoices] = useState<Record<string, string>>(() => initial ? { [initial.profileId]: initial.model ?? "" } : {});
   const [effortChoices, setEffortChoices] = useState<Record<string, Record<string, string>>>(() => initial?.effort ? { [initial.profileId]: { [initial.model ?? ""]: initial.effort } } : {});
   const [revision, setRevision] = useState(0);
+  const [permissionChoices, setPermissionChoices] = useState<Record<string, string | null>>(() => initial ? { [initial.profileId]: initial.mode ?? null } : {});
   const [catalog, setCatalog] = useState<Catalog>({ key: "", models: [], loading: false, error: null });
   const selected = targets.find(target => target.profile.id === profileId && !target.reason)
     ?? preferredTarget(targets, provider, settings.defaultProfileId);
@@ -114,7 +116,9 @@ export function useWorkflowStage(targets: Target[], provider: AgentProvider, set
     : effort ? "Esfuerzo elegido solo para esta etapa."
     : "Se usará el esfuerzo del perfil o el predeterminado del asistente.";
 
-  return { profile, profileId: selectedId, setProfileId, model, options, loading, error, validModel,
+  const mode = profile && validAgentPermission(profile.provider, permissionChoices[selectedId]) ? permissionChoices[selectedId] ?? null : null;
+  return { profile, profileId: selectedId, setProfileId, model, options, loading, error, validModel, mode,
+    setMode: (mode: string | null) => setPermissionChoices(previous => ({ ...previous, [selectedId]: mode })),
     effort, effortLevels, effortOptions, effortHint,
     ready: !!profile && !loading && validModel,
     setModel: (value: string) => setModelChoices(previous => ({ ...previous, [selectedId]: value })),
@@ -146,10 +150,10 @@ function WorkflowStageCard({ stage, role, profileOptions, disabled }: {
       <span className="workflow-role-icon" aria-hidden="true">{planning ? <MapIcon size={19} /> : <WrenchIcon size={19} />}</span>
       <div><span className="workflow-eyebrow">Etapa {planning ? "1" : "2"}</span>
         <h3 id={`${id}-title`}>{planning ? "Planificación" : "Implementación"}</h3></div>
-      <span className="workflow-stage-badge">{planning ? "Solo lectura" : "Automática"}</span>
+      <span className="workflow-stage-badge">{planning ? "Plan" : "Automática"}</span>
     </div>
     <p className="workflow-stage-description">{planning
-      ? "Explora el proyecto y prepara un plan sin modificar archivos."
+      ? "Explora el proyecto y prepara un plan con los permisos que elijas."
       : "Recibe el plan y empieza a implementar automáticamente."}</p>
     <div className="workflow-field">
       <label className="workflow-field-label" id={`${id}-profile-label`} htmlFor={`${id}-profile`}>Asistente para {name}</label>
@@ -185,8 +189,14 @@ function WorkflowStageCard({ stage, role, profileOptions, disabled }: {
         disabled={disabled || !stage.profile || !stage.effortLevels.length} onChange={stage.setEffort} />
       <p className="workflow-field-hint workflow-effort-hint" id={`${id}-effort-status`} aria-live="polite" aria-atomic="true">{stage.effortHint}</p>
     </div>
-    <div className="workflow-stage-permission"><ShieldIcon size={13} />
-      {planning ? "Análisis y plan en modo de solo lectura" : "Permisos seguros habituales del asistente"}
+    <div className="workflow-field">
+      <label className="workflow-field-label" htmlFor={`${id}-permissions`}>Permisos de {name}</label>
+      <Select id={`${id}-permissions`} className="workflow-select" align="start" disabled={disabled || !stage.profile}
+        value={stage.mode ?? (stage.profile ? defaultAgentPermission(stage.profile.provider, !planning) : "") ?? ""}
+        options={agentPermissionOptions(stage.profile?.provider ?? "claude")}
+        onChange={value => stage.setMode(value || null)} />
+      <p className="workflow-field-hint">{planning ? "Empieza en solo lectura. Puedes permitir cambios también durante la planificación."
+        : "Se aplican a archivos, comandos y las integraciones habilitadas, según el asistente."}</p>
     </div>
   </section>;
 }
@@ -208,8 +218,8 @@ export default function AgentWorkflowDialog({ project, profiles, settings, onClo
       <span className="feature-hint workflow-footer-hint">La idea se escribe después, en el chat.</span>
       <button type="button" className="btn btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
       <button type="button" className="btn btn-primary workflow-start" disabled={!ready} onClick={() => {
-        if (ready) onStart({ planner: { profileId: planner.profileId, model: planner.model || null, effort: planner.effort },
-          executor: { profileId: executor.profileId, model: executor.model || null, effort: executor.effort } });
+        if (ready) onStart({ planner: { profileId: planner.profileId, model: planner.model || null, effort: planner.effort, mode: planner.mode ?? "plan" },
+          executor: { profileId: executor.profileId, model: executor.model || null, effort: executor.effort, mode: executor.mode ?? defaultAgentPermission(executor.profile!.provider) } });
       }}>
         {submitting ? <span className="chat-spinner" aria-hidden="true" /> : <ArrowRightIcon size={15} />}
         {submitting ? "Guardando…" : "Guardar y abrir chat"}
@@ -230,7 +240,7 @@ export default function AgentWorkflowDialog({ project, profiles, settings, onClo
       <span className="workflow-direction" aria-hidden="true"><ArrowRightIcon size={17} /></span>
       <WorkflowStageCard stage={executor} role="executor" profileOptions={profileOptions} disabled={submitting} />
     </div>
-    <p className="workflow-automation-note"><ShieldIcon size={15} /><span>Guardar la configuración no inicia ninguna tarea. Cuando envíes tu idea en el chat, el planificador preparará el plan y el ejecutor lo implementará con sus permisos habituales.</span></p>
+    <p className="workflow-automation-note"><ShieldIcon size={15} /><span>Guardar la configuración no inicia ninguna tarea. Cuando envíes tu idea, el planificador preparará el plan y el ejecutor lo recibirá con los permisos que hayas elegido.</span></p>
     {!available && <p className="workflow-status" role="status">Añade en Ajustes un perfil compatible con el chat, sin opciones de reanudación ni modos especiales.</p>}
     {error && <p className="workflow-status error" role="alert">{error}</p>}
   </FeatureDialog>;

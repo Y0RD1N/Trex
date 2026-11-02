@@ -13,6 +13,7 @@ import AgentIcon from "./AgentIcon";
 import Select from "./Select";
 import { ArrowRightIcon } from "./Icons";
 import { listAntigravityConversations } from "../antigravityConnection";
+import { formatDateTime } from "../timeFormat";
 export default function RecoverConversations({
   project,
   settings,
@@ -153,7 +154,7 @@ export default function RecoverConversations({
               <span>
                 <strong>{conversation.title}</strong>
                 <small>
-                  {new Date(conversation.updatedAt).toLocaleString()} ·{" "}
+                  {formatDateTime(conversation.updatedAt, settings.timeFormat)} ·{" "}
                   {conversation.id.slice(0, 8)}
                 </small>
               </span>
