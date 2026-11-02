@@ -139,7 +139,7 @@ test('downloads are saved only as new, non-hidden files inside the workspace or 
     for(const destination of ['../other/','.git/hooks/pre-commit','sub/.hidden/','.env',other])
       assert.throws(()=>saveTarget({cwd,home,destination,suggestedName:'f.txt'}),{code:'POLICY_DENIED'},destination);
     // A link inside the workspace cannot point the write outside of it.
-    fs.symlinkSync(other,path.join(cwd,'escape'));
+    fs.symlinkSync(other,path.join(cwd,'escape'),process.platform==='win32'?'junction':'dir');
     assert.throws(()=>saveTarget({cwd,home,destination:'escape/',suggestedName:'f.txt'}),{code:'POLICY_DENIED'});
     updateSaveFolders(home,'add',other);
     assert.equal(saveTarget({cwd,home,destination:other,suggestedName:'f.txt'}).dir,other);

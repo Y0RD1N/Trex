@@ -63,6 +63,9 @@ const CHROMIUM_NETWORK_CAPABILITIES: &[&str] = &[
     "lpacChromeDevNetworkSandbox",
     "lpacChromeCanaryNetworkSandbox",
     "lpacChromeNetworkSandbox",
+    // Electron 45 inherits ContentBrowserClient's network service identity.
+    // https://github.com/chromium/chromium/blob/main/content/public/browser/content_browser_client.cc
+    "lpacContentNetworkService",
 ];
 const CHROMIUM_DATA_RIGHTS: u32 = GENERIC_READ
     | GENERIC_WRITE
@@ -935,7 +938,12 @@ fn chromium_managed_data_child(home: &Path, path: &Path) -> bool {
         return false;
     };
     let parts: Vec<_> = relative.iter().collect();
-    parts.len() > 4
+    let profile_depth = if parts[0].eq_ignore_ascii_case(OsStr::new("personal")) {
+        2
+    } else {
+        4
+    };
+    parts.len() > profile_depth
 }
 
 fn chromium_profile_path(home: &Path, path: &Path) -> bool {
@@ -943,6 +951,12 @@ fn chromium_profile_path(home: &Path, path: &Path) -> bool {
         return false;
     };
     let parts: Vec<_> = relative.components().map(|part| part.as_os_str()).collect();
+    if parts.len() >= 2
+        && parts[0].eq_ignore_ascii_case(OsStr::new("personal"))
+        && parts[1].eq_ignore_ascii_case(OsStr::new("user-data"))
+    {
+        return true;
+    }
     if parts.len() < 4
         || !parts[0].eq_ignore_ascii_case(OsStr::new("projects"))
         || !parts[3].eq_ignore_ascii_case(OsStr::new("user-data"))
@@ -1463,24 +1477,58 @@ mod tests {
     #[test]
     fn exact_chromium_capability_is_accepted_only_in_profile_data() {
         let policy = Policy::current_user().unwrap();
-        let stable = policy.chromium_capability_sids[0]
+        for capability in &policy.chromium_capability_sids {
+            let stable = capability.as_ptr().cast_mut().cast();
+            for (relative, accepted) in [
+                (PROFILE_DATA, true),
+                ("personal/user-data", true),
+                ("artifacts", false),
+                ("personal", false),
+                ("", false),
+            ] {
+                let test = TestHome::new();
+                let home = PrivateHome::at(&test.0).unwrap();
+                let target = home.path().join(relative);
+                fs::create_dir_all(&target).unwrap();
+                extra_ace(
+                    &target,
+                    stable,
+                    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+                    SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+                    GRANT_ACCESS,
+                );
+                drop(home);
+                assert_eq!(PrivateHome::at(&test.0).is_ok(), accepted, "{relative}");
+            }
+        }
+    }
+
+    #[test]
+    fn electron_network_identity_is_exact_and_cannot_control_profile_permissions() {
+        let policy = Policy::current_user().unwrap();
+        let electron = policy
+            .chromium_capability_sids
+            .last()
+            .unwrap()
             .as_ptr()
             .cast_mut()
             .cast();
-        for (relative, accepted) in [(PROFILE_DATA, true), ("artifacts", false), ("", false)] {
+        let observed = sid("S-1-15-3-1024-395641907-2340533657-1796656376-1949871151-3167452726-3934347287-2361051074-3061173417");
+        assert_ne!(unsafe { EqualSid(electron, observed.0) }, 0);
+        for relative in [PROFILE_DATA, "personal/user-data"] {
             let test = TestHome::new();
             let home = PrivateHome::at(&test.0).unwrap();
             let target = home.path().join(relative);
             fs::create_dir_all(&target).unwrap();
             extra_ace(
                 &target,
-                stable,
-                FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+                electron,
+                FILE_ALL_ACCESS,
                 SUB_CONTAINERS_AND_OBJECTS_INHERIT,
                 GRANT_ACCESS,
             );
             drop(home);
-            assert_eq!(PrivateHome::at(&test.0).is_ok(), accepted, "{relative}");
+            assert!(PrivateHome::at(&test.0).is_err(), "{relative}");
         }
     }
 
@@ -1533,8 +1581,23 @@ mod tests {
     fn profile_exception_requires_exact_worker_layout() {
         let home = Path::new("C:/private");
         assert!(chromium_profile_path(home, &home.join(PROFILE_DATA)));
+        assert!(chromium_profile_path(
+            home,
+            &home.join("personal/user-data")
+        ));
+        assert!(!chromium_managed_data_child(
+            home,
+            &home.join("personal/user-data")
+        ));
+        assert!(chromium_managed_data_child(
+            home,
+            &home.join("personal/user-data/Network")
+        ));
         for relative in [
             "artifacts/user-data",
+            "personal",
+            "personal/profile.json",
+            "personal-other/user-data",
             "projects/short/BROWSER1/user-data",
             "projects/0123456789abcdef01234567/BROWSER0/user-data",
             "projects/0123456789abcdef01234567/BROWSER100/user-data",

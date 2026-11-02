@@ -93,7 +93,7 @@ test('native MCP opens Chrome without manual controls and survives an adapter pr
     assert.ok(broker.pid > 0);
     assert.equal((await rpc(4, 'tools/call', { name: 'browser_click', arguments: { role: 'button', name: 'Test button' } })).result.structuredContent.ok, true);
     const snapshot = await rpc(5, 'tools/call', { name: 'browser_snapshot', arguments: {} });
-    assert.match(JSON.stringify(snapshot.result.structuredContent.data), /Clicked/);
+    assert.match(JSON.stringify(snapshot.result.structuredContent), /Clicked/);
     const closed = once(adapter, 'close');
     await new Promise((resolve, reject) => {
       const killer = spawn(path.join(process.env.SystemRoot, 'System32', 'taskkill.exe'), ['/PID', String(adapter.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });

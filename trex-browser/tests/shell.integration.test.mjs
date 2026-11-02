@@ -156,7 +156,7 @@ describe('Trex Browser shell', { skip: !available && 'Trex shell or display unav
     assert.deepEqual(await service.focusSpace(context({ cwd: workspace, mode: 'observe', clientId: 'x', profile: 'BROWSER9' })), { focused: false, reason: 'closed' });
   });
 
-  it('refuses to open a profile that a person has open for sign-in', async () => {
+  it('refuses to open a profile that a person has open for sign-in', { skip: process.platform === 'win32' && 'SingletonLock is a POSIX symlink; Windows uses native single-instance locks' }, async () => {
     const ctx = space('agent-c', 'BROWSER4', 'Sign-in test');
     const userData = path.join(service.profileDir(ctx), 'user-data');
     fs.mkdirSync(userData, { recursive: true });

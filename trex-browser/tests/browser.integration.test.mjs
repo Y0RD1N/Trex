@@ -253,6 +253,7 @@ async function windowsProcesses(mode, ids) {
 }
 
 const windowsPath = value => String(value || '').replaceAll('/', '\\').toLowerCase();
+const browserProcessName = name => ['chrome.exe', 'msedge.exe', 'electron.exe', 'trex-browser-shell.exe'].includes(String(name || '').toLowerCase());
 const sameProcess = (left, right) => !!left && !!right && left.pid === right.pid && left.createdAt === right.createdAt && windowsPath(left.executablePath) === windowsPath(right.executablePath);
 const originalProcessMayBeAlive = (original, current) => !!current && original.pid === current.pid && (!current.createdAt || original.createdAt === current.createdAt) && (!current.executablePath || windowsPath(original.executablePath) === windowsPath(current.executablePath));
 
@@ -278,7 +279,7 @@ async function ownedBrowserProcesses(brokerHome, projectId, profiles) {
   const guards = new Map();
   for (const profile of profiles) {
     const dataDir = windowsPath(path.join(brokerHome, 'projects', projectId, profile, 'user-data'));
-    const roots = direct.filter(item => item.parentPid === broker.pid && item.name?.toLowerCase() === 'chrome.exe' && windowsPath(item.commandLine).includes(dataDir) && !/(?:^|\s)--type(?:=|\s)/.test(item.commandLine));
+    const roots = direct.filter(item => item.parentPid === broker.pid && browserProcessName(item.name) && windowsPath(item.commandLine).includes(dataDir) && !/(?:^|\s)--type(?:=|\s)/.test(item.commandLine));
     assert.equal(roots.length, 1, `Expected one Chrome root owned by this broker for ${profile}`);
     assert.ok(roots[0].executablePath && roots[0].createdAt, 'Chrome identity must include executable and creation time');
     browsers.set(profile, roots[0]);
@@ -297,7 +298,7 @@ async function ownedChromeTree(roots) {
   let frontier = [...roots];
   for (let depth = 0; frontier.length && depth < 8; depth++) {
     const children = await windowsProcesses('children', frontier.map(item => item.pid));
-    assert.ok(children.every(item => item.name?.toLowerCase() !== 'chrome.exe' || item.executablePath && item.createdAt), 'Owned Chrome descendants require complete identity before crash');
+    assert.ok(children.every(item => !browserProcessName(item.name) || item.executablePath && item.createdAt), 'Owned browser descendants require complete identity before crash');
     frontier = children.filter(item => roots.some(root => windowsPath(item.executablePath) === windowsPath(root.executablePath)) && !records.some(known => sameProcess(known, item)));
     records.push(...frontier);
     assert.ok(records.length <= 128, 'Owned test Chrome process tree must stay bounded');
@@ -308,7 +309,9 @@ async function ownedChromeTree(roots) {
 
 describe('real Trex browser worker on isolated loopback fixtures', { concurrency: false, timeout: 900_000 }, () => {
   before(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), 'trex-browser-integration-'));
+    // Windows TEMP may use an 8.3 alias (MIPC~1). Keep fixture paths in the
+    // same canonical form as native folder selection and async realpath.
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'trex-browser-integration-')));
     home = path.join(root, 'private-home');
     workspace = path.join(root, 'workspace');
     otherWorkspace = path.join(root, 'other-workspace');
