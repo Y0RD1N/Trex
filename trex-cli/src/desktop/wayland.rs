@@ -84,8 +84,13 @@ enum Binding {
 struct Observation {
     token: String,
     stream: u32,
+    /// Image size sent to the model (possibly downscaled / a region).
     width: u32,
     height: u32,
+    /// Captured area in stream pixels, and the full stream size.
+    region: [u32; 4],
+    screen: (u32, u32),
+    uses: u8,
     logical: (i32, i32),
     at: Instant,
     generation: u64,
@@ -228,7 +233,7 @@ impl PortalState {
             );
         }
         if name == "desktop_screenshot" {
-            super::validate_fields(input, &["monitor"], &[])?;
+            let (region, full) = super::screenshot_options(input)?;
             self.observation = None;
             let selected = input
                 .get("monitor")
@@ -256,29 +261,37 @@ impl PortalState {
                 .context("monitor is not part of the granted portal session")?
                 .clone();
             let bytes = capture(fd, stream.pipe_wire_node_id(), &cancel).await?;
-            let dimensions = image::ImageReader::new(std::io::Cursor::new(&bytes))
-                .with_guessed_format()?
-                .into_dimensions()?;
+            let reader = image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
+            let dimensions = reader.into_dimensions()?;
             ensure!(
                 dimensions.0 > 0
                     && dimensions.1 > 0
                     && u64::from(dimensions.0) * u64::from(dimensions.1) <= 64_000_000,
                 "invalid capture dimensions"
             );
+            let shot = image::load_from_memory(&bytes)?;
+            let framed = super::frame(shot, region, full)?;
+            ensure!(!cancel.is_cancelled(), "cancelled before screenshot delivery");
             let token = uuid::Uuid::new_v4().to_string();
             self.observation = Some(Observation {
                 token: token.clone(),
                 stream: stream.pipe_wire_node_id(),
-                width: dimensions.0,
-                height: dimensions.1,
+                width: framed.width,
+                height: framed.height,
+                region: framed.region,
+                screen: framed.screen,
+                uses: super::OBSERVATION_USES,
                 logical: stream
                     .size()
                     .unwrap_or((dimensions.0 as i32, dimensions.1 as i32)),
                 at: Instant::now(),
                 generation: lease.generation()?,
             });
+            let mut structured = framed.structured();
+            structured["observation"] = json!(token);
+            structured["monitor"] = json!(stream.pipe_wire_node_id());
             return Ok(
-                json!({"content":[{"type":"text","text":format!("Wayland screenshot {}x{}; observation {token}. Only the screens selected in the system portal are accessible.",dimensions.0,dimensions.1)},{"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(bytes)}],"structuredContent":{"observation":token,"width":dimensions.0,"height":dimensions.1,"monitor":stream.pipe_wire_node_id(),"originX":0,"originY":0,"coordinateSpace":"physicalPixels","expiresInMs":30000}}),
+                json!({"content":[{"type":"text","text":format!("{} Only the screens selected in the system portal are accessible.",framed.summary(&token))},{"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(&framed.png)}],"structuredContent":structured}),
             );
         }
         let fields: &[&str] = match name {
@@ -312,9 +325,16 @@ impl PortalState {
             self.close().await;
             return Err(DesktopUncertain.into());
         }
-        Ok(
-            json!({"completed":true,"message":"Input sent. Capture a fresh screenshot before further input."}),
-        )
+        // Our own input advanced the shared generation; another agent's would not match.
+        let remaining = observation.uses.saturating_sub(1);
+        if remaining > 0 {
+            self.observation = Some(Observation {
+                uses: remaining,
+                generation: lease.generation()?,
+                ..observation
+            });
+        }
+        Ok(super::input_result(remaining))
     }
     async fn action(
         &self,
@@ -515,12 +535,14 @@ fn coordinates(input: &Value, x: &str, y: &str, o: &Observation) -> Result<(f64,
         .filter(|v| *v < u64::from(o.height))
         .context("y coordinate outside screenshot")?;
     ensure!(
-        o.logical.0 > 0 && o.logical.1 > 0,
+        o.logical.0 > 0 && o.logical.1 > 0 && o.screen.0 > 0 && o.screen.1 > 0,
         "portal stream geometry unavailable"
     );
+    // Image pixel -> stream pixel (undo region crop and downscale) -> portal logical.
+    let (sx, sy) = super::frame_point(x, y, o.width, o.height, o.region)?;
     Ok((
-        x as f64 * f64::from(o.logical.0) / f64::from(o.width),
-        y as f64 * f64::from(o.logical.1) / f64::from(o.height),
+        f64::from(sx) * f64::from(o.logical.0) / f64::from(o.screen.0),
+        f64::from(sy) * f64::from(o.logical.1) / f64::from(o.screen.1),
     ))
 }
 fn keysym(key: &str) -> Result<i32> {
@@ -690,6 +712,9 @@ mod tests {
             stream: 1,
             width: 3840,
             height: 2160,
+            region: [0, 0, 3840, 2160],
+            screen: (3840, 2160),
+            uses: super::super::OBSERVATION_USES,
             logical: (1920, 1080),
             at: Instant::now(),
             generation: 0,
@@ -698,6 +723,13 @@ mod tests {
             coordinates(&json!({"x":1920,"y":1080}), "x", "y", &o).unwrap(),
             (960.0, 540.0)
         );
+        // A downscaled 1280x720 screenshot of the same 4K stream maps to the same point.
+        let small = Observation { width: 1280, height: 720, ..o };
+        assert_eq!(
+            coordinates(&json!({"x":640,"y":360}), "x", "y", &small).unwrap(),
+            (960.5, 540.5)
+        );
+        let o = Observation { width: 3840, height: 2160, ..small };
         assert_eq!(keysym("🦖").unwrap(), 0x0101f996);
         assert!(validate_action("desktop_click", &json!({"x":4000,"y":0}), &o).is_err());
     }

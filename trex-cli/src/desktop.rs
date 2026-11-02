@@ -1,4 +1,4 @@
-//! Explicitly enabled desktop access. Screenshots and input share a one-use observation token.
+//! Explicitly enabled desktop access. Screenshots and input share an observation token (a few inputs, 30 s).
 use crate::tools::{ToolFuture, ToolProvider};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -79,6 +79,12 @@ struct Observation {
     token: String,
     width: u32,
     height: u32,
+    /// Captured area in screen pixels (the image may be downscaled).
+    region: [u32; 4],
+    /// Full monitor size in screen pixels (Windows re-validates the monitor).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    screen: (u32, u32),
+    uses: u8,
     origin_x: i32,
     origin_y: i32,
     captured_at: Instant,
@@ -118,11 +124,11 @@ impl ToolProvider for DesktopProvider {
             ("desktop_status", "Check desktop backend and availability without taking a screenshot or sending input.", json!({}), vec![]),
             ("desktop_monitors", "List screens with physical-pixel origins, dimensions and IDs. Windows screenshots can select a monitor by ID.", json!({}), vec![]),
             ("desktop_wait", "Wait for the desktop to settle, in milliseconds (0 to 10000). Capture again afterwards before input.", json!({"milliseconds":{"type":"integer","minimum":0,"maximum":10000}}), vec!["milliseconds"]),
-            ("desktop_screenshot", "Capture a screen, defaulting to the primary monitor. Optional monitor ID comes from desktop_monitors. The returned one-use observation expires after 30 seconds and is required for the next input. Inspect screen and focus before acting.", json!({"monitor":{"type":"integer","minimum":0}}), vec![]),
+            ("desktop_screenshot", "Capture a screen (primary by default; monitor ID from desktop_monitors), downscaled to 1280 px on its long edge. region {x,y,width,height} in screen pixels captures only that area, sharper and cheaper. fullResolution:true skips downscaling. The observation serves up to 3 inputs within 30 s while the screen is unchanged. Inspect screen and focus before acting.", json!({"monitor":{"type":"integer","minimum":0},"region":{"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":16},"height":{"type":"integer","minimum":16}},"required":["x","y","width","height"],"additionalProperties":false},"fullResolution":{"type":"boolean"}}), vec![]),
             ("desktop_move", "Move the pointer to a point in the latest screenshot without clicking. Coordinates are screenshot pixels.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0}}), vec!["observation","x","y"]),
             ("desktop_click", "Click a point in the latest desktop screenshot. Coordinates are screenshot pixels. Use clicks:2 for a double click.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"type":"string","enum":["left","right","middle"]},"clicks":{"type":"integer","minimum":1,"maximum":2}}), vec!["observation","x","y"]),
             ("desktop_scroll", "Scroll at a point in the latest screenshot. Positive amount scrolls down (vertical) or right (horizontal).", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"amount":{"type":"integer","minimum":-20,"maximum":20},"axis":{"type":"string","enum":["vertical","horizontal"]}}), vec!["observation","x","y","amount"]),
-            ("desktop_type", "Type text into the currently focused control. Verify focus from a fresh screenshot first.", json!({"observation":{"type":"string"},"text":{"type":"string","maxLength":4000}}), vec!["observation","text"]),
+            ("desktop_type", "Type text into the currently focused control. Verify focus from the latest screenshot (a click just made on the field counts).", json!({"observation":{"type":"string"},"text":{"type":"string","maxLength":4000}}), vec!["observation","text"]),
             ("desktop_key", "Press a key or keyboard shortcut in the focused control. Keys: enter, tab, escape, backspace, delete, arrows, home, end, pageup, pagedown, space, or one character. Modifiers: ctrl, alt, shift, meta.", json!({"observation":{"type":"string"},"key":{"type":"string"},"modifiers":{"type":"array","maxItems":4,"items":{"type":"string","enum":["ctrl","alt","shift","meta"]}}}), vec!["observation","key"]),
             ("desktop_drag", "Drag between points in the latest desktop screenshot using the left button.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"toX":{"type":"integer","minimum":0},"toY":{"type":"integer","minimum":0}}), vec!["observation","x","y","toX","toY"]),
         ];
@@ -192,14 +198,143 @@ fn validate_fields(input: &Value, allowed: &[&str], required: &[&str]) -> Result
 fn point(input: &Value, x: &str, y: &str, o: &Observation) -> Result<(i32, i32)> {
     let x = input[x].as_u64().context("invalid x")?;
     let y = input[y].as_u64().context("invalid y")?;
+    let (x, y) = frame_point(x, y, o.width, o.height, o.region)?;
+    Ok((
+        o.origin_x
+            .checked_add(i32::try_from(x).context("invalid x")?)
+            .context("invalid x")?,
+        o.origin_y
+            .checked_add(i32::try_from(y).context("invalid y")?)
+            .context("invalid y")?,
+    ))
+}
+/// Long edge of a default screenshot. 1280 px costs a model about 1.1k image
+/// tokens; a 1920x1080 capture about 1.8k (and 4K is downscaled anyway).
+const SCREENSHOT_EDGE: u32 = 1280;
+/// Inputs one screenshot may drive while the screen is unchanged, e.g. click
+/// a field, type, press Enter. Each extra screenshot stays in the context.
+pub(crate) const OBSERVATION_USES: u8 = 3;
+pub(crate) const SCREENSHOT_FIELDS: &[&str] = &["monitor", "region", "fullResolution"];
+
+/// A capture prepared for a model: cropped to a region, downscaled, PNG.
+pub(crate) struct Framed {
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// x, y, width, height of the captured area in screen pixels.
+    pub region: [u32; 4],
+    pub screen: (u32, u32),
+}
+impl Framed {
+    pub(crate) fn scale(&self) -> f64 {
+        f64::from(self.width) / f64::from(self.region[2])
+    }
+    /// An image pixel of this screenshot as a screen pixel.
+    #[cfg(test)]
+    fn to_screen(&self, x: u64, y: u64) -> Result<(u32, u32)> {
+        frame_point(x, y, self.width, self.height, self.region)
+    }
+    pub(crate) fn summary(&self, token: &str) -> String {
+        let area = if self.region == [0, 0, self.screen.0, self.screen.1] {
+            String::new()
+        } else {
+            format!(
+                ", region x={} y={} {}x{}",
+                self.region[0], self.region[1], self.region[2], self.region[3]
+            )
+        };
+        format!(
+            "Screenshot {}x{} of screen {}x{}{area} (scale {:.3}); observation {token}. Input coordinates are pixels of this image. It serves up to {OBSERVATION_USES} inputs within 30 s while the screen stays the same; capture again after anything moves. region (screen pixels) zooms into an area; fullResolution:true skips downscaling.",
+            self.width,
+            self.height,
+            self.screen.0,
+            self.screen.1,
+            self.scale()
+        )
+    }
+    pub(crate) fn structured(&self) -> Value {
+        json!({"width":self.width,"height":self.height,"screenWidth":self.screen.0,"screenHeight":self.screen.1,
+            "region":{"x":self.region[0],"y":self.region[1],"width":self.region[2],"height":self.region[3]},
+            "scale":self.scale(),"coordinateSpace":"imagePixels","uses":OBSERVATION_USES,"expiresInMs":30000})
+    }
+}
+pub(crate) fn frame_point(x: u64, y: u64, width: u32, height: u32, region: [u32; 4]) -> Result<(u32, u32)> {
     ensure!(
-        x < o.width as u64 && y < o.height as u64,
+        x < u64::from(width) && y < u64::from(height),
         "point outside screenshot"
     );
+    let map = |v: u64, size: u32, offset: u32, span: u32| -> u32 {
+        let screen = ((v as f64 + 0.5) * f64::from(span) / f64::from(size)).floor() as u32;
+        offset + screen.min(span - 1)
+    };
     Ok((
-        o.origin_x.checked_add(x as i32).context("invalid x")?,
-        o.origin_y.checked_add(y as i32).context("invalid y")?,
+        map(x, width, region[0], region[2]),
+        map(y, height, region[1], region[3]),
     ))
+}
+/// Reads desktop_screenshot's region / fullResolution arguments.
+pub(crate) fn screenshot_options(input: &Value) -> Result<(Option<[u32; 4]>, bool)> {
+    validate_fields(input, SCREENSHOT_FIELDS, &[])?;
+    let full = match input.get("fullResolution") {
+        None => false,
+        Some(v) => v.as_bool().context("fullResolution must be a boolean")?,
+    };
+    let region = match input.get("region") {
+        None => None,
+        Some(r) => {
+            validate_fields(r, &["x", "y", "width", "height"], &["x", "y", "width", "height"])?;
+            let n = |k: &str| {
+                r[k].as_u64()
+                    .and_then(|v| u32::try_from(v).ok())
+                    .context("invalid region")
+            };
+            let region = [n("x")?, n("y")?, n("width")?, n("height")?];
+            ensure!(
+                region[2] >= 16 && region[3] >= 16,
+                "region must be at least 16x16 screen pixels"
+            );
+            Some(region)
+        }
+    };
+    Ok((region, full))
+}
+pub(crate) fn frame(
+    image: image::DynamicImage,
+    region: Option<[u32; 4]>,
+    full: bool,
+) -> Result<Framed> {
+    let screen = image.dimensions();
+    let whole = [0, 0, screen.0, screen.1];
+    let region = region.unwrap_or(whole);
+    ensure!(
+        u64::from(region[0]) + u64::from(region[2]) <= u64::from(screen.0)
+            && u64::from(region[1]) + u64::from(region[3]) <= u64::from(screen.1),
+        "region outside the screen ({}x{} screen pixels)",
+        screen.0,
+        screen.1
+    );
+    let mut image = if region == whole {
+        image
+    } else {
+        image.crop_imm(region[0], region[1], region[2], region[3])
+    };
+    let edge = region[2].max(region[3]);
+    if !full && edge > SCREENSHOT_EDGE {
+        let scale = f64::from(SCREENSHOT_EDGE) / f64::from(edge);
+        let w = ((f64::from(region[2]) * scale).round() as u32).max(1);
+        let h = ((f64::from(region[3]) * scale).round() as u32).max(1);
+        image = image.resize_exact(w, h, image::imageops::FilterType::Triangle);
+    }
+    let (width, height) = image.dimensions();
+    let mut bytes = Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png)?;
+    Ok(Framed {
+        png: bytes.into_inner(),
+        width,
+        height,
+        region,
+        screen,
+    })
 }
 fn key(value: &str) -> Result<Key> {
     Ok(match value.to_lowercase().as_str() {
@@ -255,7 +390,7 @@ fn run(
         };
     }
     if name == "desktop_screenshot" {
-        validate_fields(input, &["monitor"], &[])?;
+        let (region, full) = screenshot_options(input)?;
         let monitor = input
             .get("monitor")
             .map(|value| {
@@ -269,10 +404,8 @@ fn run(
         #[cfg(windows)]
         let captured_focus = windows::focus();
         let (image, x, y, monitor) = capture(monitor)?;
-        let (width, height) = image.dimensions();
-        let mut bytes = Cursor::new(Vec::new());
-        image.write_to(&mut bytes, image::ImageFormat::Png)?;
-        let bytes = bytes.into_inner();
+        let framed = frame(image, region, full)?;
+        let (width, height) = (framed.width, framed.height);
         ensure!(
             !cancel.is_cancelled(),
             "cancelled before screenshot delivery"
@@ -283,7 +416,7 @@ fn run(
             "foreground changed while capturing; take a fresh screenshot"
         );
         ensure!(
-            bytes.len() <= 4 * 1024 * 1024,
+            framed.png.len() <= 4 * 1024 * 1024,
             "screenshot exceeds artifact size limit"
         );
         let token = Uuid::new_v4().to_string();
@@ -291,6 +424,9 @@ fn run(
             token: token.clone(),
             width,
             height,
+            region: framed.region,
+            screen: framed.screen,
+            uses: OBSERVATION_USES,
             origin_x: x,
             origin_y: y,
             captured_at: Instant::now(),
@@ -303,8 +439,13 @@ fn run(
             #[cfg(windows)]
             focus: captured_focus,
         });
+        let mut structured = framed.structured();
+        structured["observation"] = json!(token);
+        structured["originX"] = json!(x);
+        structured["originY"] = json!(y);
+        structured["monitor"] = json!(monitor);
         return Ok(
-            json!({"content":[{"type":"text","text":format!("Screenshot {width}x{height}; observation {token}. Input consumes this observation; capture again before the next input.")},{"type":"image","mimeType":"image/png","data":STANDARD.encode(bytes)}],"structuredContent":{"observation":token,"width":width,"height":height,"originX":x,"originY":y,"monitor":monitor,"coordinateSpace":"physicalPixels","expiresInMs":30000}}),
+            json!({"content":[{"type":"text","text":framed.summary(&token)},{"type":"image","mimeType":"image/png","data":STANDARD.encode(&framed.png)}],"structuredContent":structured}),
         );
     }
     let (allowed, required): (&[&str], &[&str]) = match name {
@@ -428,8 +569,8 @@ fn run(
             observation.monitor,
             observation.origin_x,
             observation.origin_y,
-            observation.width,
-            observation.height,
+            observation.screen.0,
+            observation.screen.1,
         )?;
         if matches!(name, "desktop_key" | "desktop_type") {
             ensure!(
@@ -443,10 +584,8 @@ fn run(
         .map_err(|e| anyhow::anyhow!("desktop input unavailable: {e}"))?;
     ensure!(!cancel.is_cancelled(), "cancelled before desktop input");
     *state = None;
-    lease
-        .as_mut()
-        .context("desktop lease unavailable")?
-        .advance()?;
+    let lease = lease.as_mut().context("desktop lease unavailable")?;
+    lease.advance()?;
     let result = (|| -> Result<()> {
         if let Some((x, y)) = points {
             move_pointer(&mut enigo, x, y)?;
@@ -508,9 +647,21 @@ fn run(
     if result.is_err() {
         return Err(DesktopUncertain.into());
     }
-    Ok(
-        json!({"completed":true,"message":"Input sent. Capture a fresh screenshot before further input."}),
-    )
+    // Our own input advanced the shared generation; another agent's would not match.
+    let remaining = observation.uses.saturating_sub(1);
+    if remaining > 0 {
+        *state = Some(Observation {
+            uses: remaining,
+            generation: lease.generation()?,
+            ..observation
+        });
+    }
+    Ok(input_result(remaining))
+}
+pub(crate) fn input_result(remaining: u8) -> Value {
+    json!({"completed":true,"observationUsesLeft":remaining,"message":if remaining > 0 {
+        format!("Input sent. The same observation serves {remaining} more input(s) only if the screen did not change; otherwise capture again.")
+    } else { "Input sent. Capture a fresh screenshot before further input.".to_string() }})
 }
 
 fn check_platform() -> Result<()> {
@@ -728,6 +879,9 @@ mod tests {
             token: "one".into(),
             width: 100,
             height: 100,
+            region: [0, 0, 100, 100],
+            screen: (100, 100),
+            uses: OBSERVATION_USES,
             origin_x: 0,
             origin_y: 0,
             captured_at: Instant::now(),
@@ -737,6 +891,32 @@ mod tests {
             #[cfg(windows)]
             focus: None,
         }
+    }
+    #[test]
+    fn screenshots_are_downscaled_and_regions_map_back_to_screen_pixels() {
+        let shot = image::DynamicImage::new_rgba8(1920, 1080);
+        let framed = frame(shot.clone(), None, false).unwrap();
+        assert_eq!((framed.width, framed.height), (1280, 720));
+        assert_eq!(framed.to_screen(0, 0).unwrap(), (0, 0));
+        assert_eq!(framed.to_screen(640, 360).unwrap(), (960, 540));
+        assert_eq!(framed.to_screen(1279, 719).unwrap(), (1919, 1079));
+        assert!(framed.to_screen(1280, 0).is_err());
+        let full = frame(shot.clone(), None, true).unwrap();
+        assert_eq!((full.width, full.height), (1920, 1080));
+        // A small region is sent at native size and offset by its origin.
+        let zoom = frame(shot.clone(), Some([1500, 40, 300, 200]), false).unwrap();
+        assert_eq!((zoom.width, zoom.height), (300, 200));
+        assert_eq!(zoom.to_screen(10, 20).unwrap(), (1510, 60));
+        assert!(frame(shot, Some([1800, 0, 300, 200]), false).is_err());
+        assert_eq!(screenshot_options(&json!({"region":{"x":1,"y":2,"width":16,"height":16}})).unwrap(), (Some([1, 2, 16, 16]), false));
+        assert!(screenshot_options(&json!({"region":{"x":1,"y":2,"width":8,"height":16}})).is_err());
+        assert!(screenshot_options(&json!({"scale":2})).is_err());
+        let mut o = observation();
+        o.width = 1280;
+        o.height = 720;
+        o.region = [0, 0, 1920, 1080];
+        o.origin_x = 1920;
+        assert_eq!(point(&json!({"x":640,"y":360}), "x", "y", &o).unwrap(), (2880, 540));
     }
     #[test]
     fn definitions_obey_read_only_and_validation_is_strict() {
@@ -791,6 +971,7 @@ mod tests {
         o.origin_y = -200;
         o.width = 1920;
         o.height = 1080;
+        o.region = [0, 0, 1920, 1080];
         assert_eq!(
             point(&json!({"x":1919,"y":1079}), "x", "y", &o).unwrap(),
             (-1, 879)
