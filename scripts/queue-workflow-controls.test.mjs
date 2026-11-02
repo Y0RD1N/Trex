@@ -6,7 +6,7 @@ import { load } from "./ts-loader.mjs";
 
 // Run the actual components, workflow/provider hooks and reducers. Only React's
 // scheduler/JSX, DOM surfaces, queue storage and native process IPC are mocked.
-const names = ["agentRoom", "agentWorkflow", "handoff", "chatState", "chatMessages", "chatCommands", "chatQuestions",
+const names = ["agentRoom", "agentWorkflow", "handoff", "chatState", "chatTimes", "chatMessages", "chatCommands", "chatQuestions",
   "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "agentNotices",
   "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));

@@ -28,6 +28,8 @@ import { codexInboxReceiptId } from "../inboxProtocol";
 import { assertCodexPlanningThread, codexPlanningThread, codexPlanningTurn } from "../workflowSafety";
 import { taskInstructions } from "../chatTasks";
 import { integrationContext, integrationInstructions, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
+import { withChatTimes } from "../chatTimes";
+const timedCodexReducer = withChatTimes(codexReducer);
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
 const ANSWERED_IN_CHAT = new Set([
@@ -106,7 +108,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env } = options;
   const planningOnly = useRef(options.planningOnly === true).current;
   const plannerReducer: typeof codexReducer = (before, action) => {
-    const next = codexReducer(before, action);
+    const next = timedCodexReducer(before, action);
     return planningOnly ? { ...next, permissionMode: "plan", modeChoice: "plan" } : next;
   };
   const [state, dispatch] = useReducer(plannerReducer, null, () => initialChatState(planningOnly ? "plan" : options.mode, options.model, options.effort));

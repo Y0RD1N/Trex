@@ -4,7 +4,11 @@ import type { AgentProvider } from "./types";
 import { MCP_TASK_TOOL } from "./taskTools";
 
 export type TaskState = "pending" | "in_progress" | "completed" | "failed" | "cancelled" | "uncertain";
-export type ChatTask = { id: string; title: string; status: TaskState; owner: string; memberId?: string; sourceId?: string; report?: string | null };
+export type ChatTask = { id: string; title: string; status: TaskState; owner: string; memberId?: string; sourceId?: string; report?: string | null;
+  /** When work on it started and finished (ms since epoch), when known. */
+  startedAt?: number; completedAt?: number;
+  /** The agent completed it without marking it in progress: the start is the previous plan update. */
+  approximate?: boolean };
 export type ChatAttribution = { provider: AgentProvider; label: string; profile?: string; memberId?: string; role?: string; model?: string | null; effort?: string | null; worker?: boolean; busy?: boolean };
 export const TASK_STATES: Record<TaskState, string> = { pending: "Pendiente", in_progress: "En curso", completed: "Completada", failed: "Falló", cancelled: "Cancelada", uncertain: "Requiere revisión" };
 
@@ -33,28 +37,63 @@ export function roomTasks(items: ChatItem[], names: { planner: string; executor:
   return chatTasks(byRole[latest], names[latest]);
 }
 
+type Timing = { startedAt?: number; completedAt?: number; approximate?: boolean };
+/** Follows a task's status across plan updates (at time `at`) to know when it ran. */
+function track(timing: Timing | undefined, status: TaskState, at: number | undefined, previousAt: number | undefined): Timing {
+  const next: Timing = { ...timing };
+  if (at === undefined) return next;
+  if (status === "in_progress") {
+    if (next.startedAt === undefined || next.completedAt !== undefined) { next.startedAt = next.completedAt !== undefined ? at : next.startedAt ?? at; next.approximate = false; }
+    next.completedAt = undefined;
+  } else if (status === "completed") {
+    if (next.completedAt === undefined) {
+      if (next.startedAt === undefined) { next.startedAt = previousAt ?? at; next.approximate = true; }
+      next.completedAt = at;
+    }
+  } else if (status === "pending") { next.completedAt = undefined; if (next.approximate) next.startedAt = undefined; }
+  return next;
+}
+const titleKey = (title: string) => title.trim().toLowerCase().replace(/\s+/g, " ");
+
 /** Only accepted tool results can replace the visible plan. Failed/partial updates cannot finish tasks. */
 export function chatTasks(items: ChatItem[], owner: string): ChatTask[] {
   let tasks: ChatTask[] = [];
+  // TodoWrite replaces the whole list each time: its tasks are followed by title.
+  const timings = new Map<string, Timing>();
+  let previousAt: number | undefined;
+  const timed = (task: ChatTask, key: string): ChatTask => { const t = timings.get(key); return t ? { ...task, ...t } : task; };
   for (const item of items) {
     if (item.kind !== "tool" || item.status !== "done") continue;
+    const at = item.at;
     if (item.name === "TodoWrite") {
       // An explicitly empty list clears the plan; malformed input cannot erase it.
       if (!Array.isArray(item.input.todos) || item.input.todos.some(todo => !todo || typeof todo !== "object" || typeof (todo as Record<string, unknown>).content !== "string")) continue;
-      tasks = todoItems(item.input).slice(0, 128).map((todo, at) => ({ id: `${item.id}:${at}`, title: todo.content, status: todo.status, owner, sourceId: item.id }));
+      tasks = todoItems(item.input).slice(0, 128).map((todo, index) => {
+        const key = `todo:${titleKey(todo.content)}`;
+        timings.set(key, track(timings.get(key), todo.status, at, previousAt));
+        return timed({ id: `${item.id}:${index}`, title: todo.content, status: todo.status, owner, sourceId: item.id }, key);
+      });
+      if (at !== undefined) previousAt = at;
     } else if (item.name === "TaskCreate" && typeof item.input.subject === "string") {
       let nativeId: unknown;
       try { const output = JSON.parse(item.output ?? "null"); nativeId = output?.task?.id ?? output?.taskId ?? output?.id; } catch { /* Native text result below. */ }
       nativeId ??= /Task #(\d+) created/i.exec(item.output ?? "")?.[1];
       const id = typeof nativeId === "string" || typeof nativeId === "number" ? String(nativeId) : item.id;
-      if (!tasks.some(task => task.id === `task:${id}`) && tasks.length < 128)
+      if (!tasks.some(task => task.id === `task:${id}`) && tasks.length < 128) {
+        timings.set(`task:${id}`, track(undefined, "pending", at, previousAt));
         tasks.push({ id: `task:${id}`, title: item.input.subject.slice(0, 4000), status: "pending", owner, sourceId: item.id });
+      }
+      if (at !== undefined) previousAt = at;
     } else if (item.name === "TaskUpdate" && typeof item.input.taskId === "string") {
       const id = `task:${item.input.taskId}`;
       if (item.input.status === "deleted") tasks = tasks.filter(task => task.id !== id);
-      else tasks = tasks.map(task => task.id !== id ? task : { ...task,
-        ...(typeof item.input.subject === "string" ? { title: item.input.subject.slice(0, 4000) } : {}),
-        ...(["pending", "in_progress", "completed"].includes(String(item.input.status)) ? { status: item.input.status as TaskState } : {}) });
+      else tasks = tasks.map(task => {
+        if (task.id !== id) return task;
+        const status = ["pending", "in_progress", "completed"].includes(String(item.input.status)) ? item.input.status as TaskState : task.status;
+        timings.set(id, track(timings.get(id), status, at, previousAt));
+        return timed({ ...task, ...(typeof item.input.subject === "string" ? { title: item.input.subject.slice(0, 4000) } : {}), status }, id);
+      });
+      if (at !== undefined) previousAt = at;
     }
   }
   return tasks;
@@ -63,9 +102,13 @@ export function chatTasks(items: ChatItem[], owner: string): ChatTask[] {
 export function teamTasks(snapshot: TeamSnapshot | null, members: TeamMember[]): ChatTask[] {
   if (!snapshot) return [];
   const owner = (memberId: string) => members.find(member => member.id === memberId)?.name ?? "Subagente";
-  const project = (task: TeamSnapshot["tasks"][number]): ChatTask => ({ id: task.key, title: task.instruction, memberId: task.memberId, owner: owner(task.memberId),
-    status: task.status === "queued" ? "pending" : task.status === "running" || task.status === "claimed" ? "in_progress" : task.status,
-    report: task.report });
+  const ms = (value: number) => value > 0 && value < 1e12 ? value * 1000 : value;
+  const project = (task: TeamSnapshot["tasks"][number]): ChatTask => {
+    const status: TaskState = task.status === "queued" ? "pending" : task.status === "running" || task.status === "claimed" ? "in_progress" : task.status;
+    return { id: task.key, title: task.instruction, memberId: task.memberId, owner: owner(task.memberId), status, report: task.report,
+      ...(status !== "pending" && task.createdAt > 0 ? { startedAt: ms(task.createdAt) } : {}),
+      ...(!["pending", "in_progress"].includes(status) && task.updatedAt > 0 ? { completedAt: ms(task.updatedAt) } : {}) };
+  };
   const planned = new Set((snapshot.plan ?? []).map(step => step.taskKey));
   return [
     ...(snapshot.plan ?? []).map((step): ChatTask => {

@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { contextPercent, contextTokensLabel, type ContextUsage } from "../../chatState";
+import { contextPercent, contextTokensLabel, formatTokens, type ContextUsage } from "../../chatState";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { accountUsageWindows, headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
 import DropdownMenu from "../DropdownMenu";
@@ -67,7 +67,8 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
   const money = (value: number): string => value.toLocaleString("es", { style: "currency", currency: "USD", maximumFractionDigits: 6 });
   const cost = typeof reportedCost === "number" && Number.isFinite(reportedCost) && reportedCost >= 0 ? reportedCost > 0 && reportedCost < .000001 ? `< ${money(.000001)}` : money(reportedCost) : null;
   const costPartial = apiUsage?.costUsd !== null && apiUsage?.costUsd !== undefined && apiUsage.costPartial;
-  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
+  const chatTokens = apiUsage?.totalTokens ?? null;
+  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens de este chat: ${chatTokens.toLocaleString("es")}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
   const ringPercent = percent ?? (showPlan ? limiting.percent : 0);
   const ringLength = 2 * Math.PI * 5.5;
   const ringFilled = ringPercent > 0 ? Math.max(ringPercent, 4) : 0;
@@ -103,6 +104,7 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
             strokeDashoffset={ringLength * (1 - ringFilled / 100)} />
         </svg></span>
         <span className="chat-tray-text">{label}</span>
+        {!!chatTokens && <span className="chat-usage-tokens" aria-hidden="true">{formatTokens(chatTokens)} tokens</span>}
       </span>
       {visibleWindows.length > 0 && <span className="chat-usage-windows" aria-hidden="true">
         {visibleWindows.map(({ key, label, window }) => <span key={key} className={`chat-usage-window ${window?.severity ?? "unavailable"}`}>

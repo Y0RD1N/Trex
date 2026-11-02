@@ -17,6 +17,7 @@ import {
 import { parseCodexSkills } from "./chatCommands";
 import { parseCodexUsage } from "./planUsage";
 import { imageReference, withoutImageLabels } from "./imageReferences";
+import { codexApiUsage } from "./tokenUsage";
 
 export type CodexAction =
   | BaseChatAction
@@ -547,7 +548,9 @@ function completeTurn(state: ChatState, turn: Json, now: number): ChatState {
     items = addNotice(items, "error", message, "e");
   } else if ((consumed.length || !state.pendingMessageIds.length) && (state.turnStartedAt !== null || typeof turn.durationMs === "number")) {
     const durationMs = typeof turn.durationMs === "number" ? turn.durationMs : now - (state.turnStartedAt ?? now);
+    const times = turnTimes(turn);
     items = [...items, { kind: "turn", id: `t-${text(turn.id) || items.length}`, durationMs,
+      startedAt: times.startedAt ?? state.turnStartedAt ?? now - durationMs, endedAt: times.endedAt ?? now,
       ...(state.turnDiff !== null ? { diff: state.turnDiff } : {}) }];
   }
   return { ...state, items, pendingTurns: pendingMessageIds.length ? 1 : 0, pendingMessageIds,
@@ -555,6 +558,13 @@ function completeTurn(state: ChatState, turn: Json, now: number): ChatState {
     interruptedMessageIds: state.interruptedMessageIds.filter(id => !consumed.includes(id)), turnStartedAt: null, turnId: null, turnDiff: null,
     completedTurnIds: [...state.completedTurnIds, completedId], turnItemStart: null,
     lastCompletion: liveCompletion(state, completedId, interrupted ? "interrupted" : failed ? "failed" : "completed", consumed, items) };
+}
+
+/** Codex turns carry Unix seconds for their start and completion. */
+function turnTimes(turn: Json): { startedAt?: number; endedAt?: number } {
+  const ms = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value > 0 ? value * 1000 : undefined;
+  const startedAt = ms(turn.startedAt), endedAt = ms(turn.completedAt);
+  return { ...(startedAt !== undefined ? { startedAt } : {}), ...(endedAt !== undefined ? { endedAt } : {}) };
 }
 
 /** Un terminal solo consume mensajes emitidos para ese turno, nunca reservas locales. */
@@ -663,7 +673,9 @@ function applyNotification(state: ChatState, method: string, params: Json, now: 
         : typeof breakdown.inputTokens === "number" ? breakdown.inputTokens + (typeof breakdown.outputTokens === "number" ? breakdown.outputTokens : 0) : null;
       // La última petición al modelo es lo que ocupa ahora la conversación en la ventana.
       const used = tokens(record(usage.last));
-      return used === null ? state : { ...state, usage: { used, parts: [], reserve: null, total: tokens(record(usage.total)),
+      // The thread's running total is what this conversation consumed so far.
+      const apiUsage = codexApiUsage(usage.total) ?? state.apiUsage;
+      return used === null ? { ...state, apiUsage } : { ...state, apiUsage, usage: { used, parts: [], reserve: null, total: tokens(record(usage.total)),
         window: typeof usage.modelContextWindow === "number" && usage.modelContextWindow > 0 ? usage.modelContextWindow : state.usage?.window ?? null } };
     }
     case "thread/compacted":
@@ -757,12 +769,16 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
         if (text(turn.id) && ["completed", "interrupted", "failed", "cancelled", "canceled"].includes(text(turn.status))) {
           completedTurnIds.add(`codex:${text(turn.id)}`);
         }
-        const start = items.length;
+        const start = items.length, times = turnTimes(turn);
         for (const item of list(turn.items).map(record)) if (item) items = applyItem(items, item, "history");
-        items = items.map((item, index) => index >= start && item.kind === "user"
-          ? { ...item, providerTurnId: text(turn.id) } : item);
+        // Codex history has no per-item times: its items are dated at their turn's start.
+        items = items.map((item, index) => index < start ? item : item.kind === "user"
+          ? { ...item, providerTurnId: text(turn.id), ...(times.startedAt !== undefined ? { at: times.startedAt } : {}) }
+          : item.kind === "tool" && times.startedAt !== undefined && item.at === undefined ? { ...item, at: times.startedAt } : item);
         if (turn.status === "completed") items.push({ kind: "turn", id: `t-${text(turn.id) || items.length}`,
-          durationMs: typeof turn.durationMs === "number" ? turn.durationMs : 0 });
+          durationMs: typeof turn.durationMs === "number" ? turn.durationMs
+            : times.startedAt !== undefined && times.endedAt !== undefined ? Math.max(0, times.endedAt - times.startedAt) : 0,
+          ...times });
         if (turn.status === "interrupted") items = addNotice(items, "info", "Detenido.", "i");
       }
       items = finalize(items);

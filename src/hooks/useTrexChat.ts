@@ -8,6 +8,8 @@ import { assertIntegrationRestrictions, integrationContext, integrationInstructi
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
+import { withChatTimes } from "../chatTimes";
+const timedTrexReducer = withChatTimes(trexReducer);
 
 type Pending = { process: string; resolve: (value: Json) => void; reject: (reason: Error) => void; timer: ReturnType<typeof setTimeout> };
 type ActiveTurn = { id: string; process: string; session: string; settled: Promise<void>; settle: () => void };
@@ -20,7 +22,7 @@ async function cancellable<T>(promise: Promise<T>, signal: AbortSignal): Promise
 }
 export function useTrexChat(options: ChatSessionOptions): ChatSession {
   const planningOnly = useRef(!!options.planningOnly).current;
-  const [state, dispatch] = useReducer(trexReducer, undefined, () => initialChatState(planningOnly ? "plan" : options.mode ?? "ask", options.model, options.effort));
+  const [state, dispatch] = useReducer(timedTrexReducer, undefined, () => initialChatState(planningOnly ? "plan" : options.mode ?? "ask", options.model, options.effort));
   const stateRef = useRef(state); stateRef.current = state;
   const latest = useRef(options); latest.current = options;
   const queue = useMessageQueue(options.queueId ?? options.sessionId);

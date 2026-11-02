@@ -94,3 +94,5 @@
 :root[data-theme="light"] .chat-usage-window.critical { --window-color: #d1242f; }
 :root[data-theme="light"] .chat-usage-warning { color: #b7791f; }
 :root[data-theme="light"] .chat-usage-warning.critical { color: #d1242f; }
+/* This chat's token total next to the context label. */
+.chat-usage-tokens { margin-left: 6px; padding-left: 7px; border-left: 1px solid var(--border); color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }

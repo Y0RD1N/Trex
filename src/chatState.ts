@@ -48,11 +48,13 @@ export type QuestionChoice = { question: string; selected: string[]; other: stri
 export type Json = Record<string, unknown>;
 
 export type ChatItem =
-  | { kind: "user"; id: string; text: string; images: number; previews: string[]; providerTurnId?: string; fromQueue?: boolean }
+  | { kind: "user"; id: string; text: string; images: number; previews: string[]; providerTurnId?: string; fromQueue?: boolean; at?: number }
   | { kind: "text"; id: string; messageId: string; text: string; final: boolean }
   | { kind: "thinking"; id: string; messageId: string; text: string; final: boolean }
   | { kind: "tool"; id: string; name: string; input: Json; status: ToolStatus; output: string | null; patch: DiffLine[] | null;
-      changeStats?: { added: number; removed: number }; artifacts?: BrowserArtifact[] }
+      changeStats?: { added: number; removed: number }; artifacts?: BrowserArtifact[];
+      /** When the call appeared (ms since epoch); measures task durations. */
+      at?: number }
   | { kind: "permission"; id: string; toolName: string; toolUseId: string | null; input: Json;
       description: string; suggestions: unknown[]; state: "pending" | "allowed" | "denied";
       /** Cambios que se van a aplicar, cuando el proveedor no los manda en `input`. */
@@ -60,7 +62,11 @@ export type ChatItem =
       /** Petición del proveedor a la que responde la tarjeta. */
       request?: { id: string | number; method: string } }
   | { kind: "notice"; id: string; tone: "info" | "warn" | "error"; text: string }
-  | { kind: "turn"; id: string; durationMs: number; diff?: string };
+  | { kind: "turn"; id: string; durationMs: number; diff?: string;
+      /** Start and end of the response (ms since epoch), when known. */
+      startedAt?: number; endedAt?: number;
+      /** Tokens the provider reported for this response. */
+      usage?: import("./tokenUsage").ApiUsage | null };
 
 export type PermissionItem = Extract<ChatItem, { kind: "permission" }>;
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
@@ -138,6 +144,8 @@ export type ChatState = {
   costUsd: number | null;
   /** Consumo informado por la API en esta conversación; no es el saldo de la cuenta. */
   apiUsage: import("./tokenUsage").ApiUsage | null;
+  /** Consumption when the current response started; its difference is the response's usage. */
+  turnUsageBase?: import("./tokenUsage").ApiUsage | null;
   /** Bloques del mensaje en curso: índice del bloque → id del elemento. */
   stream: { messageId: string | null; blocks: Record<number, string> };
   /** Mensajes que el CLI confirmó que sobrevivían a una interrupción. */

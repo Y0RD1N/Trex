@@ -1073,7 +1073,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         case "permission": return item.state !== "pending" || item.toolName === "AskUserQuestion" ? null
           : <PermissionCard key={item.id} item={item} cwd={cwd} agent={agent.name} onAnswer={answer} />;
         case "notice": return <Notice key={item.id} tone={item.tone} text={item.text} />;
-        case "turn": return <WorkSummary key={item.id} summary={summaries.get(item.id)!} durationMs={item.durationMs} animate={animate} />;
+        case "turn": return <WorkSummary key={item.id} summary={summaries.get(item.id)!} durationMs={item.durationMs}
+          startedAt={item.startedAt} endedAt={item.endedAt} usage={item.usage} animate={animate} />;
       }
     });
     return activityGroups(visibleItems, props.itemLabels).map(group => {
@@ -1139,6 +1140,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <span className="chat-working-dot" aria-hidden="true" />
           <span className="chat-working-label">{thinking ? "Pensando…" : "Trabajando…"}</span>
           {state.turnStartedAt !== null && <WorkingTime since={state.turnStartedAt} live={visible} />}
+          {state.turnStartedAt !== null && <span className="chat-working-since">desde las {new Date(state.turnStartedAt).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })}</span>}
           <span className="chat-working-hint">Esc para detener</span>
         </div>}
         {handoffPending && <div className="chat-handoff-status" role={handoffDelivery.error ? "alert" : "status"}>
@@ -1334,7 +1336,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           onClick={event => { event.currentTarget.focus({ preventScroll: true }); requestHandoff(); }}><span>Continuar con otro agente</span><span className="chat-handoff-arrow" aria-hidden="true">↗</span></button>}
       </div>
       <div className="chat-composer-meta">
-        {(usage || state.plan || state.costUsd !== null || provider === "trex" || provider === "antigravity") && <UsageMenu usage={usage} plan={state.plan} apiUsage={state.apiUsage} costUsd={state.costUsd} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
+        {(usage || state.plan || state.apiUsage || state.costUsd !== null || provider === "trex" || provider === "antigravity") && <UsageMenu usage={usage} plan={state.plan} apiUsage={state.apiUsage} costUsd={state.costUsd} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
           controls={session.usageControls} canCompact={session.supportsCompact} showUnavailable={provider === "trex" || provider === "antigravity"}
           onOpenAll={() => callbacks.current.onOpenUsage()}
           onCompact={() => {

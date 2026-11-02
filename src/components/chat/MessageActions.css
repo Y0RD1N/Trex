@@ -146,3 +146,11 @@
   .chat-changes-diff-button:active { transform: none; }
 }
 @media (hover: none) { .chat-user-actions { opacity: 1; } }
+/* Start → end of a response and its tokens (breakdown on hover). */
+.chat-turn-meta { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.chat-turn-meta time { display: inline-flex; align-items: center; gap: 4px; }
+.chat-turn-meta time > span[aria-hidden] { opacity: .6; }
+.chat-turn-tokens { padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
+.chat-turn-complete .chat-turn-meta::before { content: none; }
+.chat-changes-footer { align-items: center; }
+.chat-changes-footer .chat-turn-meta { margin-left: 0; }

@@ -1,5 +1,6 @@
 import { memo, useMemo, useState, type CSSProperties } from "react";
 import { formatDuration, formatTokens } from "../../chatState";
+import type { ApiUsage } from "../../tokenUsage";
 import { changeTree, type ChangeNode, type WorkSummary as Summary } from "../../workSummary";
 import { CheckIcon, ChevronIcon, FileIcon, FolderIcon, SplitIcon } from "../Icons";
 import { DiffView } from "./ChatItems";
@@ -35,7 +36,30 @@ function ChangeRow({ node, depth = 0, allDiffs }: { node: ChangeNode; depth?: nu
   </li>;
 }
 
-export default memo(function WorkSummary({ summary, durationMs, animate = false }: { summary: Summary; durationMs: number; animate?: boolean }) {
+const clock = (ms: number, seconds = false) => new Date(ms).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}) });
+const fullDate = (ms: number) => new Date(ms).toLocaleString("es", { dateStyle: "medium", timeStyle: "medium" });
+/** Start → end of a response and the tokens it used, with the breakdown on hover. */
+export function TurnMeta({ startedAt, endedAt, usage }: { startedAt?: number; endedAt?: number; usage?: ApiUsage | null }) {
+  const total = usage?.totalTokens ?? (usage ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) : null);
+  const breakdown = usage ? ([["Entrada", usage.inputTokens], ["Salida", usage.outputTokens], ["Razonamiento", usage.reasoningTokens],
+    ["Lectura de caché", usage.cachedReadTokens], ["Escritura de caché", usage.cachedWriteTokens]] as const)
+    .filter(([, value]) => value !== null).map(([label, value]) => `${label}: ${value!.toLocaleString("es")}`).join("\n") : "";
+  if (startedAt === undefined && endedAt === undefined && !total) return null;
+  const times = startedAt !== undefined && endedAt !== undefined ? `Inicio ${fullDate(startedAt)}\nFin ${fullDate(endedAt)}` : "";
+  return <span className="chat-turn-meta">
+    {(startedAt !== undefined || endedAt !== undefined) && <time className="tip" data-tip={times || undefined}
+      dateTime={new Date(endedAt ?? startedAt!).toISOString()} aria-label={startedAt !== undefined && endedAt !== undefined
+        ? `Inicio ${clock(startedAt, true)}, fin ${clock(endedAt, true)}` : `Hora ${clock((endedAt ?? startedAt)!, true)}`}>
+      {startedAt !== undefined && <span>{clock(startedAt)}</span>}
+      {startedAt !== undefined && endedAt !== undefined && <span aria-hidden="true">→</span>}
+      {endedAt !== undefined && <span>{clock(endedAt)}</span>}
+    </time>}
+    {!!total && <span className="chat-turn-tokens tip" data-tip={breakdown || undefined} aria-label={`${total.toLocaleString("es")} tokens. ${breakdown.split("\n").join(", ")}`}>
+      {formatTokens(total)} tokens</span>}
+  </span>;
+}
+
+export default memo(function WorkSummary({ summary, durationMs, startedAt, endedAt, usage, animate = false }: { summary: Summary; durationMs: number; startedAt?: number; endedAt?: number; usage?: ApiUsage | null; animate?: boolean }) {
   const entry = useMessageEntry(animate);
   const [open, setOpen] = useState(true);
   const [allDiffs, setAllDiffs] = useState(false);
@@ -43,6 +67,7 @@ export default memo(function WorkSummary({ summary, durationMs, animate = false 
   if (!summary.files.length) return <div ref={entry.ref} className={`chat-turn chat-turn-complete${entry.entering ? " chat-enter" : ""}`}>
     <CheckIcon size={12} /><span>{durationMs > 0 ? `Listo en ${formatDuration(durationMs)}` : "Trabajo completado"}</span>
     <span className="chat-turn-separator">·</span><span>Sin ediciones de archivos registradas</span>
+    <TurnMeta startedAt={startedAt} endedAt={endedAt} usage={usage} />
   </div>;
   return <section ref={entry.ref} className={`chat-changes${entry.entering ? " chat-enter" : ""}`} aria-label="Resumen de cambios de esta tarea">
     <header className="chat-changes-head">
@@ -59,6 +84,7 @@ export default memo(function WorkSummary({ summary, durationMs, animate = false 
     {open && <ul className="chat-changes-tree">{tree.map(node => <ChangeRow key={`${node.path}-${allDiffs}`} node={node} allDiffs={allDiffs} />)}</ul>}
     <footer className="chat-changes-footer"><span>Cambios de esta tarea</span>
       {durationMs > 0 && <span>Listo en {formatDuration(durationMs)}</span>}
+      <TurnMeta startedAt={startedAt} endedAt={endedAt} usage={usage} />
     </footer>
   </section>;
 });

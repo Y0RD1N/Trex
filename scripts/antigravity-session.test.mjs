@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 import { load } from "./ts-loader.mjs";
-const names = ["acpProtocol", "antigravityChat", "antigravityUsage", "chatState", "browser", "integrations", "sharedFiles", "messageQueue"];
+const names = ["acpProtocol", "antigravityChat", "antigravityUsage", "chatState", "chatTimes", "browser", "integrations", "sharedFiles", "messageQueue"];
 const deps = Object.fromEntries(await Promise.all(names.map(async name => ["../" + name, await load(name)])));
 const { AcpConnection } = deps["../acpProtocol"];
 const { INBOX_WAKE } = deps["../messageQueue"];

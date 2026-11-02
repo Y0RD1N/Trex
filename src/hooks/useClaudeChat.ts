@@ -25,6 +25,8 @@ import { InboxRequests, INBOX_SERVER } from "../messageQueue";
 import { CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, claudeInboxInitialize, claudeInboxReply } from "../inboxProtocol";
 import { IS_WINDOWS } from "../platform";
 import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMode, claudePlanningExitResponse, claudePlanningFlags } from "../workflowSafety";
+import { withChatTimes } from "../chatTimes";
+const timedChatReducer = withChatTimes(chatReducer);
 
 /** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
 const USAGE_INTERVAL_MS = 60_000;
@@ -80,7 +82,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const browserConnecting = useRef(false);
   const modeRevision = useRef(0);
   const plannerReducer: typeof chatReducer = (before, action) => {
-    const next = chatReducer(before, action);
+    const next = timedChatReducer(before, action);
     return planningOnly ? { ...next, permissionMode: "plan", modeChoice: "plan" } : next;
   };
   const [state, dispatch] = useReducer(plannerReducer, null, () => initialChatState(planningOnly ? "plan" : options.mode, options.model, options.effort));

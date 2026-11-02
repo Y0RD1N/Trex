@@ -12,12 +12,14 @@ import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { INBOX_WAKE, messageQueueId, type QueueReceipt } from "../messageQueue";
 import { useMessageQueue } from "./useMessageQueue";
 import { localId, type ChatSession, type ChatSessionOptions } from "./chatSession";
+import { withChatTimes } from "../chatTimes";
+const timedAntigravityReducer = withChatTimes(antigravityReducer);
 
 const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${BROWSER_INSTRUCTIONS} For meaningful multi-step work, use trex_update_tasks on the trex_inbox MCP server to publish and update the chat task list, including in ordinary chats. Use plan:[{step,status}], at most one in_progress. Mark work completed only after verifying it. User messages typed while you work are queued by Trex and delivered as complete subsequent user turns, with their attachments. Do not poll an inbox or claim you received an attachment unless it was delivered.`;
 type Approval = { id: string | number; params: Json; turn: string };
 type Active = { id: string; done: Promise<void>; cancelled: boolean };
 export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
-  const [state, dispatch] = useReducer(antigravityReducer, undefined, () => initialChatState(options.mode, options.model, options.effort));
+  const [state, dispatch] = useReducer(timedAntigravityReducer, undefined, () => initialChatState(options.mode, options.model, options.effort));
   const [setup, setSetup] = useState<"none" | "runtime" | "auth">("none"), [setupBusy, setSetupBusy] = useState(false);
   const [modes, setModes] = useState<ReturnType<typeof acpModes>>([]);
   const latest = useRef(options); latest.current = options;

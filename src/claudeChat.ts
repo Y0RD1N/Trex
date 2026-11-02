@@ -20,6 +20,8 @@ import { questionInstructions } from "./chatQuestions";
 import { INBOX_INSTRUCTIONS } from "./messageQueue";
 import { taskInstructions } from "./chatTasks";
 import { taskToolInput } from "./taskTools";
+import { addApiUsage, claudeApiUsage, type ApiUsage } from "./tokenUsage";
+import { stampItems } from "./chatTimes";
 import { integrationInstructions, type IntegrationContext } from "./integrations";
 
 export type ChatAction =
@@ -254,11 +256,14 @@ function applyResult(state: ChatState, event: Json, now: number): ChatState {
     ? { ...item, status: interrupted || failed ? "error" as const : "done" as const }
     : item.kind === "permission" && item.state === "pending" ? { ...item, state: "denied" as const } : item);
   const message = text(event.result) || list(event.errors).map(text).filter(Boolean).join("\n");
+  // Tokens of this response (also spent when it was interrupted or failed).
+  const turnUsage = claudeApiUsage(event.usage);
   if (failed) {
     items = addNotice(items, "error", message || "Claude no pudo completar la respuesta.", "e");
   } else if (!interrupted && state.turnStartedAt !== null && consumed.length) {
     const durationMs = typeof event.duration_ms === "number" ? event.duration_ms : now - state.turnStartedAt;
-    items = [...items, { kind: "turn", id: `t-${text(event.uuid) || items.length}`, durationMs }];
+    items = [...items, { kind: "turn", id: `t-${text(event.uuid) || items.length}`, durationMs, startedAt: state.turnStartedAt, endedAt: now,
+      ...(turnUsage ? { usage: turnUsage } : {}) }];
   }
   const pendingTurns = pendingMessageIds.length;
   return {
@@ -269,6 +274,7 @@ function applyResult(state: ChatState, event: Json, now: number): ChatState {
     turnStartedAt: pendingTurns > 0 ? now : null,
     stream: { messageId: null, blocks: {} },
     costUsd: typeof event.total_cost_usd === "number" ? event.total_cost_usd : state.costUsd,
+    apiUsage: addApiUsage(state.apiUsage, turnUsage),
     sessionId: text(event.session_id) || state.sessionId,
   };
 }
@@ -418,30 +424,47 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "history": {
       let replay: ChatState = { ...initialChatState(), process: state.process };
       let startedAt: number | null = null;
+      // A message is written once per content block with the same usage: count each id once.
+      const turnMessages = new Map<string, ApiUsage>(), seen = new Set<string>();
+      let apiUsage: ApiUsage | null = null;
       for (const raw of action.entries) {
         const entry = record(raw);
+        const timestamp = Date.parse(text(entry?.timestamp));
+        const before = replay.items;
         if (entry?.type === "assistant") {
           const message = record(entry.message) ?? {};
           replay = applyAssistant(replay, message);
+          const id = text(message.id), usage = claudeApiUsage(message.usage);
+          if (id && usage) turnMessages.set(id, usage);
           if (message.stop_reason === "end_turn") {
-            const endedAt = Date.parse(text(entry.timestamp));
+            let turnUsage: ApiUsage | null = null;
+            for (const [messageId, usage] of turnMessages) {
+              turnUsage = addApiUsage(turnUsage, usage);
+              if (!seen.has(messageId)) { seen.add(messageId); apiUsage = addApiUsage(apiUsage, usage); }
+            }
+            turnMessages.clear();
             replay.items.push({ kind: "turn", id: `history-t-${text(entry.uuid) || replay.items.length}`,
-              durationMs: startedAt !== null && Number.isFinite(endedAt) ? Math.max(0, endedAt - startedAt) : 0 });
+              durationMs: startedAt !== null && Number.isFinite(timestamp) ? Math.max(0, timestamp - startedAt) : 0,
+              ...(startedAt !== null ? { startedAt } : {}), ...(Number.isFinite(timestamp) ? { endedAt: timestamp } : {}),
+              ...(turnUsage ? { usage: turnUsage } : {}) });
             startedAt = null;
           }
         } else if (entry?.type === "user") {
-          const before = replay.items.length;
+          const length = replay.items.length;
           replay = applyUser(replay, entry, true);
-          if (replay.items.length > before && replay.items[replay.items.length - 1]?.kind === "user") {
-            const timestamp = Date.parse(text(entry.timestamp));
+          if (replay.items.length > length && replay.items[replay.items.length - 1]?.kind === "user") {
             startedAt = Number.isFinite(timestamp) ? timestamp : null;
           }
         }
+        if (Number.isFinite(timestamp) && replay.items !== before) replay = { ...replay, items: stampItems(before, replay.items, timestamp) };
       }
+      // Responses cut off before end_turn still consumed tokens.
+      for (const [messageId, usage] of turnMessages) if (!seen.has(messageId)) apiUsage = addApiUsage(apiUsage, usage);
       // Una herramienta sin resultado quedó cortada al cerrar la sesión anterior.
       const history = finalize(replay.items).map(item => item.kind === "tool" && item.status === "running" ? { ...item, status: "done" as const } : item);
       // Sustituye un historial anterior en vez de repetirlo.
       return { ...state, items: [...history, ...state.items.slice(state.historyCount)], historyCount: history.length,
+        apiUsage: apiUsage ?? state.apiUsage,
         turnItemStart: state.turnItemStart === null ? null : state.turnItemStart + history.length - state.historyCount };
     }
     case "catalog": {
