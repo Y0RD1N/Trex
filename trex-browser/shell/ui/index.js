@@ -11,9 +11,9 @@ const COLORS = ['#e8834a', '#7d6bff', '#38b6c9', '#e7c35a', '#ef7d7d', '#5fd08a'
 const colorFor = key => COLORS[[...String(key)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % COLORS.length];
 const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 3 ? 'ahora' : s < 60 ? `${s}s` : `${Math.round(s / 60)}m`; };
 
-/** The worker pushes every space of the project; without it we show ourselves. */
+/** Saved/reserved profiles are not open browser instances. */
 function spacesFrom(s) {
-  if (s.spaces.length) return s.spaces;
+  if (s.spaces.length) return s.spaces.filter(sp => sp.state !== 'closed');
   const tab = s.tabs.find(t => t.id === s.activeTab) ?? {};
   return [{ clientId: 'self', label: s.agent.label, model: s.agent.model, state: s.agent.state, tool: s.agent.tool, detail: s.agent.detail,
     tabCount: s.tabs.length, title: tab.title, url: tab.url, self: true }];

@@ -6,12 +6,12 @@
 .chat-task-toggle small { color: var(--accent-strong); font-size: 11px; font-variant-numeric: tabular-nums; }
 .chat-workspace { display: flex; flex: 1; min-height: 0; min-width: 0; gap: 0; }
 .chat-main { display: flex; flex-direction: column; position: relative; flex: 1; min-width: 0; min-height: 0; }
-.chat-task-panel { display: flex; flex-direction: column; width: 280px; flex: 0 0 280px; align-self: flex-start; max-height: calc(100% - var(--chat-header-space, 0px) - var(--chat-toolbar-space, 0px) - 66px); margin: calc(var(--chat-header-space, 0px) + var(--chat-toolbar-space, 0px) + 52px) 16px 14px 0; border: 1px solid var(--border); border-radius: 15px; background: var(--bg-surface); color: var(--text); overflow: hidden; box-shadow: var(--shadow-sm); font-size: 12px; }
+.chat-task-panel { display: flex; flex-direction: column; width: var(--chat-panel-width, 280px); flex: 0 0 var(--chat-panel-width, 280px); min-width: 0; align-self: flex-start; max-height: calc(100% - var(--chat-header-space, 0px) - var(--chat-toolbar-space, 0px) - 66px); margin: calc(var(--chat-header-space, 0px) + var(--chat-toolbar-space, 0px) + 52px) 16px 14px 0; border: 1px solid var(--border); border-radius: 15px; background: var(--bg-surface); color: var(--text); overflow: hidden; box-shadow: var(--shadow-sm); font-size: 12px; }
 .chat-task-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 16px 15px 12px; flex-shrink: 0; }
 .chat-task-panel h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 550; }
 .chat-task-panel h2 > svg { color: var(--accent-strong); flex-shrink: 0; }
 .chat-task-panel header p { margin: 5px 0 0; color: var(--text-dim); font-size: 11px; overflow-wrap: anywhere; }
-.chat-task-panel header .icon-btn { width: 24px; height: 24px; flex-shrink: 0; }
+.chat-task-panel header .icon-btn { width: 24px; height: 24px; padding: 0; flex-shrink: 0; }
 .chat-task-progress { padding: 0 15px 12px; flex-shrink: 0; }
 .chat-task-progress > div:first-child { display: flex; justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 11px; }
 .chat-task-progress strong { font-weight: 500; }
@@ -65,12 +65,12 @@
 .chat-agent-instruction p { padding: 10px 12px; margin: 8px 0; border-radius: 9px; background: var(--bg-inset); color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 @container chat (max-width: 760px) {
   .chat-workspace { flex-direction: column; }
-  .chat-task-panel { position: absolute; z-index: 4; top: calc(var(--chat-header-space, 0px) + var(--chat-toolbar-space, 0px) + 52px); right: 14px; left: 14px; width: auto; max-height: min(42%, max(100px, calc(100% - var(--chat-header-space, 0px) - var(--chat-toolbar-space, 0px) - var(--composer-space, 120px) - 66px))); margin: 0; overflow-y: auto; }
+  .chat-task-panel { position: absolute; z-index: 4; top: calc(var(--chat-header-space, 0px) + var(--chat-toolbar-space, 0px) + 52px); right: 16px; left: auto; width: min(var(--chat-panel-width, 280px), calc(100% - 32px)); max-height: min(42%, max(100px, calc(100% - var(--chat-header-space, 0px) - var(--chat-toolbar-space, 0px) - var(--composer-space, 120px) - 66px))); margin: 0; overflow-y: auto; }
   .chat-task-panel > * { flex-shrink: 0; }
   .chat-task-panel > header { padding-block: 11px 8px; }
   .chat-task-panel > footer { display: none; }
   .chat-task-panel .chat-task-detail { padding: 9px 15px; max-height: none; overflow: visible; }
-  .chat-task-panel .chat-task-list { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); min-height: 0; flex: none; overflow: visible; }
+  .chat-task-panel .chat-task-list { min-height: 0; flex: none; overflow: visible; }
   .chat-agent-activity > summary { flex-wrap: wrap; gap: 8px; }
   .chat-agent-status { margin-left: 33px; }
 }

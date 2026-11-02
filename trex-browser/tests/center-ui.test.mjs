@@ -39,6 +39,17 @@ async function page(width = 1280) {
 describe('agents center layout and controls', { skip: !available && 'System Chromium unavailable', concurrency: false }, () => {
   before(async () => { browser = await chromium.launch({ executablePath: detected.executablePath, headless: true }); });
   after(async () => { await browser?.close(); });
+  it('shows agent spaces as they open and removes closed profiles from the live inventory',async()=>{
+    const p=await page();
+    try{
+      assert.equal(await p.locator('.card').count(),1);
+      assert.equal(await p.locator('.card[data-profile="BROWSER3"]').count(),0);
+      await p.evaluate(()=>{window.fixture.spaces[1].state='idle';window.fixture.spaces[1].tabCount=1;window.pushState(window.fixture);});
+      assert.equal(await p.locator('.card').count(),2);
+      await p.evaluate(()=>{window.fixture.spaces[1].state='closed';window.fixture.spaces[1].tabCount=0;window.pushState(window.fixture);});
+      assert.equal(await p.locator('.card').count(),1);
+    }finally{await p.close();}
+  });
   for (const width of [1440, 1120, 960, 720, 390]) it(`contains long labels and URLs inside grid cards at ${width}px`, async () => {
     const p = await page(width);
     try {

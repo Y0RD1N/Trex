@@ -111,6 +111,7 @@ pub struct BrowserSpaces { spaces: Vec<BrowserSpace> }
 pub struct BrowserSpaceOverview {
     client_id: String, label: String, profile: String,
     running: bool, paused: bool, active: bool, tab_count: usize,
+    #[serde(default)] in_use: bool,
     current_tool: Option<String>, url: String,
 }
 #[derive(Deserialize, Serialize)]
@@ -817,5 +818,59 @@ mod tests {
         }
         assert!(decode(serde_json::json!(vec![first;100])).is_err());
         assert!(space_inventory(&vec![b' ';PROBE_LIMIT+1],&cwd).is_err());
+    }
+
+    #[test]
+    fn project_space_inventory_accepts_shared_window_usage_and_legacy_companions() {
+        let cwd=std::env::temp_dir().to_string_lossy().into_owned();
+        let space=serde_json::json!({"clientId":"agent","label":"Codex","profile":"BROWSER2","running":false,"inUse":true,"paused":false,"active":false,"tabCount":0,"currentTool":null,"url":""});
+        let decode=|space:Value|space_inventory(&serde_json::to_vec(&serde_json::json!({"spaces":[space]})).unwrap(),&cwd);
+        let result=decode(space.clone()).expect("the companion's inUse field must be accepted");
+        assert!(result.spaces[0].in_use);
+        assert!(!result.spaces[0].running, "a shared window can retain a loaded profile after its automation closes");
+        assert_eq!(serde_json::to_value(result).unwrap()["spaces"][0]["inUse"],true);
+        let mut legacy=space.clone();legacy.as_object_mut().unwrap().remove("inUse");
+        assert!(!decode(legacy).unwrap().spaces[0].in_use);
+        for (field,value) in [("inUse",serde_json::json!("true")),("inUse",Value::Null),("unexpected",serde_json::json!(true))] {
+            let mut invalid=space.clone();invalid[field]=value;assert!(decode(invalid).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires TREX_TEST_BROWSER; run the compiled test directly on Windows, outside Cargo's restrictive job"]
+    fn packaged_space_inventory_cold_start_uses_the_real_companion_contract() {
+        let binary=PathBuf::from(std::env::var_os("TREX_TEST_BROWSER").expect("set TREX_TEST_BROWSER"));
+        assert!(binary.is_absolute() && binary.is_file() && ordinary_path(&binary));
+        let home=std::env::temp_dir().join(format!("trex-browser-inventory-test-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        assert!(!home.exists());
+        struct Cleanup { home: PathBuf, binary: PathBuf }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let mut command=browser_command(&self.binary);command.env("TREX_BROWSER_HOME",&self.home);
+                let _=invoke_command(command,&["stop"],None,Duration::from_secs(20),PROBE_LIMIT);
+                let deadline=Instant::now()+Duration::from_secs(5);
+                while self.home.join("broker.json").exists() && Instant::now()<deadline { thread::sleep(Duration::from_millis(20)); }
+                let _=std::fs::remove_dir_all(&self.home);
+            }
+        }
+        let _cleanup=Cleanup { home:home.clone(),binary:binary.clone() };
+        let run=|args:&[&str],input:Option<Vec<u8>>| {
+            let mut command=browser_command(&binary);
+            command.env("TREX_BROWSER_HOME",&home).env("APPDATA",home.join("roaming")).env("LOCALAPPDATA",home.join("local"));
+            invoke_command(command,args,input,Duration::from_secs(30),PROBE_LIMIT).unwrap()
+        };
+        let cwd=std::env::temp_dir().to_string_lossy().into_owned();
+        let empty=run(&["spaces","list","--cwd",&cwd,"--json"],None);
+        assert!(space_inventory(&empty,&cwd).unwrap().spaces.is_empty());
+        assert!(home.join("broker.json").is_file(),"the first query must start the broker without a manual window");
+        let members=serde_json::to_vec(&serde_json::json!({"cwd":cwd,"members":[{"clientId":"inventory-test","label":"Codex"}]})).unwrap();
+        let allocated:BrowserSpaces=serde_json::from_slice(&run(&["spaces","--stdin-json"],Some(members))).unwrap();
+        assert_eq!(allocated.spaces.len(),1);
+        let inventory=run(&["spaces","list","--cwd",&cwd,"--json"],None);
+        let wire:Value=serde_json::from_slice(&inventory).unwrap();
+        assert!(wire["spaces"][0]["inUse"].is_boolean(),"exercise the companion output instead of a handwritten fixture");
+        let result=space_inventory(&inventory,&cwd).expect("the app must accept real nonempty inventory");
+        assert!(result.spaces.iter().any(|space|space.client_id=="inventory-test" && space.profile==allocated.spaces[0].profile));
+        assert!(result.spaces.iter().all(|space|!space.running && !space.in_use));
     }
 }

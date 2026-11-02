@@ -121,8 +121,12 @@ management endpoint are host APIs, not model-facing tools.
 including live legacy/manual profiles. Each entry includes its client/label,
 profile, running/paused/activity state, tab count, current tool and selected URL.
 This overview does not create browser contexts, join their input queues or
-change ownership. The app panel polls it while open, so other chats and teams
-remain visible and each human control targets the selected instance only.
+change ownership. The app panel polls it while open and shows only running
+instances; reserved and historical profiles remain saved without appearing as
+open agents. The native agents center likewise shows only opening or running
+spaces. Status and tab-list queries never launch a fresh browser: its first
+page operation opens that agent's space on demand. Each human control targets
+the selected instance only.
 
 Ownership still covers a whole project/profile. Independent clients cannot
 create tabs in another owner's profile; shared identities serialize page inputs.

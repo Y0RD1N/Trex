@@ -28,7 +28,7 @@ export type BrowserCall = {
   name: string; arguments: Record<string, unknown>; cwd: string; mode: BrowserMode; clientId: string;
   profile?: string; operationId?: string; timeoutMs?: number;
 };
-export type BrowserSpace = { clientId: string; profile: string; label: string; active?: boolean; running?: boolean; paused?: boolean; tabCount?: number; currentTool?: string | null; pageTitle?: string; url?: string };
+export type BrowserSpace = { clientId: string; profile: string; label: string; active?: boolean; running?: boolean; inUse?: boolean; paused?: boolean; tabCount?: number; currentTool?: string | null; pageTitle?: string; url?: string };
 export type BrowserProfile = { id: string; name: string; projectId: string; createdAt: string };
 export type BrowserArtifact = {
   id: string; sha256: string; mimeType: string; sizeBytes: number; width?: number; height?: number;

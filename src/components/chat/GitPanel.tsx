@@ -3,7 +3,7 @@ import { formatError, gitProjectAction, gitProjectDiff, gitProjectStatus, listGi
 import { gitDiffRows, gitFileLabel, type GitProjectDiff, type GitProjectStatus } from "../../gitPanel";
 import { formatClock } from "../../timeFormat";
 import { useTimeFormat } from "../../hooks/useTimeFormat";
-import { BranchIcon, CheckIcon, CloseIcon, FileIcon, RefreshIcon } from "../Icons";
+import { ArrowDownIcon, ArrowUpIcon, BranchIcon, CheckIcon, CloseIcon, FileIcon, RefreshIcon } from "../Icons";
 import Select from "../Select";
 import BranchMenu, { GIT_BRANCH_CHANGED } from "./BranchMenu";
 import "./TaskPanel.css";
@@ -101,13 +101,12 @@ export default function GitPanel({ cwd, branch, busy, visible, open = true, pane
     <div className="git-panel-scroll">
       <section className="git-branch-card" aria-label="Rama y sincronización">
         <BranchMenu cwd={cwd} branch={state?.branch ?? state?.head?.slice(0, 7) ?? branch} busy={busy || !!pending} visible={visible} onChange={onBranch} onMessage={onMessage} />
-        {state && <span className="git-sync-count" aria-label={`${state.ahead} commits por subir, ${state.behind} por traer`}>↑ {state.ahead}<span>↓ {state.behind}</span></span>}
         {state && state.remotes.length > 1 && <Select aria-label="Remoto de Git" value={remote ?? state.remote ?? ""} options={state.remotes.map(name => ({ value: name, label: name }))} disabled={!!pending || loading} onChange={setRemote} />}
-        <small>{state?.remote ? `${state.remote}${state.upstream ? ` · ${state.upstream.replace(/^refs\/remotes\//, "")}` : " · Sin seguimiento configurado"}` : "Sin remoto configurado"}</small>
-        <div className="git-sync-actions"><button type="button" className="btn btn-small" disabled={disabled || !state?.remote || !state.head || (state.ahead === 0 && !!state.upstream)} onClick={() => void action("push")}>
-          <span aria-hidden="true">↑</span>{pending === "push" ? "Subiendo…" : "Push"}{!!state?.ahead && <small>{state.ahead}</small>}</button>
-          <button type="button" className="btn btn-small" disabled={disabled || !state?.behind || diverged || state.totalFiles > 0} onClick={() => void action("pull")}>
-          <span aria-hidden="true">↓</span>{pending === "pull" ? "Trayendo…" : "Pull"}{!!state?.behind && <small>{state.behind}</small>}</button></div>
+        <small title={state?.upstream ?? state?.remote ?? undefined}>{state?.remote ? `${state.remote}${state.upstream ? ` · ${state.upstream.replace(/^refs\/remotes\//, "")}` : " · Sin seguimiento configurado"}` : "Sin remoto configurado"}</small>
+        <div className="git-sync-actions"><button type="button" className="btn btn-small" title="Subir los commits de esta rama al remoto" disabled={disabled || !state?.remote || !state.head || (state.ahead === 0 && !!state.upstream)} onClick={() => void action("push")}>
+          <ArrowUpIcon size={13} /><span>{pending === "push" ? "Subiendo…" : "Push"}</span>{state && <small aria-label={`${state.ahead} commits por subir`}>{state.ahead}</small>}</button>
+          <button type="button" className="btn btn-small" title="Traer los commits remotos a esta rama" disabled={disabled || !state?.behind || diverged || state.totalFiles > 0} onClick={() => void action("pull")}>
+          <ArrowDownIcon size={13} /><span>{pending === "pull" ? "Trayendo…" : "Pull"}</span>{state && <small aria-label={`${state.behind} commits por traer`}>{state.behind}</small>}</button></div>
         {diverged && <p className="git-hint">Las ramas tienen commits diferentes. Revisa la comparación y resuelve la divergencia antes de hacer pull.</p>}
         {!!state?.behind && state.totalFiles > 0 && <p className="git-hint">Confirma o guarda tus cambios locales para poder hacer pull.</p>}
         {state?.detached && <p className="git-hint">HEAD separado. Elige una rama para confirmar o sincronizar.</p>}

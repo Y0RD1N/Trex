@@ -16,6 +16,7 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
   const showVersion=useRef(0);
   const [selectedProfile,setSelectedProfile]=useState<string|null>(null);
   const available=[...inventory,...(spaces??[]).filter(space=>!inventory.some(entry=>entry.profile===space.profile))]
+    .filter(space=>space.running===true)
     .map(space=>({...space,active:space.active||(spaces?.find(entry=>entry.profile===space.profile)?.active??false)}))
     .sort((a,b)=>Number(b.running)-Number(a.running)||Number(b.clientId===baseBrowser.clientId)-Number(a.clientId===baseBrowser.clientId)||a.label.localeCompare(b.label));
   const selected=available.find(space=>space.profile===selectedProfile)??available.find(space=>space.profile===baseBrowser.profile&&space.clientId===baseBrowser.clientId);
@@ -27,6 +28,7 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
   const [status, setStatus] = useState<BrowserStatus | null>(null), [busy, setBusy] = useState(false);
   const [url, setUrl] = useState("http://localhost:3000"), [error, setError] = useState("");
+  const [inventoryError,setInventoryError]=useState("");
   const address=useRef({profile:"",loaded:false,edited:false});
   useEffect(()=>{
     const key=cwd+"/"+activeBrowser.profile;
@@ -76,17 +78,17 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
     finally { inFlight.current = false; setBusy(false); }
   };
   useEffect(()=>{
-    if(!anchor||!status?.ready)return;
+    if(!anchor||!status?.ready||bindingPending)return;
     let cancelled=false,pending=false;
     const refresh=async()=>{
       if(pending)return;pending=true;
-      try{const result=await trexBrowserListSpaces(cwd);if(!cancelled)setInventory(result.spaces);}
-      catch{if(!cancelled)setError("No se pudieron consultar las instancias del proyecto. Comprueba que Trex Browser esté actualizado.");}
+      try{const result=await trexBrowserListSpaces(cwd);if(!cancelled){setInventory(result.spaces);setInventoryError("");}}
+      catch{if(!cancelled)setInventoryError("No se pudieron consultar las instancias del proyecto. Se volverá a intentar automáticamente.");}
       finally{pending=false;}
     };
     void refresh();const timer=window.setInterval(()=>void refresh(),3000);
     return()=>{cancelled=true;window.clearInterval(timer);};
-  },[anchor,status?.ready,cwd]);
+  },[anchor,status?.ready,bindingPending,cwd]);
   useEffect(()=>{
     if(!anchor || !status?.ready || bindingPending)return;
     let cancelled=false,pending=false;
@@ -139,7 +141,7 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
   };
   const show = (): void => {
     const version=++showVersion.current;
-    setAnchor({ element: trigger.current! }); setError("");setBindingPending(true);
+    setAnchor({ element: trigger.current! }); setError("");setInventoryError("");setBindingPending(true);
     void (async()=>{
       const next=await trexBrowserStatus();
       const binding=next.ready?await trexBrowserResolveSpace(cwd,browser,next):browser;
@@ -164,6 +166,7 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
       <div className="chat-browser-head"><div><strong>Trex Browser</strong><small>{selected?selected.label+" · ":""}{activeBrowser.profile} · navegador del proyecto</small></div><button type="button" className="icon-btn" aria-label="Cerrar controles del navegador" data-menu-autofocus onClick={close}><CloseIcon size={14} /></button></div>
       {!!available.length&&<><div className="browser-spaces-label">Instancias del proyecto <span>{available.filter(space=>space.running).length} abiertas</span></div><div className="browser-spaces" aria-label="Espacios de los agentes">{available.map(space=>{const count=space.tabCount??counts[space.profile];return <button type="button" key={space.profile} className={space.profile===activeBrowser.profile?"browser-space selected":"browser-space"} aria-pressed={space.profile===activeBrowser.profile} disabled={busy||bindingPending} onClick={()=>setSelectedProfile(space.profile)}><GlobeIcon size={14}/><span><strong>{space.label}</strong><small>{space.profile}{count!==undefined?` · ${count} ${count===1?"pestaña":"pestañas"}`:""}</small>{space.url&&<small className="browser-space-page" title={space.url}>{space.url}</small>}</span><em>{space.paused?"Pausado":space.active?<><i className="browser-space-live"/>{SPACE_ACTIVITY[space.currentTool??""]??"En curso"}</>:space.running?"Disponible":"Sin abrir"}</em></button>;})}</div></>}
       {status?.ready ? <>
+        {!bindingPending&&!available.length&&<p className="chat-browser-hint">No hay espacios abiertos. El navegador se abrirá cuando un agente lo utilice.</p>}
         <form className="chat-browser-address" onSubmit={event => { event.preventDefault(); void call("browser_navigate", { url }); }}>
           <label htmlFor={`${id}-url`}>Abrir una página</label><div><input id={`${id}-url`} type="url" required value={url} onChange={event => {address.current.edited=true;setUrl(event.target.value);}} placeholder="http://localhost:3000" disabled={locked} /><button type="submit" disabled={locked || paused}>Abrir</button></div>
         </form>
@@ -189,8 +192,8 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
         {needsRestart && <p className="chat-browser-hint">Reiniciar cierra las pestañas de este perfil y descarta la ejecución pendiente. Tus sesiones guardadas y los archivos se conservan; después puedes abrir la página de nuevo.</p>}
         {!!artifacts.length && <div className="chat-browser-recent"><small>Archivos recientes</small>{artifacts.map(artifact => <button type="button" key={artifact.id} disabled={locked || !brokerArtifactId(artifact)} onClick={() => void open(artifact)}>{artifact.mimeType.startsWith("video/") ? "Abrir vídeo" : "Abrir captura"}<span>{Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB ↗</span></button>)}</div>}
       </> : <p className="chat-browser-hint">{!status ? "Comprobando instalación…" : status.error?.message ?? "Selecciona Trex Browser al instalar trex o utiliza su instalador independiente."}</p>}
-      {error && <p className="chat-browser-error" role="alert">{error}</p>}
-      {openNote && !error && <p className="chat-browser-note" role="status">{openNote}</p>}
+      {(error||inventoryError) && <p className="chat-browser-error" role="alert">{error||inventoryError}</p>}
+      {openNote && !error && !inventoryError && <p className="chat-browser-note" role="status">{openNote}</p>}
       <div className="chat-browser-foot">Capturas y vídeos guardados en este dispositivo.</div>
     </DropdownMenu>
   </>;

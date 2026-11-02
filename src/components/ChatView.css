@@ -7,6 +7,7 @@
 
 .chat {
   --chat-width: 780px;
+  --chat-panel-width: 280px;
   --chat-toolbar-space: calc(var(--chat-toolbar-height, 0px) + var(--chat-toolbar-gap, 0px));
   /* Cristal de la caja de mensaje: el mismo color del fondo del chat, translúcido
      y con desenfoque, para que la caja parezca hecha del propio fondo. */
@@ -67,7 +68,7 @@
 .chat-floating-toolbar { position: absolute; z-index: 4; top: var(--chat-header-space, 0px); right: 0; left: 0; max-height: min(35%, 280px); overflow-y: auto; scrollbar-width: thin; }
 .chat-floating-toolbar:empty { display: none; }
 .chat:has(> .chat-floating-toolbar > :is(.agent-room-toolbar,.agent-team-toolbar)) { --chat-toolbar-gap: 16px; }
-.chat-floating-toolbar:has(> :is(.agent-room-toolbar,.agent-team-toolbar)) { left: auto; right: 16px; width: min(280px, calc(100% - 32px)); top: calc(var(--chat-header-space, 0px) + 10px); max-height: min(60%, calc(100% - var(--composer-space, 120px) - 64px)); border-radius: 12px; }
+.chat-floating-toolbar:has(> :is(.agent-room-toolbar,.agent-team-toolbar)) { left: auto; right: 16px; width: min(var(--chat-panel-width), calc(100% - 32px)); top: calc(var(--chat-header-space, 0px) + 10px); max-height: min(60%, calc(100% - var(--composer-space, 120px) - 64px)); border-radius: 12px; }
 .chat-floating-toolbar > :is(.agent-room-toolbar,.agent-team-toolbar) { margin: 0; }
 @container chat (min-width: 761px) {
   /* La columna de tareas ya reserva el lado derecho: el hilo puede empezar
@@ -784,8 +785,11 @@
   color: var(--danger);
 }
 .chat-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
   width: 13px;
   height: 13px;
+  aspect-ratio: 1;
   border: 1.6px solid var(--accent-dim);
   border-top-color: var(--accent);
   border-radius: 50%;
@@ -2554,6 +2558,7 @@ pre.chat-ask-preview-body {
 .chat-attributed-message { min-width: 0; }
 .chat-plan-here { gap: 6px; }
 .workspace-team-mark { display: flex; align-items: center; gap: 2px; color: var(--accent-strong); }
+.workspace-team-count { font: 500 10px/1 var(--font-ui); font-variant-numeric: tabular-nums; }
 
 .chat-browser-artifacts { display:flex; flex-wrap:wrap; gap:8px; padding:8px 12px 12px 32px; }
 .chat-browser-artifact { display:flex; align-items:center; gap:8px; max-width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:11px; background:color-mix(in srgb,var(--text) 3%,transparent); color:var(--text); font:inherit; font-size:12px; cursor:pointer; }

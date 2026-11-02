@@ -16,12 +16,12 @@ const nodes=node=>!node||typeof node!=='object'?[]:Array.isArray(node)?node.flat
 const text=node=>typeof node==='string'?node:Array.isArray(node)?node.map(text).join(''):node&&typeof node==='object'?text(node.props?.children):'';
 function fixture(t,extra={}){
   const host=harness.host(t),calls=[],opened=[],stopped=[],timers=new Map();let seq=0,tree;
-  const spaces=[{clientId:'team-principal',profile:'BROWSER2',label:'Principal'},{clientId:'team-review',profile:'BROWSER3',label:'Review'}];
+  const spaces=[{clientId:'team-principal',profile:'BROWSER2',label:'Principal',running:true},{clientId:'team-review',profile:'BROWSER3',label:'Review',running:true}];
   const api={
     async trexBrowserStatus(){return {installed:true,ready:true,compatible:true};},
     async trexBrowserResolveSpace(_cwd,options){return extra.binding??options;},
-    async trexBrowserListSpaces(){return {spaces:extra.inventory??spaces};},
-    async trexBrowserCall(request){calls.push(request);const data=request.name==='browser_status'?{running:true,tabs:1,paused:false,owner:'self'}:request.name==='browser_tabs'?{tabs:[{tabId:'tab-'+request.clientId,title:'Page '+request.clientId,url:'http://localhost:3000',selected:true}]}:{paused:request.name==='browser_pause'};
+    async trexBrowserListSpaces(){return extra.listSpaces?extra.listSpaces():{spaces:extra.inventory??spaces};},
+    async trexBrowserCall(request){calls.push(request);if(extra.failAction?.(request))throw new Error('fixture action failure');const data=request.name==='browser_status'?{running:extra.running??true,tabs:extra.running===false?0:1,paused:false,owner:'self'}:request.name==='browser_tabs'?{tabs:[{tabId:'tab-'+request.clientId,title:'Page '+request.clientId,url:'http://localhost:3000',selected:true}]}:{paused:request.name==='browser_pause'};
       const artifacts=request.name==='browser_take_screenshot'?[{artifactId:'fixture-capture',sha256:'a'.repeat(64),mimeType:'image/png',bytes:10,kind:'screenshot',profile:request.profile,projectId:'project'}]:[];
       return {content:[],isError:false,structuredContent:{ok:true,data,artifacts}};},
     async trexBrowserOpenArtifact(...args){opened.push(args);return {content:[],isError:false};},
@@ -34,7 +34,7 @@ function fixture(t,extra={}){
     if(name==='../Icons')return {CloseIcon:'CloseIcon',GlobeIcon:'GlobeIcon',ImageIcon:'ImageIcon'};
     if(name.endsWith('.css'))return {};throw new Error('Unexpected import '+name);
   },exports,{setInterval:callback=>{const id=++seq;timers.set(id,callback);return id;},clearInterval:id=>timers.delete(id)},{randomUUID:()=>`operation-${++seq}`});
-  const render=()=>tree=host.render(()=>exports.default({cwd:'D:/fixture',browser:extra.browser??{enabled:true,...spaces[0]},spaces:extra.localSpaces===false?undefined:spaces,onStopAgent:id=>stopped.push(id)}));
+  const render=()=>tree=host.render(()=>exports.default({cwd:'D:/fixture',browser:extra.browser??{enabled:true,...spaces[0]},spaces:extra.localSpaces===false?undefined:Array.isArray(extra.localSpaces)?extra.localSpaces:spaces,onStopAgent:id=>stopped.push(id)}));
   const settle=async()=>{for(let i=0;i<6;i++){await harness.flush();render();}};
   const button=label=>nodes(tree).find(node=>node.type==='button'&&text(node).includes(label));
   render();return {calls,opened,stopped,spaces,render,settle,button,get tree(){return tree;},get timers(){return timers;}};
@@ -105,4 +105,41 @@ test('project refresh preserves the selected instance and a manually entered add
   inventory.reverse();for(const callback of [...f.timers.values()])callback();await f.settle();f.calls.length=0;
   f.button('Nueva pestaña').props.onClick();await f.settle();
   const request=f.calls.find(call=>call.name==='browser_tabs');assert.equal(request.clientId,'two');assert.equal(request.profile,'BROWSER3');assert.equal(request.arguments.url,'http://localhost:5199/custom');
+});
+
+test('a failed inventory query recovers on the next refresh without a permanent installation warning',async t=>{
+  let fail=true;
+  const f=fixture(t,{listSpaces:async()=>{if(fail)throw new Error('temporary inventory failure');return {spaces:[{clientId:'other',profile:'BROWSER4',label:'Recovered agent',inUse:true,running:true}]};}});
+  f.button('Espacios').props.onClick();await f.settle();
+  assert.ok(text(f.tree).includes('Se volverá a intentar automáticamente.'));
+  fail=false;for(const callback of [...f.timers.values()])callback();await f.settle();
+  assert.ok(f.button('Recovered agent'));
+  assert.ok(!text(f.tree).includes('No se pudieron consultar las instancias'));
+});
+
+test('a successful inventory refresh does not hide a failed browser action',async t=>{
+  const f=fixture(t,{failAction:request=>request.name==='browser_tabs'&&request.arguments.action==='new'});
+  f.button('Espacios').props.onClick();await f.settle();
+  f.button('Nueva pestaña').props.onClick();await f.settle();
+  const error='No se pudo conectar con Trex Browser. Comprueba su instalación en Ajustes.';
+  assert.ok(text(f.tree).includes(error));
+  for(const callback of [...f.timers.values()])callback();await f.settle();
+  assert.ok(text(f.tree).includes(error));
+});
+
+test('reserved and historical profiles stay hidden until an agent actually opens its browser',async t=>{
+  const reserved=[{clientId:'team-principal',profile:'BROWSER2',label:'Principal'},{clientId:'team-review',profile:'BROWSER3',label:'Review'}];
+  const inventory=[...reserved.map(space=>({...space,running:false,active:true})),{clientId:'old',profile:'BROWSER4',label:'Historical chat',running:false,inUse:true}];
+  const options={localSpaces:reserved,inventory,running:false};
+  const f=fixture(t,options);f.button('Navegador').props.onClick();await f.settle();
+  assert.ok(text(f.tree).includes('No hay espacios abiertos.'));
+  assert.equal(f.button('Historical chat'),undefined);assert.equal(f.button('Review'),undefined);
+  assert.ok(!f.calls.some(call=>call.name==='browser_tabs'),'checking the menu must not open tabs');
+  inventory[1].running=true;options.running=true;
+  for(const callback of [...f.timers.values()])callback();await f.settle();
+  assert.ok(f.button('Review'));assert.equal(f.button('Historical chat'),undefined);
+  assert.ok(!text(f.tree).includes('No hay espacios abiertos.'));
+  inventory[1].running=false;
+  for(const callback of [...f.timers.values()])callback();await f.settle();
+  assert.equal(f.button('Review'),undefined);
 });

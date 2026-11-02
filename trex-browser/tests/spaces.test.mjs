@@ -7,6 +7,7 @@ import { BrowserService } from '../worker/browser.mjs';
 import { ensureSpaces, listSpaces } from '../worker/spaces.mjs';
 import { context } from '../worker/security.mjs';
 import { tools, validateArguments } from '../worker/tools.mjs';
+import { randomUUID } from 'node:crypto';
 
 function fixture(t){
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-spaces-'));
@@ -46,6 +47,38 @@ test('the project overview reports all allocated and live manual instances witho
   assert.equal(result.spaces.find(space=>space.profile===bindings[1].profile).running,false);
   assert.equal(a.owner,'one');assert.equal(a.paused,false);assert.equal(manual.owner,'one');
   assert.deepEqual(listSpaces(service,{...ctx,projectId:'other-project'}),{spaces:[]});
+});
+
+test('status and tab inventory leave every reserved agent browser unopened, including inside a batch',async t=>{
+  const {service,ctx}=fixture(t);
+  const bindings=ensureSpaces(service,ctx,[{clientId:'one',label:'Principal'},{clientId:'two',label:'Review'},{clientId:'three',label:'Research'}]).spaces;
+  let opened=0;service.open=async()=>{opened++;throw new Error('Inventory must not launch a browser');};
+  for(const space of bindings){
+    const bound={...ctx,...space};
+    assert.equal((await service.call(bound,'browser_status',{},randomUUID(),1000)).data.running,false);
+    for(const args of [{},{action:'list'}])assert.deepEqual((await service.call(bound,'browser_tabs',args,randomUUID(),1000)).data.tabs,[]);
+    const batch=await service.call(bound,'browser_batch',{steps:[{tool:'browser_tabs',arguments:{action:'list'}}]},randomUUID(),1000);
+    assert.deepEqual(batch.data.steps[0].data.tabs,[]);
+  }
+  assert.equal(opened,0);assert.equal(service.shellHosts.size,0);
+  assert.ok([...service.sessions.values()].every(state=>!state.browser&&!state.opening));
+  assert.equal(service.profiles(ctx).length,bindings.length,'the stable bindings remain saved for later use');
+});
+
+test('the agents center publishes only actual browser sessions, never saved or merely inspected profiles',async t=>{
+  const {service,ctx}=fixture(t);
+  const bindings=ensureSpaces(service,ctx,[{clientId:'one',label:'Principal'},{clientId:'two',label:'Review'},{clientId:'three',label:'Research'}]).spaces;
+  const first=service.state({...ctx,...bindings[0]}),second=service.state({...ctx,...bindings[1]});
+  service.state({...ctx,...bindings[2]});
+  const published=[];const sink={push:(name,spaces)=>{if(name==='setSpaces')published.push(spaces);}};
+  first.browser={};first.shell=sink;
+  const update=async()=>{service.pushSpaces(ctx.projectId);await new Promise(resolve=>setTimeout(resolve,300));return published.at(-1);};
+  assert.deepEqual((await update()).map(space=>space.profile),[first.ctx.profile]);
+  second.browser={};second.shell=sink;
+  assert.deepEqual((await update()).map(space=>space.profile),[first.ctx.profile,second.ctx.profile]);
+  first.browser=null;first.shell=null;
+  assert.deepEqual((await update()).map(space=>space.profile),[second.ctx.profile]);
+  assert.equal(service.profiles(ctx).length,3,'closing a browser must preserve its saved profile');
 });
 test('batch validation preserves bound policy and rejects every later nested input before dispatch',()=>{
   assert.equal(tools('full').find(tool=>tool.name==='browser_batch').annotations.readOnlyHint,false);

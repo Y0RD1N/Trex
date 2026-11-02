@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { _electron } from 'playwright';
 import { BrowserService, detectBrowser } from '../worker/browser.mjs';
 import { context } from '../worker/security.mjs';
+import { ensureSpaces } from '../worker/spaces.mjs';
 
 process.env.TREX_BROWSER_DEV ??= '1';
 process.env.TREX_BROWSER_HEADLESS ??= '1';
@@ -32,6 +33,26 @@ describe('one project window with concurrent agent tabs', { skip: !available && 
     B = context({ cwd: home, profile: 'BROWSER3', clientId: 'agent-b', mode: 'full' });
   });
   after(async () => { await service?.shutdown(); server?.close(); });
+
+  it('keeps reserved agents and startup queries dormant, then displays only the agent that navigates', async () => {
+    const members=Array.from({length:6},(_,i)=>({clientId:i===0?A.clientId:i===1?B.clientId:`reserved-${i}`,label:`Agent ${i+1}`}));
+    const bindings=ensureSpaces(service,A,members).spaces;
+    for(const binding of bindings){
+      const ctx={...A,...binding};
+      assert.equal((await call(ctx,'browser_status')).data.running,false);
+      assert.deepEqual((await call(ctx,'browser_tabs',{action:'list'})).data.tabs,[]);
+    }
+    assert.equal(service.shellHosts.size,0);
+    await call(A,'browser_navigate',{url:`${base}/a`});
+    const deadline=Date.now()+5000;
+    let ui;
+    do {ui=await state();if(ui.spaces.length===1)break;await new Promise(resolve=>setTimeout(resolve,30));}while(Date.now()<deadline);
+    assert.equal(ui.tabs.length,1);assert.deepEqual(ui.spaces.map(space=>space.profile),[A.profile]);
+    assert.equal(service.state(A).sharedHost.scopes.size,1);
+    assert.deepEqual((await call(B,'browser_tabs',{action:'list'})).data.tabs,[]);
+    assert.equal((await state()).tabs.length,1);
+    await call(A,'browser_close');assert.equal(service.shellHosts.size,0);
+  });
 
   it('coalesces concurrent cold opens into one native window and scoped clients', async () => {
     await Promise.all([call(A, 'browser_navigate', { url: `${base}/a` }), call(B, 'browser_navigate', { url: `${base}/b` })]);

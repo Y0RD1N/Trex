@@ -90,7 +90,7 @@ export default function TerminalTabs({
     <header ref={barRef} className="tabs-bar" data-tauri-drag-region="deep" inert={bar.value === null} aria-hidden={!shown || undefined}>
       <div className="workspace-title" data-tauri-drag-region>
         <span className={current?.kind === "claude" ? "workspace-mark claude" : "workspace-mark"} aria-hidden="true">
-          {current?.agentTeam ? <span className="workspace-team-mark"><AgentIcon kind={current.agentTeam.master.agent.provider} size={12} /><span>+{current.agentTeam.workers.length}</span></span>
+          {current?.agentTeam ? <span className="workspace-team-mark"><AgentIcon kind={current.agentTeam.master.agent.provider} size={12} /><span className="workspace-team-count">+{current.agentTeam.workers.length}</span></span>
             : current?.agentRoom ? <span className="workspace-team-mark"><AgentIcon kind={current.agentRoom.planner.agent.provider} size={12} /><AgentIcon kind={current.agentRoom.executor.agent.provider} size={12} /></span>
             : current ? <AgentIcon kind={current.kind} activity={current.exited ? "idle" : current.activity} nativeIndicator={title?.nativeIndicator} /> : <FolderIcon size={15} />}
         </span>

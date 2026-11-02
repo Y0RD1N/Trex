@@ -172,13 +172,11 @@ export class BrowserService {
   pushSpaces(projectId){
     this.spacesTimers||=new Map();if(this.spacesTimers.has(projectId))return;
     const timer=setTimeout(async()=>{this.spacesTimers.delete(projectId);
-      const sessions=[...this.sessions.values()].filter(x=>x.ctx.projectId===projectId);const shells=sessions.filter(x=>x.shell);if(!shells.length)return;
+      const sessions=[...this.sessions.values()].filter(x=>x.ctx.projectId===projectId&&(x.browser||x.opening));const shells=sessions.filter(x=>x.shell);if(!shells.length)return;
       const running=await Promise.all(sessions.map(async x=>{const p=x.tabs.get(x.selected);return {clientId:this.spaceClient(x),label:x.spaceLabel||x.ctx.profile,profile:x.ctx.profile,model:x.spaceModel||'',
         state:agentState(x),...(x.paused?{tool:x.pauseOperation?.tool||'',detail:''}:{tool:x.active?.name||x.lastOp?.name||'',detail:x.active||x.lastOp?(x.active||x.lastOp).detail??describe((x.active||x.lastOp).name,(x.active||x.lastOp).args):''}),
         tabCount:x.tabs.size,url:p&&!p.isClosed()?p.url():'',title:p&&!p.isClosed()?text(await p.title().catch(()=>'')).slice(0,200):'',thumbnail:x.thumbnail||null,events:(x.activity||[]).slice(-10)};}));
-      const known=new Set(sessions.map(x=>x.ctx.profile));
-      const idle=this.profiles(sessions[0].ctx).filter(p=>p.space&&!known.has(p.id)).map(p=>({clientId:p.space.clientId,label:spaceLabel(p.space.label),model:typeof p.space.model==='string'?p.space.model:'',profile:p.id,state:'closed',tabCount:0}));
-      for(const x of shells)x.shell?.push('setSpaces',[...running,...idle].map(sp=>({...sp,self:sp.profile===x.ctx.profile})));
+      for(const x of shells)x.shell?.push('setSpaces',running.map(sp=>({...sp,self:sp.profile===x.ctx.profile})));
     },250);timer.unref?.();this.spacesTimers.set(projectId,timer);
   }
   /** Live thumbnails only while some agents center of the project is open. */
@@ -373,6 +371,9 @@ export class BrowserService {
     if(name==='browser_artifact')return this.artifact(ctx,a);
     if(name==='browser_save_download')return this.saveDownload(s,ctx,a,signal);
     if(name==='browser_close'){s.closing=true;try{let artifacts=[];if(s.capture)artifacts=(await this.stopCapture(s,ctx,s.capture.kind)).artifacts;if(s.opening)await s.opening;await this.closeProfile(s);s.owner=null;s.supervisorError=null;this.unpause(s);return out({closed:true,...this.status(s,ctx)},artifacts);}finally{s.closing=false;}}
+    // Inventory queries are passive. A fresh profile has no tabs until the
+    // agent navigates, creates a tab, or requests another page operation.
+    if(name==='browser_tabs'&&(!a.action||a.action==='list')&&!s.browser&&!s.opening)return out({tabs:[]});
     await this.ensure(s,ctx);signal.throwIfAborted();if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});const p=this.page(s,a);const actionDone=()=>this.invalidate(s,p);
     switch(name){
       case 'browser_navigate': await p.goto(navigateUrl(a.url),{waitUntil:'domcontentloaded'});return out({url:p.url()});
