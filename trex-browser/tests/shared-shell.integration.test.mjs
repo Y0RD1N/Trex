@@ -47,7 +47,7 @@ describe('one project window with concurrent agent tabs', { skip: !available && 
     const deadline=Date.now()+5000;
     let ui;
     do {ui=await state();if(ui.spaces.length===1)break;await new Promise(resolve=>setTimeout(resolve,30));}while(Date.now()<deadline);
-    assert.equal(ui.tabs.length,1);assert.deepEqual(ui.spaces.map(space=>space.profile),[A.profile]);
+    assert.equal(ui.tabs.length,1);assert.deepEqual(ui.spaces.map(space=>space.profile),[service.key(A)]);
     assert.equal(service.state(A).sharedHost.scopes.size,1);
     assert.deepEqual((await call(B,'browser_tabs',{action:'list'})).data.tabs,[]);
     assert.equal((await state()).tabs.length,1);
@@ -62,7 +62,7 @@ describe('one project window with concurrent agent tabs', { skip: !available && 
     assert.equal(a.browser.pages().length, 1); assert.equal(b.browser.pages().length, 1);
     assert.notEqual(a.browser, b.browser);
     const ui = await state(); assert.equal(ui.tabs.length, 2);
-    assert.deepEqual(ui.tabs.map(tab => tab.profile).sort(), [A.profile, B.profile]);
+    assert.deepEqual(ui.tabs.map(tab => tab.profile).sort(), [service.key(A), service.key(B)]);
   });
 
   it('isolates same-origin cookies, local storage and explicit permission grants', async () => {
@@ -108,7 +108,7 @@ describe('one project window with concurrent agent tabs', { skip: !available && 
 
   it('View returns to the agent-selected tab even when a person selected a different tab of that agent', async () => {
     const ui = service.state(A).shell.uiPage, current = await state();
-    const first = current.tabs.find(tab => tab.profile === A.profile && tab.url === `${base}/a`);
+    const first = current.tabs.find(tab => tab.profile === service.key(A) && tab.url === `${base}/a`);
     await ui.evaluate(id => window.trexShell.command('selectTab', { id }), first.id);
     await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: true }));
     await ui.locator('[data-client="agent-a"] [data-a="focus"]').click();

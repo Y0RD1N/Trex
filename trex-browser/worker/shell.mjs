@@ -5,7 +5,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BINARY = process.platform === 'win32' ? 'trex-browser-shell.exe' : 'trex-browser-shell';
@@ -124,9 +123,8 @@ export function spaceLabel(label) {
 }
 
 // ---- Human windows (no automation) ---------------------------------------
-// A person's own Trex Browser window is launched directly, without CDP or
-// automation flags: sites that refuse automated browsers (YouTube playback,
-// Cloudflare, Google sign-in) work there. Agent spaces stay honestly automated.
+// Legacy standalone profile detection: old windows must close before their
+// storage can be used by the shared application window.
 /** pid of the browser holding a Chromium user-data dir, or 0. */
 export function profileHolder(userData) {
   try {
@@ -142,14 +140,4 @@ export function profileHolder(userData) {
     if (!Number.isInteger(pid) || pid <= 0) return 0;
     process.kill(pid, 0); return pid;
   } catch { return 0; }
-}
-export function openHumanWindow({ executablePath, userData, label, url, env }) {
-  fs.mkdirSync(userData, { recursive: true, mode: 0o700 });
-  // Already open: the new process hands its URL to that window, focuses it and exits.
-  const reused = !!profileHolder(userData);
-  const args = [`--user-data-dir=${userData}`];
-  if (url) args.push(url);
-  const child = spawn(executablePath, args, { detached: true, stdio: 'ignore', env: { ...env, TREX_SPACE_LABEL: label } });
-  child.unref();
-  return { opened: true, ...(reused ? { reused: true } : { pid: child.pid }) };
 }

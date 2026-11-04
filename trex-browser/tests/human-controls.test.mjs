@@ -37,13 +37,13 @@ function fixture(t) {
 }
 test('center controls address the precise profile even when one client owns several spaces', async t => {
   const { service, own, other } = fixture(t);
-  await service.shellEvent(own, { type: 'control', action: 'focus', clientId: 'same-agent', profile: 'BROWSER3' });
+  await service.shellEvent(own, { type: 'control', action: 'focus', clientId: 'same-agent', profile: other.key });
   assert.equal(other.focused, true); assert.equal(own.focused, undefined);
   await assert.rejects(service.shellEvent(own, { type: 'control', action: 'focus', clientId: 'same-agent', profile: 'BROWSER9' }), /ya no está abierto/);
 });
 test('pause interrupts active work, takeover keeps it paused, and resume does not bypass recovery', async t => {
   const { service, own, other } = fixture(t), controller = new AbortController(); other.active = { controller, id: 'pending', name: 'browser_click' };
-  const request = action => service.shellEvent(own, { type: 'control', action, clientId: 'same-agent', profile: 'BROWSER3' });
+  const request = action => service.shellEvent(own, { type: 'control', action, clientId: 'same-agent', profile: other.key });
   await request('pause'); assert.equal(controller.signal.aborted, true); assert.equal(other.pauseReason, 'manual');
   const pausedGeneration = other.generation; await request('pause'); assert.ok(other.generation > pausedGeneration);
   await assert.rejects(request('resume'), /aún está terminando/);
@@ -55,6 +55,6 @@ test('pause interrupts active work, takeover keeps it paused, and resume does no
 test('capture calls observation on the target owner and returns the image to the panel', async t => {
   const { service, own, other } = fixture(t); let called;
   service.call = async (...args) => { called = args; return { image: { mimeType: 'image/jpeg', data: 'fixture' } }; };
-  const result = await service.shellEvent(own, { type: 'control', action: 'screenshot', clientId: 'same-agent', profile: 'BROWSER3' });
+  const result = await service.shellEvent(own, { type: 'control', action: 'screenshot', clientId: 'same-agent', profile: other.key });
   assert.equal(called[0], other.ctx); assert.equal(called[1], 'browser_take_screenshot'); assert.equal(result.image.data, 'fixture');
 });

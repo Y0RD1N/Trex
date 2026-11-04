@@ -23,7 +23,8 @@ let revealed = false, leaving = false, hideTimer = null, lastPointer = null, pan
 const isNewTab = s => (s?.tabs.find(t => t.id === s.activeTab)?.url || '').startsWith('trex://newtab');
 // A blurred document keeps its activeElement, so also require real focus.
 const typing = () => document.hasFocus() && document.activeElement?.tagName === 'INPUT' && root.contains(document.activeElement);
-const pinned = () => typing() || isNewTab(state) || !!state?.find.open || !!state?.prompts.length || panel === 'downloads';
+const googleSignIn = s => { try { return new URL(s?.tabs.find(t => t.id === s.activeTab)?.url).hostname === 'accounts.google.com'; } catch { return false; } };
+const pinned = () => googleSignIn(state) || typing() || isNewTab(state) || !!state?.find.open || !!state?.prompts.length || panel === 'downloads';
 
 // Focus requests survive re-renders: they are applied after the next render.
 let focusPending = null;
@@ -129,11 +130,13 @@ function renderIsland(s) {
       <button class="ib" data-c="reload" title="Recargar (Ctrl+R)">${tab.loading ? `<span class="spin">${icons.reload}</span>` : icons.reload}</button>
       <label class="url">${secure ? icons.lock : icons.globe.replace('<svg', '<svg class="insecure"')}<input spellcheck="false" placeholder="Busca o escribe una dirección" value="${esc(internal ? '' : tab.url)}">
         ${s.zoom !== 100 ? `<button class="zoom" data-c="zoomreset" title="Restablecer zoom (Ctrl+0)">${s.zoom} %</button>` : ''}</label>
+      ${!internal ? `<button class="ib" data-c="external" title="Abrir en navegador del sistema">${icons.globe}</button>` : ''}
       ${downloadsButton(s)}
       ${agentChip(s.agent)}
       <div class="sep"></div>
       <button class="ib ${s.centerOpen ? 'on' : ''}" data-c="center" title="Centro de agentes (Ctrl+Shift+A)">${icons.grid}</button>
     </div>
+    ${googleSignIn(s) ? `<div class="row notice" data-key="google-signin"><span class="msg">Google bloquea el acceso desde navegadores integrados. Continúa en tu navegador del sistema; su sesión se conserva allí.</span><button class="btn primary" data-c="external">Abrir navegador</button></div>` : ''}
     ${findRow(s.find)}${promptRows(s)}${downloadsPanel(s)}
   </div>`);
   if (lastActiveTab !== s.activeTab) root.querySelector('.tabpill.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -202,6 +205,7 @@ root.addEventListener('click', e => {
   if (t.dataset.tab) return cmd('selectTab', { id: t.dataset.tab });
   const findText = root.querySelector('input.find')?.value ?? '';
   switch (t.dataset.c) {
+    case 'external': return cmd('openExternal');
     case 'back': return cmd('back'); case 'forward': return cmd('forward'); case 'reload': return cmd('reload');
     case 'center': return cmd('toggleCenter'); case 'newtab': return cmd('newTab');
     case 'zoomreset': e.preventDefault(); return cmd('zoom', { reset: true });

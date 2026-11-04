@@ -103,25 +103,39 @@ export class BrowserService {
     if(!s.owner)s.owner=ctx.clientId;
     this.notifyShell(s);
   }
-  async projectShell(ctx,browser){
-    let slot=this.shellHosts.get(ctx.projectId);
-    if(slot?.host?.closing){await slot.host.closing;if(this.shellHosts.get(ctx.projectId)===slot)this.shellHosts.delete(ctx.projectId);slot=null;}
+  async applicationShell(browser){
+    let slot=this.shellHosts.get('global');
+    if(slot?.host?.closing){await slot.host.closing;if(this.shellHosts.get('global')===slot)this.shellHosts.delete('global');slot=null;}
     if(slot)return slot.promise;
-    slot={};this.shellHosts.set(ctx.projectId,slot);
-    slot.promise=SharedShell.launch({root:path.dirname(this.profileDir(ctx)),executablePath:browser.executablePath,artifacts:path.join(this.home,'artifacts'),projectLabel:path.basename(ctx.cwd),
+    slot={};this.shellHosts.set('global',slot);
+    slot.promise=SharedShell.launch({root:this.home,executablePath:browser.executablePath,artifacts:path.join(this.home,'artifacts'),projectLabel:'Trex Browser',
       onEvent:message=>{
-        const origin=[...this.sessions.values()].find(state=>state.ctx.projectId===ctx.projectId&&state.ctx.profile===message?.profile)
-          || [...this.sessions.values()].find(state=>state.ctx.projectId===ctx.projectId&&state.sharedHost===slot.host);
+        const origin=[...this.sessions.values()].find(state=>state.key===message?.profile)
+          || [...this.sessions.values()].find(state=>state.sharedHost===slot.host);
         return origin?this.shellEvent(origin,message):undefined;
       },
-      onFailure:error=>{for(const state of this.sessions.values())if(state.ctx.projectId===ctx.projectId&&state.sharedHost){state.supervisorError=error.message;this.pause(state,'runtime',state.active);state.active?.controller.abort();}},
-      onClosed:host=>{if(this.shellHosts.get(ctx.projectId)===slot)this.shellHosts.delete(ctx.projectId);},
-    }).then(host=>(slot.host=host)).catch(error=>{if(this.shellHosts.get(ctx.projectId)===slot)this.shellHosts.delete(ctx.projectId);throw error;});
+      onFailure:error=>{for(const state of this.sessions.values())if(state.sharedHost===slot.host){state.supervisorError=error.message;this.pause(state,'runtime',state.active);state.active?.controller.abort();}},
+      onClosed:host=>{if(this.shellHosts.get('global')===slot)this.shellHosts.delete('global');},
+    }).then(host=>(slot.host=host)).catch(error=>{if(this.shellHosts.get('global')===slot)this.shellHosts.delete('global');throw error;});
     return slot.promise;
   }
+  async openWindow(input){
+    const browser=detectShell('auto');if(!browser)throw new Error('Trex Browser shell is not installed');
+    let profile='personal',label='Personal',project='';
+    if(input.personal!==true){
+      const ctx=input.ctx,manifest=this.profiles(ctx).find(p=>p.id===ctx.profile);
+      if(!manifest)return {opened:false,reason:'unknown-profile'};
+      profile=this.key(ctx);label=spaceLabel(manifest.space?.label)||ctx.profile;project=path.basename(ctx.cwd);
+    }
+    const userData=profile==='personal'?path.join(this.home,'personal','user-data'):path.join(this.profileDir(input.ctx),'user-data');
+    safePath(userData,{allowMissing:true});
+    if(profileHolder(userData))throw Object.assign(new Error('Close the older separate Trex Browser window before opening this profile in the shared window.'),{code:'PROFILE_IN_USE'});
+    const host=await this.applicationShell(browser);
+    return host.openHuman({profile,label,project,url:input.url});
+  }
   async openSharedShell(s,ctx,browser){
-    s.startupStage='shared-window';const host=await this.projectShell(ctx,browser);s.sharedHost=host;
-    const scope=await host.open({profile:ctx.profile,label:s.spaceLabel,model:s.spaceModel,clientId:s.spaceClientId||ctx.clientId});
+    s.startupStage='shared-window';const host=await this.applicationShell(browser);s.sharedHost=host;
+    const scope=await host.open({profile:s.key,label:s.spaceLabel,project:path.basename(ctx.cwd),model:s.spaceModel,clientId:s.spaceClientId||ctx.clientId});
     s.browser=scope.context;s.shell=scope.link;s.supervisorError=null;
     s.cdps=new Map();s.networkConditions=new WeakMap();s.emulationOffline=false;
     const opened=s.browser;
@@ -170,25 +184,26 @@ export class BrowserService {
     this.pushSpaces(s.ctx.projectId);
   }
   pushSpaces(projectId){
-    this.spacesTimers||=new Map();if(this.spacesTimers.has(projectId))return;
-    const timer=setTimeout(async()=>{this.spacesTimers.delete(projectId);
-      const sessions=[...this.sessions.values()].filter(x=>x.ctx.projectId===projectId&&(x.browser||x.opening));const shells=sessions.filter(x=>x.shell);if(!shells.length)return;
-      const running=await Promise.all(sessions.map(async x=>{const p=x.tabs.get(x.selected);return {clientId:this.spaceClient(x),label:x.spaceLabel||x.ctx.profile,profile:x.ctx.profile,model:x.spaceModel||'',
+    this.spacesTimers||=new Map();if(this.spacesTimers.has('global'))return;
+    const timer=setTimeout(async()=>{this.spacesTimers.delete('global');
+      const sessions=[...this.sessions.values()].filter(x=>x.browser||x.opening);const shells=sessions.filter(x=>x.shell),host=this.shellHosts.get('global')?.host;if(!shells.length&&!host)return;
+      const running=await Promise.all(sessions.map(async x=>{const p=x.tabs.get(x.selected);return {clientId:this.spaceClient(x),label:x.spaceLabel||x.ctx.profile,profile:x.key,project:path.basename(x.ctx.cwd),model:x.spaceModel||'',
         state:agentState(x),...(x.paused?{tool:x.pauseOperation?.tool||'',detail:''}:{tool:x.active?.name||x.lastOp?.name||'',detail:x.active||x.lastOp?(x.active||x.lastOp).detail??describe((x.active||x.lastOp).name,(x.active||x.lastOp).args):''}),
         tabCount:x.tabs.size,url:p&&!p.isClosed()?p.url():'',title:p&&!p.isClosed()?text(await p.title().catch(()=>'')).slice(0,200):'',thumbnail:x.thumbnail||null,events:(x.activity||[]).slice(-10)};}));
-      for(const x of shells)x.shell?.push('setSpaces',running.map(sp=>({...sp,self:sp.profile===x.ctx.profile})));
-    },250);timer.unref?.();this.spacesTimers.set(projectId,timer);
+      if(host&&!host.closed&&!host.closing)host.link.push('setSpaces',running);
+      else for(const x of shells)x.shell?.push('setSpaces',running.map(sp=>({...sp,self:sp.profile===x.key})));
+    },250);timer.unref?.();this.spacesTimers.set('global',timer);
   }
-  /** Live thumbnails only while some agents center of the project is open. */
+  /** Live thumbnails only while the shared agents center is open. */
   thumbnails(projectId){
-    this.thumbTimers||=new Map();const open=()=>[...this.sessions.values()].some(x=>x.ctx.projectId===projectId&&x.shell&&x.centerOpen);
-    if(!open()){clearInterval(this.thumbTimers.get(projectId));this.thumbTimers.delete(projectId);return;}
-    if(this.thumbTimers.has(projectId))return;
+    this.thumbTimers||=new Map();const open=()=>[...this.sessions.values()].some(x=>x.shell&&x.centerOpen);
+    if(!open()){clearInterval(this.thumbTimers.get('global'));this.thumbTimers.delete('global');return;}
+    if(this.thumbTimers.has('global'))return;
     const tick=async()=>{if(!open())return this.thumbnails(projectId);
-      await Promise.all([...this.sessions.values()].filter(x=>x.ctx.projectId===projectId&&x.browser&&(!x.centerOpen||x.shell?.shared)).map(async x=>{const p=x.tabs.get(x.selected);if(!p||p.isClosed())return;
+      await Promise.all([...this.sessions.values()].filter(x=>x.browser&&(!x.centerOpen||x.shell?.shared)).map(async x=>{const p=x.tabs.get(x.selected);if(!p||p.isClosed())return;
         try{const jpeg=await p.screenshot({type:'jpeg',quality:45,scale:'css',timeout:2500});x.thumbnail=`data:image/jpeg;base64,${jpeg.toString('base64')}`;}catch{}}));
       this.pushSpaces(projectId);};
-    tick();const timer=setInterval(tick,2500);timer.unref?.();this.thumbTimers.set(projectId,timer);
+    tick();const timer=setInterval(tick,2500);timer.unref?.();this.thumbTimers.set('global',timer);
   }
   /** Host request (never an agent tool): raise a space's window, optionally on one tab. */
   async focusSpace(ctx,tabId=null){
@@ -201,7 +216,7 @@ export class BrowserService {
   async shellEvent(s,m){
     if(m?.type==='center'){for(const state of this.sessions.values())if(state===s||s.sharedHost&&state.sharedHost===s.sharedHost)state.centerOpen=!!m.open;this.thumbnails(s.ctx.projectId);return;}
     if(m?.type!=='control')return;
-    const t=m.clientId==='self'?s:[...this.sessions.values()].find(x=>x.ctx.projectId===s.ctx.projectId&&this.spaceClient(x)===m.clientId&&(!m.profile||x.ctx.profile===m.profile));
+    const t=m.clientId==='self'?s:[...this.sessions.values()].find(x=>this.spaceClient(x)===m.clientId&&(!m.profile||x.key===m.profile));
     if(!t||!t.browser)throw new Error('Este espacio ya no está abierto. Actualiza el panel.');
     // Human controls reuse the explicit pause semantics; uncertain pauses still need inspection by the owner.
     if(m.action==='pause'||m.action==='takeover'){
@@ -539,11 +554,11 @@ export class BrowserService {
     if(a.read){if(bytes.length>MAX_IMAGE)throw new Error('Artifact read limit 4 MiB; use artifact-open for video');if(meta.mimeType.startsWith('image/'))result.image={type:'image',mimeType:meta.mimeType,data:bytes.toString('base64')};else if(meta.mimeType==='application/json')result.data.text=bytes.toString('utf8');else throw new Error('This artifact is metadata/open only');}return result;
   }
   async closeProfile(s){
-    if(s.sharedHost){const host=s.sharedHost;s.sharedHost=null;await host.release(s.ctx.profile);s.browser=null;s.shell=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();return;}
+    if(s.sharedHost){const host=s.sharedHost;s.sharedHost=null;await host.release(s.key);s.browser=null;s.shell=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();return;}
     const context=s.browser,guard=s.guard;if(!context&&!guard)return;
     let closing=Promise.resolve();if(context){const browser=context.browser();closing=(browser?browser.close({reason:'Trex Browser profile stopped by its owner'}):context.close());}
     if(guard){await Promise.race([closing.catch(()=>{}),sleep(3000)]);try{await guard.stop();}catch(e){this.pause(s,'runtime',s.active);throw Object.assign(new Error(`Owned browser shutdown is uncertain (${e.message}); manual review required`),{code:'UNCERTAIN'});}if(s.guard===guard)s.guard=null;closing.catch(()=>{});s.browser=null;this.invalidateAll(s);s.tabs.clear();s.pageStates.clear();s.selected=null;s.refs.clear();}
     else await closing;
   }
-  async shutdown(){await Promise.allSettled([...this.sessions.values()].map(async s=>{if(s.capture)try{await this.stopCapture(s,s.capture.ctx,s.capture.kind);}catch{}await this.closeProfile(s);}));}
+  async shutdown(){await Promise.allSettled([...this.sessions.values()].map(async s=>{if(s.capture)try{await this.stopCapture(s,s.capture.ctx,s.capture.kind);}catch{}await this.closeProfile(s);}));await Promise.allSettled([...this.shellHosts.values()].map(async slot=>(await slot.promise).shutdown()));}
 }

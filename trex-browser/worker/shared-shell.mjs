@@ -6,7 +6,7 @@ import { ScopedCdp } from './scoped-cdp.mjs';
 import { guardBrowser } from './guard.mjs';
 import { childEnvironment, safePath } from './security.mjs';
 
-/** One native window per project; scoped CDP clients never see one another's tabs. */
+/** One native window per private Browser home; scoped CDP clients never see one another's tabs. */
 export class SharedShell {
   static async launch({ root, executablePath, artifacts, projectLabel, onEvent, onFailure, onClosed }) {
     const host = new SharedShell(); host.onClosed = onClosed; host.artifacts = artifacts;
@@ -16,7 +16,7 @@ export class SharedShell {
     host.context = await chromium.launchPersistentContext(userData, {
       executablePath, headless: process.env.TREX_BROWSER_HEADLESS === '1', chromiumSandbox: true,
       acceptDownloads: true, viewport: null, timeout: 20000, downloadsPath: artifacts, args,
-      env: { ...childEnvironment(), TREX_SHARED_PROJECT_ROOT: root, TREX_PROJECT_LABEL: projectLabel,
+      env: { ...childEnvironment(), TREX_SHARED_BROWSER_ROOT: root, TREX_PROJECT_LABEL: projectLabel,
         ...(process.env.TREX_BROWSER_DEV === '1' && process.env.TREX_SHELL_DEV === '1' ? { TREX_SHELL_DEV: '1' } : {}) },
     });
     // This supervisor connection also discovers the native page targets. It
@@ -43,21 +43,23 @@ export class SharedShell {
       return host;
     } catch (error) { await host.shutdown().catch(() => {}); throw error; }
   }
-  constructor() { this.scopes = new Map(); this.targets = new Map(); this.loaded = new Set(); }
-  async open({ profile, label, model, clientId }) {
+  constructor() { this.scopes = new Map(); this.targets = new Map(); this.loaded = new Set(); this.humanScopes = new Set(); }
+  async open({ profile, label, model, clientId, project }) {
     if (this.closed || this.closing || this.failure) throw new Error('The shared browser window is unavailable; close it before reconnecting');
     if (this.scopes.has(profile)) throw new Error('This browser space is already open');
     if(this.traceOwner)throw new Error('Finish the active performance trace before opening another browser space');
-    const scope = { profile }; this.scopes.set(profile, scope);
+    const scope = { profile };
+    scope.ready = new Promise((resolve, reject) => { scope.resolve = resolve; scope.reject = reject; });
+    scope.ready.catch(() => {}); this.scopes.set(profile, scope);
     try {
-      const info = await this.link.call('openScope', { profile, label, model, clientId }); this.loaded.add(profile);
+      const info = await this.link.call('openScope', { profile, label, model, clientId, project }); this.loaded.add(profile);
       const root = await this.context.browser().newBrowserCDPSession();
       const transport = new ScopedCdp(root, { browserContextId: info.browserContextId,
         targets: [...new Set([info.targetId, ...(this.targets.get(profile) || [])])],
         createTarget: args => this.link.call('newTab', { url: args.url, profile, activate: false }),
         storage: (method,params) => this.link.call('scopeStorage',{profile,method,params}),manualDownloads:true,
         traceControl: phase=>{
-          if(phase==='start'){if(this.scopes.size>1||this.traceOwner&&this.traceOwner!==profile)throw new Error('Performance tracing requires exclusive use of the project window; stop it before opening other spaces');this.traceOwner=profile;}
+          if(phase==='start'){if(this.humanScopes.size||this.scopes.size>1||this.traceOwner&&this.traceOwner!==profile)throw new Error('Performance tracing requires exclusive use of the browser window, without personal tabs; stop it before opening other spaces');this.traceOwner=profile;}
           else if(this.traceOwner===profile)this.traceOwner=null;
         },
       });
@@ -67,12 +69,37 @@ export class SharedShell {
       scope.link = new SpaceLink(this.link, scope.context, profile, transport);
       scope.link.selectedTarget = info.targetId;
       // Download policy is scoped to this Electron session, never to peer tabs.
-      return scope;
+      scope.resolve(); return scope;
     } catch (error) {
+      scope.reject(error);
       this.scopes.delete(profile); scope.transport?.close(); await scope.browser?.close().catch(() => {});
-      await this.link.call('closeScope', { profile }).catch(() => {}); if (!this.scopes.size) await this.shutdown().catch(() => {}); throw error;
+      await this.link.call('closeScope', { profile }).catch(() => {}); if (!this.scopes.size && !this.humanScopes.size) await this.shutdown().catch(() => {}); throw error;
     }
   }
+  async openHuman({profile,label,project='',url}) {
+    if(this.closed||this.closing||this.failure)throw new Error('The browser window is unavailable');
+    if(this.traceOwner)throw new Error('Finish the active performance trace before opening personal tabs');
+    const reused=this.loaded.has(profile),wasHuman=this.humanScopes.has(profile);
+    // Reserve the human scope before awaiting IPC: the last agent can finish
+    // while a person is opening the window, and must not shut that window down.
+    this.humanScopes.add(profile);
+    try {
+      const agent=this.scopes.get(profile);
+      if(agent)await agent.ready;
+      else {
+        await this.link.call('openScope',{profile,label,project,clientId:'human'});
+        this.loaded.add(profile);
+      }
+      if(url)await this.link.call('newTab',{profile,url,activate:true});
+      await this.link.call('focusWindow',{profile});
+      return {opened:true,reused};
+    } catch(error) {
+      if(!wasHuman)this.humanScopes.delete(profile);
+      if(!this.scopes.size&&!this.humanScopes.size)await this.shutdown().catch(()=>{});
+      throw error;
+    }
+  }
+
   release(profile) {
     // Native sessions share the process: complete each profile's storage flush
     // before the last release shuts that process down, including host shutdown.
@@ -81,10 +108,11 @@ export class SharedShell {
   }
   async releaseScope(profile) {
     const scope = this.scopes.get(profile); if (!scope) return;
-    this.scopes.delete(profile); this.targets.delete(profile);
-    await this.link.call('closeScope', { profile }).catch(() => {});
+    this.scopes.delete(profile); if(!this.humanScopes.has(profile))this.targets.delete(profile);
+    if (!this.humanScopes.has(profile)) await this.link.call('closeScope', { profile }).catch(() => {});
+    else await this.link.call('setAgent', { profile, state: 'idle', tool: '', detail: '' }).catch(() => {});
     await scope.browser?.close().catch(() => {}); scope.transport?.close();
-    if (!this.scopes.size) await this.shutdown();
+    if (!this.scopes.size && !this.humanScopes.size) await this.shutdown();
   }
   async shutdown() {
     if (this.closing) return this.closing;

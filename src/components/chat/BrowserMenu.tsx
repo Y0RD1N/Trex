@@ -123,19 +123,18 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
     if (await showWindow(tabId)) { setTabs(before => before.map(tab => ({...tab, selected: tab.tabId === tabId}))); return; }
     await call("browser_tabs",{action:"select",tabId});
   };
-  // A person's window has no automation, so sites that refuse automated
-  // browsers (YouTube, Cloudflare, Google sign-in) work there.
+  // Personal tabs share the application window and keep their own storage.
   const [openNote, setOpenNote] = useState("");
   const openPersonal = async (): Promise<void> => {
     setOpenNote("");
-    try { await trexBrowserOpen(null); setOpenNote("Ventana personal abierta: úsala para navegar e iniciar sesión en tus cuentas."); }
+    try { await trexBrowserOpen(null); setOpenNote("Pestañas personales abiertas en Trex Browser. Google puede requerir el navegador del sistema."); }
     catch { setError("No se pudo abrir Trex Browser."); }
   };
   const signInForAgent = async (): Promise<void> => {
     setOpenNote("");
     try {
       const result = await trexBrowserOpen({ cwd, profile: activeBrowser.profile });
-      if (result.opened) setOpenNote("Inicia sesión en esa ventana y ciérrala al terminar: el agente usará la sesión iniciada.");
+      if (result.opened) setOpenNote("Espacio abierto en la ventana compartida. El agente conserva las sesiones iniciadas aquí; Google puede requerir el navegador del sistema.");
       else setError(result.reason === "agent-running" ? "El agente tiene abierto este espacio. Ciérralo o espera a que termine para iniciar sesión." : "No se pudo abrir este espacio para iniciar sesión.");
     } catch { setError("No se pudo abrir este espacio para iniciar sesión."); }
   };
@@ -174,8 +173,8 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
         <div className="chat-browser-actions">
           <button type="button" disabled={locked||paused} onClick={()=>void call("browser_tabs",{action:"new",url})}>+ Nueva pestaña</button>
           {selected?.running&&<button type="button" onClick={()=>void showWindow()} title="Trae al frente la ventana de este espacio">Mostrar ventana</button>}
-          {!selected?.running&&<button type="button" onClick={()=>void signInForAgent()} title="Abre este espacio sin automatización para que inicies sesión; el agente usará esa sesión">Iniciar sesión para este agente</button>}
-          <button type="button" onClick={()=>void openPersonal()} title="Tu propia ventana de Trex Browser, sin automatización: YouTube, cuentas, navegación normal">Abrir Trex Browser personal</button>
+          {!selected?.running&&<button type="button" onClick={()=>void signInForAgent()} title="Abre el espacio de este agente en la ventana compartida para revisar sus cuentas">Iniciar sesión para este agente</button>}
+          <button type="button" onClick={()=>void openPersonal()} title="Pestañas personales en la misma ventana de Trex Browser, separadas de los agentes">Abrir Trex Browser personal</button>
           <button type="button" disabled={locked} onClick={()=>void call("browser_status")}>Actualizar estado</button>
           <button type="button" disabled={locked} onClick={() => void call("browser_take_screenshot")}><ImageIcon size={15} />Tomar captura</button>
           <button type="button" disabled={locked || (paused && !recording)} onClick={() => void call(recording ? "browser_stop_video" : "browser_start_video")}>{recording ? "■ Detener vídeo" : "○ Grabar vídeo"}</button>

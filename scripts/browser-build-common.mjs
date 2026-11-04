@@ -102,7 +102,7 @@ export function packageShell(core, runtime, { platform = process.platform } = {}
   }
   _mkdir(appDir, { recursive: true });
   _write(_join(appDir, 'package.json'), JSON.stringify({ name: shellPackage.name, productName: 'Trex Browser', desktopName: 'trex-browser.desktop', version: shellPackage.version, private: true, type: 'module', main: 'main.mjs' }, null, 2) + '\n');
-  for (const name of ['main.mjs', 'preload.cjs', 'human-controls.mjs', 'scope-storage.mjs', 'view-layout.mjs']) _copy(_join(source, name), _join(appDir, name));
+  for (const name of ['main.mjs', 'preload.cjs', 'human-controls.mjs', 'scope-storage.mjs', 'scope-path.mjs', 'view-layout.mjs']) _copy(_join(source, name), _join(appDir, name));
   _cp(_join(source, 'ui'), _join(appDir, 'ui'), { recursive: true });
   _cp(_join(source, 'icons'), _join(appDir, 'icons'), { recursive: true });
   if (platform === 'linux') {

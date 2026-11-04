@@ -171,7 +171,7 @@ describe('Trex Browser shell', { skip: !available && 'Trex shell or display unav
     await card.locator('[data-a="focus"]').click();
     await until(async () => !(await shellState(B)).centerOpen, 'Ver did not close the target grid');
     const focused = await shellState(B);
-    assert.equal(focused.tabs.find(tab => tab.id === focused.activeTab).profile, B.profile);
+    assert.equal(focused.tabs.find(tab => tab.id === focused.activeTab).profile, service.key(B));
     await ui.evaluate(() => window.trexShell.command('toggleCenter', { open: true }));
     await card.locator('[data-a="takeover"]').click();
     await until(async () => (await call(B, 'browser_status')).data.paused, 'Tomar control did not pause automation');

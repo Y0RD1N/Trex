@@ -35,6 +35,21 @@ describe('stable browser overlays during agent work', { skip: !detected.availabl
   before(async () => { browser = await chromium.launch({ executablePath: detected.executablePath, headless: true }); });
   after(async () => { await browser?.close(); });
 
+  it('explains embedded Google sign-in and opens the system browser only after the person clicks', async () => {
+    const page = await fixture();
+    try {
+      await page.evaluate(() => { window.fixture.tabs[0].url = 'https://accounts.google.com/signin'; window.pushState(window.fixture); });
+      const notice = page.locator('[data-key=google-signin]');
+      await notice.waitFor();
+      assert.match(await notice.innerText(), /Google bloquea/);
+      assert.equal((await page.evaluate(() => window.calls.filter(call => call.name === 'openExternal'))).length, 0);
+      await notice.locator('button').click();
+      assert.equal((await page.evaluate(() => window.calls.filter(call => call.name === 'openExternal'))).length, 1);
+      await page.evaluate(() => { window.fixture.tabs[0].url = 'https://fixture.test/'; window.pushState(window.fixture); });
+      assert.equal(await notice.count(), 0);
+    } finally { await page.close(); }
+  });
+
   it('keeps the bar, pressed controls and loading animation attached across activity and tab updates', async () => {
     const page = await fixture();
     try {

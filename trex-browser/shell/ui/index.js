@@ -13,6 +13,7 @@ const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 3 ?
 
 /** Saved/reserved profiles are not open browser instances. */
 function spacesFrom(s) {
+  if (s.automation === false && !s.spaces.length) return [];
   if (s.spaces.length) return s.spaces.filter(sp => sp.state !== 'closed');
   const tab = s.tabs.find(t => t.id === s.activeTab) ?? {};
   return [{ clientId: 'self', label: s.agent.label, model: s.agent.model, state: s.agent.state, tool: s.agent.tool, detail: s.agent.detail,
@@ -35,7 +36,7 @@ function card(sp, backdrop) {
     <div class="thumb" style="${thumb ? `background-image:url('${esc(thumb)}')` : ''}">${thumb ? '' : st === 'closed' ? 'Sin abrir' : 'Sin vista previa'}
       ${live ? '<span class="badge"><i></i>EN VIVO</span>' : ''}${sp.tabCount ? `<span class="tabs-mini">${sp.tabCount} ${sp.tabCount === 1 ? 'pestaña' : 'pestañas'}</span>` : ''}</div>
     <div class="meta">
-      <div class="row"><span class="av" style="--c:${colorFor(sp.clientId)}">${initial(sp.label)}</span><span class="name" title="${esc(sp.label)}">${esc(sp.label)}</span><span class="model" title="${esc(sp.model || sp.profile || '')}">${esc(sp.model || sp.profile || '')}</span><span class="pill ${esc(st)}"><em></em>${esc(STATE_LABEL[st] || st)}</span></div>
+      <div class="row"><span class="av" style="--c:${colorFor(sp.clientId)}">${initial(sp.label)}</span><span class="name" title="${esc(sp.project ? `${sp.label} · ${sp.project}` : sp.label)}">${esc(sp.project ? `${sp.label} · ${sp.project}` : sp.label)}</span><span class="model" title="${esc(sp.model || sp.profile || '')}">${esc(sp.model || sp.profile || '')}</span><span class="pill ${esc(st)}"><em></em>${esc(STATE_LABEL[st] || st)}</span></div>
       <div class="tool" title="${esc(sp.tool || sp.detail || '')}">${tool}</div>
       <div class="cur">${favicon({ url: sp.url || '', title: sp.title || sp.profile || '' })}<div><strong title="${esc(sp.title || sp.profile || '')}">${esc(sp.title || sp.profile || 'Sin página')}</strong><small title="${esc(sp.url || '')}">${esc(sp.url || 'perfil persistente')}</small></div></div>
     </div>

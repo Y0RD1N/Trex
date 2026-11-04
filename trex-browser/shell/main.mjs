@@ -1,13 +1,14 @@
 // Trex Browser shell: a frameless glass window whose tabs are WebContentsViews.
 // The worker launches this executable the same way it launched Chrome
 // (Playwright launchPersistentContext over --remote-debugging-pipe), so no
-// debugging port is opened. Automated spaces share one project window.
+// debugging port is opened. Personal tabs and automated spaces share one application window.
 import { app, BaseWindow, WebContentsView, ipcMain, protocol, net, session, nativeTheme, Menu, clipboard, shell as desktop } from 'electron';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { scopePath } from './scope-path.mjs';
 import { humanControls } from './human-controls.mjs';
 import { storageCommand, scopedDownload, grantedPermission } from './scope-storage.mjs';
 import { setBounds, setVisible, keepOnTop } from './view-layout.mjs';
@@ -46,7 +47,17 @@ const userDataDir = argValue('user-data-dir');
 const HEADLESS = process.argv.some(a => a === '--headless' || a.startsWith('--headless='));
 // Launched by the worker (Playwright over the CDP pipe) rather than by a person.
 const AUTOMATION = process.argv.includes('--remote-debugging-pipe');
-const SHARED_ROOT = AUTOMATION && process.env.TREX_SHARED_PROJECT_ROOT && path.isAbsolute(process.env.TREX_SHARED_PROJECT_ROOT) ? path.resolve(process.env.TREX_SHARED_PROJECT_ROOT) : null;
+const SHARED_ROOT = AUTOMATION && process.env.TREX_SHARED_BROWSER_ROOT && path.isAbsolute(process.env.TREX_SHARED_BROWSER_ROOT) ? path.resolve(process.env.TREX_SHARED_BROWSER_ROOT) : null;
+// Desktop launches join the broker-owned application window. No browser data
+// or debugger endpoint is exposed to another process by this handoff.
+if (!AUTOMATION && !userDataDir && app.isPackaged) {
+  const launcher = path.resolve(path.dirname(process.execPath), '..', '..', process.platform === 'win32' ? 'trex-browser.exe' : 'trex-browser');
+  if (fs.existsSync(launcher)) {
+    try { execFileSync(launcher, ['open', '--stdin-json'], { input: JSON.stringify({ personal: true, url: process.argv.find(a => /^https?:\/\//.test(a)) }), timeout: 60000, windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] }); }
+    catch { process.stderr.write('No se pudo abrir la ventana compartida de Trex Browser.\n'); process.exit(1); }
+    app.quit(); process.exit(0);
+  }
+}
 if (userDataDir) app.setPath('userData', path.resolve(userDataDir));
 else if (!AUTOMATION && app.isPackaged) { const personal = personalProfile(); if (personal) app.setPath('userData', personal); }
 app.setName('Trex Browser');
@@ -121,7 +132,7 @@ const isUi = wc => !!wc && uiContents.has(wc);
 function snapshot() {
   if (SHARED_ROOT) agent = scopes.get(tabs.get(activeTab)?.profile)?.agent ?? { label: 'Trex Browser', model: '', state: 'idle', tool: '', detail: '', step: '' };
   return {
-    tabs: [...tabs.values()].map(t => ({ id: t.id, title: t.title, url: t.url, favicon: t.favicon, loading: t.loading, ...(t.profile ? { profile: t.profile, owner: scopes.get(t.profile)?.agent.label || t.profile } : {}) })),
+    tabs: [...tabs.values()].map(t => ({ id: t.id, title: t.title, url: t.url, favicon: t.favicon, loading: t.loading, ...(t.profile ? { profile: t.profile, owner: [scopes.get(t.profile)?.agent.label || t.profile, scopes.get(t.profile)?.project].filter(Boolean).join(' · ') } : {}) })),
     activeTab, centerOpen, agent, spaces: SHARED_ROOT ? spaces.map(sp => ({ ...sp, self: sp.profile === tabs.get(activeTab)?.profile })) : spaces,
     canGoBack: tabs.get(activeTab)?.view.webContents.navigationHistory.canGoBack() ?? false,
     canGoForward: tabs.get(activeTab)?.view.webContents.navigationHistory.canGoForward() ?? false,
@@ -130,8 +141,8 @@ function snapshot() {
     find,
     downloads: [...downloads.values()].slice(-8).reverse().map(({ item, ...d }) => d),
     prompts: [...prompts.values()].map(({ done, timer, ...p }) => p),
-    automation: AUTOMATION,
-    project: process.env.TREX_PROJECT_LABEL || '',
+    automation: AUTOMATION && tabs.get(activeTab)?.profile !== 'personal',
+    project: scopes.get(tabs.get(activeTab)?.profile)?.project || process.env.TREX_PROJECT_LABEL || '',
     platform: process.platform,
   };
 }
@@ -242,6 +253,7 @@ function contextMenu(tab, p) {
       { label: 'Recargar', click: () => wc.reload() }); sep();
     items.push({ label: 'Buscar en la página…', click: () => commands.findOpen() }); sep();
   }
+  if (/^https?:\/\//i.test(wc.getURL())) items.push({ label: 'Abrir en navegador del sistema', click: () => desktop.openExternal(wc.getURL()) });
   items.push({ label: 'Inspeccionar', click: () => { if (!wc.isDevToolsOpened()) wc.openDevTools({ mode: 'detach' }); wc.inspectElement(p.x, p.y); } });
   Menu.buildFromTemplate(items).popup({ window: win });
 }
@@ -291,8 +303,8 @@ function uniquePath(dir, name) {
   const ext = path.extname(name), base = path.basename(name, ext) || 'descarga';
   for (let i = 0; ; i++) { const candidate = path.join(dir, i ? `${base} (${i})${ext}` : `${base}${ext}`); if (!fs.existsSync(candidate)) return candidate; }
 }
-function trackDownload(_event, item) {
-  if (!AUTOMATION && !item.getSavePath()) item.setSavePath(uniquePath(app.getPath('downloads'), item.getFilename()));
+function trackDownload(_event, item, wc) {
+  if ((!AUTOMATION || [...tabs.values()].find(t => t.view.webContents === wc)?.profile === 'personal') && !item.getSavePath()) item.setSavePath(uniquePath(app.getPath('downloads'), item.getFilename()));
   const id = nextId++;
   const d = { id, name: item.getFilename(), state: 'progressing', received: 0, total: item.getTotalBytes(), path: item.getSavePath(), item };
   downloads.set(id, d);
@@ -303,14 +315,15 @@ function trackDownload(_event, item) {
 }
 
 // ---- Session restore (people only) ---------------------------------------
-const sessionFile = () => path.join(app.getPath('userData'), 'trex-session.json');
+const sessionFile = () => path.join(SHARED_ROOT ? scopePath(SHARED_ROOT, 'personal') : app.getPath('userData'), 'trex-session.json');
 let sessionTimer = null, closing = false;
 function saveSession(now = false) {
-  if (AUTOMATION || closing || !win) return;
+  if (AUTOMATION && !SHARED_ROOT || SHARED_ROOT && !scopes.has('personal') || closing || !win) return;
   clearTimeout(sessionTimer);
   const write = () => {
-    const list = [...tabs.values()].filter(t => /^https?:/i.test(t.url)).map(t => t.url);
-    const active = [...tabs.values()].filter(t => /^https?:/i.test(t.url)).findIndex(t => t.id === activeTab);
+    const personalTabs = [...tabs.values()].filter(t => (!SHARED_ROOT || t.profile === 'personal') && /^https?:/i.test(t.url));
+    const list = personalTabs.map(t => t.url);
+    const active = personalTabs.findIndex(t => t.id === activeTab);
     try { fs.writeFileSync(sessionFile(), JSON.stringify({ tabs: list.slice(0, 50), active }), { mode: 0o600 }); } catch {}
   };
   if (now) write(); else sessionTimer = setTimeout(write, 500);
@@ -345,11 +358,11 @@ function addOverlay(part) {
 }
 
 const NEW_TAB = 'trex://newtab/';
-function createTab(url = NEW_TAB, { activate = true, profile = tabs.get(activeTab)?.profile || scopes.keys().next().value } = {}) {
+function createTab(url = NEW_TAB, { activate = true, profile = tabs.get(activeTab)?.profile || scopes.keys().next().value, popupOptions } = {}) {
   const scope = profile && scopes.get(profile);
   if (SHARED_ROOT && !scope) return null;
   const id = `t${nextTab++}`;
-  const view = new WebContentsView({ webPreferences: { ...(scope ? { session: scope.session } : {}), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: !HEADLESS && !AUTOMATION } });
+  const view = new WebContentsView({ ...(popupOptions || {}), webPreferences: { ...(popupOptions?.webPreferences || {}), ...(scope ? { session: scope.session } : {}), preload: undefined, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: !HEADLESS && !AUTOMATION } });
   view.setBorderRadius(RADIUS);
   view.setBackgroundColor('#121212');
   const tab = { id, view, title: 'Nueva pestaña', url, favicon: null, loading: true, profile };
@@ -387,13 +400,16 @@ function createTab(url = NEW_TAB, { activate = true, profile = tabs.get(activeTa
   // navigation simply fails like any unknown address, without a cancelled
   // navigation that automation would wait on forever.
   wc.setWindowOpenHandler(({ url: target }) => {
-    if (/^https?:/.test(target)) createTab(target, { profile, activate: !SHARED_ROOT || tabs.get(activeTab)?.profile === profile });
-    return { action: 'deny' };
+    if (target !== 'about:blank' && !/^https?:/.test(target)) return { action: 'deny' };
+    return { action: 'allow', createWindow: options => {
+      const id = createTab(target, { profile, activate: !SHARED_ROOT || tabs.get(activeTab)?.profile === profile, popupOptions: options });
+      return tabs.get(id).view.webContents;
+    } };
   });
   // Background tabs start below the visible page and chrome. They never flash
   // above the foreground while the worker attaches or the first URL loads.
   win.contentView.addChildView(view, 0);
-  wc.loadURL(url).catch(() => {});
+  if (!popupOptions) wc.loadURL(url).catch(() => {});
   if (activate) activeTab = id;
   layout(); broadcast();
   if (profile) void targetIdOf(wc).then(targetId => emitToWorker({ type: 'scope-target', profile, targetId })).catch(() => {});
@@ -424,6 +440,10 @@ const commands = {
   back: () => tabs.get(activeTab)?.view.webContents.navigationHistory.goBack(),
   forward: () => tabs.get(activeTab)?.view.webContents.navigationHistory.goForward(),
   reload: () => tabs.get(activeTab)?.view.webContents.reload(),
+  openExternal: async () => {
+    const url = tabs.get(activeTab)?.view.webContents.getURL();
+    if (url && /^https?:\/\//i.test(url)) await desktop.openExternal(url);
+  },
   newTab: ({ url } = {}) => {
     const id = createTab(url ? normalizeAddress(url) : undefined);
     if (url) return;
@@ -513,28 +533,37 @@ const tabByTarget = async targetId => { for (const t of tabs.values()) if (await
 // same pipe Playwright uses) and calls window.trexShell.worker(...). Events go
 // back through a Playwright binding the worker installs on that document.
 const workerApi = {
-  openScope: async ({ profile, label, model = '', clientId }) => {
-    if (!SHARED_ROOT || !/^BROWSER[1-9][0-9]?$/.test(profile) || typeof clientId !== 'string' || !clientId || clientId.length > 256) throw new Error('Invalid browser space');
+  openScope: async ({ profile, label, model = '', clientId, project = '' }) => {
+    if (!SHARED_ROOT || typeof clientId !== 'string' || !clientId || clientId.length > 256) throw new Error('Invalid browser space');
     let scope = scopes.get(profile);
     if (!scope) {
-      const storage = path.join(SHARED_ROOT, profile, 'user-data');
+      const storage = scopePath(SHARED_ROOT, profile);
       fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
       const ses = session.fromPath(storage);
       ses.protocol.handle('trex', request => new URL(request.url).host === 'newtab' ? serveFrom(['newtab'])(request) : Response.error());
-      ses.setUserAgent(webUserAgent(ses.getUserAgent()));
       ses.setPermissionRequestHandler(requestPermission);
       ses.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || grantedPermission(scopes.get(profile), permission, originOf(origin)) || loadDecisions()[`${profile}|${originOf(origin)}|${permission}`] === true);
-      scope = { profile, session: ses }; scopes.set(profile, scope);
+      scope = { profile, session: ses, personal: profile === 'personal' }; scopes.set(profile, scope);
       ses.on('will-download', (event, item, wc) => {
-        scopedDownload(scope, item, wc, path.resolve(SHARED_ROOT, '..', '..', 'artifacts'), targetIdOf, emitToWorker);
-        trackDownload(event, item);
+        if (!scope.personal) scopedDownload(scope, item, wc, path.join(SHARED_ROOT, 'artifacts'), targetIdOf, emitToWorker);
+        trackDownload(event, item, wc);
       });
     }
-    scope.clientId = clientId; scope.agent = { label: String(label || profile).slice(0, 100), model: String(model).slice(0, 100), state: 'idle', tool: '', detail: '', step: '' };
+    scope.clientId = clientId; scope.project = String(project).slice(0, 100); scope.agent = { label: String(label || profile).slice(0, 100), model: String(model).slice(0, 100), state: 'idle', tool: '', detail: '', step: '' };
     scope.permissions = new Map();
     closingScopes.delete(profile);
     const existing = [...tabs.values()].find(t => t.profile === profile);
-    const id = existing?.id || createTab(undefined, { profile, activate: !activeTab });
+    let id = existing?.id;
+    if (!id && scope.personal) {
+      try {
+        const saved = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'));
+        const urls = (saved.tabs || []).filter(url => typeof url === 'string' && /^https?:\/\//.test(url)).slice(0, 50);
+        const ids = urls.map(url => createTab(url, { profile, activate: false }));
+        id = ids[Math.max(0, Math.min(ids.length - 1, saved.active || 0))];
+      } catch {}
+    }
+    id ||= createTab(undefined, { profile, activate: !activeTab });
+    scope.selectedId ||= id;
     const wc = tabs.get(id).view.webContents, targetId = await targetIdOf(wc);
     return { targetId, browserContextId: contextIds.get(wc), profile };
   },
@@ -607,13 +636,9 @@ ipcMain.handle('shell:worker', (event, name, args) => {
 function emitToWorker(message) { if(chromeView&&!chromeView.webContents.isDestroyed())chromeView.webContents.send('shell:to-worker', message); }
 const controls = humanControls(emitToWorker);
 
-// Present as plain Chromium: the "TrexBrowser/x" and "Electron/x" tokens make
-// Google (YouTube playback, sign-in) and Cloudflare treat us as an embedded app.
-const webUserAgent = ua => ua.replace(/ TrexBrowser\/\S+/i, '').replace(/ Trex Browser\/\S+/i, '').replace(/ Electron\/\S+/, '');
-app.userAgentFallback = webUserAgent(app.userAgentFallback);
-
+// Keep the browser's identity intact. Embedded-browser sign-in restrictions
+// are handled through the person's system browser, not a spoofed user agent.
 app.whenReady().then(() => {
-  session.defaultSession.setUserAgent(webUserAgent(session.defaultSession.getUserAgent()));
   serveUi();
   session.defaultSession.setPermissionRequestHandler(requestPermission);
   session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || loadDecisions()[`${originOf(origin)}|${permission}`] === true);
@@ -624,7 +649,7 @@ app.whenReady().then(() => {
     ...(process.platform === 'darwin' ? { vibrancy: 'under-window', visualEffectState: 'active', titleBarStyle: 'hidden' } : {}),
     ...(process.platform === 'win32' ? { backgroundMaterial: 'acrylic' } : {}),
     ...(process.platform !== 'darwin' ? { icon: path.join(here, 'icons', process.platform === 'win32' ? 'trex-browser.ico' : 'trex-browser-256.png') } : {}),
-    title: SHARED_ROOT ? `Trex Browser — ${process.env.TREX_PROJECT_LABEL || 'Proyecto'}` : process.env.TREX_SPACE_LABEL ? `Trex Browser — ${process.env.TREX_SPACE_LABEL}` : 'Trex Browser',
+    title: SHARED_ROOT ? 'Trex Browser' : process.env.TREX_SPACE_LABEL ? `Trex Browser — ${process.env.TREX_SPACE_LABEL}` : 'Trex Browser',
   });
   chromeView = new WebContentsView({ webPreferences: uiPrefs });
   uiContents.add(chromeView.webContents);

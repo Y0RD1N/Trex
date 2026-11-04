@@ -10,7 +10,7 @@ export function humanControls(send, { timeoutMs = 15000 } = {}) {
   return {
     request({ action, clientId = 'self', profile } = {}) {
       if (!ACTIONS.has(action) || typeof clientId !== 'string' || !clientId || clientId.length > 256
-        || profile != null && (typeof profile !== 'string' || !/^BROWSER\d+$/.test(profile)))
+        || profile != null && (typeof profile !== 'string' || !/^(?:[a-f0-9]{24}\/)?BROWSER[1-9][0-9]?$/.test(profile)))
         return Promise.reject(new Error('Control de navegador no válido.'));
       if (closed || pending.size >= 20) return Promise.reject(new Error('El navegador no está disponible. Vuelve a abrir el panel.'));
       return new Promise((resolve, reject) => {

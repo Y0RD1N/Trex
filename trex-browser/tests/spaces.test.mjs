@@ -73,11 +73,11 @@ test('the agents center publishes only actual browser sessions, never saved or m
   const published=[];const sink={push:(name,spaces)=>{if(name==='setSpaces')published.push(spaces);}};
   first.browser={};first.shell=sink;
   const update=async()=>{service.pushSpaces(ctx.projectId);await new Promise(resolve=>setTimeout(resolve,300));return published.at(-1);};
-  assert.deepEqual((await update()).map(space=>space.profile),[first.ctx.profile]);
+  assert.deepEqual((await update()).map(space=>space.profile),[first.key]);
   second.browser={};second.shell=sink;
-  assert.deepEqual((await update()).map(space=>space.profile),[first.ctx.profile,second.ctx.profile]);
+  assert.deepEqual((await update()).map(space=>space.profile),[first.key,second.key]);
   first.browser=null;first.shell=null;
-  assert.deepEqual((await update()).map(space=>space.profile),[second.ctx.profile]);
+  assert.deepEqual((await update()).map(space=>space.profile),[second.key]);
   assert.equal(service.profiles(ctx).length,3,'closing a browser must preserve its saved profile');
 });
 test('batch validation preserves bound policy and rejects every later nested input before dispatch',()=>{

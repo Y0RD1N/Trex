@@ -131,18 +131,25 @@ the selected instance only.
 Ownership still covers a whole project/profile. Independent clients cannot
 create tabs in another owner's profile; shared identities serialize page inputs.
 Different allocated profiles run concurrently with separate browser storage.
-Trex Browser presents those profiles as owned tabs inside one native window per
-project. Opening another agent's space reuses that window; cookies, local storage,
-permissions, downloads, operation queues and Playwright target connections remain
-scoped to each profile. Background agents do not change the human-selected tab.
-The agents center's View/Pause/Take control actions select and control the requested
-profile. Closing one profile leaves its peers running; the last close stops the
-project window. Existing profile storage is opened in place, preserving sign-ins.
-A profile loaded by that window cannot also be opened in a separate sign-in window
-until the shared window closes. Personal browser windows remain independent.
-Playwright action traces can run concurrently across agents. Raw Chromium
-performance tracing is browser-wide and requires exclusive use of the project
-window; starting another space while such a trace is active is rejected explicitly.
+Trex Browser presents personal tabs and agent profiles from all projects inside
+one native application window. Opening it from the desktop or from TREX joins
+the same broker-owned window. Profile identity includes its project, so two
+projects using BROWSER2 keep different cookies, local storage, permissions,
+downloads, queues and Playwright target connections. Agents cannot inspect the
+personal tabs. Existing profile storage is opened in place without migration.
+Background agents do not change the human-selected tab. The agents center's
+View/Pause/Take control actions address the full project/profile identity.
+Closing an agent leaves other agents and personal tabs open.
+Playwright action traces remain scoped to each agent. Raw Chromium performance
+tracing is browser-wide and requires exclusive use, with no personal tabs.
+
+Some providers, including Google, reject embedded browsers such as Electron
+with “This browser or app may not be secure.” The address bar offers **Abrir en
+navegador del sistema** and explains this on Google's sign-in page. Authentication
+in that external browser stays there; it does not log the Electron session in.
+TREX does not spoof its browser identity or copy cookies between browsers.
+Popup-based authentication supported by a site retains its opener, request body
+and profile session inside a tab of the shared window.
 The team scheduler supports up to four independent read-only tasks. Tasks that
 can write the shared workspace remain exclusive. `trex_team_plan.dependsOn: []`
 marks independent work; prerequisites must be earlier plan keys. Omitted

@@ -11,8 +11,8 @@ The worker launches the shell exactly like it launched Chrome:
 
 - **CDP over `--remote-debugging-pipe`.** No debugging port is opened. Playwright
   and every existing `browser_*` tool keep working.
-- **One window and process per project.** Each agent owns tabs backed by its
-  existing persistent `BROWSERn/user-data` session. Private scoped CDP connections
+- **One window and process for the application.** Each agent owns tabs backed by its
+  existing persistent `projects/<project>/BROWSERn/user-data` session. Personal tabs join this window in their own persistent session. Private scoped CDP connections
   expose only that agent's targets to Playwright, preserving independent cookies,
   storage, permissions and operation queues. Background agents keep working
   without changing the human-selected tab. Personal browser windows stay separate.

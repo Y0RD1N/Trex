@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { privateHome, privateHomePath, readPrivate, writePrivate, jsonRead, context, MAX_JSON, safePath, sha256, childEnvironment, readSaveFolders, updateSaveFolders } from './security.mjs';
 import { BrowserService, detectBrowser, isObservation } from './browser.mjs';
 import { ensureSpaces, listSpaces } from './spaces.mjs';
-import { ENGINES, readEngine, detectShell, openHumanWindow, spaceLabel } from './shell.mjs';
+import { ENGINES, readEngine, detectShell } from './shell.mjs';
 import { VERSION, PROTOCOL, tools, MODES, mcpInitialization, modelView } from './tools.mjs';
 
 const entry=fileURLToPath(import.meta.url);
@@ -137,6 +137,7 @@ async function daemon(){
     try{let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>1024*1024)throw new Error('Input exceeds 1 MiB');}const body=JSON.parse(raw||'{}');
       if(req.url==='/health'){send(200,{ok:true,version:VERSION,pid:process.pid});return;}
       if(req.url==='/grant'){const ctx=context(body);const grantId=crypto.randomBytes(32).toString('hex');grants.set(grantId,{ctx,expires:Date.now()+120000});if(grants.size>2000)for(const [id,g] of grants)if(g.expires<Date.now())grants.delete(id);send(200,{grantId});return;}
+      if(req.url==='/open'){send(200,await service.openWindow({...body,...(body.personal===true?{}:{ctx:context({...body,mode:'observe',clientId:'host-open'})})}));return;}
       if(req.url==='/spaces'){const ctx=context(body);send(200,body.action==='list'?listSpaces(service,ctx):ensureSpaces(service,ctx,body.members));return;}
       // Host only: bring a space's Trex Browser window (and optionally a tab) to the front.
       if(req.url==='/focus'){const ctx=context(body);send(200,await service.focusSpace(ctx,typeof body.tabId==='string'?body.tabId:null));return;}
@@ -215,18 +216,12 @@ async function main(){const args=argMap(process.argv.slice(2));const command=arg
   if(command==='spaces'){const listing=args._[1]==='list';if(!listing&&!args['stdin-json'])throw new Error('spaces requires --stdin-json');const input=listing?{cwd:args.cwd}:await stdinJson(),ctx=context({...input,mode:'observe',clientId:'host-spaces'}),home=privateHome();await ensureBroker(home);emit(await ipc(home,'/spaces',{...ctx,...(listing?{action:'list'}:{members:input.members})}));return;}
   if(command==='mcp-session'){if(!args['stdin-json'])throw new Error('mcp-session requires --stdin-json');const input=await stdinJson(),ctx=context({cwd:input.cwd,mode:input.mode,clientId:input.clientId,profile:input.profile}),home=privateHome();await ensureBroker(home);emit(await ipc(home,'/mcp-session',ctx));return;}
   if(command==='open'){
-    // Host only: a person's window without automation. {personal:true} or {cwd,profile} (agent sign-in).
+    // Host only: personal tabs or a selected profile inside the shared window.
     if(!args['stdin-json'])throw new Error('open requires --stdin-json');
-    const input=await stdinJson(),home=privateHome(),shell=detectShell('auto');
-    if(!shell)throw new Error('Trex Browser shell is not installed');
+    const input=await stdinJson(),home=privateHome();
     const url=typeof input.url==='string'&&/^https?:\/\//.test(input.url)?input.url:undefined;
-    if(input.personal===true){emit(openHumanWindow({executablePath:shell.executablePath,userData:path.join(home,'personal','user-data'),label:'Personal',url,env:childEnvironment()}));return;}
-    const ctx=context({cwd:input.cwd,mode:'observe',clientId:'host-open',profile:input.profile});
-    if(await running(home)){const listed=await ipc(home,'/spaces',{...ctx,action:'list'});if(listed.spaces?.some(sp=>sp.profile===ctx.profile&&(sp.running||sp.inUse))){emit({opened:false,reason:'agent-running'});return;}}
-    const dir=path.join(home,'projects',ctx.projectId,ctx.profile),manifest=jsonRead(path.join(dir,'profile.json'),null);
-    if(!manifest){emit({opened:false,reason:'unknown-profile'});return;}
-    safePath(dir);
-    emit(openHumanWindow({executablePath:shell.executablePath,userData:path.join(dir,'user-data'),label:`${spaceLabel(manifest.space?.label)||ctx.profile} · inicio de sesión`,url,env:childEnvironment()}));return;
+    await ensureBroker(home);
+    emit(await ipc(home,'/open',{...input,url},45000));return;
   }
   if(command==='focus'){if(!args['stdin-json'])throw new Error('focus requires --stdin-json');const input=await stdinJson(),ctx=context({cwd:input.cwd,profile:input.profile,mode:'observe',clientId:'host-focus'}),home=privateHome();await ensureBroker(home);emit(await ipc(home,'/focus',{...ctx,tabId:input.tabId}));return;}
   if(command==='profiles'){const ctx=boundArgs(args);const home=privateHome();await ensureBroker(home);emit(await ipc(home,'/profiles',{...ctx,action:args._[1]||'list'}));return;}
