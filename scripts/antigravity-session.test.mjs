@@ -213,3 +213,30 @@ test("A completed turn releases its busy state before the composer wakes the nex
   await h.start(); await h.session.send("First", [], []); await h.complete();
   assert.equal(await followup, true); assert.equal(h.writes.filter(w => w.method === "session/prompt").length, 2);
 });
+
+const contextPrompts = h => h.writes.filter(w => w.method === "session/prompt").map(w => w.params.prompt.some(part => part.text?.startsWith("<trex_context>")));
+test("the trex context is sent with the first prompt of each ACP session, not with every prompt", async t => {
+  const h = harness(t); await h.start();
+  await h.session.send("Primero", [], []); await h.complete();
+  await h.session.send("Segundo", [], []); await h.complete();
+  assert.deepEqual(contextPrompts(h), [true, false]);
+  await h.session.start(); await h.session.send("Tras reconectar", [], []); await h.complete();
+  assert.deepEqual(contextPrompts(h), [true, false, true], "a reloaded session receives it again");
+});
+test("a failed first prompt carries the context again on the next one", async t => {
+  const h = harness(t); await h.start();
+  await h.session.send("Falla", [], []); await h.complete({});
+  assert.equal(h.state.lastCompletion.status, "failed");
+  await h.session.send("Reintento", [], []); await h.complete();
+  assert.deepEqual(contextPrompts(h), [true, true]);
+});
+test("browser guidance enters the context only when a browser is attached", async t => {
+  const plain = harness(t); await plain.start(); await plain.session.send("Hola", [], []);
+  const text = plain.writes.find(w => w.method === "session/prompt").params.prompt[0].text;
+  assert.doesNotMatch(text, /Trex Browser|browser_navigate/);
+  assert.ok(Buffer.byteLength(text) < 2_000, `compact context (${Buffer.byteLength(text)} B)`);
+  await plain.complete();
+  const attached = harness(t, { options: { browser: { enabled: true, clientId: "client-b", profile: "BROWSER2" } } }); await attached.start(); await attached.session.send("Hola", [], []);
+  assert.match(attached.writes.find(w => w.method === "session/prompt").params.prompt[0].text, /browser_navigate/);
+  await attached.complete();
+});

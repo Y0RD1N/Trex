@@ -1,25 +1,25 @@
 .modal.feature-dialog.agent-workflow-dialog.agent-team-dialog { width: min(1000px, calc(100vw - 40px)); max-width: 1000px; }
-.team-member-editor { display: grid; gap: 12px; min-width: 0; padding: 17px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-inset, var(--bg-inset)); }
+.team-member-editor { display: grid; gap: var(--sp-3); min-width: 0; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--radius-2xl); background: var(--surface-inset); }
 .team-member-editor > header { display: flex; align-items: center; justify-content: space-between; min-height: 24px; }
-.team-member-controls { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.team-member-controls { display: flex; align-items: center; gap: var(--sp-1); flex-shrink: 0; }
 .team-member-controls .icon-btn { width: 29px; height: 29px; flex-shrink: 0; }
 .team-member-controls .icon-btn:disabled { opacity: .3; }
-.team-member-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.team-member-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-3); }
 .team-member-editor .select-trigger { width: 100%; min-width: 0; text-align: left; }
 .team-member-editor .workflow-field { min-width: 0; margin: 0; }
 .team-member-editor .input { width: 100%; min-width: 0; }
-.team-member-editor .select-trigger { min-height: 42px; height: auto; padding: 9px 12px; }
-.team-member-editor textarea.input { height: auto; min-height: 84px; padding: 11px 12px; line-height: 1.65; resize: vertical; }
-.team-member-editor > header .workflow-eyebrow { color: var(--text-muted); font-size: 11px; }
+.team-member-editor .select-trigger { min-height: 42px; height: auto; padding: var(--sp-2) var(--sp-3); }
+.team-member-editor textarea.input { height: auto; min-height: 84px; padding: var(--sp-2-5) var(--sp-3); line-height: 1.65; resize: vertical; }
+.team-member-editor > header .workflow-eyebrow { color: var(--text-muted); font-size: var(--fs-xs); }
 .team-member-editor:has(.team-member-policy > svg) { border-color: color-mix(in srgb, var(--accent) 28%, var(--border)); }
 .team-workers-heading > .btn { min-height: 36px; }
-.team-member-policy { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
-.team-member-policy > svg { flex: 0 0 auto; margin-top: 2px; }
-.team-member-policy > input { margin: 3px 0 0; accent-color: var(--accent); }
-.team-workers-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 6px; }
-.team-workers-heading h3 { margin: 0; font-size: 14px; }
-.team-workers-heading p { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
-.team-workers-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 14px; }
+.team-member-policy { display: flex; align-items: flex-start; gap: var(--sp-2); margin: 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.6; }
+.team-member-policy > svg { flex: 0 0 auto; margin-top: var(--sp-0-5); }
+.team-member-policy > input { margin: var(--sp-1) 0 0; accent-color: var(--accent); }
+.team-workers-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding-top: var(--sp-1-5); }
+.team-workers-heading h3 { margin: 0; font-size: var(--fs-base); }
+.team-workers-heading p { margin: var(--sp-1) 0 0; font-size: var(--fs-xs); line-height: 1.6; color: var(--text-muted); }
+.team-workers-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: var(--sp-3-5); }
 @media (max-width: 720px) { .team-workers-grid { grid-template-columns: minmax(0,1fr); } .team-workers-heading { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 420px) { .team-member-fields { grid-template-columns: minmax(0,1fr); } }
 @media (max-width: 640px) { .agent-team-dialog > .modal-footer .btn-primary { width: 100%; } .agent-team-dialog > .modal-footer .feature-hint { flex-basis: 100%; } }

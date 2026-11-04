@@ -6,8 +6,7 @@ import { AcpError, acpMcpServer, acpPrompt, validAcpSessionId } from "../acpProt
 import { acpConfigs, acpEffortConfig, acpModelConfig, acpModes, antigravityReducer, type AcpConfig } from "../antigravityChat";
 import { initialChatState, list, record, text, type Json, type OutgoingImage, type PermissionItem } from "../chatState";
 import { connectBrowser } from "../browserConnection";
-import { BROWSER_INSTRUCTIONS } from "../browser";
-import { integrationContext, integrationInstructions } from "../integrations";
+import { detectedIntegrations, integrationContext, integrationInstructions } from "../integrations";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { INBOX_WAKE, messageQueueId, type QueueReceipt } from "../messageQueue";
 import { useMessageQueue } from "./useMessageQueue";
@@ -15,7 +14,7 @@ import { localId, type ChatSession, type ChatSessionOptions } from "./chatSessio
 import { withChatTimes } from "../chatTimes";
 const timedAntigravityReducer = withChatTimes(antigravityReducer);
 
-const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${BROWSER_INSTRUCTIONS} For meaningful multi-step work, use trex_update_tasks on the trex_inbox MCP server to publish and update the chat task list, including in ordinary chats. Use plan:[{step,status}], at most one in_progress. Mark work completed only after verifying it. User messages typed while you work are queued by Trex and delivered as complete subsequent user turns, with their attachments. Do not poll an inbox or claim you received an attachment unless it was delivered.`;
+const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} For multi-step work, in ordinary chats too, publish and update the chat task list with trex_update_tasks (trex_inbox MCP server; plan:[{step,status}], at most one in_progress); mark work completed only after verifying it. Messages the user types while you work are queued by trex and delivered as the next user turn with their attachments; do not poll an inbox or claim an attachment that was not delivered.`;
 type Approval = { id: string | number; params: Json; turn: string };
 type Active = { id: string; done: Promise<void>; cancelled: boolean };
 export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
@@ -36,6 +35,10 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
   const authMethods = useRef<{ id: string; name: string }[]>([]);
   const controller = useRef<AbortController | null>(null);
   const choices = useRef({ model: options.model, effort: options.effort, mode: options.mode });
+  /** What this ACP session has: an attached browser and the installed applications. */
+  const tools = useRef<{ browser: boolean; available: Partial<Record<"github" | "blender" | "hyperframes", boolean>> | null }>({ browser: false, available: null });
+  /** The <trex_context> stays in the session's history: it is sent again only for a new/reloaded session or new content. */
+  const contextSent = useRef<{ session: string; text: string } | null>(null);
   const notice = (tone: "info" | "warn" | "error", value: string): void => { if (alive.current) dispatch({ type: "notice", id: localId(), tone, text: value }); };
   const isCurrent = (token: number): boolean => alive.current && generation.current === token;
   const cancelApprovals = async (): Promise<void> => {
@@ -125,6 +128,8 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       }
       const native = connection.current;
       const browser = await connectBrowser(current.browser, current.cwd, null, false, "", message => notice("warn", message));
+      const detection = detectedIntegrations(current.cwd);
+      tools.current = { browser: !!browser, available: detection instanceof Promise ? await detection : detection };
       const tasks = await messageQueueMcpConfig(messageQueueId(current.queueId ?? current.sessionId), true);
       const servers = [acpMcpServer("trex_inbox", { command: text(tasks["mcp_servers.trex_inbox.command"]), args: tasks["mcp_servers.trex_inbox.args"] as string[] }),
         ...(browser ? [acpMcpServer("trex_browser", browser)] : []), ...(current.desktopEnabled ? [acpMcpServer("trex_desktop", await trexDesktopMcpConfig("full"))] : [])];
@@ -142,6 +147,7 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       const nativeId = saved ?? result.sessionId;
       if (!validAcpSessionId(nativeId)) throw new Error("Antigravity no devolvió un identificador de conversación válido.");
       session.current = nativeId; conversation.current = nativeId;
+      contextSent.current = null; // A new or reloaded session gets the context with its first prompt.
       tier.current = antigravityTier(result);
       configs.current = acpConfigs(result.configOptions); const availableModes = acpModes(result.modes); setModes(availableModes);
       dispatch({ type: "acpReady", sessionId: nativeId, result, history: !!saved });
@@ -184,7 +190,10 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
         ...receipt.messages.flatMap((m, i) => acpPrompt(`Mensaje ${i + 1} (${m.id}):\n${m.text}`, m.images, imageSupported))]
         : acpPrompt(value, images, imageSupported);
       // Explicit context travels as text, including on resume; no private or undocumented injection channel.
-      prompt.unshift({ type: "text", text: `<trex_context>\n${INSTRUCTIONS} ${integrationInstructions("antigravity", integrationContext(latest.current))}${latest.current.planningInstruction ? `\n${latest.current.planningInstruction}` : ""}\n</trex_context>` });
+      // It stays in the session history, so it is repeated only for a new/reloaded session or changed content.
+      const context = `<trex_context>\n${[INSTRUCTIONS, integrationInstructions("antigravity", integrationContext(latest.current, tools.current))].filter(Boolean).join(" ")}${latest.current.planningInstruction ? `\n${latest.current.planningInstruction}` : ""}\n</trex_context>`;
+      const withContext = contextSent.current?.session !== session.current || contextSent.current.text !== context;
+      if (withContext) prompt.unshift({ type: "text", text: context });
       const id = localId(), native = connection.current, nativeSession = session.current;
       dispatch({ type: "send", id, text: display ?? value, previews, now: Date.now() });
       let settle!: () => void;
@@ -201,10 +210,13 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
         dispatch({ type: "acpFinished", id, result, now: Date.now() });
       }).catch(error => { if (isCurrent(token)) {
         if (active.current?.id === id) { void cancelApprovals(); active.current = null; }
+        // A failed prompt may not be in the history: the next one carries the context again.
+        if (withContext && contextSent.current?.session === nativeSession && contextSent.current.text === context) contextSent.current = null;
         if (error instanceof AcpError && error.code === -32000) { setSetup("auth"); startup.current = null; }
         dispatch({ type: "acpFinished", id, error: formatError(error), now: Date.now() });
       } })
         .finally(() => { settle(); if (active.current?.id === id) { active.current = null; void cancelApprovals(); } });
+      if (withContext) contextSent.current = { session: nativeSession, text: context };
       await request.written;
       return true;
     } catch (error) { notice("error", formatError(error)); return false; }

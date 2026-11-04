@@ -2,9 +2,9 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { agentWrite, agentTeamMcpConfig, trexBrowserResolveSpace, formatError } from "../api";
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
-import { InboxRequests, INBOX_INSTRUCTIONS, type QueueSnapshot } from "../messageQueue";
+import { deliverInbox, InboxRequests, INBOX_INSTRUCTIONS, INBOX_WAKE, type QueueSnapshot } from "../messageQueue";
 import { taskInstructions } from "../chatTasks";
-import { assertIntegrationRestrictions, integrationContext, integrationInstructions, integrationRestrictions } from "../integrations";
+import { assertIntegrationRestrictions, detectedIntegrations, integrationContext, integrationInstructions, integrationRestrictions } from "../integrations";
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
@@ -144,8 +144,14 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const browser = current.browser?.enabled && current.browser.automatic ? await trexBrowserResolveSpace(current.cwd,current.browser) : current.browser;
       assertStartup(procId);
       if(current.browser?.enabled && browser?.enabled === false) notice("warn","Trex Browser no está disponible. Revisa su instalación en Ajustes; el asistente continúa sin navegador.");
+      const detection = detectedIntegrations(current.cwd);
+      const available = detection instanceof Promise ? await detection : detection;
+      assertStartup(procId);
+      // Announce only an attached browser and installed applications; restrictions below still follow the preferences.
+      const integrations = integrationContext(current, { browser: browser?.enabled === true, available });
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
-        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current, instructions: `${INBOX_INSTRUCTIONS} ${taskInstructions("trex")} ${integrationInstructions("trex", integrationContext(current))}`,
+        model: selected.model, effort: selected.effort, conversationId: nativeConversation.current,
+        instructions: [INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations)].filter(Boolean).join(" "),
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
         settings: integrationRestrictions(current.integrations), desktopEnabled: current.desktopEnabled === true, ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
@@ -232,7 +238,24 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       return false;
     } finally { attempt.controller.abort(); if (sending.current === attempt) sending.current = null; }
   };
-  const send = (value: string, images: OutgoingImage[], previews: string[], display?: string): Promise<boolean> => submit(value, images, previews, display, false);
+  /**
+   * Queued messages travel as the next user turn (one request, no tool call).
+   * Above the CLI's per-message image limit the model reads them through the
+   * durable inbox callback instead.
+   */
+  const deliverQueued = async (): Promise<boolean> => {
+    if (!mounted.current) return false;
+    const snapshot = queue.snapshot, batch = snapshot.receipt?.messages ?? snapshot.messages;
+    const images = batch.flatMap(message => message.images);
+    if (images.length > 16 || images.reduce((total, image) => total + image.data.length, 0) > 24 * 1024 * 1024)
+      return submit(INBOX_WAKE, [], [], "Leer los mensajes en cola", false);
+    try {
+      return await deliverInbox(queue.client, delivery => submit(delivery.text, delivery.images, delivery.previews, delivery.display, false),
+        () => mounted.current, message => notice("warn", message));
+    } catch (error) { notice("error", `No se pudo leer la cola: ${formatError(error)}`); return false; }
+  };
+  const send = (value: string, images: OutgoingImage[], previews: string[], display?: string): Promise<boolean> =>
+    value === INBOX_WAKE ? deliverQueued() : submit(value, images, previews, display, false);
   const sendNow = (value: string, images: OutgoingImage[], previews: string[], display?: string, onInterrupt?: (messageId: string) => void): Promise<boolean> => submit(value, images, previews, display, true, onInterrupt);
   const interrupt = (): void => {
     const attempt = sending.current;

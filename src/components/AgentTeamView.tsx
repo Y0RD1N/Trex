@@ -1,10 +1,14 @@
 import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { agentTeamClaim, agentTeamFinish, agentTeamOpen, agentTeamPause, agentTeamPoll, agentTeamSnapshot, trexBrowserStatus, trexBrowserSpaces, formatError, loadHandoff, prepareHandoff } from "../api";
-import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, mergeTeamItems, teamCombinedState, teamPlanningContext, teamTaskActive, teamTaskRunnable, type AgentTeam, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
+import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, TEAM_REPORT_INSTRUCTIONS, mergeTeamItems, teamCombinedState, teamGitSnapshot, teamMemberUsesBrowser, teamPlanningContext, teamTaskActive, teamTaskRunnable, type AgentTeam, type TaskUsage, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
+import { budgetNote, budgetRefusal, budgetRemaining } from "../teamBudget";
+import { addToLedger, compactionNeeded, memberQuota, observeUsage, readAccountPlan, requestCompaction, teamUsageReport, teamUsageView, usageSince, type UsageObservation } from "../teamUsage";
+import { agentTeamFinishTask, agentTeamPublishUsage } from "../teamApi";
+import type { PlanUsage } from "../planUsage";
 import { browserOptions, type BrowserSpace } from "../browser";
 import { currentModel, modelName, type ChatState } from "../chatState";
-import { buildHandoffPrompt, sanitizeHandoffText } from "../handoff";
+import { buildHandoffPrompt, sanitizeHandoffText, withoutGitSnapshot } from "../handoff";
 import { planningContext } from "../agentWorkflow";
 import type { ChatSession, ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
@@ -28,7 +32,9 @@ function ClaudeRuntime(props: RuntimeProps) { return <Publish {...props} session
 function CodexRuntime(props: RuntimeProps) { return <Publish {...props} session={useCodexChat(props.options)} />; }
 function AntigravityRuntime(props: RuntimeProps) { return <Publish {...props} session={useAntigravityChat(props.options)} />; }
 function TrexRuntime(props: RuntimeProps) { return <Publish {...props} session={useTrexChat(props.options)} />; }
-type Attempt = { epoch: string; task: TeamTask; member: TeamMember; session: ChatSession; previous: string | null; users: Set<string>; accepted: boolean };
+/** `ledger`: the member's attributed usage when the delegation started; its growth is the task's usage. */
+type Attempt = { epoch: string; task: TeamTask; member: TeamMember; session: ChatSession; previous: string | null; users: Set<string>; accepted: boolean; ledger: TaskUsage | null };
+const REPORT_TRANSPORT_LIMIT = 900_000;
 const noop = (): void => undefined;
 export default function AgentTeamView(props: Props) {
   const { team } = props;
@@ -55,8 +61,14 @@ export default function AgentTeamView(props: Props) {
   const masterCompletion = useRef<string | null>(null);
   const feedback=useRef<string | null>(null),waitingReports=useRef(false);
   const opening = useRef<string | null>(null);
+  const observed = useRef(new Map<string, UsageObservation>());
+  const compactions = useRef(new Map<string, { at: number; usage: ChatState["usage"]; started: boolean }>());
+  const publishedUsage = useRef({ text: "", at: 0 });
+  const [accountPlans, setAccountPlans] = useState<Record<string, PlanUsage | null>>({});
+  const plansRef = useRef(accountPlans); plansRef.current = accountPlans;
   if (epoch.current !== team.epoch) {
     epoch.current = team.epoch; sessionsRef.current = {}; attempt.current.clear(); masterCompletion.current = null;feedback.current=null;waitingReports.current=false;
+    observed.current.clear(); compactions.current.clear(); publishedUsage.current = { text: "", at: 0 };
   }
   const change = useCallback((update:(value:AgentTeam)=>AgentTeam):void => {
     if (!mounted.current) return;
@@ -69,6 +81,9 @@ export default function AgentTeamView(props: Props) {
     const prior=sessionsRef.current[id]; sessionsRef.current[id]=session;
     if (!prior || prior.state!==session.state || prior.terminals!==session.terminals || prior.queue.snapshot!==session.queue.snapshot || prior.queue.ready!==session.queue.ready || prior.queue.error!==session.queue.error)
       setPublished(previous=>({epoch:publishedEpoch,sessions:{...(previous.epoch===publishedEpoch?previous.sessions:{}),[id]:session}}));
+    // New tokens attributed to the team accumulate across cycles (budget and usage panel).
+    const seen=observeUsage(observed.current.get(id),session.state);observed.current.set(id,seen.next);
+    if(seen.delta){const delta=seen.delta;change(value=>({...value,usage:addToLedger(value.usage,id,delta)}));}
     change(value=>{
       const member=id===value.master.id?value.master:value.workers.find(member=>member.id===id);
       if (!member) return value;
@@ -108,9 +123,12 @@ export default function AgentTeamView(props: Props) {
   },[]);
   const allocateSpaces=async(config:AgentTeam):Promise<BrowserSpace[]>=>{
     if(!browser.enabled)return [];
+    // Only members whose role browses (or that the user enabled) get a space and its tools.
+    const browsing=[config.master,...config.workers].filter(teamMemberUsesBrowser);
+    if(!browsing.length)return [];
     const status=await trexBrowserStatus();if(!status.ready)return [];
     if(!status.capabilities?.spaces)throw new Error("Actualiza el componente Trex Browser para habilitar espacios por agente.");
-    return (await trexBrowserSpaces(latest.current.cwd,[config.master,...config.workers].map(member=>({clientId:config.id+"-"+member.id,label:member.name})))).spaces;
+    return (await trexBrowserSpaces(latest.current.cwd,browsing.map(member=>({clientId:config.id+"-"+member.id,label:member.name})))).spaces;
   };
   useEffect(()=>{
     if (team.phase==="paused" || team.phase==="failed") {
@@ -120,10 +138,10 @@ export default function AgentTeamView(props: Props) {
     if(openedEpoch===team.epoch || opening.current===team.epoch)return;
     const binding=team.epoch; opening.current=binding; setStarting(true);
     void (async()=>{
-      const bindings=await allocateSpaces(team);
+      const bindings=await allocateSpaces(current.current);
       if(!mounted.current || current.current.epoch!==binding)return null;
       setSpaces(bindings);
-      return agentTeamOpen(team,props.cwd);
+      return agentTeamOpen(current.current,props.cwd);
     })().then(value=>{
       if(!value || !mounted.current || current.current.epoch!==binding)return;
       setSnapshot(value);setOpenedEpoch(binding);
@@ -146,6 +164,16 @@ export default function AgentTeamView(props: Props) {
     }catch(error){if(mounted.current)change(value=>({...value,phase:"paused",error:formatError(error)}));}
     finally{if(mounted.current)setStarting(false);}
   };
+  /** Publishes usage, budget and quotas for the coordinator tools when they change (throttled). */
+  const publishUsage=(binding:{id:string;epoch:string}):void=>{
+    const team=current.current;
+    const states=Object.fromEntries(Object.entries(sessionsRef.current).map(([id,session])=>[id,session.state])) as Record<string,ChatState>;
+    const text=JSON.stringify(teamUsageReport(team,teamUsageView(team,states,plansRef.current),browser.enabled));
+    const last=publishedUsage.current, now=Date.now();
+    if(text===last.text || now-last.at<1500)return;
+    publishedUsage.current={text,at:now};
+    void agentTeamPublishUsage(binding,JSON.parse(text)).catch(()=>{if(publishedUsage.current.text===text)publishedUsage.current={text:"",at:now};});
+  };
   // A slow provider acknowledgement or context capture must not expire the
   // coordinator's lease while the task scheduler is awaiting that operation.
   useEffect(()=>{
@@ -163,6 +191,15 @@ export default function AgentTeamView(props: Props) {
     },3000);
     return()=>{cancelled=true;window.clearInterval(timer);};
   },[team.id,team.epoch,team.phase,openedEpoch,stop]);
+  // Account quotas without spending tokens; sessions replace them with their own live readings.
+  useEffect(()=>{
+    if(openedEpoch!==team.epoch)return;
+    const settings=latest.current.settings, profiles=settings.profiles??[];
+    let cancelled=false;
+    for(const profile of profiles.filter(profile=>[current.current.master,...current.current.workers].some(member=>member.agent.profileId===profile.id)))
+      void readAccountPlan(profile,settings,latest.current.cwd).then(plan=>{if(!cancelled && mounted.current)setAccountPlans(previous=>({...previous,[profile.id]:plan}));});
+    return()=>{cancelled=true;};
+  },[openedEpoch,team.epoch]);
   useEffect(()=>{
     if(openedEpoch!==team.epoch || ["paused","failed","completed"].includes(team.phase))return;
     let cancelled=false;
@@ -176,6 +213,7 @@ export default function AgentTeamView(props: Props) {
         if(!isCurrent())return;
         setSnapshot(value);
         if(value.phase!=="running"){stop("La coordinación se pausó. Revisa las tareas antes de continuar.");return;}
+        publishUsage(binding);
         const main=sessionsRef.current[current.current.master.id];
         const completion=main?.state.lastCompletion;
         if(completion && completion.id!==masterCompletion.current){
@@ -202,8 +240,10 @@ export default function AgentTeamView(props: Props) {
           let status=done.status==="completed"?"completed":done.status==="interrupted"?"uncertain":"failed";
           let result=report || "El subagente terminó sin un informe final utilizable. Revisa su historial y solicita una explicación.";
           if(!report && status!=="uncertain")status="failed";
-          if(new TextEncoder().encode(result).length>32*1024){status="failed";result="El informe final supera 32 KiB. El contenido completo se conserva en el historial del subagente; solicita un resumen completo más breve antes de decidir.";}
-          value=await agentTeamFinish(binding,active.task.id,status,result);
+          // Long reports keep their status: Trex stores the full text natively and gives the principal an excerpt.
+          if(result.length>REPORT_TRANSPORT_LIMIT)result=result.slice(0,REPORT_TRANSPORT_LIMIT)+"\n\n[Informe recortado por tamaño; el texto completo sigue en el historial del subagente.]";
+          const usage=usageSince(current.current.usage?.[active.member.id],active.ledger);
+          value=await agentTeamFinishTask(binding,active.task.id,status,result,usage);
           if(!isCurrent())return;
           attempt.current.delete(active.member.id);setSnapshot(value);
           if(status==="uncertain"){stop("Una delegación se interrumpió. Revisa los archivos y el historial antes de continuar.");return;}
@@ -213,7 +253,7 @@ export default function AgentTeamView(props: Props) {
           const key=finished.map(task=>task.id+":"+task.status).sort().join("|");
           if(feedback.current!==key && current.current.phase!=="completed"){
             feedback.current=key;waitingReports.current=false;
-            const prompt="Han terminado las delegaciones pendientes de este ciclo. Consulta trex_task_status para leer y evaluar sus informes antes de cerrar el trabajo. No vuelvas a ejecutar estas tareas. Si hay fallos, decide y publica los pasos correctivos con claves nuevas. Tareas: "+finished.map(task=>task.id+" ("+task.key+", "+task.status+")").join("; ");
+            const prompt="Han terminado las delegaciones pendientes de este ciclo. Llama una sola vez a trex_task_status sin taskId: devuelve juntos los informes nuevos. Evalúalos antes de cerrar el trabajo. No vuelvas a ejecutar estas tareas. Si hay fallos, decide y publica los pasos correctivos con claves nuevas. Tareas: "+finished.map(task=>task.id+" ("+task.key+", "+task.status+")").join("; ");
             const accepted=await main.send(prompt,[],[],"Informes del equipo listos para revisión");
             if(!isCurrent())return;
             if(accepted!==true){stop("No se pudo confirmar la entrega de los informes al principal. No se repetirán automáticamente.");return;}
@@ -229,6 +269,16 @@ export default function AgentTeamView(props: Props) {
           setActivated(previous=>previous.has(member.id)?previous:new Set([...previous,member.id]));
           if(worker?.queue.error)throw new Error("No se pudo cargar la cola de "+member.name+": "+worker.queue.error);
           if(!worker || !worker.queue.ready || ["starting","idle"].includes(worker.state.process) || worker.state.pendingTurns>0)continue;
+          // A long-lived member session is summarized before new work instead of re-reading it all.
+          const compaction=compactions.current.get(queued.id);
+          if(!compaction){
+            const needed=compactionNeeded(worker.state);
+            if(needed){
+              const started=requestCompaction(worker);
+              compactions.current.set(queued.id,{at:Date.now(),usage:worker.state.usage,started});
+              if(started){worker.notice("info","Contexto de "+member.name+(needed.percent!==null?" al "+Math.round(needed.percent)+" %":"")+": se resume la conversación antes de la nueva tarea.");continue;}
+            }
+          }else if(compaction.started && worker.state.usage===compaction.usage && Date.now()-compaction.at<45_000)continue;
           value=await agentTeamClaim(binding,queued.id);
           if(!isCurrent())return;
           const task=value.tasks.find(task=>task.id===queued.id && task.status==="claimed");
@@ -238,7 +288,16 @@ export default function AgentTeamView(props: Props) {
             const failed=await agentTeamFinish(binding,task.id,"failed","No se pudo iniciar este subagente. Revisa su cuenta o conexión.");
             if(isCurrent())setSnapshot(failed);continue;
           }
-          const issued:Attempt={epoch:binding.epoch,task,member,session:worker,previous:worker.state.lastCompletion?.id??null,users:new Set([...worker.state.pendingMessageIds,...worker.state.items.filter(item=>item.kind==="user").map(item=>item.id)]),accepted:false};
+          const refusal=budgetRefusal(current.current,member.id), quota=memberQuota(member,worker.state,plansRef.current);
+          if(refusal || quota?.blocked){
+            const reason=refusal?refusal+" La delegación no se inició.":"La cuenta "+quota!.label+" de "+member.name+" está al "+Math.round(quota!.peak??100)+" % de su cuota. La delegación no se inició: asígnala a otro colaborador con margen.";
+            value=await agentTeamFinish(binding,task.id,"failed",reason);
+            if(!isCurrent())return;
+            setSnapshot(value);
+            if(refusal){stop(refusal+" Amplía el presupuesto en el panel del equipo y reanuda para continuar.");return;}
+            continue;
+          }
+          const issued:Attempt={epoch:binding.epoch,task,member,session:worker,previous:worker.state.lastCompletion?.id??null,users:new Set([...worker.state.pendingMessageIds,...worker.state.items.filter(item=>item.kind==="user").map(item=>item.id)]),accepted:false,ledger:current.current.usage?.[member.id]??null};
           attempt.current.set(member.id,issued);
           void (async()=>{
         const context=planningContext(task.instruction,{sessionId:latest.current.sessionId,provider:current.current.master.agent.provider,
@@ -246,11 +305,13 @@ export default function AgentTeamView(props: Props) {
           projectId:latest.current.projectId??"",projectName:latest.current.projectName,cwd:latest.current.cwd});
         const instructions="Realiza solo la tarea delegada. Tu función es "+TEAM_ROLES[member.role].name+". "+member.instructions
           +(member.canWrite?" Comprueba el estado actual del proyecto antes de editar. Permisos elegidos: "+agentPermissionLabel(member.agent.provider,member.mode)+".":" No modifiques archivos, ejecutes implementaciones ni solicites permisos de escritura.")
-          +" Si la tarea tiene varios pasos, publica y actualiza tu propia lista con tus herramientas de tareas disponibles; marca cada paso completado solo tras verificarlo. La tarea asignada del equipo se actualiza según el resultado confirmado de tu delegación. Entrega un informe final con resultado, archivos/evidencias, validaciones realizadas, hallazgos y limitaciones. No delegues a otros agentes.";
+          +" Si la tarea tiene varios pasos, publica y actualiza tu propia lista con tus herramientas de tareas disponibles; marca cada paso completado solo tras verificarlo. La tarea asignada del equipo se actualiza según el resultado confirmado de tu delegación. No delegues a otros agentes. "
+          +TEAM_REPORT_INSTRUCTIONS+budgetNote(budgetRemaining(current.current,member.id));
         context.content="# Función e instrucciones de esta delegación\n\n"+instructions+"\n\n"+context.content;
-        const prepared=await prepareHandoff(context);
+        // Git context by role: reviewers get the diff, researchers nothing, the rest the status.
+        const prepared=await prepareHandoff(context,{git:teamGitSnapshot(member)});
         if(!isCurrent() || attempt.current.get(member.id)!==issued)return;
-        const accepted=await worker.send(buildHandoffPrompt(prepared,"Realiza únicamente la tarea y función recibidas. Respeta sus restricciones y entrega un informe final verificable."),[],[],"Delegación de "+current.current.master.name+"\n\n"+task.instruction);
+        const accepted=await worker.send(buildHandoffPrompt(prepared,"Realiza únicamente la tarea y función recibidas. Respeta sus restricciones y entrega un informe final breve y verificable."),[],[],"Delegación de "+current.current.master.name+"\n\n"+task.instruction);
         if(!isCurrent() || attempt.current.get(member.id)!==issued)return;
         if(accepted!==true){
           await agentTeamFinish(binding,task.id,"uncertain","No se pudo confirmar la entrega. Revisa el historial; no se repetirá automáticamente.");
@@ -273,7 +334,9 @@ export default function AgentTeamView(props: Props) {
   const paused=["paused","failed"].includes(team.phase);
   const locked=paused || starting || openedEpoch!==team.epoch;
   const block=(message:string):"blocked"=>{latest.current.onMessage(message);return "blocked";};
+  const usageView=useMemo(()=>teamUsageView(team,states,accountPlans),[team,states,accountPlans]);
   const toolbar=<AgentTeamToolbar team={team} states={states} snapshot={snapshot} starting={starting} busy={busy}
+    usage={usageView} onBudgetChange={budget=>change(value=>({...value,budget}))}
     onStop={()=>stop()} onResume={()=>void resume()}
     onLoad={member=>{ setActivated(previous=>new Set([...previous,member.id])); const session=sessions[member.id];
       if(session && ["failed","exited"].includes(session.state.process))void session.start().catch(error=>latest.current.onMessage(formatError(error))); }}
@@ -305,8 +368,11 @@ export default function AgentTeamView(props: Props) {
             if(!valid())return false;
             const context=teamPlanningContext(current.current,text.trim()?text:images.length?"Analiza las imágenes adjuntas y ayúdame a planificar la idea. Pregunta si necesitas más contexto.":text,
               {sessionId:latest.current.sessionId,provider:current.current.master.agent.provider,profileId:current.current.master.agent.profileId,
-                profileName:current.current.master.agent.profileName,title:"Planificación del equipo",projectId:latest.current.projectId??"",projectName:latest.current.projectName,cwd:latest.current.cwd},prior?.content);
-            const prepared=await prepareHandoff(context);
+                profileName:current.current.master.agent.profileName,title:"Planificación del equipo",projectId:latest.current.projectId??"",projectName:latest.current.projectName,cwd:latest.current.cwd},
+                // A fresh status snapshot is attached below; drop the one saved with the inherited context.
+                prior?withoutGitSnapshot(prior.content):undefined);
+            // The coordinator plans from branch and status; reviewers receive the diff when delegated.
+            const prepared=await prepareHandoff(context,{git:"status"});
             if(!valid())return false;
             outgoing=buildHandoffPrompt(prepared,"Atiende la idea del usuario. Planifica, delega según el equipo configurado y revisa los resultados. "+(current.current.master.canWrite?"Puedes editar respetando tus permisos y ceder el proyecto al terminar tu turno.":"No implementes directamente."));
           }

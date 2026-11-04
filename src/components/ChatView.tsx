@@ -12,7 +12,7 @@ import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browse
  * TerminalView, se monta una vez por pestaña y el padre la oculta con
  * display:none, así que el proceso y el hilo se conservan al cambiar de sesión.
  */
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { formatError, gitBranch, listProjectFiles, readClipboard, trexBrowserOpenArtifact, trexBrowserSpaces } from "../api";
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
@@ -48,10 +48,10 @@ import { dispatchQueuedMessage, INBOX_WAKE, type QueuedMessage } from "../messag
 import { createHandoffContext, type HandoffContext, type HandoffReference } from "../handoff";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, ListIcon, MapIcon, PaperclipIcon, PencilIcon, RotateIcon, ShieldIcon, StopIcon } from "./Icons";
+import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, ListIcon, MapIcon, PaperclipIcon, PencilIcon, ProfilesIcon, RotateIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { ModelMenu } from "./chat/ModelMenu";
-import ComposerSettings from "./chat/ComposerSettings";
+import ComposerSettings, { ComposerMoreMenu, type ComposerAction } from "./chat/ComposerSettings";
 import UsageMenu from "./chat/UsageMenu";
 import { FileBadge, SharedFilesContext } from "./chat/SharedFiles";
 import { useImageViewer } from "./ImageViewer";
@@ -166,6 +166,36 @@ const THREAD_WINDOW = 60;
 const THREAD_STEP = 80;
 const NO_ITEMS: ChatItem[] = [];
 
+/** Pestañas del panel lateral: equipo, tareas y Git comparten un solo panel. */
+type SideTab = "team" | "tasks" | "git";
+/** Atajos de la caja de mensaje: los mismos disparadores que abren las sugerencias. */
+const COMPOSER_HINTS = [
+  { char: "/", label: "Comandos" },
+  { char: "$", label: "Skills" },
+  { char: "@", label: "Archivos" },
+] as const;
+const SIDE_STORE = "trex.chat-side";
+const SIDE_MEMORY = 100;
+/** Pestaña recordada para este chat; sin almacenamiento disponible, ninguna. */
+function storedSide(sessionId: string): SideTab | "closed" | undefined {
+  try {
+    const value = (JSON.parse(window.localStorage?.getItem(SIDE_STORE) ?? "{}") as Record<string, unknown>)[sessionId];
+    return value === "team" || value === "tasks" || value === "git" || value === "closed" ? value : undefined;
+  } catch { return undefined; }
+}
+function storeSide(sessionId: string, tab: SideTab | null): void {
+  try {
+    const storage = window.localStorage;
+    if (!storage) return;
+    const all = JSON.parse(storage.getItem(SIDE_STORE) ?? "{}") as Record<string, string>;
+    delete all[sessionId];
+    all[sessionId] = tab ?? "closed";
+    const keys = Object.keys(all);
+    for (const key of keys.slice(0, Math.max(0, keys.length - SIDE_MEMORY))) delete all[key];
+    storage.setItem(SIDE_STORE, JSON.stringify(all));
+  } catch { /* sin almacenamiento: se recuerda mientras el chat siga abierto */ }
+}
+
 /** Tiempo del turno en curso: solo este texto se repinta cada segundo. */
 function WorkingTime({ since, live }: { since: number; live: boolean }) {
   const [now, setNow] = useState(() => Date.now());
@@ -191,10 +221,21 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     updateDraft(draftRef.current);
   };
   const [atBottom, setAtBottom] = useState(true);
-  const [tasksOpen, setTasksOpen] = useState(props.taskPlan !== undefined && !props.emptyState);
-  const [gitOpen, setGitOpen] = useState(false);
+  // Un solo panel lateral con pestañas; null es el panel contraído.
+  const [sideTab, setSideTab] = useState<SideTab | null>(() => {
+    const stored = storedSide(sessionId);
+    if (stored) return stored === "closed" ? null : stored;
+    return props.taskPlan !== undefined && !props.emptyState ? "tasks" : props.toolbar ? "team" : null;
+  });
+  const storedSideRef = useRef(sideTab);
+  useEffect(() => {
+    if (storedSideRef.current === sideTab) return;
+    storedSideRef.current = sideTab;
+    storeSide(sessionId, sideTab);
+  }, [sessionId, sideTab]);
+  const setTasksOpen = (open: boolean): void => setSideTab(tab => open ? "tasks" : tab === "tasks" ? null : tab);
   const gitToggle = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (tasksOpen) setGitOpen(false); }, [tasksOpen]);
+  const teamToggle = useRef<HTMLButtonElement>(null);
   const hadTasks = useRef(false);
   const taskToggle = useRef<HTMLButtonElement>(null);
   const revealingTask = useRef(false);
@@ -254,13 +295,16 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const mirrorRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
-  const toolbarRef = useRef<HTMLDivElement | null>(null);
 
   // Una pestaña oculta no repinta su hilo: conserva lo último que se vio y se
   // pone al día al mostrarse. Las que nunca se abrieron no pintan su historial.
   const shownItemsRef = useRef<ChatItem[] | null>(null);
   if (visible) shownItemsRef.current = state.items;
   const threadItems = shownItemsRef.current ?? NO_ITEMS;
+  // Datos derivados que no son urgentes (tareas, preguntas en texto): se calculan
+  // con prioridad baja para que el streaming y la escritura no esperen por ellos.
+  // Usan todos los mensajes: las tareas de una pestaña oculta siguen al día.
+  const deferredItems = useDeferredValue(state.items);
   // Solo entran con movimiento las filas que acaban de llegar a la vista.
   // Cargar historial, volver a la pestaña o subir a leer no vuelve a animarlas.
   const previousThreadRef = useRef({ items: threadItems, visible });
@@ -318,10 +362,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   }, [state.sessionId, hasMessages, sessionId]);
 
   // Desplazamiento: sigue el final mientras la persona no haya subido a leer.
+  // Solo al llegar filas nuevas o al mostrarse: el crecimiento del texto en curso
+  // lo sigue el ResizeObserver del hilo, sin forzar un layout por fragmento.
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element && stickRef.current && visible) element.scrollTop = element.scrollHeight;
-  }, [state.items, state.pendingTurns, visible]);
+  }, [threadItems.length, state.pendingTurns, visible]);
 
   const onScroll = (): void => {
     const element = scrollRef.current;
@@ -358,20 +404,18 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     return () => observer.disconnect();
   }, []);
 
-  // Los controles flotan sobre el hilo. Sus medidas solo reservan los extremos
-  // del contenido; no recortan la superficie por la que se desplazan los mensajes.
+  // La caja de mensaje flota sobre el hilo. Su medida solo reserva el final
+  // del contenido; no recorta la superficie por la que se desplazan los mensajes.
   useLayoutEffect(() => {
-    const composer = composerRef.current, toolbar = toolbarRef.current, root = rootRef.current;
-    if (!composer || !toolbar || !root) return;
+    const composer = composerRef.current, root = rootRef.current;
+    if (!composer || !root) return;
     const measure = (): void => {
       root.style.setProperty("--composer-space", `${composer.offsetHeight}px`);
-      root.style.setProperty("--chat-toolbar-height", `${toolbar.offsetHeight}px`);
       const scroller = scrollRef.current;
       if (scroller && stickRef.current) scroller.scrollTop = scroller.scrollHeight;
     };
     const observer = new ResizeObserver(measure);
     observer.observe(composer);
-    observer.observe(toolbar);
     measure();
     return () => observer.disconnect();
   }, []);
@@ -428,9 +472,13 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     void Promise.resolve(session.send(INBOX_WAKE, [], [], "Leer los mensajes en cola")).finally(() => { queueWakeRef.current.sending = false; });
   });
   // One follow-up per batch after a successful turn. A stop, failure or restored
-  // tab leaves its messages pending until the user explicitly continues.
+  // tab leaves its messages pending until the user explicitly continues. The
+  // provider delivers the batch itself as that turn (no wake prompt + tool call).
+  // A stale unacknowledged receipt is part of the key: once its replay is
+  // confirmed, messages that arrived behind it still get their own follow-up.
   useEffect(() => {
-    const pending = session.queue.snapshot.messages.map(message => message.id).join(",");
+    const unread = session.queue.snapshot.messages.map(message => message.id).join(",");
+    const pending = unread && `${session.queue.snapshot.receipt?.id ?? ""}|${unread}`;
     const wake = queueWakeRef.current;
     if (running && pending) wake.armed = true;
     if (running || queueSaving || hasDirectQueue || !wake.armed || !pending || wake.attempted === pending || state.process !== "ready") return;
@@ -438,7 +486,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     if (state.items[state.items.length - 1]?.kind !== "turn") return;
     wake.attempted = pending;
     wakeQueue();
-  }, [running, queueSaving, hasDirectQueue, session.queue.snapshot.messages, state.items, state.process, wakeQueue]);
+  }, [running, queueSaving, hasDirectQueue, session.queue.snapshot.messages, session.queue.snapshot.receipt, state.items, state.process, wakeQueue]);
   const consumeHandoff = useStableCallback((id: string) => callbacks.current.onHandoffConsumed?.(sessionId, id));
   const handoffDelivery = useHandoffDelivery({ reference: props.handoff, session, visible, conversationId,
     requireReview: props.handoffRestored, loadWhenConsumed: props.workflow?.role === "planner",
@@ -958,7 +1006,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const backToInput = (): void => { requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true })); };
 
   // Una pregunta con viñetas también se puede contestar si el agente no usó su herramienta.
-  const textQuestion = useMemo(() => pendingTextQuestion(state.items), [state.items]);
+  const textQuestion = useMemo(() => pendingTextQuestion(deferredItems), [deferredItems]);
 
   // Identidad fija: las filas del hilo están memorizadas y no deben repintarse por ella.
   const answer = useStableCallback((item: PermissionItem, allowed: boolean, remember: boolean, choices?: QuestionChoice[]): void => {
@@ -1005,7 +1053,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   // Filas del hilo: se rehacen solo cuando cambia algo que muestran, no con cada tecla en la caja.
   const editingId = editing?.id ?? null;
   const busy = workflowLocked || preparing > 0 || handoffPending || hasQueued || !session.queue.ready;
-  const tasks = useMemo(() => props.taskPlan ?? chatTasks(state.items, props.profileName ?? agent.name), [props.taskPlan, state.items, props.profileName, agent.name]);
+  const tasks = useMemo(() => props.taskPlan ?? chatTasks(deferredItems, props.profileName ?? agent.name), [props.taskPlan, deferredItems, props.profileName, agent.name]);
   useEffect(() => {
     if (tasks.length && !hadTasks.current) setTasksOpen(true);
     hadTasks.current = tasks.length > 0;
@@ -1036,6 +1084,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       revealingTask.current = false;
     });
   };
+  // Identidad fija para que las filas memorizadas con capturas no se repinten en cada fragmento.
+  const openArtifact = useStableCallback(async (artifact: Parameters<NonNullable<Parameters<typeof ToolRow>[0]["onOpenArtifact"]>>[0]): Promise<void> => {
+    const id = brokerArtifactId(artifact); if (!id || !props.browser) return;
+    const profile=(artifact.provenance as {profile?:string}|null)?.profile;
+    const binding=props.browserSpaces?.find(space=>space.profile===profile)??{...props.browser,profile:profile&&validBrowserProfile(profile)?profile:props.browser.profile};
+    try { const result = await trexBrowserOpenArtifact(id, cwd, "full", binding?.clientId??props.browser.clientId, binding?.profile??props.browser.profile);
+      if (result.isError) session.notice("warn", "No se pudo abrir el archivo. Revisa el estado del navegador.");
+    } catch { session.notice("warn", "No se pudo abrir el archivo del navegador."); }
+  });
   const rows = useMemo(() => {
     // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
     const askingFor = new Set(threadItems.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
@@ -1065,14 +1122,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
         }
         case "thinking": return <Thinking key={item.id} text={item.text} />;
         case "tool": return asked(item.id) ? null : <div key={item.id} data-plan-source={["TodoWrite", "TaskCreate", "TaskUpdate"].includes(item.name) ? item.id : undefined}><ToolRow item={item} cwd={cwd}
-          onOpenArtifact={props.browser?.enabled ? async artifact => {
-            const id = brokerArtifactId(artifact); if (!id || !props.browser) return;
-            const profile=(artifact.provenance as {profile?:string}|null)?.profile;
-            const binding=props.browserSpaces?.find(space=>space.profile===profile)??{...props.browser,profile:profile&&validBrowserProfile(profile)?profile:props.browser.profile};
-            try { const result = await trexBrowserOpenArtifact(id, cwd, "full", binding?.clientId??props.browser.clientId, binding?.profile??props.browser.profile);
-              if (result.isError) session.notice("warn", "No se pudo abrir el archivo. Revisa el estado del navegador.");
-            } catch { session.notice("warn", "No se pudo abrir el archivo del navegador."); }
-          } : undefined}
+          onOpenArtifact={props.browser?.enabled ? openArtifact : undefined}
           expanded={!tasks.length && item.id === latestTodos || item.id === latestPlan}
           onImplement={item.id === latestPlan && planReady ? implementPlan : undefined} /></div>;
         // Las preguntas se responden en el panel que sustituye a la caja de mensaje.
@@ -1092,8 +1142,22 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   }, [threadItems, threadStart, enterFrom, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
     planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels, props.browser, props.planningOnly, mode, session, tasks.length]);
   const stderrTail = state.stderr.slice(-6).join("\n");
+  // Una pestaña sin contenido (sin equipo o sin repositorio) no se muestra.
+  const activeSide = sideTab === "git" && !branch || sideTab === "team" && !props.toolbar ? null : sideTab;
+  const tasksOpen = activeSide === "tasks", gitOpen = activeSide === "git";
+  const tasksDone = tasks.filter(task => task.status === "completed").length;
+  const closeSide = (focus: { current: HTMLButtonElement | null }): void => {
+    setSideTab(null);
+    focus.current?.focus({ preventScroll: true });
+  };
+  const moreActions: ComposerAction[] = [
+    ...(props.onPlanHere && provider !== "antigravity" ? [{ id: "plan", label: "Planear aquí", icon: <MapIcon size={14} />,
+      hint: handoffDisabled ? handoffHint : "Prepara un plan con otro agente sin salir de este chat.", disabled: handoffDisabled, run: planHere }] : []),
+    ...(props.onHandoffRequest ? [{ id: "handoff", label: "Continuar con otro agente", icon: <RotateIcon size={14} />,
+      hint: handoffHint, disabled: handoffDisabled, run: requestHandoff }] : []),
+  ];
 
-  return <div ref={rootRef} className={`chat${empty ? " is-empty" : ""}${dragging ? " is-dragging" : ""}`}
+  return <div ref={rootRef} className={`chat${empty ? " is-empty" : ""}${dragging ? " is-dragging" : ""}${activeSide ? " has-side" : ""}`}
     style={{ "--chat-font-size": `${settings.fontSize}px` } as CSSProperties}
     onDragOver={event => { if (hasFiles(event.dataTransfer)) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
@@ -1103,10 +1167,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       setDragging(false);
       addDropped(Array.from(event.dataTransfer.files));
     }}>
-    <div className="chat-floating-toolbar" ref={toolbarRef}>{props.toolbar}</div>
-    <div className="chat-task-toolbar">{branch && <button ref={gitToggle} type="button" className="chat-task-toggle chat-git-toggle" aria-expanded={gitOpen} aria-controls={gitOpen ? `git-${sessionId}` : undefined}
-      onClick={() => { setGitOpen(value => !value); setTasksOpen(false); }} title={`Git · ${branch}`}><BranchIcon size={14} />Git<small>{branch}</small></button>}<button ref={taskToggle} type="button" className="chat-task-toggle" aria-expanded={tasksOpen} aria-controls={tasksOpen?`tasks-${sessionId}`:undefined}
-      onClick={() => setTasksOpen(value => !value)}><ListIcon size={14} />Tareas{tasks.length>0&&<small>{tasks.filter(task => task.status === "completed").length}/{tasks.length}</small>}</button></div>
     <div className="chat-workspace"><div className="chat-main">
     <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
       <SharedFilesContext.Provider value={filesContext}>
@@ -1168,7 +1228,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           <p>{session.setup.description}</p>{session.setup.actions.map(action => <button key={action.label} type="button" className="btn btn-small" disabled={session.setup!.busy}
             onClick={() => void action.run()}>{session.setup!.busy ? "Conectando…" : action.label}</button>)}
         </div>}
-        {!handoffPending && (state.process === "exited" || state.process === "failed") && <div className="chat-ended">
+        {!handoffPending && (state.process === "exited" || state.process === "failed") && <div
+          className={`chat-ended${state.process === "failed" || state.exitCode !== null && state.exitCode !== 0 ? " is-error" : ""}`}
+          role={state.process === "failed" ? "alert" : "status"}>
           <div>
             <strong>{state.process === "failed" ? `${agent.product} no pudo arrancar` : `La sesión de ${agent.product} se cerró`}</strong>
             {state.exitCode !== null && state.exitCode !== 0 && <span> · código {state.exitCode}</span>}
@@ -1253,6 +1315,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           {draft.endsWith("\n") ? "​" : ""}
         </div>
         <textarea ref={inputRef} rows={1} value={draft} readOnly={workflowLocked || submittingEdit || queueSaving || handoffPending} aria-label={`Mensaje para ${agent.name}`}
+          aria-describedby={`${sessionId}-input-hints`}
           aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? `${sessionId}-suggestions` : undefined}
           aria-activedescendant={showSuggestions && suggestions.length ? `${sessionId}-suggestions-${selectedSuggestion}` : undefined}
           placeholder={running
@@ -1309,6 +1372,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
               stopResponse();
             }
           }} />
+        {/* Atajos visibles mientras la caja está vacía. Solo informan: los clics
+            atraviesan hasta la caja, así nunca escriben nada por accidente. */}
+        <span id={`${sessionId}-input-hints`} className="sr-only">Escribe / para comandos, $ para skills y @ para citar archivos o carpetas.</span>
+        {!draft && !(workflowLocked || submittingEdit || queueSaving || handoffPending) && <div className="chat-input-hints" aria-hidden="true">
+          {COMPOSER_HINTS.map(hint => <span key={hint.char} className="chat-input-hint"><kbd>{hint.char}</kbd><span>{hint.label}</span></span>)}
+        </div>}
         </div>
         <div className="chat-input-actions">
           <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
@@ -1336,11 +1405,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           openSignal={menuSignal} />
         {props.browser?.enabled && <BrowserMenu cwd={cwd} browser={props.browser} spaces={props.browserSpaces} onStopAgent={props.onStopBrowserAgent} />}
         <span className="chat-composer-spacer" />
-        {props.onPlanHere && provider !== "antigravity" && <button type="button" className="chat-tray-chip chat-plan-here" disabled={handoffDisabled}
-          onClick={event => { event.currentTarget.focus({ preventScroll: true }); planHere(); }}><MapIcon size={13} /><span>Planear aquí</span></button>}
-        {props.onHandoffRequest && <button type="button" className="chat-tray-chip chat-handoff-button tip"
-          aria-label="Continuar con otro agente" data-tip={handoffHint} disabled={handoffDisabled}
-          onClick={event => { event.currentTarget.focus({ preventScroll: true }); requestHandoff(); }}><span>Continuar con otro agente</span><span className="chat-handoff-arrow" aria-hidden="true">↗</span></button>}
+        {moreActions.length > 0 && <ComposerMoreMenu actions={moreActions} />}
       </div>
       <div className="chat-composer-meta">
         {(usage || state.plan || state.apiUsage || state.costUsd !== null || provider === "trex" || provider === "antigravity") && <UsageMenu usage={usage} plan={state.plan} apiUsage={state.apiUsage} costUsd={state.costUsd} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
@@ -1359,10 +1424,35 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
      </div>
     </div>
     </div>
-    {tasksOpen && <TaskPanel panelId={`tasks-${sessionId}`} tasks={tasks} author={props.taskAuthor ?? props.profileName ?? agent.name} paused={props.tasksPaused}
-      onClose={() => { setTasksOpen(false); taskToggle.current?.focus({ preventScroll: true }); }} onReveal={revealTask} />}
-    {branch && <GitPanel key={cwd} panelId={`git-${sessionId}`} cwd={cwd} branch={branch} busy={running || submittingEdit} open={gitOpen} visible={visible && gitOpen}
-      onBranch={setBranch} onMessage={message => callbacks.current.onMessage(message)} onClose={() => { setGitOpen(false); gitToggle.current?.focus({ preventScroll: true }); }} />}
+    {/* Equipo, tareas y Git: un solo panel con pestañas. Contraído, solo quedan las pestañas. */}
+    <div className={`chat-side${activeSide ? " is-open" : ""}`} data-side={activeSide ?? undefined}
+      onKeyDown={event => {
+        if (event.key !== "Escape" || event.defaultPrevented || !activeSide) return;
+        event.preventDefault();
+        closeSide(activeSide === "team" ? teamToggle : activeSide === "git" ? gitToggle : taskToggle);
+      }}>
+      <div className="chat-side-tabs" role="group" aria-label="Paneles del chat">
+        {props.toolbar && <button ref={teamToggle} type="button" className="chat-side-tab chat-team-toggle" aria-label="Equipo"
+          aria-expanded={activeSide === "team"} aria-controls={activeSide === "team" ? `team-${sessionId}` : undefined}
+          onClick={() => setSideTab(tab => tab === "team" ? null : "team")}>
+          <ProfilesIcon size={14} /><span className="chat-side-label">Equipo</span>{running && <i className="chat-side-live" aria-hidden="true" />}</button>}
+        <button ref={taskToggle} type="button" className="chat-task-toggle" aria-label={tasks.length ? `Tareas: ${tasksDone} de ${tasks.length} completadas` : "Tareas"}
+          aria-expanded={tasksOpen} aria-controls={tasksOpen ? `tasks-${sessionId}` : undefined}
+          onClick={() => setSideTab(tab => tab === "tasks" ? null : "tasks")}>
+          <ListIcon size={14} /><span className="chat-side-label">Tareas</span>{tasks.length > 0 && <small>{tasksDone}/{tasks.length}</small>}</button>
+        {branch && <button ref={gitToggle} type="button" className="chat-task-toggle chat-git-toggle" aria-label={`Git · ${branch}`} title={`Git · ${branch}`}
+          aria-expanded={gitOpen} aria-controls={gitOpen ? `git-${sessionId}` : undefined}
+          onClick={() => setSideTab(tab => tab === "git" ? null : "git")}>
+          <BranchIcon size={14} /><span className="chat-side-label">Git</span><small>{branch}</small></button>}
+        {activeSide && <button type="button" className="icon-btn chat-side-collapse tip tip-below" aria-label="Contraer panel" data-tip="Contraer panel (Esc)"
+          onClick={() => closeSide(activeSide === "team" ? teamToggle : activeSide === "git" ? gitToggle : taskToggle)}><CloseIcon size={14} /></button>}
+      </div>
+      {props.toolbar && <div id={`team-${sessionId}`} className="chat-side-team" hidden={activeSide !== "team"}>{props.toolbar}</div>}
+      {tasksOpen && <TaskPanel panelId={`tasks-${sessionId}`} tasks={tasks} author={props.taskAuthor ?? props.profileName ?? agent.name} paused={props.tasksPaused}
+        onClose={() => closeSide(taskToggle)} onReveal={revealTask} />}
+      {branch && <GitPanel key={cwd} panelId={`git-${sessionId}`} cwd={cwd} branch={branch} busy={running || submittingEdit} open={gitOpen} visible={visible && gitOpen}
+        onBranch={setBranch} onMessage={message => callbacks.current.onMessage(message)} onClose={() => closeSide(gitToggle)} />}
+    </div>
     </div>
   </div>;
 }

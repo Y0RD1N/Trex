@@ -35,3 +35,30 @@ test("Claude launch and inbox initialization cannot reintroduce a disabled integ
   const instructions = JSON.parse(response.line).response.response.mcp_response.result.instructions;
   assert.doesNotMatch(instructions, /GitHub|Blender|HyperFrames/); assert.match(instructions, /task|plan/i);
 });
+const { integrationContext, detectedIntegrations } = await load("integrations");
+const { BROWSER_INSTRUCTIONS } = await load("browser");
+test("only enabled applications that were not detected as missing are announced; preferences stay untouched", () => {
+  const preferences = { github: true, blender: true, hyperframes: true };
+  const context = integrationContext({ integrations: preferences }, { available: { github: true, blender: false, hyperframes: false } });
+  for (const provider of ["claude", "codex", "trex", "antigravity"]) {
+    const text = integrationInstructions(provider, context);
+    assert.match(text, /GitHub/); assert.doesNotMatch(text, /Blender|HyperFrames/);
+  }
+  assert.deepEqual(preferences, { github: true, blender: true, hyperframes: true });
+  assert.deepEqual(integrationRestrictions(preferences), { tools: {} }, "detection never becomes a saved restriction");
+  assert.equal(integrationInstructions("claude", integrationContext({ integrations: preferences }, { available: { github: false, blender: false, hyperframes: false } })), "");
+  assert.match(integrationInstructions("claude", integrationContext({ integrations: preferences })), /GitHub.*Blender.*HyperFrames/s, "unknown availability keeps announcing enabled apps");
+});
+test("browser guidance needs a browser attached to that session, once per provider", () => {
+  const enabled = { integrations: off, browser: { enabled: true } };
+  assert.equal(integrationContext(enabled).browser, false, "the preference alone does not attach a browser");
+  assert.equal(integrationInstructions("codex", integrationContext(enabled)), "");
+  const codex = integrationInstructions("codex", integrationContext(enabled, { browser: true }));
+  assert.equal(codex, BROWSER_INSTRUCTIONS);
+  assert.match(integrationInstructions("claude", integrationContext(enabled, { browser: true })), /browser_navigate/);
+  assert.ok(Buffer.byteLength(BROWSER_INSTRUCTIONS) < 700);
+});
+test("without the native app, detection degrades to the enabled preferences synchronously", () => {
+  assert.equal(detectedIntegrations("D:/offline-project"), null);
+  assert.equal(detectedIntegrations("D:/offline-project"), null);
+});

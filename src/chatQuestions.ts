@@ -2,9 +2,8 @@
 import { choiceAnswers, type ChatItem, type Json, type PermissionItem, type QuestionChoice } from "./chatState";
 
 export const questionInstructions = (provider: "claude" | "codex"): string => [
-  `When you need an answer or a choice from the user, use ${provider === "claude" ? "AskUserQuestion" : "request_user_input"}.`,
-  "trex renders this tool as an interactive question with selectable options and a custom answer field.",
-  "Do not ask the user to choose from options only in plain text or a Markdown list.",
+  `To get an answer or a choice from the user, use ${provider === "claude" ? "AskUserQuestion" : "request_user_input"}`,
+  "(trex shows selectable options and a custom answer); never offer options only as plain text or a Markdown list.",
 ].join(" ");
 
 const LIST_ITEM = /^ {0,3}(?:[-+*]|\d{1,2}[.)]|[a-hA-H][.)])\s+(.+)$/;

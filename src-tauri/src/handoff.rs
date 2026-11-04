@@ -20,6 +20,30 @@ const MAX_FILE_BYTES: usize = (MAX_CONTENT_BYTES + MAX_CWD_BYTES) * 6 + 16 * 102
 const GIT_BUDGET: Duration = Duration::from_secs(8);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const TRUNCATED: &str = "\n[Contexto Git truncado por tamaño.]\n";
+
+/// Cuánto estado de Git acompaña a un traspaso. Las diferencias completas
+/// cuestan hasta ~7k tokens por entrega; las funciones que no editan ni
+/// revisan cambios solo necesitan la rama y el estado, o nada.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitSnapshot {
+    /// Rama, HEAD, estado y diferencias preparadas y sin preparar.
+    Full,
+    /// Rama, HEAD y estado (`status --porcelain`), sin diferencias.
+    Status,
+    /// Sin instantánea: el agente consulta Git con sus herramientas si lo necesita.
+    None,
+}
+
+impl GitSnapshot {
+    pub fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value.unwrap_or("full") {
+            "full" => Ok(Self::Full),
+            "status" => Ok(Self::Status),
+            "none" => Ok(Self::None),
+            other => Err(format!("Modo de instantánea Git no válido: {other}")),
+        }
+    }
+}
 // Se excluyen antes de producir los diffs. Además se filtra el texto completo
 // antes de persistirlo: los archivos con nombres ordinarios también pueden contener claves.
 const EXCLUDED_DIFF_PATHS: &[&str] = &[
@@ -356,7 +380,15 @@ fn isolate_test_git(command: &mut Command) {
     );
 }
 
+#[cfg(test)]
 fn capture_git(cwd: &str) -> (String, bool) {
+    capture_git_with(cwd, GitSnapshot::Full)
+}
+
+fn capture_git_with(cwd: &str, mode: GitSnapshot) -> (String, bool) {
+    if mode == GitSnapshot::None {
+        return (String::new(), false);
+    }
     let deadline = Instant::now() + GIT_BUDGET;
     let mut text = String::from("\n\n---\n## Estado del proyecto capturado por TREX\nLos siguientes datos son una instantánea de Git; revisa el estado actual antes de continuar.\n");
     if !matches!(run_git(cwd, &["rev-parse", "--is-inside-work-tree"], 64, deadline), Ok(output) if output.text == "true")
@@ -413,6 +445,13 @@ fn capture_git(cwd: &str) -> (String, bool) {
             12 * 1024,
         ),
     ];
+    // Rama, HEAD y estado son las tres primeras secciones; el resto son diffs.
+    let sections = if mode == GitSnapshot::Status {
+        text.push_str("Instantánea reducida: solo rama y estado. Consulta las diferencias con Git si las necesitas.\n");
+        &sections[..3]
+    } else {
+        sections
+    };
     for (title, args, limit) in sections {
         text.push_str(&format!("\n### {title}\n"));
         let mut args = args.to_vec();
@@ -445,6 +484,7 @@ fn compose_content(source: &str, git: &str, git_truncated: bool) -> (String, boo
     (format!("{source}{git}"), git_truncated || clipped)
 }
 
+#[cfg(test)]
 fn save_in(
     data_dir: &Path,
     cwd: String,
@@ -453,6 +493,26 @@ fn save_in(
     source_label: String,
     content: String,
 ) -> Result<PreparedHandoff, String> {
+    save_in_with(
+        data_dir,
+        cwd,
+        source_session_id,
+        source_provider,
+        source_label,
+        content,
+        GitSnapshot::Full,
+    )
+}
+
+fn save_in_with(
+    data_dir: &Path,
+    cwd: String,
+    source_session_id: String,
+    source_provider: String,
+    source_label: String,
+    content: String,
+    git_mode: GitSnapshot,
+) -> Result<PreparedHandoff, String> {
     validate_source(
         &cwd,
         &source_session_id,
@@ -460,7 +520,7 @@ fn save_in(
         &source_label,
         &content,
     )?;
-    let (git, git_truncated) = capture_git(&cwd);
+    let (git, git_truncated) = capture_git_with(&cwd, git_mode);
     let (content, truncated) = compose_content(&content, &git, git_truncated);
     let handoff_dir = data_dir.join("handoffs");
     fs::create_dir_all(&handoff_dir)
@@ -564,19 +624,22 @@ pub async fn prepare_handoff(
     source_provider: String,
     source_label: String,
     content: String,
+    git: Option<String>,
 ) -> Result<PreparedHandoff, String> {
+    let git_mode = GitSnapshot::parse(git.as_deref())?;
     tauri::async_runtime::spawn_blocking(move || {
         let data_dir = app
             .path()
             .app_data_dir()
             .map_err(|error| error.to_string())?;
-        save_in(
+        save_in_with(
             &data_dir,
             cwd,
             source_session_id,
             source_provider,
             source_label,
             content,
+            git_mode,
         )
     })
     .await
@@ -1078,6 +1141,22 @@ mod tests {
             fs::read_to_string(dir.0.join("tracked.txt")).unwrap(),
             "unstaged-marker\n"
         );
+        // Modo reducido: rama y estado, nunca diferencias.
+        let (status, truncated) = capture_git_with(dir.cwd(), GitSnapshot::Status);
+        assert!(!truncated);
+        assert!(status.contains("main"));
+        assert!(status.contains("?? untracked-private.txt"));
+        assert!(!status.contains("+staged-marker"));
+        assert!(!status.contains("+unstaged-marker"));
+        assert!(status.len() < snapshot.len());
+        // Sin instantánea.
+        assert_eq!(
+            capture_git_with(dir.cwd(), GitSnapshot::None),
+            (String::new(), false)
+        );
+        assert_eq!(GitSnapshot::parse(None), Ok(GitSnapshot::Full));
+        assert_eq!(GitSnapshot::parse(Some("status")), Ok(GitSnapshot::Status));
+        assert!(GitSnapshot::parse(Some("diff")).is_err());
     }
 
     #[test]

@@ -1,11 +1,7 @@
 /**
- * Uso del contexto en la bandeja del chat: un anillo con la parte de la
- * ventana que ocupa la conversación y, al pulsarlo, el desglose y la opción
- * de resumirla para liberar espacio.
+ * Uso del contexto: el desglose de la ventana que ocupa la conversación y la
+ * opción de resumirla. Lo muestra el menú «Uso y contexto» (UsageMenu).
  */
-import { useRef, useState } from "react";
-import DropdownMenu from "../DropdownMenu";
-import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { contextPercent, contextTokensLabel, formatTokens, type ContextUsage } from "../../chatState";
 
 /** Neutral shades identify fixed parts; conversation usage gets the accent. */
@@ -13,17 +9,6 @@ const PART_COLORS = ["var(--text-muted)", "var(--text-dim)", "var(--border-stron
 const MESSAGES_COLOR = "var(--context-color, var(--accent))";
 
 const percentLabel = (percent: number): string => percent > 0 && percent < 1 ? "<1 %" : `${Math.round(percent)} %`;
-
-function Ring({ percent }: { percent: number }) {
-  const radius = 5.5;
-  const length = 2 * Math.PI * radius;
-  // Siempre asoma un poco de arco: un anillo vacío parece que no mide nada.
-  const filled = percent > 0 ? Math.max(percent, 4) : 0;
-  return <svg className="chat-context-ring" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-    <circle className="track" cx="8" cy="8" r={radius} />
-    <circle className="value" cx="8" cy="8" r={radius} strokeDasharray={length} strokeDashoffset={length * (1 - filled / 100)} />
-  </svg>;
-}
 
 type ContextProps = {
   usage: ContextUsage;
@@ -87,29 +72,5 @@ export function ContextDetails({ usage, product, busy, onCompact, canCompact, in
       onClick={() => { onClose?.(); onCompact(); }}>
       <span>Resumir conversación</span><small>/compact</small>
     </button>}
-  </>;
-}
-
-export default function ContextMeter({ usage, product, busy, onCompact }: ContextProps) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
-  const close = (): void => setAnchor(null);
-  const percent = contextPercent(usage);
-  const level = percent === null ? "" : percent >= 90 ? " critical" : percent >= 70 ? " high" : "";
-  const shown = usage.measured === false ? "Sin medición" : percent === null ? formatTokens(usage.used) : percentLabel(percent);
-  const summary = contextTokensLabel(usage);
-
-  return <>
-    <button ref={triggerRef} type="button" className={`chat-tray-chip chat-context${level}`} aria-haspopup="menu" aria-expanded={!!anchor}
-      aria-label={`Contexto: ${percent === null ? summary : `${shown} usado, ${summary}`}`}
-      data-tip={anchor ? undefined : `Contexto usado: ${summary}`}
-      onClick={() => setAnchor(anchor ? null : { element: triggerRef.current! })}>
-      {percent !== null && <span className="chat-tray-icon"><Ring percent={percent} /></span>}
-      <span className="chat-tray-text">{shown}</span>
-    </button>
-    <DropdownMenu anchor={anchor} triggerRef={triggerRef} label="Uso del contexto"
-      className={`chat-tray-menu chat-glass-menu chat-context-menu${level}`} onClose={close}>
-      <ContextDetails usage={usage} product={product} busy={busy} onCompact={onCompact} onClose={close} />
-    </DropdownMenu>
   </>;
 }

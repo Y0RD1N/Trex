@@ -1,0 +1,19 @@
+/* Token usage details shared by the usage menu and per-response metadata. */
+.usage-cache-note {
+  color: var(--text-dim);
+  font-weight: var(--fw-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-new-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--sp-1);
+  margin-bottom: var(--sp-1-5);
+}
+
+.usage-number {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}

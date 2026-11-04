@@ -1,7 +1,7 @@
 import { connectBrowser, rebindBrowser } from "../browserConnection";
 import { browserEnv, claudeBrowserServer, isBrowserHttp, type BrowserTransport } from "../browser";
 import { browserMode, OBSERVE_BROWSER_TOOLS } from "../browser";
-import { integrationContext, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
+import { detectedIntegrations, integrationContext, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS, type IntegrationContext } from "../integrations";
 /**
  * Sesión de Claude Code como chat: `claude -p` con stream-json.
  *
@@ -18,10 +18,10 @@ import { readConversation } from "../conversations";
 import {
   allowsAll, autoAllowed, initialChatState, needsAnswer, record, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
-import { answeredInput, chatReducer, claudeChatFlags, controlErrorLine, controlLine, permissionLine, userMessageLine } from "../claudeChat";
+import { answeredInput, chatReducer, claudeChatFlags, controlErrorLine, controlLine, inboxDeliveryLine, permissionLine, userMessageLine } from "../claudeChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
-import { InboxRequests, INBOX_SERVER } from "../messageQueue";
+import { deliverInbox, InboxRequests, INBOX_SERVER, INBOX_WAKE } from "../messageQueue";
 import { CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, claudeInboxInitialize, claudeInboxReply } from "../inboxProtocol";
 import { IS_WINDOWS } from "../platform";
 import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMode, claudePlanningExitResponse, claudePlanningFlags } from "../workflowSafety";
@@ -92,6 +92,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   callbacks.current = options;
   const queue = useMessageQueue(options.queueId ?? sessionId);
   const inboxRequests = useRef(new InboxRequests());
+  /** What the running process was told: attached tools and whether --append-system-prompt carried it. */
+  const launchGuidanceRef = useRef<{ integrations: IntegrationContext; appended: boolean }>({ integrations: {}, appended: false });
   const isCurrentRef = useRef<(id: string) => boolean>(() => false);
   const pendingControlsRef = useRef(new Map<string, Control>());
   const plannerReadyRef = useRef<Promise<void> | null>(null);
@@ -345,8 +347,9 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     }
     if (message.type === "control_request" && message.request_id && request?.subtype === "mcp_message" && request.server_name === INBOX_SERVER) {
       void (async () => {
+        const guidance = launchGuidanceRef.current;
         const reply = await claudeInboxReply(message.request_id!, request,
-          () => inboxRequests.current.read(`${procId}:${message.request_id}`, queue.client.read), integrationContext(callbacks.current));
+          () => inboxRequests.current.read(`${procId}:${message.request_id}`, queue.client.read), guidance.integrations, { appended: guidance.appended });
         if (!reply || !isCurrentRef.current(procId)) return;
         await writeRef.current(reply.line);
         if (!isCurrentRef.current(procId)) return;
@@ -447,7 +450,12 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         finally { if (startupRef.current === startup) browserConnecting.current = false; }
         const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", conversationOverrideRef.current)
           : conversationOverrideRef.current ? withoutConversationArgs(args) : args;
-        const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations: integrationContext(callbacks.current) });
+        // Only what this process really has: an attached browser and installed applications.
+        const detection = detectedIntegrations(cwd);
+        const available = detection instanceof Promise ? await whileCurrent(detection, startup.signal) : detection;
+        const integrations = integrationContext(callbacks.current, { browser: !!browser, available });
+        const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations });
+        launchGuidanceRef.current = { integrations, appended: flags.includes("--append-system-prompt") };
         if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
           && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
         const teamConfig = callbacks.current.team ? browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell) : null;
@@ -524,7 +532,21 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options.visible]);
 
-  const send = async (text: string, images: OutgoingImage[], previews: string[], display?: string): Promise<boolean> => {
+  /** Queued messages travel as the next user turn: one request, without a wake prompt or tool call. */
+  const deliverQueued = async (): Promise<boolean> => {
+    if (!mountedRef.current) return false;
+    try {
+      return await deliverInbox(queue.client, delivery => issue(id => inboxDeliveryLine(delivery.parts, id), delivery.display, delivery.previews),
+        () => mountedRef.current, message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message }));
+    } catch (error) {
+      dispatch({ type: "notice", id: localId(), tone: "error", text: `No se pudo leer la cola: ${formatError(error)}` });
+      return false;
+    }
+  };
+  const send = (text: string, images: OutgoingImage[], previews: string[], display?: string): Promise<boolean> => text === INBOX_WAKE ? deliverQueued()
+    : issue(id => userMessageLine(claudeSkillText(text, stateRef.current.skills), images, id), display ?? text, previews);
+
+  const issue = async (line: (id: string) => string, display: string, previews: string[]): Promise<boolean> => {
     if (!mountedRef.current) return false;
     const id = crypto.randomUUID();
     const request = new AbortController();
@@ -533,7 +555,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const cancellation = issuedCancellationRef.current;
       if (cancellation) await whileCurrent(cancellation.promise, request.signal);
       request.signal.throwIfAborted();
-      dispatch({ type: "send", id, text: display ?? text, previews, now: Date.now() });
+      dispatch({ type: "send", id, text: display, previews, now: Date.now() });
       if (!processReadyRef.current) void start(false, request);
       const ready = processReadyRef.current!;
       const plannerReady = plannerReadyRef.current;
@@ -546,7 +568,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       if (!mountedRef.current || !procId || !agent.isCurrent(procId)) throw new Error("La sesión de Claude no está activa.");
       // El id queda fijado antes del IPC; agent.write esperaría de nuevo un arranque mutable.
       issuedMessagesRef.current.add(id);
-      await whileCurrent(agentWrite(procId, userMessageLine(claudeSkillText(text, stateRef.current.skills), images, id)), request.signal);
+      await whileCurrent(agentWrite(procId, line(id)), request.signal);
       request.signal.throwIfAborted();
       return true;
     } catch (error) {
@@ -586,8 +608,12 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const chosenMode = planningOnly ? "plan" : accessEnabled ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
       const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await whileCurrent(trexDesktopMcpConfig(browserMode(chosenMode, planningOnly)), request.signal), shell) : null;
       const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", true) : withoutConversationArgs(args);
+      const detection = detectedIntegrations(cwd);
+      const available = detection instanceof Promise ? await whileCurrent(detection, request.signal) : detection;
+      const integrations = integrationContext(callbacks.current, { browser: !!browser, available });
       const chatFlags = claudeChatFlags(profileArgs, point ? current.sessionId : null,
-        { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations: integrationContext(callbacks.current) });
+        { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations });
+      launchGuidanceRef.current = { integrations, appended: chatFlags.includes("--append-system-prompt") };
       const flags = planningOnly ? claudePlanningFlags(chatFlags) : chatFlags;
       if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
         && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);

@@ -117,7 +117,7 @@ publica tareas, el ejecutor puede crearlas a partir del plan. El panel muestra
 únicamente las listas que las herramientas del asistente hayan confirmado: su
 uso depende de que el agente disponga de esas herramientas y las invoque.
 
-Puedes usar **Planear aquí** desde un chat existente para añadir el segundo
+Puedes usar **Planear aquí** (en el menú **⋯** de la caja de mensaje) desde un chat existente para añadir el segundo
 asistente conservando el historial y el perfil original en una de las etapas.
 Después, **Nueva planificación** o `/plan tu nueva idea` inicia otro ciclo con el
 contexto acumulado, sin crear más pestañas. `@planificador` y `@ejecutor` dirigen
@@ -125,8 +125,15 @@ mensajes a cada rol; `@Claude` y `@Codex` también funcionan si el proveedor
 identifica a un único participante. Los mensajes normales se envían al destino
 seleccionado. Los cambios de rol comparten un extracto acotado del historial,
 sin sustituir el plan definitivo completo ni los permisos del asistente.
+Cada rol recibe el contexto completo solo en su primera entrega; después, solo
+las novedades del otro agente desde la última vez. El ejecutor recibe tu
+petición original, el plan y las tareas, no el historial del planificador.
 
-El control del flujo aparece compacto a la derecha, encima de **Tareas**. Muestra
+A la derecha, un único panel con pestañas **Equipo**, **Tareas** y **Git**
+reúne el flujo, la lista de tareas y el repositorio (solo aparecen las que
+tienen contenido). Recuerda la pestaña de cada chat, se cierra con `Esc` y,
+en paneles estrechos, se abre como una hoja inferior sin tapar la caja de
+mensaje. El control del flujo, en **Equipo**, muestra
 los participantes, el estado y el ciclo; el botón **Modelos y esfuerzo del flujo**
 despliega los ajustes de ambos agentes. Detener, nueva planificación y la revisión
 de errores siguen disponibles en la misma tarjeta.
@@ -135,7 +142,7 @@ de errores siguen disponibles en la misma tarjeta.
 también detienen el flujo. Al reabrir la aplicación, los flujos pendientes se
 recuperan pausados para revisar su progreso antes de reanudarlos.
 
-Con **Continuar con otro agente**, debajo del mensaje, puedes pasar el trabajo a
+Con **Continuar con otro agente**, en el menú **⋯** de la caja de mensaje, puedes pasar el trabajo a
 otro perfil: Claude 1 → Claude 2, Claude → Codex o en sentido contrario. Elige
 el destino y su modelo, revisa el contexto y, si quieres, indica el siguiente paso. TREX
 abre una conversación nueva en el mismo proyecto y conserva la original.
@@ -146,8 +153,10 @@ Si el asistente está trabajando, detén la respuesta antes de transferirla.
 
 Mientras un agente trabaja, el envío usa **En cola** de forma predeterminada.
 El texto, las imágenes y las referencias a archivos se guardan localmente por
-pestaña. El agente dispone de `trex_read_messages` y decide cuándo leerlos;
-se le indica que consulte en puntos oportunos y antes de terminar. La bandeja
+pestaña. Al terminar el turno, TREX entrega los pendientes como el siguiente
+mensaje, en una sola petición y sin llamadas extra a herramientas. En tareas
+largas el agente puede adelantarse con `trex_read_messages` tras un paso
+importante; no consulta la cola en bucle ni antes de cada respuesta. La bandeja
 muestra los pendientes y permite editarlos o cancelarlos hasta que comience su
 lectura. Cada mensaje tiene un botón **Enviar ahora** que conserva sus adjuntos;
 en Trex CLI detiene el turno anterior antes de entregar la corrección. Editar un
@@ -157,8 +166,9 @@ Si no se puede confirmar un envío directo, el mensaje permanece guardado para
 revisión. Comprueba la conversación antes de restaurarlo a la cola: reenviarlo
 sin revisar podría repetir una instrucción ya recibida.
 
-Si termina correctamente con mensajes pendientes, TREX inicia una continuación
-para que consulte la cola, una vez por lote. Al detenerlo, fallar o restaurar
+Si termina correctamente con mensajes pendientes, TREX los envía juntos como
+un único mensaje con su recibo, una vez por lote; el recibo solo se confirma
+cuando el asistente acepta el turno. Al detenerlo, fallar o restaurar
 la aplicación, los mensajes quedan pendientes: pulsa **Continuar con la cola**
 para retomarlos. La lectura depende del agente y no tiene un plazo garantizado.
 Lee o cancela la cola antes de empezar una conversación nueva o transferirla.
@@ -255,7 +265,10 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
   que abres el chat qué parte de la ventana de contexto ocupa la conversación;
   se pone ámbar al 70 % y rojo al 90 %. Al pulsarlo ves el desglose (en Claude,
   lo mismo que `/context`; en Codex, también los tokens de toda la
-  conversación) y puedes resumirla con `/compact`.
+  conversación) y puedes resumirla con `/compact`. Las cifras de tokens
+  muestran los **tokens nuevos** (entrada sin caché, salida y escritura de
+  caché); las lecturas de caché, mucho más baratas, aparecen aparte junto al
+  coste cuando el proveedor lo informa.
 - **Modelo y esfuerzo**: el modelo tiene un acceso propio; **Ajustes del agente**
   agrupa permisos, esfuerzo y velocidad. Solo aparecen los niveles que admite
   cada modelo. En Codex se aplican desde el siguiente mensaje.
@@ -373,6 +386,17 @@ Si MiniMax no lo incluye en el catálogo, aplica su
 salida. Los endpoints personalizados conservan su propio límite; si no lo informan,
 se indica que no está disponible. El contexto de la última solicitud y los tokens
 procesados en toda la conversación se muestran por separado.
+
+Para ahorrar tokens, el CLI compacta la conversación antes de superar 128.000
+tokens activos aunque el modelo admita un millón, archiva los resultados de
+herramientas de turnos anteriores (recuperables con `history_search`), reenvía
+como máximo 3 imágenes de turnos previos y recorta las salidas largas
+conservando el principio y, sobre todo, el final. Las herramientas avanzadas del
+navegador (rendimiento, trazas, vídeo, sesiones) se activan bajo demanda con
+`enable_tools`. Con modelos `anthropic/*` de OpenRouter activa la caché de
+prompts, y si el proveedor no informa del coste lo estima con los precios
+configurados, incluidos los de caché. Los ajustes están en
+[trex-cli/README.md](trex-cli/README.md).
 
 Cada perfil puede abrir un chat, planificar o ejecutar en un chat compartido,
 incluyendo dos modelos del mismo proveedor. El catálogo determina los esfuerzos
@@ -583,6 +607,16 @@ El chat reúne los historiales con el nombre de su participante y conserva el de
 
 **Detener equipo** interrumpe todas sus sesiones. Al recuperar un equipo, empieza en pausa y requiere revisión explícita. Las entregas iniciadas sin confirmación permanecen inciertas: reanudar no las vuelve a ejecutar. Trex CLI puede requerir además **Confirmar revisión de operaciones** en el participante afectado. Las aclaraciones se añaden a la cola del principal.
 
-Límites por equipo: ocho colaboradores, 32 tareas por ciclo y 128 en total; tarea delegada de hasta 16 KiB e informe de hasta 32 KiB. El plan admite 32 pasos y 48 KiB en conjunto. Publicarlo no ejecuta las tareas. Los informes mayores permanecen en el historial y se solicitan más breves; no se presentan como una validación completa. Un equipo usa los modelos y servicios configurados por el usuario; cada sesión consume su cuota habitual.
+Límites por equipo: ocho colaboradores, 32 tareas por ciclo y 128 en total; tarea delegada de hasta 16 KiB. El plan admite 32 pasos y 48 KiB en conjunto. Publicarlo no ejecuta las tareas. Un equipo usa los modelos y servicios configurados por el usuario; cada sesión consume su cuota habitual.
+
+### Consumo de tokens en los equipos
+
+- **Modelo y esfuerzo por función**: al elegir la función de un participante, el diálogo sugiere un modelo y un esfuerzo acordes (investigación con un modelo económico y esfuerzo bajo, revisión y corrección con uno intermedio, principal e implementación con el del perfil). Solo rellena lo que no hayas elegido tú y lo indica con «Sugerido para esta función».
+- **Resumen antes de empezar**: el pie del diálogo muestra cuántos agentes usan cada cuenta y el porcentaje de sus límites de 5 horas y semana (consultarlo no gasta tokens), con avisos si una cuenta supera el 75 % o la comparten tres o más agentes.
+- **Presupuesto**: puedes limitar los tokens nuevos del equipo y de cada agente. Las delegaciones informan del presupuesto restante; al agotarse, la tarea no empieza y el equipo se pausa con opciones para ampliarlo o quitar los límites. Los tokens nuevos excluyen las lecturas de caché, que se muestran aparte.
+- **Uso visible**: la pestaña **Equipo** muestra el total del equipo, la barra de presupuesto y, agrupados por cuenta, el contexto, los tokens nuevos, el coste conocido y la cuota de cada participante. El principal recibe esos datos y prefiere a los miembros con margen; una cuenta al 98 % o rechazada bloquea nuevas delegaciones a ese miembro.
+- **Contexto justo por función**: la investigación no recibe instantánea de Git, la revisión recibe las diferencias y el resto solo la rama y el estado. El navegador se asigna por función (puedes cambiarlo por agente). Antes de una tarea nueva, un miembro con el contexto al 50 % o más se compacta una vez.
+- **Informes breves**: se piden informes de unas 500 palabras con rutas en lugar de código. Si uno supera 32 KiB ya no falla: el texto completo se guarda en la carpeta de datos de TREX y la tarea conserva el principio y el final con la ruta.
+- **Coordinación sin sondeos**: el principal no espera consultando el estado; TREX abre un turno nuevo cuando terminan las delegaciones y una consulta devuelve los informes nuevos una sola vez.
 
 En chats individuales, el mismo panel muestra las tareas publicadas por Claude y Codex y los planes de Trex CLI, con pendientes, trabajo en curso y tareas completadas. No hace falta configurar un equipo ni cambiar de modo. Puedes abrir **Tareas** desde el inicio o contraerlo para ampliar el chat; abrir el panel no envía mensajes al modelo. Los estados se reconstruyen a partir de los resultados de tareas que devuelve el historial del asistente; un error o actualización incompleta no marca tareas como terminadas. En ventanas estrechas, la lista se coloca encima del chat y permite desplazarse sin tapar el borrador.

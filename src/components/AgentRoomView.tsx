@@ -2,13 +2,14 @@ import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { browserOptions } from "../browser";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatError, loadHandoff, prepareHandoff } from "../api";
-import { mergeRoomItems, roomConversationContext, roomQueueAddress, roomQueueSnapshot, routeRoomMessage, type AgentRoom, type RoomRole } from "../agentRoom";
-import { completedWorkflowPlan, IMPLEMENTATION_INSTRUCTION, workflowPlanningInstruction, workflowClarifications, workflowPlanContext } from "../agentWorkflow";
+import { mergeRoomItems, roomConversationContext, roomDelivery, roomQueueAddress, roomQueueSnapshot, roomRequestText, routeRoomMessage, type AgentRoom, type RoomRole } from "../agentRoom";
+import { completedWorkflowPlan, IMPLEMENTATION_INSTRUCTION, IMPLEMENTATION_REMINDER, PLANNING_REMINDER, workflowPlanningInstruction, workflowClarifications, workflowPlanContext } from "../agentWorkflow";
 import { conversationTitle, initialChatState, type ChatState, type OutgoingImage } from "../chatState";
 import { TEAM_READER_POLICY } from "../agentTeam";
 import { defaultAgentPermission } from "../agentPermissions";
 import { chatTasks, roomTasks } from "../chatTasks";
-import { buildHandoffPrompt, handoffAlreadySent, sanitizeHandoffText, type HandoffSource, type PreparedHandoff } from "../handoff";
+import { buildHandoffPrompt, clipHandoffText, handoffAlreadySent, handoffBytes, roomUpdates, sanitizeHandoffText, withoutGitSnapshot,
+  type HandoffContext, type HandoffSource } from "../handoff";
 import { type ChatSession, type ChatSessionOptions } from "../hooks/chatSession";
 import { useClaudeChat } from "../hooks/useClaudeChat";
 import { useCodexChat } from "../hooks/useCodexChat";
@@ -29,6 +30,10 @@ export type AgentRoomViewProps = Omit<ChatViewProps, "workflow" | "planningOnly"
 
 const ROLES: RoomRole[] = ["planner", "executor"];
 const ROLE_NAMES = { planner: "Planificador", executor: "Ejecutor" };
+/** Below the backend's 64 KiB source limit, leaving room for headings. */
+const CONTENT_BUDGET = 62 * 1024;
+/** Incremental updates from the other agent: the newest entries win (~6k tokens). */
+const DELTA_BUDGET = 24 * 1024;
 type Sessions = Partial<Record<RoomRole, ChatSession>>;
 type SendKind = "plan" | "execute" | "message";
 type Issued = { cycle: number; kind: SendKind; previous: string | null; users: Set<string>; accepted: boolean };
@@ -51,6 +56,9 @@ function TrexRuntime({ role, options, publish }: RuntimeProps) {
 
 const queued = (session?: ChatSession): boolean => !!session && (session.queue.snapshot.messages.length > 0 || !!session.queue.snapshot.receipt || !!session.queue.snapshot.outbox?.length);
 const noop = (): void => undefined;
+/** An accepted (or already recorded) delivery advances that role's cursor; older pending entries have none. */
+const deliveredTo = (current: AgentRoom, pending: NonNullable<AgentRoom["pending"]>): Partial<AgentRoom> =>
+  pending.cursor === undefined ? {} : { delivered: { ...current.delivered, [pending.role]: pending.cursor } };
 
 /** Two independent provider sessions, one composer and a durable serial handoff. */
 export default function AgentRoomView(props: AgentRoomViewProps) {
@@ -78,7 +86,8 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
   const queueWrites = useRef(0);
   const pendingKinds = useRef(new Map<string, SendKind>());
   const attachments = useRef(new Map<string, { images: OutgoingImage[]; previews: string[]; display: string }>());
-  const original = useRef<{ cycle: number; prepared: PreparedHandoff; start: number } | null>(null);
+  /** The user's request for this planning cycle: the executor gets this, not the planner's transferred history. */
+  const original = useRef<{ cycle: number; task: string; start: number } | null>(null);
 
   const change = useCallback((update: (current: AgentRoom) => AgentRoom): void => {
     if (!mounted.current) return;
@@ -162,25 +171,46 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
     setReviewing(false);
     change(current => ({ ...current, active: role, cycle, phase: "transferring", ...(newCycle ? { plan: null } : {}), error: null }));
     try {
-      const context = roomConversationContext(snapshot().items, source(before.active));
+      // Each role resumes its own provider conversation: send only what it lacks.
+      const merged = snapshot(), peer: RoomRole = role === "planner" ? "executor" : "planner";
+      const delivery = roomDelivery(before, merged, role, !!sessionsRef.current[role]?.state.items.some(item => item.kind === "user"));
+      // The inherited chat goes to the role that does not resume that conversation (older rooms: first send).
+      const setup = before.setupContext && (before.setupRole == null || before.setupRole === role) ? before.setupContext : null;
       const recovered = resume && before.pending ? await loadHandoff(before.pending.reference.id) : null;
-      const inherited = before.setupContext ? await loadHandoff(before.setupContext.id) : null;
+      const inherited = setup && delivery.full ? await loadHandoff(setup.id) : null;
       if (!currentOperation(token, cycle)) return false;
       const task = sanitizeHandoffText(text).trim();
-      context.content = `# Solicitud actual del usuario\n\n${task}\n\n${recovered ? `## Contexto de la entrega pendiente que se revisa\n\n${recovered.content}\n\n` : ""}${inherited ? `## Contexto anterior del chat\n\n${inherited.content}` : context.content}`;
-      const prepared = await prepareHandoff(context);
-      if (!currentOperation(token, cycle)) return false;
-      if (role === "planner" && (newCycle || resume || original.current?.cycle !== cycle)) {
-        original.current = { cycle, prepared, start: sessionsRef.current.planner?.state.items.length ?? 0 };
+      // Older snapshots inside these packages are stale: this delivery attaches a current one.
+      const sections = [`# Solicitud actual del usuario\n\n${task}`];
+      // The backend accepts 64 KiB of content: the transferred context gets what the request leaves.
+      const space = (heading: number): number => CONTENT_BUDGET - handoffBytes(sections.join("\n\n")) - heading;
+      if (recovered) sections.push(`## Contexto de la entrega pendiente que se revisa\n\n${clipHandoffText(withoutGitSnapshot(recovered.content), space(64) / 2)}`);
+      if (inherited) sections.push(`## Contexto anterior del chat\n\n${clipHandoffText(withoutGitSnapshot(inherited.content), space(64))}`);
+      else if (delivery.full && delivery.items.length) sections.push(roomConversationContext(delivery.items, source(before.active), space(16)).content);
+      else if (delivery.items.length) {
+        const name = `${ROLE_NAMES[peer]} · ${before[peer].agent.profileName}`;
+        sections.push(`## Novedades de ${name} desde tu última entrega\n\n${roomUpdates(delivery.items, { user: `Usuario → ${name}`, agent: name }, Math.min(DELTA_BUDGET, space(160))).text}`);
       }
-      const instruction = `Atiende la solicitud actual del usuario indicada al principio del contexto transferido. ${kind === "plan" ? workflowPlanningInstruction((before.planner.mode??"plan")!=="plan")
-        : kind === "execute" ? IMPLEMENTATION_INSTRUCTION : "Comprueba el estado actual del proyecto antes de actuar y respeta los permisos elegidos."}`;
+      const context: HandoffContext = { source: source(before.active), content: sections.join("\n\n"), createdAt: Date.now(),
+        messageCount: delivery.items.length, truncated: false, imagesOmitted: 0 };
+      // Full diffs only when the role starts (or resumes) without that state; afterwards the
+      // status suffices when the other agent worked, and nothing when only the user spoke.
+      const prepared = await prepareHandoff(context, { git: resume || delivery.full ? "full" : delivery.peerWork ? "status" : "none" });
+      if (!currentOperation(token, cycle)) return false;
+      if (role === "planner" && (newCycle || original.current?.cycle !== cycle)) {
+        original.current = { cycle, task: (recovered && roomRequestText(recovered.content)) || task, start: sessionsRef.current.planner?.state.items.length ?? 0 };
+      }
+      // Within a cycle the full stage instruction is already in that conversation.
+      const followUp = !delivery.full && !newCycle && !resume;
+      const instruction = `Atiende la solicitud actual del usuario indicada al principio del contexto transferido. ${kind === "plan" ? followUp ? PLANNING_REMINDER : workflowPlanningInstruction((before.planner.mode??"plan")!=="plan")
+        : kind === "execute" ? followUp ? IMPLEMENTATION_REMINDER : IMPLEMENTATION_INSTRUCTION : "Comprueba el estado actual del proyecto antes de actuar y respeta los permisos elegidos."}`;
       const reference = { id: prepared.id, sourceLabel: prepared.sourceLabel, pending: true, instruction };
       pendingKinds.current.set(prepared.id, kind);
       attachments.current.set(prepared.id, { images, previews, display: task });
-      if (!snapshot().items.some(item => item.kind === "user")) latest.current.onTitle(latest.current.sessionId, conversationTitle(task));
+      if (!merged.items.some(item => item.kind === "user")) latest.current.onTitle(latest.current.sessionId, conversationTitle(task));
+      const consumed = !!before.setupContext && (before.setupRole == null || before.setupRole === role);
       change(current => ({ ...current, active: role, phase: role === "planner" ? "planning" : "executing",
-        pending: { id: prepared.id, role, reference }, ...(before.setupContext?{setupContext:null}:{}), error: null }));
+        pending: { id: prepared.id, role, reference, cursor: delivery.cursor }, ...(consumed ? { setupContext: null, setupRole: null } : {}), error: null }));
       setPlanIntent(false);
       return true;
     } catch (error) {
@@ -207,17 +237,17 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
         const session = sessionsRef.current[role]!;
         if (!allReady() || anyBusy() || anyQueued()) throw new Error("La sala cambió mientras se preparaba la entrega. Revisa y reanuda.");
         if (handoffAlreadySent(session.state.items, pending.reference.id)) {
-          change(current => ({ ...current, phase: "paused", pending: null,
+          change(current => ({ ...current, phase: "paused", pending: null, ...deliveredTo(current, pending),
             error: "La entrega ya aparece en el historial. Revisa el resultado antes de continuar." }));
           return;
         }
         const kind = pendingKinds.current.get(pending.reference.id) ?? (role === "planner" ? "plan" : "execute");
-        if (role === "planner" && original.current?.cycle !== cycle) original.current = { cycle, prepared, start: session.state.items.length };
+        const initialTask = roomRequestText(prepared.content) ?? undefined;
+        if (role === "planner" && original.current?.cycle !== cycle) original.current = { cycle, task: initialTask ?? "", start: session.state.items.length };
         const attempt: Issued = { cycle, kind, previous: session.state.lastCompletion?.id ?? null,
           users: new Set([...session.state.pendingMessageIds, ...session.state.items.filter(item => item.kind === "user").map(item => item.id)]), accepted: false };
         issued.current[role] = attempt;
         const outgoing = attachments.current.get(pending.reference.id);
-        const initialTask = /^# Solicitud (?:actual del usuario|del usuario)\s*\n+([\s\S]*?)(?=\n\n(?:---\n|##)|$)/.exec(prepared.content)?.[1]?.trim();
         const display = outgoing?.display ?? (kind === "execute" ? `Implementa el plan definitivo de ${roomRef.current.planner.agent.profileName}.`
           : initialTask || "Continúa la planificación con el contexto de esta conversación.");
         const accepted = await session.send(buildHandoffPrompt(prepared, pending.reference.instruction ?? (role === "planner" ? workflowPlanningInstruction((roomRef.current.planner.mode??"plan")!=="plan") : IMPLEMENTATION_INSTRUCTION)),
@@ -226,7 +256,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
         if (accepted === false) throw new Error("El agente no confirmó la recepción. Revisa el historial antes de reanudar.");
         attempt.accepted = true;
         attachments.current.delete(pending.reference.id);
-        change(current => ({ ...current, pending: null,
+        change(current => ({ ...current, pending: null, ...deliveredTo(current, pending),
           plan: current.plan?.id === pending.reference.id ? { ...current.plan, pending: false } : current.plan, error: null }));
         setRevision(value => value + 1);
       } catch (error) {
@@ -266,11 +296,14 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
         try {
           const request = original.current;
           if (!request || request.cycle !== cycle) throw new Error("Falta la solicitud de este ciclo. Revisa el contexto antes de reanudar.");
-          const clarifications = workflowClarifications(session.state.items.slice(request.start));
-          const requestText = request.prepared.content.split("\n\n---\n## Estado del proyecto capturado por TREX\n")[0];
-          const tasks = chatTasks(session.state.items.slice(request.start), roomRef.current.planner.agent.profileName);
-          const context = workflowPlanContext(plan, `${requestText}\n\n## Aclaraciones del usuario\n${clarifications || "Sin aclaraciones adicionales."}`, source("planner"), tasks);
-          const prepared = await prepareHandoff(context);
+          // The executor gets the user's request, the final plan and the confirmed tasks; not the
+          // history extract the planner already received (it could exceed the 64 KiB limit).
+          const cycleItems = session.state.items.slice(request.start);
+          const clarifications = workflowClarifications(cycleItems.filter(item => !(item.kind === "user" && sanitizeHandoffText(item.text).trim() === request.task)));
+          const tasks = chatTasks(cycleItems, roomRef.current.planner.agent.profileName);
+          const context = workflowPlanContext(plan, `${request.task || "La solicitud original está en la conversación del planificador; sigue el plan."}\n\n## Aclaraciones del usuario\n${clarifications || "Sin aclaraciones adicionales."}`, source("planner"), tasks);
+          // Branch and status are enough: the executor inspects the diffs it needs itself.
+          const prepared = await prepareHandoff(context, { git: "status" });
           if (!currentOperation(token, cycle) || roomRef.current.phase !== "transferring") return;
           if (anyQueued()) {
             change(current => ({ ...current, phase: "waiting", active: "planner", error: "El planificador debe leer las aclaraciones en cola antes de entregar el plan." }));
@@ -278,8 +311,12 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
           }
           const reference = { id: prepared.id, sourceLabel: prepared.sourceLabel, pending: true, instruction: IMPLEMENTATION_INSTRUCTION };
           pendingKinds.current.set(prepared.id, "execute");
+          // The plan supersedes the planner's investigation: once accepted, the executor
+          // only receives later updates. It also stands in for an inherited chat meant for it.
+          const ledger = snapshot().order, cursor = ledger[ledger.length - 1] ?? null;
           change(current => ({ ...current, phase: "executing", active: "executor", plan: reference,
-            pending: { id: prepared.id, role: "executor", reference }, error: null }));
+            pending: { id: prepared.id, role: "executor", reference, cursor },
+            ...(current.setupContext && current.setupRole === "executor" ? { setupContext: null, setupRole: null } : {}), error: null }));
         } catch (error) {
           if (currentOperation(token, cycle)) change(current => ({ ...current, phase: "failed", error: formatError(error) }));
         } finally {

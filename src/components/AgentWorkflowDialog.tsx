@@ -117,7 +117,7 @@ export function useWorkflowStage(targets: Target[], provider: AgentProvider, set
     : "Se usará el esfuerzo del perfil o el predeterminado del asistente.";
 
   const mode = profile && validAgentPermission(profile.provider, permissionChoices[selectedId]) ? permissionChoices[selectedId] ?? null : null;
-  return { profile, profileId: selectedId, setProfileId, model, options, loading, error, validModel, mode,
+  return { profile, profileId: selectedId, setProfileId, model, models, options, loading, error, validModel, mode,
     setMode: (mode: string | null) => setPermissionChoices(previous => ({ ...previous, [selectedId]: mode })),
     effort, effortLevels, effortOptions, effortHint,
     ready: !!profile && !loading && validModel,

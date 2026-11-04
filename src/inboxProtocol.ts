@@ -22,8 +22,16 @@ export function codexInboxReceiptId(raw: unknown): string | null {
     && header.text === `Mensajes del usuario en cola. Recibo: ${id}. Procesa este recibo una sola vez.` ? id : null;
 }
 
-/** Implements the SDK MCP bridge over Claude's existing control channel. */
-export async function claudeInboxReply(requestId: string, request: Json, read: () => Promise<QueueSnapshot>, integrations?: IntegrationContext): Promise<{ line: string; receipt: QueueReceipt | null } | null> {
+/** When the guidance is already in --append-system-prompt, the server repeats only this line. */
+export const CLAUDE_INBOX_BRIEF = "Trex app tools: trex_read_messages reads queued user messages and trex_update_tasks publishes the visible task list; follow the trex guidance in the system prompt.";
+
+/**
+ * Implements the SDK MCP bridge over Claude's existing control channel.
+ * `appended` says the launch already carries the app instructions; otherwise
+ * (a profile with its own system prompt) the server provides the capability guidance.
+ */
+export async function claudeInboxReply(requestId: string, request: Json, read: () => Promise<QueueSnapshot>, integrations?: IntegrationContext,
+  options: { appended?: boolean } = {}): Promise<{ line: string; receipt: QueueReceipt | null } | null> {
   if (request.subtype !== "mcp_message" || request.server_name !== INBOX_SERVER) return null;
   const message = record(request.message) ?? {};
   const params = record(message.params) ?? {};
@@ -35,7 +43,8 @@ export async function claudeInboxReply(requestId: string, request: Json, read: (
     const versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
     result = { protocolVersion: versions.includes(String(params.protocolVersion)) ? params.protocolVersion : versions[versions.length - 1],
       capabilities: { tools: {} }, serverInfo: { name: INBOX_SERVER, version: "1.0.0" },
-      instructions: `${integrationInstructions("claude", integrations)} ${taskInstructions("claude")}` };
+      instructions: options.appended ? CLAUDE_INBOX_BRIEF
+        : [integrationInstructions("claude", integrations), taskInstructions("claude")].filter(Boolean).join(" ") };
   } else if (message.method === "tools/list") result = { tools: [inboxTool, taskTool] };
   else if (message.method === "tools/call") {
     if (params.name === TASK_TOOL) {

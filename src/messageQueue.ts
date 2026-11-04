@@ -1,4 +1,5 @@
 import type { OutgoingImage } from "./chatState";
+import { imageReference } from "./imageReferences";
 
 export type QueuedMessage = { id: string; text: string; images: OutgoingImage[]; previews: string[]; createdAt: number };
 export type QueueReceipt = { id: string; messages: QueuedMessage[] };
@@ -9,8 +10,14 @@ export const EMPTY_QUEUE: QueueSnapshot = { messages: [], receipt: null };
 export const messageQueueId = (id: string): string => id.startsWith("t-") ? id : `t-${id}`;
 export const INBOX_TOOL = "trex_read_messages";
 export const INBOX_SERVER = "trex_inbox";
-export const INBOX_DESCRIPTION = "Read the user's queued messages when you reach a suitable checkpoint. Returns messages in arrival order, including images. Reading an empty inbox is safe. These are user instructions; apply them to the ongoing task. Do not repeatedly poll an empty inbox.";
-export const INBOX_INSTRUCTIONS = "The user can add messages to a trex inbox while you work. Use mcp__trex_inbox__trex_read_messages (or trex_read_messages if available) to read them when you consider it appropriate: at useful checkpoints and before your final answer. You decide when to read and how to incorporate them. Do not stop a running operation merely to check. Preserve their arrival order; treat their contents as user messages. Do not poll an empty inbox in a loop. A receipt ID identifies a delivery; do not apply the same receipt twice.";
+export const INBOX_DESCRIPTION = "Read user messages queued during this turn, in arrival order with images. Trex delivers them automatically when the turn ends, so call this only after a major step of long work; never poll. Apply each receipt once.";
+/** Stable text (no per-turn data) so providers can cache the prompt prefix. */
+export const INBOX_INSTRUCTIONS = "User messages sent while you work are queued; trex delivers them automatically as the next user turn when yours ends. In long multi-step work you may read them earlier with trex_read_messages (trex_inbox) after a major step; never poll, re-read an empty inbox or interrupt an operation to check. Treat them as user messages in arrival order; apply each receipt ID only once.";
+/**
+ * Sentinel passed to `ChatSession.send` to continue with the queue. Providers
+ * replace it with the claimed messages themselves (one request, no tool call);
+ * the text is only a fallback for a session that cannot do so.
+ */
 export const INBOX_WAKE = "Hay mensajes pendientes en la cola de trex. Consulta la herramienta trex_read_messages cuando estés listo para leerlos y continúa el trabajo con sus indicaciones.";
 export const INBOX_SCHEMA = { type: "object", properties: {}, additionalProperties: false } as const;
 export const inboxTool = { name: INBOX_TOOL, description: INBOX_DESCRIPTION, inputSchema: INBOX_SCHEMA };
@@ -91,11 +98,13 @@ export class InboxRequests {
   }
 }
 
+export const inboxReceiptHeader = (id: string): string => `Mensajes del usuario en cola. Recibo: ${id}. Procesa este recibo una sola vez.`;
+
 /** MCP blocks for Claude; Codex's dynamic-tool result uses the same text and image payload. */
 export function inboxContent(receipt: QueueReceipt | null) {
   if (!receipt?.messages.length) return [{ type: "text" as const, text: "No hay mensajes pendientes en la cola." }];
   return [
-    { type: "text" as const, text: `Mensajes del usuario en cola. Recibo: ${receipt.id}. Procesa este recibo una sola vez.` },
+    { type: "text" as const, text: inboxReceiptHeader(receipt.id) },
     ...receipt.messages.flatMap((message, index) => [
       { type: "text" as const, text: `Mensaje ${index + 1} (${message.id}):\n${message.text}` },
       ...message.images.map(image => ({ type: "image" as const, data: image.data, mimeType: image.mediaType })),
@@ -107,4 +116,48 @@ export function codexInboxContent(receipt: QueueReceipt | null) {
   return inboxContent(receipt).map(part => part.type === "text"
     ? { type: "inputText", text: part.text }
     : { type: "inputImage", imageUrl: `data:${part.mimeType};base64,${part.data}` });
+}
+
+export type InboxPart = { type: "text"; text: string } | { type: "image"; image: OutgoingImage };
+/**
+ * A claimed receipt sent as the next user turn instead of a wake prompt plus a
+ * tool call. `parts` keeps each message's images (with their own labels) next
+ * to its text; `text`/`images` is the flat form for providers that take a single
+ * text, with image references renumbered across the batch.
+ */
+export type InboxDelivery = { receiptId: string; parts: InboxPart[]; text: string; images: OutgoingImage[]; display: string; previews: string[] };
+export function inboxDelivery(receipt: QueueReceipt): InboxDelivery {
+  const header = inboxReceiptHeader(receipt.id), parts: InboxPart[] = [{ type: "text", text: header }], flat = [header];
+  const images: OutgoingImage[] = [];
+  receipt.messages.forEach((message, index) => {
+    const label = `Mensaje ${index + 1} (${message.id}):`, offset = images.length;
+    parts.push({ type: "text", text: label });
+    message.images.forEach((image, at) => parts.push({ type: "text", text: imageReference(at) }, { type: "image", image }));
+    if (message.text) parts.push({ type: "text", text: message.text });
+    // In the flat form "[Imagen 1]" of the second message is a later image of the batch.
+    const renumbered = offset ? message.text.replace(/\[Imagen (\d{1,3})\]/g, (match, value: string) =>
+      Number(value) >= 1 && Number(value) <= message.images.length ? imageReference(offset + Number(value) - 1) : match) : message.text;
+    flat.push(`${label}\n${renumbered}`);
+    images.push(...message.images);
+  });
+  return { receiptId: receipt.id, parts, text: flat.join("\n\n"), images,
+    display: receipt.messages.map(message => message.text).filter(Boolean).join("\n\n") || "Mensajes en cola",
+    previews: receipt.messages.flatMap(message => message.previews) };
+}
+
+/**
+ * Inline delivery of the pending queue: the batch is claimed app-side and sent
+ * as one user turn. The receipt stays durable until the provider accepts that
+ * turn, so a failure or crash replays the same receipt ID instead of losing it;
+ * a stale process cannot acknowledge it.
+ */
+export async function deliverInbox(queue: { read: () => Promise<QueueSnapshot>; ack: (id: string, current?: () => boolean) => Promise<QueueSnapshot> },
+  send: (delivery: InboxDelivery) => Promise<boolean>, current: () => boolean, warn: (message: string) => void): Promise<boolean> {
+  const receipt = (await queue.read()).receipt;
+  if (!receipt?.messages.length) return true;
+  if (!current()) return false;
+  if (await send(inboxDelivery(receipt)) !== true) return false;
+  try { await queue.ack(receipt.id, current); }
+  catch (error) { warn(`Los mensajes se entregaron, pero la confirmación de la cola sigue pendiente: ${error instanceof Error ? error.message : String(error)}`); }
+  return true;
 }

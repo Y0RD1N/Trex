@@ -146,8 +146,7 @@ export function DiffView({ lines }: { lines: DiffLine[] }) {
   </div>;
 }
 
-function DiffCount({ lines }: { lines: DiffLine[] | null }) {
-  const { added, removed } = diffStats(lines);
+function DiffCount({ added, removed }: { added: number; removed: number }) {
   if (!added && !removed) return null;
   return <span className="chat-diff-count">
     {added > 0 && <span className="add">+{added}</span>}
@@ -237,26 +236,34 @@ export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onIm
   item: ToolItem; cwd: string; expanded?: boolean; onImplement?: () => void; onOpenArtifact?: (artifact: BrowserArtifact) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  // La fila se repinta cuando cambia otra cosa del hilo (p. ej. una prop de
+  // función nueva en cada trozo de una respuesta): lo derivado, que incluye
+  // calcular el diff de una edición, solo se rehace si cambia la herramienta.
+  const running = item.status === "running";
+  const summary = useMemo(() => describeTool(item.name, item.input, cwd, running), [item.name, item.input, cwd, running]);
+  const stats = useMemo(() => diffStats(item.patch ?? inputDiff(item.name, item.input)), [item.patch, item.name, item.input]);
+  const answer = useMemo(() => answerSummary(item), [item]);
   if (item.name === "TodoWrite" && expanded) return <TodoCard input={item.input} />;
   if (item.name === "ExitPlanMode" && expanded && typeof item.input.plan === "string") return <PlanCard plan={item.input.plan} onImplement={onImplement} />;
-  const summary = describeTool(item.name, item.input, cwd, item.status === "running");
-  const diff = item.patch ?? inputDiff(item.name, item.input);
   const description = item.name === "Bash" && typeof item.input.description === "string" ? item.input.description : undefined;
-  const answer = answerSummary(item);
   return <div className={`chat-tool${open ? " open" : ""}`} data-status={item.status}>
     <button type="button" className="chat-tool-row" aria-expanded={open} onClick={() => setOpen(!open)} title={description}>
       <span className="chat-tool-icon" aria-hidden="true">{TOOL_ICONS[summary.icon]}</span>
       <span className="chat-tool-verb">{summary.verb}</span>
       {summary.target && <span className={`chat-tool-target${summary.icon === "run" || summary.icon === "search" ? " mono" : ""}`}>{summary.target}</span>}
       {answer && <span className={`chat-tool-answer${answer === "Sin respuesta" ? " empty" : ""}`}>{answer}</span>}
-      <DiffCount lines={diff} />
+      <DiffCount added={stats.added} removed={stats.removed} />
       <StatusMark status={item.status} />
       <span className="chat-tool-chevron" aria-hidden="true"><ChevronIcon size={13} /></span>
     </button>
     {open && <div className="chat-tool-detail">{toolDetail(item, cwd)}</div>}
     {!!item.artifacts?.length && <div className="chat-browser-artifacts">{item.artifacts.map(artifact => <BrowserArtifactButton key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}</div>}
   </div>;
-});
+}, (previous, next) => previous.item === next.item && previous.cwd === next.cwd && previous.expanded === next.expanded
+  && previous.onImplement === next.onImplement
+  // `onOpenArtifact` solo se usa en filas con capturas: en las demás, una función
+  // nueva en cada render del hilo no debe repintarlas con cada trozo de respuesta.
+  && (previous.onOpenArtifact === next.onOpenArtifact || !next.item.artifacts?.length));
 
 function BrowserArtifactButton({ artifact, onOpen }: { artifact: BrowserArtifact; onOpen?: (artifact: BrowserArtifact) => Promise<void> }) {
   const [busy, setBusy] = useState(false);

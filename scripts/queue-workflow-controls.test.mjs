@@ -30,6 +30,8 @@ let currentHost;
 const react = Object.fromEntries(["useRef", "useState", "useReducer", "useMemo", "useCallback", "useEffect", "useLayoutEffect"]
   .map(name => [name, (...args) => currentHost[name](...args)]));
 react.memo = component => component;
+// The offline host renders synchronously: the deferred value is the current one.
+react.useDeferredValue = value => value;
 const jsx = (type, props, key) => ({ type, props: props ?? {}, key });
 const jsxRuntime = { jsx, jsxs: jsx, Fragment: Symbol("Fragment") };
 
@@ -517,4 +519,94 @@ test("ready room without pending work still permits /init through the real compo
   assert.equal(h.draft, "");
   assert.deepEqual(h.calls, [{ role: "planner", method: "runCommand", name: "init", args: "" }]);
   assert.deepEqual(h.messages, []);
+});
+
+// --- Token-efficient room deliveries ---
+function recordingApi(extra = {}) {
+  const contexts = [], gits = [], loads = [], saved = new Map(Object.entries(extra));
+  return { contexts, gits, loads, api: {
+    prepareHandoff: async (context, options) => {
+      const value = { id: `handoff-${contexts.length}`, ...context, sourceLabel: "room", sourceProvider: "codex", sourceSessionId: "room", cwd: "D:/test" };
+      contexts.push(context); gits.push(options?.git ?? "full"); saved.set(value.id, value); return value;
+    },
+    loadHandoff: async id => { loads.push(id); return saved.get(id); },
+  } };
+}
+const roomUser = (id, text) => ({ kind: "user", id, text, images: 0, previews: [] });
+const roomText = (id, text) => ({ kind: "text", id, messageId: id, text, final: true });
+const roomTool = id => ({ kind: "tool", id, name: "Bash", input: { command: "npm test" }, output: "42 passing", status: "done", patch: null });
+
+test("a later message to the same agent carries only the other agent's new entries, without the full history", async t => {
+  const rec = recordingApi();
+  const plannerItems = [roomUser("p-user", "Planifica el login"), roomText("p-reply", "PLANNER_OWN_REASONING")];
+  const executorItems = [roomUser("e-user", "Implementa"), roomTool("e-tool"), roomText("e-reply", "EXECUTOR_RESULT: login listo")];
+  const h = roomHarness(t, { room: { phase: "completed", cycle: 1, active: "planner", delivered: { planner: "planner::p-reply" } }, api: rec.api,
+    states: { planner: { items: plannerItems }, executor: { items: executorItems } } });
+  await h.pump();
+  h.type("Revisa el resultado"); h.submit(); await h.pump();
+  assert.equal(rec.contexts.length, 1);
+  const content = rec.contexts[0].content;
+  assert.match(content, /^# Solicitud actual del usuario\n\nRevisa el resultado/);
+  assert.match(content, /## Novedades de Ejecutor · executor desde tu última entrega/);
+  assert.match(content, /EXECUTOR_RESULT/); assert.match(content, /npm test/);
+  assert.doesNotMatch(content, /PLANNER_OWN_REASONING|# Continuidad del proyecto/, "its own conversation already has them");
+  assert.equal(rec.gits[0], "status", "the other agent worked: branch and status, no diffs");
+  const send = h.calls.find(call => call.role === "planner" && call.method === "send");
+  assert.ok(send); assert.equal(send.args[3], "Revisa el resultado");
+  assert.equal(h.room.delivered.planner, "executor::e-reply", "the accepted delivery advances the cursor");
+});
+
+test("a planning follow-up without new work sends no Git snapshot and only a short stage reminder", async t => {
+  const rec = recordingApi();
+  const h = roomHarness(t, { room: { phase: "waiting", cycle: 1, active: "planner", delivered: { planner: "planner::p-reply" } }, api: rec.api,
+    states: { planner: { items: [roomUser("p-user", "Planifica"), roomText("p-reply", "¿Opción A o B?")] } } });
+  await h.pump();
+  h.type("Usa la opción B"); h.submit(); await h.pump();
+  assert.equal(rec.gits[0], "none");
+  assert.doesNotMatch(rec.contexts[0].content, /Novedades de/);
+  const send = h.calls.find(call => call.role === "planner" && call.method === "send");
+  assert.match(send.args[0], /Sigues en la etapa de planificación/);
+  assert.doesNotMatch(send.args[0], /Tu única etapa es planificar/);
+  assert.match(send.args[0], /trex_plan/);
+});
+
+test("the executor receives the request, plan and tasks with a Git status, never the planner's transferred history", async t => {
+  const rec = recordingApi();
+  const prior = [roomUser("old-user", "Tarea anterior"), roomText("old-reply", "PRIOR_EXECUTOR_HISTORY ".repeat(40))];
+  const h = roomHarness(t, { room: { phase: "idle", cycle: 0 }, api: rec.api, states: { executor: { items: prior } } });
+  h.type("Implement the feature"); h.submit(); await h.pump();
+  assert.match(rec.contexts[0].content, /PRIOR_EXECUTOR_HISTORY/, "the planner's first delivery carries the context it lacks");
+  assert.equal(rec.gits[0], "full");
+  const user = { kind: "user", id: "request", text: "Implement the feature", images: 0, previews: [] };
+  const tasks = { kind: "tool", id: "tasks", name: "TodoWrite", status: "done", input: { todos: [{ content: "Implement", status: "pending" }] }, output: null, patch: null };
+  const final = { kind: "text", id: "plan", messageId: "answer", text: "<trex_plan>Implement and validate.</trex_plan>", final: true };
+  h.publish("planner", { ...h.sessions.planner.state, items: [user, tasks, final], lastCompletion: { id: "complete", status: "completed", messageIds: ["request"], itemIds: ["tasks", "plan"] } });
+  await h.pump();
+  assert.equal(rec.contexts.length, 2);
+  const executor = rec.contexts[1].content;
+  assert.match(executor, /# Plan definitivo para implementar\n\nImplement and validate\./);
+  assert.match(executor, /## Solicitud original del usuario\n\nImplement the feature/);
+  assert.match(executor, /\[pending\] Implement/);
+  assert.doesNotMatch(executor, /PRIOR_EXECUTOR_HISTORY|# Continuidad del proyecto|# Solicitud actual del usuario/);
+  assert.equal(rec.gits[1], "status");
+  assert.ok(h.calls.some(call => call.role === "executor" && call.method === "send"));
+  assert.equal(typeof h.room.delivered.executor, "string", "later messages to the executor are incremental");
+});
+
+test("an inherited chat is delivered only to the role that does not resume it", async t => {
+  const rec = recordingApi({ prior: { id: "prior", content: "INHERITED_CHAT\n\n---\n## Estado del proyecto capturado por TREX\nSTALE_GIT", sourceLabel: "Earlier" } });
+  const h = roomHarness(t, { room: { phase: "idle", cycle: 0, active: "executor", setupContext: { id: "prior", pending: false, sourceLabel: "Earlier" }, setupRole: "planner" },
+    api: rec.api, states: { executor: { items: [roomUser("source-user", "Conversación original"), roomText("source-reply", "Respuesta original")] } } });
+  h.type("@ejecutor Continúa con los tests"); h.submit(); await h.pump();
+  assert.ok(!rec.loads.includes("prior"), "the resumed source conversation does not receive its own history again");
+  assert.doesNotMatch(rec.contexts[0].content, /INHERITED_CHAT|Respuesta original/);
+  assert.equal(h.room.setupContext?.id, "prior", "the setup waits for the other role");
+  h.publish("executor", { ...h.sessions.executor.state, items: [...h.sessions.executor.state.items, roomUser("e-new", "Continúa con los tests"), roomText("e-done", "Tests listos")],
+    lastCompletion: { id: "done", status: "completed", messageIds: ["e-new"], itemIds: ["e-done"] } });
+  await h.pump();
+  h.type("@planificador Revisa la cobertura"); h.submit(); await h.pump();
+  const planner = rec.contexts.at(-1).content;
+  assert.match(planner, /## Contexto anterior del chat\n\nINHERITED_CHAT/);
+  assert.doesNotMatch(planner, /STALE_GIT/, "the delivery attaches its own current snapshot");
+  assert.equal(h.room.setupContext, null);
 });

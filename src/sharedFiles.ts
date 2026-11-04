@@ -14,12 +14,11 @@ import { nodeText, type HastNode } from "./chatMarkdown";
  * archivos. Una sola línea y sin comillas dobles: viaja como argumento del CLI.
  */
 export const FILE_SHARING_INSTRUCTIONS = [
-  "You are running inside trex, a desktop chat app that renders your replies as Markdown.",
-  "When the user asks you for a file, or when you create a file they will want to look at (a PDF, an image, a document, an export, a generated asset), attach it:",
-  "put a Markdown link to its absolute local path on a line of its own, for example [CV.pdf](/home/user/cv/CV.pdf);",
-  "wrap paths that contain spaces in angle brackets, like [Report.pdf](</home/user/My Files/Report.pdf>).",
-  "trex shows each attached file as a card the user can preview, open or save, and shows images inline; several attachments can go on consecutive lines.",
-  "Only attach files that are useful to the user, and keep referring to code locations as you normally do.",
+  "You are in trex, a desktop chat app that renders Markdown.",
+  "When the user asks for a file or you make one they will want (PDF, image, document, export, asset), attach it:",
+  "a Markdown link to its absolute local path on a line of its own, e.g. [CV.pdf](/home/user/cv/CV.pdf);",
+  "use angle brackets for paths with spaces: [Report.pdf](</home/u/My Files/Report.pdf>).",
+  "trex shows it as a card to preview, open or save. Attach only useful files.",
 ].join(" ");
 
 export type FileInfo = { path: string; name: string; exists: boolean; isDir: boolean; size: number };

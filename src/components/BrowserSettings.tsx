@@ -62,7 +62,7 @@ export default function BrowserSettings({ settings, cwd, onChange, onBusyChange 
   const label = loading ? "Comprobando…" : status?.ready ? "Listo para usar" : status?.installed ? "Necesita atención" : "Componente opcional";
   return <div className="browser-settings">
     <div className="browser-settings-card">
-      <div className="browser-settings-heading"><span className="browser-settings-badge" aria-hidden="true">◎</span>
+      <div className="browser-settings-heading"><span className="browser-settings-badge" aria-hidden="true"><GlobeIcon size={20} /></span>
         <div><h4>Trex Browser</h4><p>Un espacio independiente para cada agente.</p></div>
         <span className={`browser-settings-status${status?.ready ? " is-ready" : ""}`}>{label}</span>
       </div>

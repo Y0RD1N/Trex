@@ -8,7 +8,7 @@
  * restauración de la sesión anterior y las confirmaciones de la app (mediante
  * el sistema de diálogos propio, montado en el proveedor de la raíz).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -56,7 +56,7 @@ import type {
 } from "./types";
 import ClaudeBanner from "./components/ClaudeBanner";
 import DialogProvider, { useDialog } from "./components/DialogProvider";
-import SettingsPanel from "./components/SettingsPanel";
+import { lazyComponent } from "./lazyComponent";
 import Sidebar from "./components/Sidebar";
 import TerminalTabs from "./components/TerminalTabs";
 import TerminalView from "./components/TerminalView";
@@ -83,13 +83,10 @@ import SplitDivider from "./components/SplitDivider";
 import SplitPaneHeader from "./components/SplitPaneHeader";
 import AgentIcon from "./components/AgentIcon";
 import { PanelIcon, TerminalIcon } from "./components/Icons";
-import CommandPalette from "./components/CommandPalette";
-import RecoverConversations from "./components/RecoverConversations";
-import UsageDialog from "./components/UsageDialog";
 import FeatureDialog from "./components/FeatureDialog";
 import HandoffDialog, { handoffTargetReason } from "./components/HandoffDialog";
 import { normalizeHandoffReference, sanitizeHandoffInstruction, type HandoffContext, type HandoffReference, type PreparedHandoff } from "./handoff";
-import AgentWorkflowDialog, { type WorkflowRequest } from "./components/AgentWorkflowDialog";
+import type { WorkflowRequest } from "./components/AgentWorkflowDialog";
 import { IMPLEMENTATION_INSTRUCTION, normalizeAgentWorkflow, restoreAgentWorkflow, type AgentWorkflow, type WorkflowAgent } from "./agentWorkflow";
 import { claudePlanningArgs } from "./workflowSafety";
 import { normalizeAgentRoom, restoreAgentRoom, type AgentRoom, type RoomRole } from "./agentRoom";
@@ -103,6 +100,12 @@ import type { PaletteCommand } from "./commandPalette";
 import { useNotificationSound } from "./hooks/useNotificationSound";
 import { useCliUpdates } from "./hooks/useCliUpdates";
 import type { CliId } from "./cliUpdates";
+// Ajustes, paleta y diálogos poco frecuentes: en su propio fragmento (ver lazyComponent).
+const SettingsPanel = lazyComponent(() => import("./components/SettingsPanel"));
+const CommandPalette = lazyComponent(() => import("./components/CommandPalette"));
+const RecoverConversations = lazyComponent(() => import("./components/RecoverConversations"));
+const UsageDialog = lazyComponent(() => import("./components/UsageDialog"));
+const AgentWorkflowDialog = lazyComponent(() => import("./components/AgentWorkflowDialog"));
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
 const CLAUDE_INFO_FALLBACK: ClaudeInfo = {
@@ -790,7 +793,8 @@ function AppShell() {
     }
     const generation = ++handoffGeneration.current;
     setHandoffDialog({ context, prepared: null, loading: true, error: null });
-    void prepareHandoff(context).then(prepared => {
+    // Otro asistente continúa sin este historial: necesita también las diferencias pendientes.
+    void prepareHandoff(context, { git: "full" }).then(prepared => {
       if (handoffGeneration.current === generation) setHandoffDialog({ context, prepared, loading: false, error: null });
     }).catch(error => {
       if (handoffGeneration.current === generation) setHandoffDialog({ context, prepared: null, loading: false, error: formatError(error) });
@@ -899,7 +903,9 @@ function AppShell() {
         participant.profileName = sourceTab.profileName ?? participant.profileName;
       }
       const id = crypto.randomUUID();
-      const inherited = captured ? await prepareHandoff(captured.context) : null;
+      // Only the role that does not resume this chat receives it; that delivery attaches
+      // its own current Git snapshot, so the stored context needs none.
+      const inherited = captured ? await prepareHandoff(captured.context, { git: "none" }) : null;
       const permission = (choice: WorkflowRequest["planner"], agent: WorkflowAgent, planning: boolean): string | null => {
         if (choice.mode != null && !validAgentPermission(agent.provider, choice.mode)) throw new Error("El modo de permisos no es válido para este asistente.");
         return choice.mode ?? defaultAgentPermission(agent.provider, !planning);
@@ -909,6 +915,7 @@ function AppShell() {
           mode: request.executor.mode !== undefined ? permission(request.executor, executor, false) : sourceRole === "executor" ? sourceTab!.chatMode : defaultAgentPermission(executor.provider) },
         active: "planner", phase: "idle", cycle: 0, pending: null,
         setupContext: inherited ? { id: inherited.id, sourceLabel: inherited.sourceLabel, pending: false } : null,
+        ...(inherited && sourceRole ? { setupRole: sourceRole === "planner" ? "executor" as const : "planner" as const } : {}),
         order: sourceRole ? captured!.itemIds.map(item => `${sourceRole}::${item}`) : [], plan: null, error: null };
       const surface = workflowSurfaceRef.current;
       setWorkflowProject(null);
@@ -949,6 +956,8 @@ function AppShell() {
         if (mode != null && !validAgentPermission(profile.provider, mode)) throw new Error("El modo de permisos no es válido para esta cuenta.");
         return { id: choice.id, name: sanitizeHandoffText(choice.name), role: principal ? "coordinator" : choice.role,
           instructions: sanitizeHandoffText(choice.instructions), canWrite: mode !== "plan", mode,
+          // Explicit Trex Browser choice from the dialog; absent means the role default.
+          ...(typeof choice.browser === "boolean" ? { browser: choice.browser } : {}),
           agent: { profileId: profile.id, profileName: profile.name, provider: profile.provider, model, effort, launch }, conversationId: null };
       };
       const master = pick(request.master, true), workers = request.workers.map(worker => pick(worker));
@@ -967,9 +976,14 @@ function AppShell() {
       }
       const id = "team-" + crypto.randomUUID();
       let team = normalizeAgentTeam({ id, epoch: crypto.randomUUID(), master, workers, phase: "running",
-        order: sourceMember ? captured!.itemIds.map(id => sourceMember.id + "::" + id) : [], initial: null, setup: { context: null }, error: null });
+        order: sourceMember ? captured!.itemIds.map(id => sourceMember.id + "::" + id) : [], initial: null, setup: { context: null }, error: null,
+        ...(request.budget ? { budget: request.budget } : {}) });
       if (!team) throw new Error("La configuración del equipo no es válida.");
-      const inherited = captured ? await prepareHandoff(captured.context) : null;
+      // The member whose conversationId came from this chat resumes it and already has the
+      // history. The setup context is for the principal's first message, so a principal
+      // that is the source gets none (setup stays { context: null }); a principal that is
+      // not receives it. Branch and status suffice: the principal reads diffs if needed.
+      const inherited = captured && sourceMember !== master ? await prepareHandoff(captured.context, { git: "status" }) : null;
       team = { ...team, setup: { context: inherited ? { id: inherited.id, sourceLabel: inherited.sourceLabel, pending: false } : null } };
       teamConfigurationText(team,inherited?.content);
       const readyTeam = team;
@@ -1005,7 +1019,8 @@ function AppShell() {
     workflowTransfersRef.current.add(runId);
     changeWorkflow(tabId, runId, { status: "transferring", error: null });
     try {
-      const prepared = context ? await prepareHandoff(context) : null;
+      // Plan, request and tasks for the executor: branch and status suffice, it inspects the diffs itself.
+      const prepared = context ? await prepareHandoff(context, { git: "status" }) : null;
       const current = tabsRef.current.find(tab => tab.id === tabId);
       if (current?.workflow?.id !== runId || current.workflow.status !== "transferring") return;
       const plan: HandoffReference = prepared ? { id: prepared.id, sourceLabel: workflow.planner.profileName, pending: true, instruction: IMPLEMENTATION_INSTRUCTION } : { ...workflow.plan!, pending: true };
@@ -1611,7 +1626,7 @@ function AppShell() {
         )}
       </main>
 
-      {settingsPresence.value && (
+      {settingsPresence.value && (<Suspense fallback={null}>
         <SettingsPanel
           surfaceRef={settingsSurfaceRef}
           entering={settingsPresence.entering}
@@ -1628,25 +1643,25 @@ function AppShell() {
           onClose={() => setSettingsOpen(false)}
           onRedetect={redetectClaude}
         />
-      )}
+      </Suspense>)}
 
       {toast && (
         <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />
       )}
-      {workflowPresence.value && <AgentWorkflowDialog project={workflowPresence.value} profiles={availableProfiles}
+      {workflowPresence.value && <Suspense fallback={null}><AgentWorkflowDialog project={workflowPresence.value} profiles={availableProfiles}
         initialExecutor={(() => { const source = workflowSourceRef.current; const tab = source && tabs.find(item => item.id === source.context.source.sessionId);
           return tab?.profileId ? { profileId: tab.profileId, model: tab.chatModel ?? null, effort: tab.chatEffort ?? null } : undefined; })()}
         settings={config.settings} onClose={closeWorkflow} onStart={startWorkflow} onStartTeam={startTeam} submitting={workflowSubmitting} error={workflowError}
-        entering={workflowPresence.entering} leaving={workflowPresence.leaving} surfaceRef={workflowSurfaceRef} />}
+        entering={workflowPresence.entering} leaving={workflowPresence.leaving} surfaceRef={workflowSurfaceRef} /></Suspense>}
       {handoffPresence.value && <HandoffDialog {...handoffPresence.value}
         profiles={availableProfiles} settings={config.settings} onClose={closeHandoff}
         onContinue={continueHandoff} submitting={handoffSubmitting}
         entering={handoffPresence.entering} leaving={handoffPresence.leaving} surfaceRef={handoffSurfaceRef} />}
-      {palettePresence.value && <CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)}
-        surfaceRef={paletteSurfaceRef} entering={palettePresence.entering} leaving={palettePresence.leaving} />}
-      {usagePresence.value && <UsageDialog settings={config.settings} cwd={appInfo?.homeDir || activeProject?.path || "/"} onClose={()=>setUsageOpen(false)}
-        surfaceRef={usageSurfaceRef} entering={usagePresence.entering} leaving={usagePresence.leaving} />}
-      {recoveryPresence.value && activeProject && <RecoverConversations project={activeProject} settings={config.settings} onClose={()=>setRecoveryOpen(false)}
+      {palettePresence.value && <Suspense fallback={null}><CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)}
+        surfaceRef={paletteSurfaceRef} entering={palettePresence.entering} leaving={palettePresence.leaving} /></Suspense>}
+      {usagePresence.value && <Suspense fallback={null}><UsageDialog settings={config.settings} cwd={appInfo?.homeDir || activeProject?.path || "/"} onClose={()=>setUsageOpen(false)}
+        surfaceRef={usageSurfaceRef} entering={usagePresence.entering} leaving={usagePresence.leaving} /></Suspense>}
+      {recoveryPresence.value && activeProject && <Suspense fallback={null}><RecoverConversations project={activeProject} settings={config.settings} onClose={()=>setRecoveryOpen(false)}
         surfaceRef={recoverySurfaceRef} entering={recoveryPresence.entering} leaving={recoveryPresence.leaving} onResume={(profile,conversation)=>{
         const surface = recoverySurfaceRef.current;
         setRecoveryOpen(false);
@@ -1656,7 +1671,7 @@ function AppShell() {
           const existing=tabsRef.current.find(tab=>!tab.exited && tab.profileId===profile.id && tab.conversationId===conversation.id);
           if(existing) setActiveTabId(existing.id); else { try { openTab(activeProject.id,profile.id,conversation); } catch(error) { showToast(formatError(error)); } }
         })));
-      }} />}
+      }} /></Suspense>}
       {shownImagePreview && <FeatureDialog title="Vista previa de la captura" onClose={()=>dismissImage(false)}
         surfaceRef={imagePreviewSurfaceRef} entering={imagePreviewPresence.entering} leaving={imagePreviewPresence.leaving}
         footer={<><button className="btn btn-ghost" onClick={()=>dismissImage(false)}>Cancelar</button><button className="btn btn-primary" onClick={()=>dismissImage(true)}>Pegar imagen</button></>}>

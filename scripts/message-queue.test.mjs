@@ -598,3 +598,87 @@ test("Codex completes its original turn after queuedRead without leaving a phant
   assert.equal(state.items.filter(item => item.kind === "user").length, 2);
   assert.equal(state.items.filter(item => item.kind === "turn").length, 1);
 });
+
+// --- Inline delivery: the batch is the next user turn, no wake prompt or tool call ---
+const queueApi = await load("messageQueue");
+const { CLAUDE_INBOX_BRIEF } = await load("inboxProtocol");
+
+test("inbox instructions rely on automatic delivery and never ask for a read before the final answer", () => {
+  assert.doesNotMatch(INBOX_INSTRUCTIONS, /before your final answer|at useful checkpoints/i);
+  assert.match(INBOX_INSTRUCTIONS, /delivers them automatically as the next user turn/);
+  assert.match(INBOX_INSTRUCTIONS, /never poll/);
+  assert.match(INBOX_INSTRUCTIONS, /arrival order/);
+  assert.match(INBOX_INSTRUCTIONS, /receipt ID only once/);
+  assert.doesNotMatch(queueApi.INBOX_DESCRIPTION, /before the final|final answer/i);
+  assert.ok(!/\d{4}-\d{2}-\d{2}|\d{2}:\d{2}/.test(INBOX_INSTRUCTIONS), "stable text keeps the provider's prompt cache");
+});
+
+test("an inline delivery keeps each message's images and labels next to its text and renumbers the flat form", () => {
+  const png = data => ({ mediaType: "image/png", data });
+  const receipt = { id: "receipt-inline", messages: [
+    message("first", { text: "Mira [Imagen 1]", images: [png("b25l")], previews: ["p1"] }),
+    message("second", { text: "Compara [Imagen 1] y [Imagen 2]\n[Archivo 1]: C:/b.txt", images: [png("dHdv"), png("dGhyZWU=")], previews: ["p2", "p3"] }),
+  ] };
+  const delivery = queueApi.inboxDelivery(receipt);
+  assert.equal(delivery.receiptId, "receipt-inline");
+  assert.deepEqual(delivery.parts.map(part => part.type === "text" ? part.text : `<${part.image.data}>`), [
+    "Mensajes del usuario en cola. Recibo: receipt-inline. Procesa este recibo una sola vez.",
+    "Mensaje 1 (first):", "[Imagen 1]", "<b25l>", "Mira [Imagen 1]",
+    "Mensaje 2 (second):", "[Imagen 1]", "<dHdv>", "[Imagen 2]", "<dGhyZWU=>", "Compara [Imagen 1] y [Imagen 2]\n[Archivo 1]: C:/b.txt",
+  ]);
+  assert.deepEqual(delivery.images.map(image => image.data), ["b25l", "dHdv", "dGhyZWU="]);
+  assert.match(delivery.text, /Mensaje 1 \(first\):\nMira \[Imagen 1\]/);
+  assert.match(delivery.text, /Mensaje 2 \(second\):\nCompara \[Imagen 2\] y \[Imagen 3\]\n\[Archivo 1\]: C:\/b.txt/);
+  assert.equal(delivery.display, "Mira [Imagen 1]\n\nCompara [Imagen 1] y [Imagen 2]\n[Archivo 1]: C:/b.txt");
+  assert.deepEqual(delivery.previews, ["p1", "p2", "p3"]);
+});
+
+test("inline delivery acknowledges its receipt only after the provider accepts the turn", async () => {
+  const store = memoryQueue();
+  await store.queue.enqueue(message("a")); await store.queue.enqueue(message("b"));
+  const sent = [];
+  assert.equal(await queueApi.deliverInbox(store.queue, async delivery => { sent.push(delivery); return true; }, () => true, assert.fail), true);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(store.calls.slice(-2), ["read", `ack:${sent[0].receiptId}`]);
+  assert.deepEqual(store.stored, { messages: [], receipt: null });
+});
+
+test("a refused or failed inline turn keeps the durable receipt and the retry replays the same receipt ID", async () => {
+  const store = memoryQueue();
+  await store.queue.enqueue(message("kept"));
+  const ids = [];
+  assert.equal(await queueApi.deliverInbox(store.queue, async delivery => { ids.push(delivery.receiptId); return false; }, () => true, assert.fail), false);
+  await assert.rejects(queueApi.deliverInbox(store.queue, async delivery => { ids.push(delivery.receiptId); throw new Error("pipe closed"); }, () => true, assert.fail), /pipe closed/);
+  assert.equal(store.stored.receipt.id, ids[0]);
+  await store.queue.enqueue(message("later"));
+  assert.equal(await queueApi.deliverInbox(store.queue, async delivery => { ids.push(delivery.receiptId); return true; }, () => true, assert.fail), true);
+  assert.deepEqual(new Set(ids).size, 1, "every attempt carries the same receipt, so the model can apply it once");
+  assert.deepEqual(store.stored.messages.map(item => item.id), ["later"], "a later message is not swallowed by the replayed receipt");
+  assert.equal(store.stored.receipt, null);
+});
+
+test("a stale session cannot acknowledge an accepted inline delivery and an empty queue sends nothing", async () => {
+  const store = memoryQueue();
+  let current = true, sends = 0;
+  assert.equal(await queueApi.deliverInbox(store.queue, async () => { sends++; return true; }, () => current, assert.fail), true);
+  assert.equal(sends, 0);
+  await store.queue.enqueue(message("x"));
+  assert.equal(await queueApi.deliverInbox(store.queue, async () => { sends++; current = false; return true; }, () => current, assert.fail), true);
+  assert.equal(store.stored.receipt.messages[0].id, "x", "the receipt stays for review instead of being acknowledged by a replaced session");
+  const warnings = [];
+  current = true; store.failures.set("ack", new Error("disk full"));
+  assert.equal(await queueApi.deliverInbox(store.queue, async () => true, () => current, value => warnings.push(value)), true);
+  assert.match(warnings[0], /confirmación de la cola sigue pendiente: disk full/);
+});
+
+test("Claude's MCP server repeats only a brief line when the launch already appended the guidance", async () => {
+  const appended = wireReply(await claudeInboxReply("brief", mcpRequest("initialize", { protocolVersion: "2025-06-18" }), assert.fail, { desktop: true, browser: true }, { appended: true }));
+  assert.equal(appended.mcp.result.instructions, CLAUDE_INBOX_BRIEF);
+  assert.ok(Buffer.byteLength(CLAUDE_INBOX_BRIEF) < 200);
+  assert.doesNotMatch(appended.mcp.result.instructions, /GitHub|Blender|desktop_status/);
+  const custom = wireReply(await claudeInboxReply("custom", mcpRequest("initialize", { protocolVersion: "2025-06-18" }), assert.fail, {}, { appended: false }));
+  assert.equal(custom.mcp.result.instructions, `${integrationInstructions("claude")} ${taskInstructions("claude")}`);
+  const flags = claudeChatFlags(null, null);
+  const prompt = flags[flags.indexOf("--append-system-prompt") + 1];
+  for (const block of [INBOX_INSTRUCTIONS, taskInstructions("claude")]) assert.equal(prompt.split(block).length, 2, "each block appears once");
+});

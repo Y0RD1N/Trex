@@ -10,7 +10,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
+import type { SearchAddon } from "@xterm/addon-search";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
@@ -92,6 +92,7 @@ function TerminalView({
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const searchRef = useRef<SearchAddon | null>(null);
+  const searchLoadRef = useRef<Promise<SearchAddon | null> | null>(null);
   const rendererFailedRef = useRef(false);
   const disposablesRef = useRef<IDisposable[]>([]);
   const unlistensRef = useRef<Array<() => void>>([]);
@@ -449,15 +450,34 @@ function TerminalView({
 
   // --- Búsqueda ---------------------------------------------------------------
 
+  /** El addon de búsqueda se carga (en su propio fragmento) la primera vez que se abre la barra. */
+  const ensureSearch = useCallback((): Promise<SearchAddon | null> => {
+    if (searchRef.current) return Promise.resolve(searchRef.current);
+    searchLoadRef.current ??= import("@xterm/addon-search").then(({ SearchAddon }) => {
+      const term = termRef.current;
+      if (!term || disposedRef.current) return null;
+      const search = new SearchAddon();
+      term.loadAddon(search);
+      searchRef.current = search;
+      return search;
+    }).catch(() => {
+      searchLoadRef.current = null;
+      return null;
+    });
+    return searchLoadRef.current;
+  }, []);
+
   const runSearch = useCallback(
     (direction: "next" | "prev") => {
-      const search = searchRef.current;
-      if (!search || !searchTerm) return;
-      const options = { incremental: true, decorations: getSearchDecorations(getThemeMode()) };
-      if (direction === "next") search.findNext(searchTerm, options);
-      else search.findPrevious(searchTerm, options);
+      if (!searchTerm) return;
+      void ensureSearch().then(search => {
+        if (!search) return;
+        const options = { incremental: true, decorations: getSearchDecorations(getThemeMode()) };
+        if (direction === "next") search.findNext(searchTerm, options);
+        else search.findPrevious(searchTerm, options);
+      });
     },
-    [searchTerm],
+    [searchTerm, ensureSearch],
   );
 
   // --- Montaje del terminal (una sola vez) ------------------------------------
@@ -478,7 +498,6 @@ function TerminalView({
       theme: getTerminalTheme(getThemeMode()),
     });
     const fit = new FitAddon();
-    const search = new SearchAddon();
     const links = new WebLinksAddon((event, uri) => {
       event.preventDefault();
       void openUrl(uri).catch(() => {
@@ -486,7 +505,6 @@ function TerminalView({
       });
     });
     term.loadAddon(fit);
-    term.loadAddon(search);
     term.loadAddon(links);
     // Anchos Unicode modernos (15 + grafemas). Por defecto xterm usa las tablas de
     // Unicode 6 y cuenta 1 celda para emojis como 📁 🧠 ⚡, mientras que Claude Code
@@ -496,7 +514,6 @@ function TerminalView({
     term.loadAddon(new UnicodeGraphemesAddon());
     termRef.current = term;
     fitRef.current = fit;
-    searchRef.current = search;
     term.open(host);
     resizeRef.current = new TerminalResizeCoordinator({
       measure: () => {
@@ -640,6 +657,7 @@ function TerminalView({
       termRef.current = null;
       fitRef.current = null;
       searchRef.current = null;
+      searchLoadRef.current = null;
     };
   }, [cleanSubscriptions, copySelection, pasteFromClipboard, safeFit, startPty]);
 
@@ -745,6 +763,7 @@ function TerminalView({
 
   useEffect(() => {
     if (searchOpen) {
+      void ensureSearch();
       const timer = window.setTimeout(() => {
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
@@ -752,7 +771,7 @@ function TerminalView({
       return () => window.clearTimeout(timer);
     }
     searchRef.current?.clearDecorations();
-  }, [searchOpen]);
+  }, [searchOpen, ensureSearch]);
 
   return (
     <div className="terminal-view">

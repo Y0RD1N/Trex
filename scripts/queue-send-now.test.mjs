@@ -1493,3 +1493,70 @@ test("Codex native MCP confirms model-visible text/images and never a structured
   const shown = h.state.items.find(entry => entry.id === "queued-attachments");
   assert.equal(shown.text, payload.text); assert.equal(shown.images, payload.images.length);
 });
+
+// --- Continuing with the queue: one request carrying the batch, no wake prompt + tool call ---
+const { INBOX_WAKE } = dependencies["../messageQueue"];
+const deliveredText = (provider, write) => provider === "claude" ? write.message.content.filter(part => part.type === "text").map(part => part.text).join("\n")
+  : provider === "codex" ? write.params.input.filter(part => part.type === "text").map(part => part.text).join("\n") : write.params.text;
+const deliveredImages = (provider, write) => provider === "claude" ? write.message.content.filter(part => part.type === "image").map(part => part.source.data)
+  : provider === "codex" ? write.params.input.filter(part => part.type === "image").map(part => part.url.split(",")[1]) : write.params.images.map(image => image.data);
+
+for (const provider of ["claude", "codex", "trex"]) {
+  test(`${provider}: continuing the queue sends the claimed batch as the user turn and acknowledges it after acceptance`, async t => {
+    const h = harness(t, provider); await h.ready();
+    const receipt = fixtureReceipt();
+    h.queue.client.read = async (...args) => { h.queueCalls.push({ name: "read", args }); return { messages: [], receipt }; };
+    assert.equal(await h.session.send(INBOX_WAKE, [], [], "Leer los mensajes en cola"), true);
+    await h.pump();
+    assert.equal(h.userWrites.length, 1, "exactly one provider request delivers the batch");
+    const write = h.userWrites[0], text = deliveredText(provider, write);
+    assert.match(text, /Recibo: r-delivery-test\. Procesa este recibo una sola vez\./);
+    assert.ok(text.includes("Complete request"), "the queued text travels in the turn itself");
+    assert.deepEqual(splitAttachedFiles(text.slice(text.indexOf("Complete request"))).files, attachedPaths);
+    assert.doesNotMatch(text, /Consulta la herramienta trex_read_messages/, "the model is not asked to call the inbox tool");
+    assert.deepEqual(deliveredImages(provider, write), payload.images.map(image => image.data));
+    assert.ok(!JSON.stringify(write).includes("preview-one"), "previews never reach the provider");
+    assert.deepEqual(h.queueCalls.map(call => [call.name, call.args[0]]), [["read", undefined], ["ack", receipt.id]]);
+    const user = h.state.items.findLast(item => item.kind === "user");
+    assert.equal(user.text, payload.text); assert.deepEqual(user.previews, payload.previews);
+  });
+
+  test(`${provider}: an unaccepted queue turn keeps the receipt for an explicit retry`, async t => {
+    const h = harness(t, provider, { beforeWrite: message => { if (message.type === "user" || message.method === "turn/start") throw new Error("offline pipe failure"); } });
+    await h.ready();
+    const receipt = fixtureReceipt();
+    h.queue.client.read = async () => { h.queueCalls.push({ name: "read", args: [] }); return { messages: [], receipt }; };
+    assert.equal(await h.session.send(INBOX_WAKE, [], []), false);
+    await h.pump();
+    assert.deepEqual(h.queueCalls.map(call => call.name), ["read"], "no acknowledgement without the provider's acceptance");
+  });
+
+  test(`${provider}: an empty queue continuation sends no provider request`, async t => {
+    const h = harness(t, provider); await h.ready();
+    h.queue.client.read = async () => ({ messages: [], receipt: null });
+    assert.equal(await h.session.send(INBOX_WAKE, [], []), true);
+    await h.pump();
+    assert.equal(h.userWrites.length, 0);
+    assert.ok(!h.queueCalls.some(call => call.name === "ack"));
+  });
+}
+
+test("trex: a batch above the CLI's image limit falls back to the durable inbox callback", async t => {
+  const h = harness(t, "trex"); await h.ready();
+  const images = Array.from({ length: 17 }, () => ({ mediaType: "image/png", data: "aW1n" }));
+  h.queue.snapshot.receipt = { id: "too-many", messages: [{ id: "big", text: "Many images", images, previews: [], createdAt: 1 }] };
+  assert.equal(await h.session.send(INBOX_WAKE, [], []), true);
+  assert.equal(h.userWrites[0].params.text, INBOX_WAKE);
+  assert.deepEqual(h.userWrites[0].params.images, []);
+  assert.ok(!h.queueCalls.some(call => call.name === "read"), "the CLI reads it through inbox/read and confirms with inbox/consumed");
+});
+
+test("codex: instructions appear once and browser guidance only with an attached browser", async t => {
+  const h = harness(t, "codex"); await h.ready();
+  const start = h.writes.find(write => write.method === "thread/start");
+  const instructions = start.params.developerInstructions;
+  const { INBOX_INSTRUCTIONS } = dependencies["../messageQueue"], { taskInstructions } = dependencies["../chatTasks"];
+  for (const block of [INBOX_INSTRUCTIONS, taskInstructions("codex")]) assert.equal(instructions.split(block).length, 2);
+  assert.doesNotMatch(instructions, /Trex Browser|browser_navigate/);
+  assert.ok(Buffer.byteLength(instructions) < 2_400, `developer instructions stay compact (${Buffer.byteLength(instructions)} B)`);
+});

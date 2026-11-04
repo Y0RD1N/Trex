@@ -15,7 +15,7 @@ import {
   allowsAll, autoAllowed, fastSpeed, initialChatState, record, text, type Json, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import {
-  INIT_PROMPT, OPT_OUT_NOTIFICATIONS, answerResult, autoApproval, codexLaunch, codexReducer, errorLine, notificationLine, requestLine,
+  INIT_PROMPT, OPT_OUT_NOTIFICATIONS, answerResult, autoApproval, codexLaunch, codexReducer, errorLine, inboxInput, notificationLine, requestLine,
   resultLine, turnOverrides, userInput,
 } from "../codexChat";
 import { mentionedSkills } from "../chatCommands";
@@ -23,11 +23,11 @@ import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { questionInstructions } from "../chatQuestions";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
-import { codexInboxContent, InboxRequests, INBOX_INSTRUCTIONS, INBOX_TOOL, inboxConfigForShell } from "../messageQueue";
+import { codexInboxContent, deliverInbox, InboxRequests, INBOX_INSTRUCTIONS, INBOX_TOOL, INBOX_WAKE, inboxConfigForShell } from "../messageQueue";
 import { codexInboxReceiptId } from "../inboxProtocol";
 import { assertCodexPlanningThread, codexPlanningThread, codexPlanningTurn } from "../workflowSafety";
 import { taskInstructions } from "../chatTasks";
-import { integrationContext, integrationInstructions, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS } from "../integrations";
+import { detectedIntegrations, integrationContext, integrationInstructions, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS, type IntegrationContext } from "../integrations";
 import { withChatTimes } from "../chatTimes";
 const timedCodexReducer = withChatTimes(codexReducer);
 
@@ -116,10 +116,14 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   stateRef.current = state;
   const callbacks = useRef(options);
   callbacks.current = options;
-  const chatInstructions = () => `${CHAT_INSTRUCTIONS} ${integrationInstructions("codex", integrationContext(callbacks.current))}`;
   const queue = useMessageQueue(options.queueId ?? sessionId);
   const inboxRequests = useRef(new InboxRequests());
   const inboxConfigRef = useRef<Json>({});
+  const availableRef = useRef<IntegrationContext["available"]>(null);
+  /** Browser guidance only when this process really attached trex_browser (it also enters via integrations). */
+  const browserAttached = (): boolean => inboxConfigRef.current["mcp_servers.trex_browser.enabled"] === true;
+  const chatInstructions = () => [CHAT_INSTRUCTIONS, integrationInstructions("codex",
+    integrationContext(callbacks.current, { browser: browserAttached(), available: availableRef.current }))].filter(Boolean).join(" ");
   const isCurrentRef = useRef<(id: string) => boolean>(() => false);
 
   const nextIdRef = useRef(1);
@@ -357,7 +361,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   }, [request, notice]);
 
   const threadOverrides = useCallback((overrides: Json): Json => {
-    if (browserBindingRef.current && callbacks.current.browser?.enabled) {
+    // A profile's own developer instructions still learn about an attached browser, once.
+    if (browserBindingRef.current && browserAttached()) {
       const instructions = typeof overrides.developerInstructions === "string" ? overrides.developerInstructions : "";
       overrides = { ...overrides, developerInstructions: instructions.includes(BROWSER_INSTRUCTIONS) ? instructions : [instructions, BROWSER_INSTRUCTIONS].filter(Boolean).join("\n\n") };
     }
@@ -516,6 +521,9 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         if (callbacks.current.browser?.enabled || callbacks.current.desktopEnabled) browserBindingRef.current = { mode: bindingMode, pending: true };
         const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId);
         if (!isCurrent()) return;
+        const detection = detectedIntegrations(cwd);
+        availableRef.current = detection instanceof Promise ? await detection : detection;
+        if (!isCurrent()) return;
         for (let attempt = 0; attempt < 2; attempt++) {
         const browser = callbacks.current.browser?.enabled ? await connectBrowser(callbacks.current.browser, cwd, browserChoice(bindingMode), planningOnly, shell, message => notice("warn", message), true) : null;
         if (!isCurrent()) return;
@@ -611,7 +619,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     dispatch({ type: "sendIssued", id, turnId, now: Date.now() });
   };
 
-  const deliver = (text: string, images: OutgoingImage[], userId?: string, signal?: AbortSignal): Promise<void> => {
+  const deliver = (text: string, images: OutgoingImage[], userId?: string, signal?: AbortSignal, input?: Json[]): Promise<void> => {
     const epoch = deliveryEpochRef.current;
     const procId = readyProcessRef.current;
     const assertCurrent = (): void => {
@@ -631,7 +639,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     if (userId) markIssued(userId, signal, activeTurnId ?? undefined);
     let result: { turn?: { id?: string }; turnId?: string };
     try { result = await request<typeof result>(activeTurnId ? "turn/steer" : "turn/start", {
-      threadId, input: userInput(text, images, mentionedSkills(text, current.skills)), clientUserMessageId: userId,
+      threadId, input: input ?? userInput(text, images, mentionedSkills(text, current.skills)), clientUserMessageId: userId,
       ...(planningOnly && !activeTurnId ? codexPlanningTurn(overrides, choicesRef.current.model ?? threadModelRef.current,
         choicesRef.current.effort ?? current.effort, callbacks.current.planningInstruction ?? null) : overrides),
     }, procId!); }
@@ -694,8 +702,16 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     } finally { submissionsRef.current.delete(controller); }
   };
 
-  const send = (text: string, images: OutgoingImage[], previews: string[], display?: string): Promise<boolean> =>
-    submit(display ?? text, previews, (id, signal) => deliver(text, images, id, signal));
+  /** Queued messages travel as the next user turn: one request, without a wake prompt or tool call. */
+  const deliverQueued = async (): Promise<boolean> => {
+    if (!mountedRef.current) return false;
+    try {
+      return await deliverInbox(queue.client, delivery => submit(delivery.display, delivery.previews,
+        (id, signal) => deliver("", [], id, signal, inboxInput(delivery.parts))), () => mountedRef.current, message => notice("warn", message));
+    } catch (error) { notice("error", `No se pudo leer la cola: ${formatError(error)}`); return false; }
+  };
+  const send = (text: string, images: OutgoingImage[], previews: string[], display?: string): Promise<boolean> => text === INBOX_WAKE ? deliverQueued()
+    : submit(display ?? text, previews, (id, signal) => deliver(text, images, id, signal));
 
   const edit: ChatSession["edit"] = async (id, text, images, previews) => {
     const epoch = deliveryEpochRef.current;

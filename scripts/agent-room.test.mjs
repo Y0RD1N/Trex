@@ -393,3 +393,55 @@ test("room context bounds large histories and keeps original and latest user goa
   assert.match(result.content, /LATEST_TASK/);
   assert.equal(result.content, Buffer.from(result.content, "utf8").toString("utf8"));
 });
+
+// --- Incremental deliveries: each role keeps its own conversation ---
+const roomApi = await load("agentRoom");
+const handoffApi = await load("handoff");
+const ledger = items => mergeRoomItems({ planner: state(items.planner ?? []), executor: state(items.executor ?? []) }, []);
+
+test("delivery cursors and setup targets persist, and older rooms without them still load", () => {
+  const saved = room({ delivered: { planner: "planner::p1", executor: null }, setupContext: reference({ id: "prior_chat" }), setupRole: "executor",
+    pending: { id: "delivery_2", role: "executor", reference: reference({ id: "ctx_2", pending: true }), cursor: "executor::e1" } });
+  const result = normalizeAgentRoom(JSON.parse(JSON.stringify(saved)));
+  assert.deepEqual(result.delivered, { planner: "planner::p1", executor: null });
+  assert.equal(result.setupRole, "executor");
+  assert.equal(result.pending.cursor, "executor::e1");
+  assert.deepEqual(normalizeAgentRoom(JSON.parse(JSON.stringify(result))), result);
+  const legacy = normalizeAgentRoom(room({ pending: { id: "delivery_1", role: "planner", reference: reference({ id: "ctx_1", pending: true }) } }));
+  assert.equal(legacy.delivered, undefined); assert.equal(legacy.setupRole, undefined); assert.equal("cursor" in legacy.pending, false);
+  const damaged = normalizeAgentRoom(room({ delivered: { planner: "no-role-prefix", executor: 7 }, setupRole: "nobody" }));
+  assert.ok(damaged, "an unreadable cursor costs one full delivery, never the room");
+  assert.deepEqual(damaged.delivered, {}); assert.equal(damaged.setupRole, undefined);
+});
+
+test("the first delivery carries the full context once; later ones only the other agent's new entries", () => {
+  const merged = ledger({ planner: [user("p-user", "Planifica"), reply("p-reply", "Plan listo")], executor: [user("e-user", "Implementa"), tool("e-tool"), reply("e-reply", "Hecho")] });
+  const first = roomApi.roomDelivery(room({}), merged, "planner", true);
+  assert.equal(first.full, true);
+  assert.deepEqual(first.items.map(item => item.id), ["executor::e-user", "executor::e-tool", "executor::e-reply"], "its own entries are already in its conversation");
+  assert.equal(first.cursor, merged.order.at(-1));
+  const fresh = roomApi.roomDelivery(room({}), merged, "executor", false);
+  assert.equal(fresh.full, true); assert.equal(fresh.items.length, merged.items.length, "a new conversation receives everything");
+  const later = roomApi.roomDelivery(room({ delivered: { planner: "executor::e-user" } }), merged, "planner", true);
+  assert.equal(later.full, false);
+  assert.deepEqual(later.items.map(item => item.id), ["executor::e-tool", "executor::e-reply"]);
+  assert.equal(later.peerWork, true);
+  const quiet = roomApi.roomDelivery(room({ delivered: { planner: merged.order.at(-1) } }), merged, "planner", true);
+  assert.deepEqual(quiet.items, []); assert.equal(quiet.peerWork, false);
+  const unknown = roomApi.roomDelivery(room({ delivered: { planner: "executor::vanished" } }), merged, "planner", true);
+  assert.equal(unknown.full, true, "a cursor missing from the ledger resends the full context once");
+});
+
+test("incremental updates keep the newest entries, files and commands within their limit and filter secrets", () => {
+  const items = [user("u", "Corrige el login"), tool("cmd", "Bash", { command: "npm test" }, "ok"), tool("edit", "Edit", { file_path: "src/login.ts" }),
+    reply("old", "Resultado anterior largo. ".repeat(900)), reply("new", "Último resultado.\napi_key=FAKE_SECRET_123456789")];
+  const result = handoffApi.roomUpdates(items, { user: "Usuario → Ejecutor", agent: "Ejecutor" }, 8 * 1024);
+  assert.ok(Buffer.byteLength(result.text) <= 8 * 1024);
+  assert.equal(result.truncated, true);
+  assert.match(result.text, /Último resultado/);
+  assert.match(result.text, /src\/login\.ts/);
+  assert.doesNotMatch(result.text, /FAKE_SECRET/);
+  assert.equal(roomApi.roomRequestText("# Solicitud actual del usuario\n\nArregla ## esto\n\n## Novedades de Ejecutor · Codex desde tu última entrega\n\nx"), "Arregla ## esto");
+  assert.equal(roomApi.roomRequestText("# Solicitud actual del usuario\n\nSolo la tarea\n\n---\n## Estado del proyecto capturado por TREX\nmain"), "Solo la tarea");
+  assert.equal(roomApi.roomRequestText("sin encabezado"), null);
+});

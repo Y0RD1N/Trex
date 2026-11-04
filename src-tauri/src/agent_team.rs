@@ -15,6 +15,7 @@ const LIMIT: usize = 8 * 1024 * 1024;
 const FLAG: &str = "--trex-team-mcp";
 const CALL_FLAG: &str = "--trex-team-call";
 const ACTIVE: [&str; 3] = ["queued", "claimed", "running"];
+const TEAM_MCP_INSTRUCTIONS: &str = "Publish the plan with trex_team_plan (dependsOn: [] marks independent work), enqueue delegations with trex_delegate_task wait:false and end your turn. Do not poll: Trex starts a new turn for you when delegations finish; then call trex_task_status once without taskId to receive all new reports. Use waitMs only for short waits. Delivered reports come back as previews; request detail:\"full\" only when needed. trex_team_members shows each member's new-token usage, remaining budget, context and account quota (5h/week): prefer members whose accounts have headroom and remember that members may share an account. Only members with browser access have their own browser space. Workspace writers are exclusive; up to four independent readers run at once. Never replay uncertain work.";
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 fn now() -> u64 {
     SystemTime::now()
@@ -56,6 +57,25 @@ pub struct Member {
     pub role: String,
     pub can_write: bool,
 }
+/// Consumption measured by the app while a delegation ran. Cache reads are
+/// reported apart from new tokens; unknown costs stay unknown.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskUsage {
+    #[serde(default)]
+    pub new_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub requests: Option<u64>,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
@@ -68,6 +88,172 @@ pub struct Task {
     pub report: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TaskUsage>,
+    /// Full text of a report too long to keep inline (app data directory).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_file: Option<String>,
+    /// The coordinator already received the full report once.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub report_delivered: bool,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Budget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_tokens: Option<u64>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaWindow {
+    pub percent: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<u64>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountQuota {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_hour: Option<QuotaWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub week: Option<QuotaWindow>,
+    #[serde(default)]
+    pub blocked: bool,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberUsage {
+    pub member_id: String,
+    #[serde(default)]
+    pub coordinator: bool,
+    #[serde(default)]
+    pub usage: TaskUsage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<AccountQuota>,
+}
+/// Usage, budget and account quotas published by the app beside the journal.
+/// It is advisory: tools read it, but it never grants permissions.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReport {
+    pub epoch: String,
+    #[serde(default)]
+    pub budget: Budget,
+    #[serde(default)]
+    pub members: Vec<MemberUsage>,
+}
+const REPORT_INLINE: usize = 32 * 1024;
+const REPORT_EXCERPT: usize = 24 * 1024;
+const REPORT_LIMIT: usize = 4 * 1024 * 1024;
+const REPORT_PREVIEW: usize = 480;
+fn floor_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+fn ceil_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+fn preview(text: &str) -> String {
+    let end = floor_boundary(text, REPORT_PREVIEW);
+    if end < text.len() {
+        format!("{}…", text[..end].trim_end())
+    } else {
+        text.to_owned()
+    }
+}
+/// Head and tail of an oversized report, with where to find the rest.
+fn excerpt(full: &str, file: Option<&str>) -> String {
+    let note = format!(
+        "\n\n[… Informe recortado: el original ocupa {} KiB. {} Pide trex_task_status con detail:\"full\" solo si necesitas más. …]\n\n",
+        full.len().div_ceil(1024),
+        file.map(|path| format!("Informe completo: {path}."))
+            .unwrap_or_else(|| "No se pudo guardar el informe completo.".into())
+    );
+    let room = REPORT_EXCERPT.saturating_sub(note.len());
+    let head = floor_boundary(full, room * 2 / 3);
+    let tail = ceil_boundary(full, full.len().saturating_sub(room - room * 2 / 3));
+    format!("{}{note}{}", &full[..head], &full[tail.max(head)..])
+}
+fn report_path(root: &Path, id: &str, task_id: &str) -> Result<PathBuf, String> {
+    if !root.is_absolute() || !valid_id(id) || !valid_id(task_id) {
+        return Err("Identificador de informe no válido.".into());
+    }
+    let parent = root.join("team-reports");
+    let dir = parent.join(id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    regular(&parent)?;
+    regular(&dir)?;
+    Ok(dir.join(format!("{task_id}.md")))
+}
+/// Reads at most `limit` bytes of a stored report; the flag tells if more remain.
+fn read_report(root: &Path, id: &str, task_id: &str, limit: usize) -> Option<(String, bool)> {
+    let path = report_path(root, id, task_id).ok()?;
+    regular(&path).ok()?;
+    let mut bytes = Vec::new();
+    File::open(&path)
+        .ok()?
+        .take((limit + 4) as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let end = floor_boundary(&text, limit);
+    Some((text[..end].to_owned(), text.len() > end))
+}
+fn valid_usage(usage: TaskUsage) -> TaskUsage {
+    const CAP: u64 = 10_000_000_000_000;
+    TaskUsage {
+        new_tokens: usage.new_tokens.min(CAP),
+        cache_read_tokens: usage.cache_read_tokens.min(CAP),
+        output_tokens: usage.output_tokens.min(CAP),
+        cost_usd: usage.cost_usd.filter(|c| c.is_finite() && *c >= 0.0),
+        requests: usage.requests.map(|r| r.min(CAP)),
+    }
+}
+fn usage_view(usage: &TaskUsage) -> Value {
+    let mut value = json!({"newTokens":usage.new_tokens});
+    if usage.cache_read_tokens > 0 {
+        value["cacheReadTokens"] = json!(usage.cache_read_tokens);
+    }
+    if usage.output_tokens > 0 {
+        value["outputTokens"] = json!(usage.output_tokens);
+    }
+    if let Some(cost) = usage.cost_usd {
+        value["costUsd"] = json!((cost * 10_000.0).round() / 10_000.0);
+    }
+    if let Some(requests) = usage.requests {
+        value["requests"] = json!(requests);
+    }
+    value
+}
+fn add_usage(total: &mut TaskUsage, usage: &TaskUsage) {
+    total.new_tokens = total.new_tokens.saturating_add(usage.new_tokens);
+    total.cache_read_tokens = total.cache_read_tokens.saturating_add(usage.cache_read_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+    total.cost_usd = match (total.cost_usd, usage.cost_usd) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+    };
+    total.requests = match (total.requests, usage.requests) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0).saturating_add(b.unwrap_or(0))),
+    };
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -233,6 +419,70 @@ fn heartbeat(path: &Path, epoch: &str) -> Result<u64, String> {
             .map_err(|e| e.to_string())?,
     )?;
     Ok(stamp)
+}
+fn usage_path(path: &Path) -> PathBuf {
+    path.with_extension("usage")
+}
+/// Missing or unreadable usage only removes advisory details from the tools.
+fn load_usage(path: &Path) -> Option<UsageReport> {
+    let path = usage_path(path);
+    regular(&path).ok()?;
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > 64 * 1024 {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+fn short_label(value: &str) -> String {
+    let clean: String = value.chars().filter(|c| !c.is_control()).collect();
+    clean[..floor_boundary(&clean, 120)].trim().to_owned()
+}
+fn save_usage(path: &Path, state: &Snapshot, raw: Value) -> Result<(), String> {
+    if serde_json::to_vec(&raw).map_err(|e| e.to_string())?.len() > 64 * 1024 {
+        return Err("El informe de uso del equipo es demasiado grande.".into());
+    }
+    let mut report: UsageReport =
+        serde_json::from_value(raw).map_err(|_| "El informe de uso del equipo no es válido.")?;
+    if report.epoch != state.epoch || report.members.len() > 9 {
+        return Err("El informe de uso no pertenece a este equipo.".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for member in &mut report.members {
+        if !valid_id(&member.member_id)
+            || !seen.insert(member.member_id.clone())
+            || (!member.coordinator && !state.members.iter().any(|m| m.id == member.member_id))
+        {
+            return Err("El informe de uso apunta a un participante desconocido.".into());
+        }
+        member.usage = valid_usage(member.usage.clone());
+        member.context_percent = member
+            .context_percent
+            .filter(|p| p.is_finite())
+            .map(|p| p.clamp(0.0, 100.0));
+        if let Some(account) = &mut member.account {
+            account.label = short_label(&account.label);
+            account.key = if valid_id(&account.key) {
+                account.key.clone()
+            } else {
+                String::new()
+            };
+            for window in [&mut account.five_hour, &mut account.week] {
+                *window = window.take().filter(|w| w.percent.is_finite()).map(|w| QuotaWindow {
+                    percent: w.percent.clamp(0.0, 100.0),
+                    resets_at: w.resets_at,
+                });
+            }
+        }
+    }
+    save_bytes(
+        &usage_path(path),
+        &serde_json::to_vec(&report).map_err(|e| e.to_string())?,
+    )
 }
 fn mutate(
     root: &Path,
@@ -493,6 +743,7 @@ fn claim_for(
         Ok(())
     })
 }
+#[cfg(test)]
 fn finish(
     root: &Path,
     id: &str,
@@ -501,10 +752,24 @@ fn finish(
     status: &str,
     report: Option<&str>,
 ) -> Result<Snapshot, String> {
+    finish_with(root, id, epoch, task_id, status, report, None)
+}
+/// Oversized reports never discard the work: the full text is kept in the app
+/// data directory and the task keeps a bounded head and tail.
+fn finish_with(
+    root: &Path,
+    id: &str,
+    epoch: &str,
+    task_id: &str,
+    status: &str,
+    report: Option<&str>,
+    usage: Option<TaskUsage>,
+) -> Result<Snapshot, String> {
     if !["running", "completed", "failed", "uncertain"].contains(&status) {
         return Err("Estado de tarea no válido.".into());
     }
-    let report = report.map(|value| clean(value, 32 * 1024)).transpose()?;
+    let report = report.map(|value| clean(value, REPORT_LIMIT)).transpose()?;
+    let usage = usage.map(valid_usage);
     mutate(root, id, epoch, |state| {
         live(state)?;
         let task = state
@@ -521,8 +786,25 @@ fn finish(
         if status != "running" && report.is_none() {
             return Err("La tarea necesita un resultado verificable.".into());
         }
+        let mut file = None;
+        let report = match report {
+            Some(full) if full.len() > REPORT_INLINE => {
+                file = report_path(root, id, task_id)
+                    .and_then(|path| {
+                        save_bytes(&path, full.as_bytes())?;
+                        Ok(path.to_string_lossy().into_owned())
+                    })
+                    .ok();
+                Some(excerpt(&full, file.as_deref()))
+            }
+            other => other,
+        };
         task.status = status.into();
         task.report = report;
+        task.report_file = file;
+        if usage.is_some() {
+            task.usage = usage;
+        }
         task.updated_at = now();
         settle_blocked(state);
         Ok(())
@@ -530,14 +812,216 @@ fn finish(
 }
 pub fn tool_definitions() -> Value {
     json!([
-        {"name":"trex_team_plan","description":"Publica la lista de tareas del equipo antes de delegar. No ejecuta trabajo. Usa las mismas taskKey, memberId y task al delegar; el progreso se obtiene de los resultados reales. Puedes revisar pasos aún no enviados, sin ocultar tareas ya emitidas.","inputSchema":{"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"taskKey":{"type":"string","maxLength":100},"memberId":{"type":"string"},"task":{"type":"string","maxLength":16384},"dependsOn":{"type":"array","maxItems":8,"items":{"type":"string"}}},"required":["taskKey","memberId","task"],"additionalProperties":false}}},"required":["steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
-        {"name":"trex_team_members","description":"Lista los subagentes configurados, sus funciones y permisos. No crea participantes ni cambia modelos.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true}},
-        {"name":"trex_delegate_task","description":"Delega una tarea a un subagente configurado y espera su resultado. Si el principal puede editar, devuelve la tarea en cola y awaitCoordinatorTurnEnd:true: termina el turno para que empiece el subagente. Con wait:false solo encola y devuelve el taskId: úsalo para enviar tareas independientes antes de esperar sus resultados. El plan dependsOn define dependencias; las escrituras son exclusivas y hay hasta cuatro lectores simultáneos. Usa un taskKey único y estable; reutilízalo solo para recuperar la misma tarea, nunca para repetir una tarea incierta o cancelada.","inputSchema":{"type":"object","properties":{"memberId":{"type":"string"},"taskKey":{"type":"string","maxLength":100},"task":{"type":"string","maxLength":16384},"wait":{"type":"boolean","default":true}},"required":["memberId","taskKey","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
-        {"name":"trex_task_status","description":"Consulta el estado de las tareas. Con taskId devuelve también el resultado conservado. waitMs (0..30000) espera cambios o la finalización sin ejecutar trabajo ni gastar turnos en consultas repetidas.","inputSchema":{"type":"object","properties":{"taskId":{"type":"string"},"waitMs":{"type":"integer","minimum":0,"maximum":30000}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
+        {"name":"trex_team_plan","description":"Publica la lista de tareas del equipo antes de delegar. No ejecuta trabajo y devuelve una confirmación compacta (claves y estado). Usa las mismas taskKey, memberId y task al delegar; el progreso se obtiene de los resultados reales. Puedes revisar pasos aún no enviados, sin ocultar tareas ya emitidas.","inputSchema":{"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"taskKey":{"type":"string","maxLength":100},"memberId":{"type":"string"},"task":{"type":"string","maxLength":16384},"dependsOn":{"type":"array","maxItems":8,"items":{"type":"string"}}},"required":["taskKey","memberId","task"],"additionalProperties":false}}},"required":["steps"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
+        {"name":"trex_team_members","description":"Lista los subagentes configurados, sus funciones, permisos y navegador, con su consumo de tokens nuevos, presupuesto restante, contexto y cuota de la cuenta (5 h/semana) cuando se conocen. No crea participantes ni cambia modelos.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true}},
+        {"name":"trex_delegate_task","description":"Delega una tarea a un subagente configurado y devuelve {taskId, status, member}. Usa wait:false para encolar tareas independientes y termina tu turno: Trex te abre un turno nuevo cuando terminan. Si el principal puede editar, la tarea queda en cola con awaitCoordinatorTurnEnd:true: termina el turno para que empiece el subagente. El plan dependsOn define dependencias; las escrituras son exclusivas y hay hasta cuatro lectores simultáneos. Usa un taskKey único y estable; reutilízalo solo para recuperar la misma tarea, nunca para repetir una tarea incierta o cancelada.","inputSchema":{"type":"object","properties":{"memberId":{"type":"string"},"taskKey":{"type":"string","maxLength":100},"task":{"type":"string","maxLength":16384},"wait":{"type":"boolean","default":true}},"required":["memberId","taskKey","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}},
+        {"name":"trex_task_status","description":"Estado compacto de las tareas. Sin taskId devuelve todas y, una sola vez, los informes nuevos. Con taskId devuelve esa tarea; un informe ya entregado vuelve como vista previa. detail:\"full\" añade instrucción e informe completo. No consultes en bucle: Trex te abre un turno nuevo cuando terminan las delegaciones; waitMs (0..30000) es solo para esperas cortas.","inputSchema":{"type":"object","properties":{"taskId":{"type":"string"},"waitMs":{"type":"integer","minimum":0,"maximum":30000},"detail":{"type":"string","enum":["compact","full"]}},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
     ])
 }
 fn result(value: Value, is_error: bool) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":is_error})
+}
+/// Claude Code reads the text and Codex falls back to it without
+/// structuredContent: one JSON copy reaches either model.
+fn for_mcp(raw: Value) -> Value {
+    json!({"content":raw["content"].clone(),"isError":raw["isError"].clone()})
+}
+/// Trex CLI forwards text and structuredContent together (and reads the task
+/// status from structuredContent), so its text stays a short pointer.
+fn for_cli(raw: Value) -> Value {
+    let text = if raw["isError"] == true {
+        raw["structuredContent"]["error"]
+            .as_str()
+            .unwrap_or("La herramienta del equipo falló.")
+            .to_owned()
+    } else {
+        "Resultado del equipo en structuredContent.".to_owned()
+    };
+    json!({"content":[{"type":"text","text":text}],"structuredContent":raw["structuredContent"].clone(),"isError":raw["isError"].clone()})
+}
+fn quota_view(account: &AccountQuota, shared: Vec<&str>) -> Value {
+    let window = |w: &QuotaWindow| {
+        let mut value = json!({"percent":w.percent.round()});
+        if let Some(at) = w.resets_at {
+            value["resetsInMinutes"] = json!(at.saturating_sub(now()) / 60_000);
+        }
+        value
+    };
+    let mut value = json!({"label":account.label});
+    if let Some(w) = &account.five_hour {
+        value["fiveHour"] = window(w);
+    }
+    if let Some(w) = &account.week {
+        value["week"] = window(w);
+    }
+    if account.blocked {
+        value["blocked"] = json!(true);
+    }
+    if !shared.is_empty() {
+        value["sharedWith"] = json!(shared);
+    }
+    value
+}
+fn quota_peak(account: &AccountQuota) -> f64 {
+    [&account.five_hour, &account.week]
+        .into_iter()
+        .flatten()
+        .map(|w| w.percent)
+        .fold(0.0, f64::max)
+}
+fn quota_blocked(account: &AccountQuota) -> bool {
+    account.blocked || quota_peak(account) >= 98.0
+}
+/// Team total (coordinator included) and what remains of its budget.
+fn team_view(report: &UsageReport) -> Value {
+    let mut total = TaskUsage::default();
+    for member in &report.members {
+        add_usage(&mut total, &member.usage);
+    }
+    let mut team = json!({"usage":usage_view(&total)});
+    if let Some(limit) = report.budget.team_tokens {
+        team["budget"] = json!({"limit":limit,"remaining":limit.saturating_sub(total.new_tokens)});
+    }
+    if let Some(limit) = report.budget.member_tokens {
+        team["memberBudget"] = json!(limit);
+    }
+    team
+}
+fn members_view(state: &Snapshot, report: Option<&UsageReport>) -> Value {
+    let budget = report.map(|r| r.budget.clone()).unwrap_or_default();
+    let entry = |id: &str| report.and_then(|r| r.members.iter().find(|m| m.member_id == id && !m.coordinator));
+    let shared = |me: &MemberUsage| -> Vec<&str> {
+        let key = me.account.as_ref().map(|a| a.key.as_str()).unwrap_or("");
+        report
+            .map(|r| {
+                r.members
+                    .iter()
+                    .filter(|m| {
+                        !key.is_empty()
+                            && m.member_id != me.member_id
+                            && m.account.as_ref().is_some_and(|a| a.key == key)
+                    })
+                    .map(|m| m.member_id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let members: Vec<Value> = state
+        .members
+        .iter()
+        .map(|member| {
+            let mut value = json!({"id":member.id,"name":member.name,"role":member.role,"canWrite":member.can_write});
+            if let Some(usage) = entry(&member.id) {
+                if let Some(browser) = usage.browser {
+                    value["browser"] = json!(browser);
+                }
+                value["usage"] = usage_view(&usage.usage);
+                if let Some(limit) = budget.member_tokens {
+                    value["budget"] = json!({"limit":limit,"remaining":limit.saturating_sub(usage.usage.new_tokens)});
+                }
+                if let Some(percent) = usage.context_percent {
+                    value["contextPercent"] = json!(percent.round());
+                }
+                if let Some(account) = &usage.account {
+                    value["account"] = quota_view(account, shared(usage));
+                }
+            }
+            value
+        })
+        .collect();
+    let mut view = json!({"coordinatorCanWrite":state.coordinator_can_write,"members":members});
+    if let Some(report) = report {
+        view["team"] = team_view(report);
+        if let Some(coordinator) = report.members.iter().find(|m| m.coordinator) {
+            let mut value = json!({"usage":usage_view(&coordinator.usage)});
+            if let Some(account) = &coordinator.account {
+                value["account"] = quota_view(account, shared(coordinator));
+            }
+            view["coordinator"] = value;
+        }
+    }
+    view
+}
+/// A delegation to an exhausted account would only fail later at the provider.
+fn quota_refusal(state: &Snapshot, report: Option<&UsageReport>, member_id: &str) -> Option<String> {
+    let report = report?;
+    let account_of = |id: &str| {
+        report
+            .members
+            .iter()
+            .find(|m| m.member_id == id && !m.coordinator)
+            .and_then(|m| m.account.as_ref())
+    };
+    let account = account_of(member_id)?;
+    if !quota_blocked(account) {
+        return None;
+    }
+    let alternatives: Vec<String> = state
+        .members
+        .iter()
+        .filter(|m| m.id != member_id && !account_of(&m.id).is_some_and(quota_blocked))
+        .map(|m| format!("{} ({})", m.id, m.role))
+        .collect();
+    Some(format!(
+        "La cuenta {} de {member_id} no tiene margen (uso del plan al {}%). No se encoló la tarea. {}",
+        if account.label.is_empty() { "asignada" } else { account.label.as_str() },
+        quota_peak(account).round(),
+        if alternatives.is_empty() {
+            "Ningún otro colaborador tiene margen ahora; informa al usuario.".to_owned()
+        } else {
+            format!("Colaboradores con margen: {}.", alternatives.join(", "))
+        }
+    ))
+}
+/// Compact task view: reports already delivered come back as a preview.
+fn task_view(root: &Path, id: &str, task: &Task, full: bool, deliver: bool) -> Value {
+    let mut value = json!({"id":task.id,"key":task.key,"memberId":task.member_id,"status":task.status});
+    if let Some(usage) = &task.usage {
+        value["usage"] = usage_view(usage);
+    }
+    if full {
+        value["instruction"] = json!(task.instruction);
+    }
+    if let Some(report) = &task.report {
+        if full && task.report_file.is_some() {
+            match read_report(root, id, &task.id, REPORT_INLINE) {
+                Some((text, more)) => {
+                    value["report"] = json!(text);
+                    if more {
+                        value["reportTruncated"] = json!(true);
+                    }
+                }
+                None => value["report"] = json!(report),
+            }
+        } else if task.report_delivered && !full && !deliver {
+            value["reportPreview"] = json!(preview(report));
+            value["reportDelivered"] = json!(true);
+        } else {
+            value["report"] = json!(report);
+        }
+        if let Some(file) = &task.report_file {
+            value["reportFile"] = json!(file);
+        }
+    }
+    value
+}
+fn mark_delivered(root: &Path, id: &str, epoch: &str, ids: &[String]) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    mutate(root, id, epoch, |state| {
+        for task in &mut state.tasks {
+            if ids.contains(&task.id) && task.report.is_some() && !ACTIVE.contains(&task.status.as_str()) {
+                task.report_delivered = true;
+            }
+        }
+        Ok(())
+    })
+    .map(|_| ())
+}
+fn delegation_view(task: &Task) -> Value {
+    // `task.status` stays for Trex CLI, which detects uncertain delegations there.
+    json!({"taskId":task.id,"status":task.status,"member":task.member_id,"task":{"id":task.id,"status":task.status}})
 }
 fn error(message: String) -> Value {
     result(json!({"error":message}), true)
@@ -550,7 +1034,7 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
         "trex_team_plan" => &["steps"],
         "trex_team_members" => &[],
         "trex_delegate_task" => &["memberId", "taskKey", "task", "wait"],
-        "trex_task_status" => &["taskId", "waitMs"],
+        "trex_task_status" => &["taskId", "waitMs", "detail"],
         _ => return Err("Herramienta de equipo desconocida.".into()),
     };
     if args.keys().any(|key| !allowed.contains(&key.as_str())) {
@@ -633,14 +1117,32 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             state.plan = steps;
             Ok(())
         })?;
-        return Ok(result(json!({"plan":state.plan}), false));
+        // A confirmation is enough: the coordinator already holds the plan text.
+        let steps: Vec<Value> = state
+            .plan
+            .iter()
+            .map(|step| {
+                let mut value = json!({"taskKey":step.task_key,"memberId":step.member_id});
+                if let Some(deps) = &step.depends_on {
+                    value["dependsOn"] = json!(deps);
+                }
+                if let Some(task) = state.tasks.iter().find(|t| t.key == step.task_key) {
+                    value["taskId"] = json!(task.id);
+                    value["status"] = json!(task.status);
+                }
+                value
+            })
+            .collect();
+        let issued = steps.iter().filter(|s| s.get("taskId").is_some()).count();
+        return Ok(result(
+            json!({"published":steps.len(),"issued":issued,"steps":steps}),
+            false,
+        ));
     }
     if name == "trex_team_members" {
         let state = mutate(root, id, epoch, |s| live(s))?;
-        return Ok(result(
-            json!({"members":state.members,"coordinatorCanWrite":state.coordinator_can_write}),
-            false,
-        ));
+        let usage = load_usage(&store_path(root, id)?);
+        return Ok(result(members_view(&state, usage.as_ref()), false));
     }
     if name == "trex_task_status" {
         let mut state = mutate(root, id, epoch, |s| live(s))?;
@@ -648,6 +1150,11 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             .get("taskId")
             .map(|v| v.as_str().ok_or("taskId no válido."))
             .transpose()?;
+        let full = match args.get("detail").map(Value::as_str) {
+            None | Some(Some("compact")) => false,
+            Some(Some("full")) => true,
+            _ => return Err("detail debe ser \"compact\" o \"full\".".into()),
+        };
         let wait_ms = args
             .get("waitMs")
             .map(|value| {
@@ -674,18 +1181,64 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             }
             live(&state)?;
         }
+        let finished = |task: &Task| task.report.is_some() && !ACTIVE.contains(&task.status.as_str());
         if let Some(task_id) = task_id {
             let task = state
                 .tasks
                 .iter()
                 .find(|t| t.id == task_id)
                 .ok_or("No se encontró la tarea.")?;
-            return Ok(result(json!({"task":task}), false));
+            let view = task_view(root, id, task, full, false);
+            if finished(task) && !task.report_delivered {
+                let _ = mark_delivered(root, id, epoch, std::slice::from_ref(&task.id));
+            }
+            return Ok(result(json!({"task":view}), false));
         }
-        return Ok(result(
-            json!({"plan":state.plan,"tasks":state.tasks.iter().map(|t|json!({"id":t.id,"key":t.key,"memberId":t.member_id,"status":t.status})).collect::<Vec<_>>()}),
-            false,
-        ));
+        // New reports of this cycle are delivered together, once, within a bound.
+        let mut room = 48 * 1024;
+        let mut delivered = vec![];
+        let tasks: Vec<Value> = state
+            .tasks
+            .iter()
+            .map(|task| {
+                let fresh = finished(task) && !task.report_delivered && task.epoch == epoch;
+                let size = task.report.as_ref().map_or(0, String::len);
+                if fresh && size <= room {
+                    room -= size;
+                    delivered.push(task.id.clone());
+                    return task_view(root, id, task, false, true);
+                }
+                let mut value = json!({"id":task.id,"key":task.key,"memberId":task.member_id,"status":task.status});
+                if let Some(usage) = &task.usage {
+                    value["usage"] = usage_view(usage);
+                }
+                if fresh {
+                    value["reportPending"] = json!("Consulta esta tarea con taskId para leer su informe.");
+                } else if task.report_delivered {
+                    value["reportDelivered"] = json!(true);
+                }
+                value
+            })
+            .collect();
+        let _ = mark_delivered(root, id, epoch, &delivered);
+        let mut view = json!({"tasks":tasks});
+        if let Some(report) = load_usage(&store_path(root, id)?) {
+            view["team"] = team_view(&report);
+        }
+        if full {
+            view["plan"] = json!(state.plan);
+        } else {
+            let pending: Vec<&str> = state
+                .plan
+                .iter()
+                .filter(|step| !state.tasks.iter().any(|t| t.key == step.task_key))
+                .map(|step| step.task_key.as_str())
+                .collect();
+            if !pending.is_empty() {
+                view["notDelegated"] = json!(pending);
+            }
+        }
+        return Ok(result(view, false));
     }
     let wait = args
         .get("wait")
@@ -699,6 +1252,7 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
         return Err("taskKey debe ser un identificador estable de hasta 100 caracteres.".into());
     }
     let mut selected = String::new();
+    let usage = load_usage(&store_path(root, id)?);
     let initial = mutate(root, id, epoch, |state| {
         live(state)?;
         if !state.members.iter().any(|m| m.id == member_id) {
@@ -720,6 +1274,9 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
         {
             return Err("Se alcanzó el límite de tareas. Revisa los resultados e inicia un ciclo nuevo o un equipo nuevo.".into());
         }
+        if let Some(refusal) = quota_refusal(state, usage.as_ref(), member_id) {
+            return Err(refusal);
+        }
         let stamp = now();
         selected = uid();
         state.tasks.push(Task {
@@ -732,6 +1289,9 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             report: None,
             created_at: stamp,
             updated_at: stamp,
+            usage: None,
+            report_file: None,
+            report_delivered: false,
         });
         settle_blocked(state);
         Ok(())
@@ -742,8 +1302,12 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
             .iter()
             .find(|task| task.id == selected)
             .ok_or("La tarea no está disponible.")?;
+        let mut view = delegation_view(task);
+        if initial.coordinator_can_write && ACTIVE.contains(&task.status.as_str()) {
+            view["awaitCoordinatorTurnEnd"] = json!(true);
+        }
         return Ok(result(
-            json!({"task":task,"queued":ACTIVE.contains(&task.status.as_str()),"awaitCoordinatorTurnEnd":initial.coordinator_can_write && ACTIVE.contains(&task.status.as_str())}),
+            view,
             ["failed", "cancelled", "uncertain"].contains(&task.status.as_str()),
         ));
     }
@@ -767,7 +1331,17 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
                     Ok(())
                 });
             }
-            return Ok(result(json!({"task":task}), task.status != "completed"));
+            let mut view = delegation_view(&task);
+            let detail = task_view(root, id, &task, false, true);
+            for key in ["usage", "report", "reportFile"] {
+                if let Some(value) = detail.get(key) {
+                    view[key] = value.clone();
+                }
+            }
+            if task.report.is_some() {
+                let _ = mark_delivered(root, id, epoch, std::slice::from_ref(&task.id));
+            }
+            return Ok(result(view, task.status != "completed"));
         }
         if live(&state).is_err() || Instant::now() > deadline {
             let stopped = mutate(root, id, epoch, |state| {
@@ -779,7 +1353,9 @@ fn tool(root: &Path, id: &str, epoch: &str, name: &str, args: &Value) -> Result<
                 .iter()
                 .find(|task| task.id == selected)
                 .ok_or("No se pudo recuperar la entrega pendiente.")?;
-            return Ok(result(json!({"task":task,"manualReview":true}), true));
+            let mut view = delegation_view(task);
+            view["manualReview"] = json!(true);
+            return Ok(result(view, true));
         }
         std::thread::sleep(Duration::from_millis(250));
         let _guard = lock(root)?;
@@ -817,25 +1393,32 @@ pub async fn agent_team_snapshot(app: AppHandle, id: String) -> Result<Snapshot,
     .await
     .map_err(|e| e.to_string())?
 }
+/// Heartbeat; with `usage` it also publishes the advisory usage report read by
+/// the coordinator tools. The journal itself is not rewritten.
+fn poll(root: &Path, id: &str, epoch: &str, usage: Option<Value>) -> Result<Snapshot, String> {
+    let path = store_path(root, id)?;
+    let _guard = lock(root)?;
+    let mut state = load(&path)?;
+    if state.id != id || state.epoch != epoch {
+        return Err("Esta generación del equipo ya no está activa.".into());
+    }
+    state.heartbeat = heartbeat(&path, epoch)?;
+    if let Some(usage) = usage.filter(|value| !value.is_null()) {
+        save_usage(&path, &state, usage)?;
+    }
+    Ok(state)
+}
 #[tauri::command]
 pub async fn agent_team_poll(
     app: AppHandle,
     id: String,
     epoch: String,
+    usage: Option<Value>,
 ) -> Result<Snapshot, String> {
     let root = data_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = store_path(&root, &id)?;
-        let _guard = lock(&root)?;
-        let mut state = load(&path)?;
-        if state.id != id || state.epoch != epoch {
-            return Err("Esta generación del equipo ya no está activa.".into());
-        }
-        state.heartbeat = heartbeat(&path, &epoch)?;
-        Ok(state)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || poll(&root, &id, &epoch, usage))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn agent_team_claim(
@@ -857,10 +1440,11 @@ pub async fn agent_team_finish(
     task_id: String,
     status: String,
     report: Option<String>,
+    usage: Option<TaskUsage>,
 ) -> Result<Snapshot, String> {
     let root = data_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        finish(&root, &id, &epoch, &task_id, &status, report.as_deref())
+        finish_with(&root, &id, &epoch, &task_id, &status, report.as_deref(), usage)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -938,14 +1522,16 @@ pub fn run_if_requested() -> bool {
             Err(_) => break,
         };
         let response = if flag == CALL_FLAG {
-            tool(
-                &root,
-                &id,
-                &epoch,
-                request["name"].as_str().unwrap_or(""),
-                &request["arguments"],
+            for_cli(
+                tool(
+                    &root,
+                    &id,
+                    &epoch,
+                    request["name"].as_str().unwrap_or(""),
+                    &request["arguments"],
+                )
+                .unwrap_or_else(error),
             )
-            .unwrap_or_else(error)
         } else {
             let rpc_id = &request["id"];
             let method = request["method"].as_str().unwrap_or("");
@@ -991,19 +1577,21 @@ pub fn run_if_requested() -> bool {
             };
             let result = match method {
                 "initialize" => {
-                    json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"trex_team","version":"1.0.0"},"instructions":"Publish dependencies with trex_team_plan dependsOn; [] marks independent work. Enqueue independent delegations with wait:false, then retrieve reports using trex_task_status. When browser integration is enabled, each member has a separate browser space. Workspace writers are exclusive; up to four independent readers run at once. Never replay uncertain work."})
+                    json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"trex_team","version":"1.1.0"},"instructions":TEAM_MCP_INSTRUCTIONS})
                 }
                 "ping" => json!({}),
                 "tools/list" => json!({"tools":tool_definitions()}),
-                "tools/call" => tool(
-                    &root,
-                    &id,
-                    &epoch,
-                    request["params"]["name"].as_str().unwrap_or(""),
-                    &arguments,
-                )
-                .unwrap_or_else(error),
-                _ => error("Método de equipo desconocido.".into()),
+                "tools/call" => for_mcp(
+                    tool(
+                        &root,
+                        &id,
+                        &epoch,
+                        request["params"]["name"].as_str().unwrap_or(""),
+                        &arguments,
+                    )
+                    .unwrap_or_else(error),
+                ),
+                _ => for_mcp(error("Método de equipo desconocido.".into())),
             };
             let reply = json!({"jsonrpc":"2.0","id":rpc_id,"result":result});
             if method == "tools/call" && cache.len() < 256 {
@@ -1063,10 +1651,19 @@ mod tests {
                     report: None,
                     created_at: now(),
                     updated_at: now(),
+                    usage: None,
+                    report_file: None,
+                    report_delivered: false,
                 });
                 Ok(())
             })
             .unwrap();
+            id
+        }
+        fn completed(&self, key: &str, report: &str) -> String {
+            let id = self.queued(key);
+            claim(&self.root, "team", "epoch").unwrap();
+            finish(&self.root, "team", "epoch", &id, "completed", Some(report)).unwrap();
             id
         }
     }
@@ -1208,7 +1805,9 @@ mod tests {
         f.open("epoch", false).unwrap();
         let plan = json!({"steps":[{"taskKey":"first","memberId":"impl","task":"Implement the task"},{"taskKey":"second","memberId":"review","task":"Review the changes"}]});
         let result = tool(&f.root, "team", "epoch", "trex_team_plan", &plan).unwrap();
-        assert_eq!(result["structuredContent"]["plan"][0]["taskKey"], "first");
+        assert_eq!(result["structuredContent"]["steps"][0]["taskKey"], "first");
+        assert_eq!(result["structuredContent"]["published"], 2);
+        assert!(!result["content"][0]["text"].as_str().unwrap().contains("Review the changes"));
         assert_eq!(f.read().tasks.len(), 0);
         assert_eq!(f.read().plan.len(), 2);
         assert_eq!(
@@ -1322,9 +1921,11 @@ mod tests {
         let reply = task.join().unwrap().unwrap();
         assert_eq!(reply["isError"], false);
         assert_eq!(
-            reply["structuredContent"]["task"]["report"],
+            reply["structuredContent"]["report"],
             "Search implemented; tests pass."
         );
+        assert_eq!(reply["structuredContent"]["member"], "impl");
+        assert!(reply["structuredContent"].get("instruction").is_none());
         assert_eq!(
             tool(&f.root, "team", "epoch", "trex_delegate_task", &args).unwrap(),
             reply
@@ -1414,7 +2015,7 @@ mod tests {
             "epoch",
             &id,
             "completed",
-            Some(&"x".repeat(32769))
+            Some(&"x".repeat(REPORT_LIMIT + 1))
         )
         .is_err());
         assert_eq!(f.read().tasks[0].status, "claimed");
@@ -1430,6 +2031,122 @@ mod tests {
         let saved = fs::read_to_string(store_path(&f.root, "team").unwrap()).unwrap();
         assert!(!saved.contains("AUDIT_FAKE_ONLY"));
         assert!(saved.contains("Tests passed."));
+    }
+    #[test]
+    fn oversized_report_keeps_status_excerpt_and_full_file() {
+        let f = Fixture::new();
+        f.open("epoch", false).unwrap();
+        let id = f.queued("large");
+        claim(&f.root, "team", "epoch").unwrap();
+        let report = format!("BEGIN\n{}\napi_key=AUDIT_FAKE_ONLY\nEND", "línea verificada. ".repeat(4000));
+        assert!(report.len() > 64 * 1024);
+        let usage = TaskUsage { new_tokens: 1200, cache_read_tokens: 9000, output_tokens: 300, cost_usd: Some(0.012), requests: Some(3) };
+        finish_with(&f.root, "team", "epoch", &id, "completed", Some(&report), Some(usage.clone())).unwrap();
+        let task = f.read().tasks[0].clone();
+        assert_eq!(task.status, "completed");
+        assert_eq!(task.usage, Some(usage));
+        let stored = task.report.unwrap();
+        assert!(stored.len() <= REPORT_EXCERPT);
+        assert!(stored.starts_with("BEGIN") && stored.ends_with("END"));
+        assert!(stored.contains("Informe recortado"));
+        let file = task.report_file.unwrap();
+        assert!(stored.contains(&file));
+        let full = fs::read_to_string(&file).unwrap();
+        assert!(full.len() > 64 * 1024 && !full.contains("AUDIT_FAKE_ONLY"));
+        let detail = tool(&f.root, "team", "epoch", "trex_task_status", &json!({"taskId":id,"detail":"full"})).unwrap();
+        let task = &detail["structuredContent"]["task"];
+        assert_eq!(task["reportTruncated"], true);
+        assert!(task["report"].as_str().unwrap().len() <= REPORT_INLINE);
+        assert_eq!(task["instruction"], "Implement the task");
+        assert_eq!(task["usage"]["newTokens"], 1200);
+    }
+    #[test]
+    fn reports_are_delivered_once_and_then_previewed() {
+        let f = Fixture::new();
+        f.open("epoch", false).unwrap();
+        let report = format!("Resultado: verificado. {}", "detalle ".repeat(200));
+        let first = f.completed("first", &report);
+        let listed = tool(&f.root, "team", "epoch", "trex_task_status", &json!({})).unwrap();
+        assert_eq!(listed["structuredContent"]["tasks"][0]["report"], report.as_str());
+        assert!(listed["structuredContent"]["tasks"][0].get("instruction").is_none());
+        let again = tool(&f.root, "team", "epoch", "trex_task_status", &json!({})).unwrap();
+        assert!(again["structuredContent"]["tasks"][0].get("report").is_none());
+        assert_eq!(again["structuredContent"]["tasks"][0]["reportDelivered"], true);
+        let single = tool(&f.root, "team", "epoch", "trex_task_status", &json!({"taskId":first})).unwrap();
+        let task = &single["structuredContent"]["task"];
+        assert!(task.get("report").is_none() && task.get("instruction").is_none());
+        assert!(task["reportPreview"].as_str().unwrap().chars().count() <= REPORT_PREVIEW + 1);
+        let full = tool(&f.root, "team", "epoch", "trex_task_status", &json!({"taskId":first,"detail":"full"})).unwrap();
+        assert_eq!(full["structuredContent"]["task"]["report"], report.as_str());
+        assert!(tool(&f.root, "team", "epoch", "trex_task_status", &json!({"detail":"everything"})).is_err());
+        let second = f.completed("second", "Segundo informe");
+        let single = tool(&f.root, "team", "epoch", "trex_task_status", &json!({"taskId":second})).unwrap();
+        assert_eq!(single["structuredContent"]["task"]["report"], "Segundo informe");
+        assert!(f.read().tasks.iter().all(|t| t.report_delivered));
+    }
+    #[test]
+    fn legacy_tasks_without_usage_or_delivery_fields_still_load() {
+        let f = Fixture::new();
+        f.open("epoch", false).unwrap();
+        f.completed("old", "Old report");
+        let path = store_path(&f.root, "team").unwrap();
+        let mut old = serde_json::to_value(f.read()).unwrap();
+        for task in old["tasks"].as_array_mut().unwrap() {
+            for key in ["usage", "reportFile", "reportDelivered"] {
+                task.as_object_mut().unwrap().remove(key);
+            }
+        }
+        save_bytes(&path, &serde_json::to_vec(&old).unwrap()).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.tasks[0].usage, None);
+        assert!(!loaded.tasks[0].report_delivered);
+    }
+    #[test]
+    fn usage_report_feeds_members_budget_and_blocks_exhausted_accounts() {
+        let f = Fixture::new();
+        f.open("epoch", false).unwrap();
+        let account = |percent: f64| json!({"key":"claude-max","label":"Claude Max","fiveHour":{"percent":percent,"resetsAt":now()+3_600_000},"week":{"percent":40.0}});
+        let report = |percent: f64| json!({"epoch":"epoch","budget":{"teamTokens":500000,"memberTokens":100000},"members":[
+            {"memberId":"principal","coordinator":true,"usage":{"newTokens":20000,"costUsd":0.5},"account":account(percent)},
+            {"memberId":"impl","usage":{"newTokens":30000,"cacheReadTokens":90000},"contextPercent":61.4,"browser":true,"account":account(percent)},
+            {"memberId":"review","usage":{"newTokens":5000},"browser":false,"account":{"key":"codex","label":"Codex Pro","fiveHour":{"percent":10.0}}}]});
+        poll(&f.root, "team", "epoch", Some(report(80.0))).unwrap();
+        let members = tool(&f.root, "team", "epoch", "trex_team_members", &json!({})).unwrap();
+        let view = &members["structuredContent"];
+        assert_eq!(view["team"]["usage"]["newTokens"], 55000);
+        assert_eq!(view["team"]["budget"]["remaining"], 445000);
+        assert_eq!(view["members"][0]["budget"]["remaining"], 70000);
+        assert_eq!(view["members"][0]["contextPercent"], 61.0);
+        assert_eq!(view["members"][0]["browser"], true);
+        assert_eq!(view["members"][0]["account"]["fiveHour"]["percent"], 80.0);
+        assert_eq!(view["members"][0]["account"]["sharedWith"], json!(["principal"]));
+        assert_eq!(view["coordinator"]["usage"]["costUsd"], 0.5);
+        assert!(view["members"][1]["account"].get("sharedWith").is_none());
+        let status = tool(&f.root, "team", "epoch", "trex_task_status", &json!({})).unwrap();
+        assert_eq!(status["structuredContent"]["team"]["budget"]["remaining"], 445000);
+        poll(&f.root, "team", "epoch", Some(report(99.0))).unwrap();
+        let refused = tool(&f.root, "team", "epoch", "trex_delegate_task", &json!({"memberId":"impl","taskKey":"k","task":"Implement","wait":false})).unwrap_err();
+        assert!(refused.contains("review") && refused.contains("99"));
+        assert!(f.read().tasks.is_empty());
+        tool(&f.root, "team", "epoch", "trex_delegate_task", &json!({"memberId":"review","taskKey":"r","task":"Review","wait":false})).unwrap();
+        for bad in [
+            json!({"epoch":"other","members":[]}),
+            json!({"epoch":"epoch","members":[{"memberId":"ghost","usage":{}}]}),
+            json!({"epoch":"epoch","members":[{"memberId":"impl"},{"memberId":"impl"}]}),
+        ] {
+            assert!(poll(&f.root, "team", "epoch", Some(bad)).is_err());
+        }
+    }
+    #[test]
+    fn replies_carry_one_json_copy_for_mcp_clients_and_a_pointer_for_trex_cli() {
+        let raw = result(json!({"taskId":"t","status":"queued","task":{"id":"t","status":"queued"}}), false);
+        let mcp = for_mcp(raw.clone());
+        assert!(mcp.get("structuredContent").is_none());
+        assert!(mcp["content"][0]["text"].as_str().unwrap().contains("\"taskId\""));
+        let cli = for_cli(raw);
+        assert_eq!(cli["structuredContent"]["task"]["status"], "queued");
+        assert!(!cli["content"][0]["text"].as_str().unwrap().contains("taskId"));
+        assert_eq!(for_cli(error("Sin margen".into()))["content"][0]["text"], "Sin margen");
     }
     #[test]
     fn rejects_invalid_identity_configuration_and_unknown_finish() {

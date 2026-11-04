@@ -1,0 +1,197 @@
+/* Team usage, budget and quota details (toolbar and setup dialog).
+   Neutral by default; warning and critical levels use the state colors. */
+
+/* --- Toolbar: team totals and budget -------------------------------------- */
+.team-usage-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2-5);
+  margin-top: var(--sp-2-5);
+  padding: var(--sp-2) var(--sp-2-5);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+.team-usage-total {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-variant-numeric: tabular-nums;
+}
+.team-usage-total > svg { color: var(--text-dim); }
+.team-usage-total strong { color: var(--text); font-weight: var(--fw-semibold); }
+.team-budget {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.team-budget-meter {
+  position: relative;
+  width: 72px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.team-budget-meter i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--text-muted);
+}
+.team-budget-meter.warning i { background: var(--warn); }
+.team-budget-meter.critical i { background: var(--danger); }
+.team-budget-text { color: var(--text-dim); }
+.team-budget-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1-5);
+  padding: var(--sp-2) 0 var(--sp-1);
+}
+.team-budget-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1-5);
+  padding: var(--sp-2) 0 var(--sp-2-5);
+  border-bottom: 1px solid var(--border);
+}
+.team-budget-controls .select-trigger { flex: 1 1 120px; min-width: 0; min-height: var(--hit-min); }
+.team-budget-label {
+  flex-basis: 100%;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+/* --- Toolbar: members grouped by account ---------------------------------- */
+.team-account-group {
+  display: grid;
+  gap: 0;
+  padding-top: var(--sp-2-5);
+}
+.team-account-group + .team-account-group { margin-top: var(--sp-1); border-top: 1px solid var(--border); }
+.team-account-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.team-account-name {
+  color: var(--text-muted);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.team-quota {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.team-account-heading .team-quota { margin-left: auto; }
+.team-quota.warning { color: var(--warn-text); }
+.team-quota.critical { color: var(--danger-text); font-weight: var(--fw-medium); }
+.team-member-usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.team-member-budget,
+.team-member-cost { color: var(--text-dim); }
+.team-usage-context {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.team-usage-context svg { transform: rotate(-90deg); }
+.team-usage-context circle {
+  fill: none;
+  stroke-width: 2;
+}
+.team-usage-context .track { stroke: color-mix(in srgb, var(--text) 14%, transparent); }
+.team-usage-context .value {
+  stroke: var(--text-muted);
+  stroke-linecap: round;
+}
+.team-usage-context.warning { color: var(--warn-text); }
+.team-usage-context.warning .value { stroke: var(--warn); }
+.team-usage-context.critical { color: var(--danger-text); }
+.team-usage-context.critical .value { stroke: var(--danger); }
+
+/* --- Setup dialog --------------------------------------------------------- */
+.team-member-browser {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.team-member-browser small { color: var(--text-dim); font-size: var(--fs-xs); }
+.team-suggestion-hint {
+  color: var(--ok-text);
+  font-size: var(--fs-xs);
+}
+.team-budget-field {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sp-2) var(--sp-3);
+}
+.team-launch-summary {
+  display: grid;
+  gap: var(--sp-1-5);
+  padding: var(--sp-2-5) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.team-launch-summary h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+.team-launch-accounts {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.team-launch-accounts li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--sp-2);
+  font-variant-numeric: tabular-nums;
+}
+.team-launch-accounts strong { color: var(--text); font-weight: var(--fw-medium); }
+.team-launch-warnings {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  color: var(--warn-text);
+  list-style: none;
+}
+.team-launch-warnings li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}

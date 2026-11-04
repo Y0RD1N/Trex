@@ -1,6 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import DropdownMenu from "../DropdownMenu";
-import { AlertIcon, BoltIcon, CheckIcon, ChevronIcon, CloseIcon, SettingsIcon } from "../Icons";
+import { AlertIcon, BoltIcon, CheckIcon, ChevronIcon, CloseIcon, EllipsisIcon, PencilIcon, SettingsIcon, ShieldIcon } from "../Icons";
 import type { SelectOption } from "../Select";
 import { EFFORT_LEVELS, type ModelInfo } from "../../chatState";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
@@ -22,6 +22,52 @@ type Props = {
 type Section = "mode" | "effort";
 const fullAccess = (mode: string): boolean => mode === "full" || mode === "bypassPermissions";
 
+/** Riesgo de un modo de permisos: lectura, con aprobación, edición o acceso total. */
+export type PermissionRisk = "read" | "ask" | "edit" | "full";
+export function permissionRisk(mode: string): PermissionRisk {
+  if (fullAccess(mode) || mode === "dontAsk") return "full";
+  if (mode === "acceptEdits" || mode === "auto") return "edit";
+  if (mode === "plan" || mode === "read-only") return "read";
+  return "ask";
+}
+const RISK_LABELS: Record<PermissionRisk, string> = { read: "Lectura", ask: "Con aprobación", edit: "Edición", full: "Acceso total" };
+const RISK_ICONS: Record<PermissionRisk, ReactNode> = {
+  read: <ShieldIcon size={12} />, ask: <ShieldIcon size={12} />, edit: <PencilIcon size={12} />, full: <AlertIcon size={12} />,
+};
+/** Insignia de riesgo con icono y color de estado; reutilizable en otras vistas. */
+export function PermissionBadge({ mode }: { mode: string }) {
+  const risk = permissionRisk(mode);
+  return <span className="permission-badge" data-risk={risk}>{RISK_ICONS[risk]}<span>{RISK_LABELS[risk]}</span></span>;
+}
+
+/** Acción secundaria del chat que vive en el menú «Más acciones». */
+export type ComposerAction = { id: string; label: string; hint?: string; icon: ReactNode; disabled?: boolean; run: () => void };
+
+/** Menú «⋯» de la caja de mensaje: acciones secundarias con su motivo cuando no están disponibles. */
+export function ComposerMoreMenu({ actions }: { actions: ComposerAction[] }) {
+  const id = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
+  if (!actions.length) return null;
+  return <>
+    <button ref={triggerRef} type="button" className="chat-tray-chip chat-more-trigger tip" aria-label="Más acciones"
+      data-tip={anchor ? undefined : "Más acciones"} aria-haspopup="menu" aria-expanded={!!anchor} aria-controls={anchor ? id : undefined}
+      onClick={() => setAnchor(anchor ? null : { element: triggerRef.current! })}>
+      <EllipsisIcon size={16} />
+    </button>
+    <DropdownMenu id={id} anchor={anchor} triggerRef={triggerRef} label="Más acciones" align="end"
+      className="chat-glass-menu chat-more-menu" onClose={() => setAnchor(null)}>
+      {actions.map(action => <button key={action.id} type="button" role="menuitem" className="context-item chat-more-item"
+        disabled={action.disabled} aria-describedby={action.hint ? `${id}-${action.id}` : undefined}
+        onClick={() => { setAnchor(null); action.run(); }}>
+        <span className="context-icon" aria-hidden="true">{action.icon}</span>
+        <span className="chat-more-text"><span>{action.label}</span>
+          {action.hint && <small id={`${id}-${action.id}`}>{action.hint}</small>}</span>
+      </button>)}
+    </DropdownMenu>
+  </>;
+}
+
 export default function ComposerSettings({ mode, modes, onMode, levels, effort, onEffort, speed, fast, onFast, openSignal }: Props) {
   const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -34,6 +80,7 @@ export default function ComposerSettings({ mode, modes, onMode, levels, effort, 
   const selectedMode = modes.find(option => option.value === mode);
   const modeLabel = selectedMode?.label ?? mode;
   const unrestricted = fullAccess(mode);
+  const risk = permissionRisk(mode);
   const triggerText = unrestricted ? "Acceso total" : mode === "plan" ? "Planificar" : mode === "read-only" ? "Solo lectura" : "Ajustes";
   const knownLevels = levels.filter(level => EFFORT_LEVELS[level]);
   const modeTarget = modes.find(option => option.value === mode && !option.disabled) ?? modes.find(option => !option.disabled);
@@ -75,8 +122,8 @@ export default function ComposerSettings({ mode, modes, onMode, levels, effort, 
 
   return <>
     <button ref={triggerRef} type="button"
-      className={`chat-tray-chip chat-composer-settings-trigger${unrestricted ? " is-full" : ""}`}
-      aria-label={`Ajustes del agente: ${modeLabel}`} aria-haspopup="dialog" aria-expanded={!!anchor}
+      className={`chat-tray-chip chat-composer-settings-trigger${unrestricted ? " is-full" : ""}`} data-risk={risk}
+      aria-label={`Ajustes del agente: ${modeLabel} · ${RISK_LABELS[risk]}`} aria-haspopup="dialog" aria-expanded={!!anchor}
       aria-controls={anchor ? menuId : undefined}
       onClick={() => anchor ? close() : open("mode")}
       onKeyDown={event => {
@@ -103,7 +150,7 @@ export default function ComposerSettings({ mode, modes, onMode, levels, effort, 
           {modes.map(option => {
             const selected = option.value === mode;
             return <button key={option.value} type="button" disabled={option.disabled} aria-pressed={selected}
-              className={`chat-composer-settings-mode${fullAccess(option.value) ? " is-full" : ""}`}
+              className={`chat-composer-settings-mode${fullAccess(option.value) ? " is-full" : ""}`} data-risk={permissionRisk(option.value)}
               data-menu-autofocus={focusMode && option === modeTarget ? "" : undefined}
               onClick={() => { if (!selected) onMode(option.value); }}>
               <span className="chat-composer-settings-mode-heading">
@@ -111,6 +158,7 @@ export default function ComposerSettings({ mode, modes, onMode, levels, effort, 
                 <span className="chat-composer-settings-check" aria-hidden="true">{selected && <CheckIcon size={14} />}</span>
               </span>
               {option.description && <small>{option.description}</small>}
+              <PermissionBadge mode={option.value} />
             </button>;
           })}
         </div>

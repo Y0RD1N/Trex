@@ -39,13 +39,13 @@ export default function TaskPanel({ tasks, author, paused, onClose, onReveal, pa
           <span>{allDone ? "Tiempo total" : "Tiempo transcurrido"} <b>{formatDuration(totalMs)}</b></span>
           <span>{clock(Math.min(...starts))}{allDone && ends.length ? ` → ${clock(Math.max(...ends))}` : ""}</span></p>}
         <div className="chat-task-track" role="progressbar" aria-label="Tareas completadas" aria-valuemin={0} aria-valuemax={tasks.length} aria-valuenow={done}>
-          <span style={{ width: `${done / tasks.length * 100}%` }} /></div></div>
+          <span style={{ transform: `scaleX(${done / tasks.length})` }} /></div></div>
       <ol className="chat-task-list">{tasks.map((task, index) => <li key={task.id} data-status={task.status}>
         <button type="button" aria-current={selected?.id === task.id ? "step" : undefined} onClick={() => setSelected(task.id)}>
           <span className="chat-task-mark" aria-hidden="true">{task.status === "in_progress" ? <svg width="16" height="16" viewBox="0 0 16 16">
             <circle cx="8" cy="8" r="7.5" fill="none" stroke="currentColor" />
             <circle cx="8" cy="8" r="2.5" fill="currentColor" />
-          </svg> : task.status === "completed" ? <CheckIcon size={10} /> : ["failed", "uncertain"].includes(task.status) ? "!" : null}</span>
+          </svg> : task.status === "completed" ? <CheckIcon size={11} /> : ["failed", "uncertain"].includes(task.status) ? "!" : null}</span>
           <span className="chat-task-copy"><strong>{task.title}</strong><small>{task.owner}<span aria-hidden="true"> · </span>{paused && task.status === "in_progress" ? "En pausa" : TASK_STATES[task.status]}
             {elapsed(task) !== null && <><span aria-hidden="true"> · </span><span className={`chat-task-time${task.status === "in_progress" ? " live" : ""}`}
               title={task.approximate ? "Aproximado: el agente no marcó la tarea como «en curso» al empezarla." : undefined}>

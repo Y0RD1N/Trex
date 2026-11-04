@@ -11,7 +11,7 @@ import { taskToolInput } from "./taskTools";
  * vuelta. No toca la interfaz ni el backend, así que se prueba sin Tauri.
  */
 import {
-  addNotice, baseReducer, choiceAnswers, clip, diffStats, finalize, list, liveCompletion, questionsOf, record, speedHint, text, unifiedDiffLines,
+  addNotice, baseReducer, choiceAnswers, clip, diffStats, finalize, lastIndexWhere, list, liveCompletion, questionsOf, record, speedHint, text, unifiedDiffLines,
   type BaseChatAction, type ChatItem, type ChatState, type Json, type ModelInfo, type OutgoingImage,
   type PermissionItem, type QuestionChoice, type ToolItem, type ToolStatus,
 } from "./chatState";
@@ -19,6 +19,7 @@ import { parseCodexSkills } from "./chatCommands";
 import { parseCodexUsage } from "./planUsage";
 import { imageReference, withoutImageLabels } from "./imageReferences";
 import { codexApiUsage } from "./tokenUsage";
+import type { InboxPart } from "./messageQueue";
 
 export type CodexAction =
   | BaseChatAction
@@ -223,6 +224,12 @@ export function userInput(value: string, images: OutgoingImage[] = [], skills: {
   ];
 }
 
+/** Mensajes de la cola entregados como un solo turno, cada imagen junto a su mensaje. */
+export function inboxInput(parts: InboxPart[]): Json[] {
+  return parts.map(part => part.type === "text" ? { type: "text", text: part.text, text_elements: [] }
+    : { type: "image", url: `data:${part.image.mediaType};base64,${part.image.data}` });
+}
+
 /** Mensaje de `/init`: el mismo encargo que hace la terminal de Codex. */
 export const INIT_PROMPT = [
   "Genera un archivo AGENTS.md en la raíz del repositorio que sirva de guía para quien contribuya, sea una persona o un agente.",
@@ -421,7 +428,7 @@ function itemTools(item: Json): ToolItem[] {
 }
 
 function upsert(items: ChatItem[], next: ChatItem): ChatItem[] {
-  const index = items.findIndex(item => item.kind === next.kind && item.id === next.id);
+  const index = lastIndexWhere(items, item => item.kind === next.kind && item.id === next.id);
   if (index === -1) return [...items, next];
   const copy = [...items];
   copy[index] = next;
@@ -497,7 +504,7 @@ function applyItem(items: ChatItem[], item: Json, phase: "started" | "completed"
 function appendDelta(items: ChatItem[], id: string, kind: "text" | "thinking" | "tool" | "plan", delta: string): ChatItem[] {
   if (!delta) return items;
   const target = kind === "plan" ? "tool" : kind;
-  const index = items.findIndex(item => item.kind === target && item.id === id);
+  const index = lastIndexWhere(items, item => item.kind === target && item.id === id);
   if (index === -1) {
     if (kind === "text" || kind === "thinking") return [...items, { kind, id, messageId: id, text: delta, final: false }];
     if (kind === "plan") return [...items, { kind: "tool", id, name: "ExitPlanMode", input: { plan: delta }, status: "running", output: null, patch: null }];

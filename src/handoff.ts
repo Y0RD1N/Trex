@@ -164,7 +164,64 @@ function toolRecord(item: ToolItem): string {
   return `Comando histórico (${item.status}): ${bounded(clean(command), 700)}${output ? `\nResultado registrado:\n${bounded(output, 1_400)}` : ""}`;
 }
 
-export function createHandoffContext(state: ChatState, source: HandoffSource, now = Date.now()): HandoffContext {
+const GIT_SNAPSHOT = "\n\n---\n## Estado del proyecto capturado por TREX\n";
+/** Quita la instantánea Git de un paquete guardado: la entrega nueva lleva la suya, actual. */
+export const withoutGitSnapshot = (content: string): string => content.split(GIT_SNAPSHOT)[0];
+/** Recorte UTF-8 que conserva el principio y el final, con el mismo marcador de omisión. */
+export const clipHandoffText = (value: string, limit: number): string => bounded(value, Math.max(0, limit));
+export const handoffBytes = bytes;
+
+/**
+ * Novedades de otro participante para una entrega incremental: mensajes
+ * visibles, comandos, plan, tareas y archivos, con el mismo filtrado que el
+ * contexto completo. Si no cabe todo, se conservan las más recientes.
+ */
+export function roomUpdates(items: ChatItem[], labels: { user: string; agent: string }, limit = 24 * 1024): { text: string; truncated: boolean } {
+  let truncated = false;
+  const clip = (value: string, size: number): string => { if (bytes(value) > size) truncated = true; return bounded(value, size); };
+  const files = new Map<string, string>();
+  const latestTodos = [...items].reverse().find((item): item is ToolItem => item.kind === "tool" && item.name === "TodoWrite");
+  const records: string[] = [];
+  for (const item of items) {
+    if (item.kind === "user" || item.kind === "text") {
+      const visible = visibleMessage(item.text);
+      if (visible.flattened) truncated = true;
+      if (visible.text) records.push(`${item.kind === "user" ? labels.user : labels.agent}:\n${clip(visible.text, item.kind === "user" ? 3_000 : 6_000)}`);
+    } else if (item.kind === "tool") {
+      if (EDIT_TOOLS.has(item.name)) {
+        const path = str(item.input.file_path) || str(item.input.notebook_path);
+        if (path) files.set(path, `- ${clip(clean(path), 400)} (${item.status})`);
+      } else if (item.name === "ExitPlanMode" && str(item.input.plan)) records.push(`Plan propuesto:\n${clip(clean(str(item.input.plan)), 6_000)}`);
+      else if (item === latestTodos && Array.isArray(item.input.todos)) {
+        const todos = item.input.todos.slice(0, 40).flatMap(todo => {
+          const value = todo && typeof todo === "object" ? todo as Record<string, unknown> : {};
+          return str(value.content) ? [`- [${str(value.status) || "pending"}] ${clip(clean(str(value.content)), 300)}`] : [];
+        });
+        if (todos.length) records.push(`Tareas:\n${todos.join("\n")}`);
+      } else {
+        const command = toolRecord(item);
+        if (command) records.push(command);
+      }
+    } else if (item.kind === "turn" && item.diff) {
+      for (const match of item.diff.matchAll(/^diff --git (?:"(?:[^"\\]|\\.)*"|a\/.*?) ("(?:[^"\\]|\\.)*"|b\/.*)$/gm))
+        files.set(match[1], `- ${clip(clean(match[1].replace(/^b\//, "")), 400)} (diff registrado)`);
+    }
+  }
+  const fileText = files.size ? `Archivos con cambios registrados:\n${clip([...files.values()].slice(-60).join("\n"), 3_000)}` : "";
+  let remaining = Math.max(0, limit - bytes(fileText) - 200);
+  const kept: string[] = [];
+  for (let index = records.length - 1; index >= 0; index--) {
+    const size = bytes(records[index]) + 10;
+    if (size > remaining) { truncated = true; break; }
+    kept.unshift(records[index]);
+    remaining -= size;
+  }
+  const text = [kept.join("\n\n---\n\n"), fileText, truncated ? "Se omitió parte del historial anterior; consulta el estado actual si lo necesitas." : ""].filter(Boolean).join("\n\n");
+  return { text: bounded(text, limit), truncated };
+}
+
+export function createHandoffContext(state: ChatState, source: HandoffSource, now = Date.now(), limit = CONTEXT_LIMIT): HandoffContext {
+  limit = Math.min(Math.max(0, limit), CONTEXT_LIMIT);
   let truncated = false;
   const clip = (value: string, limit: number): string => {
     if (bytes(value) > limit) truncated = true;
@@ -234,7 +291,7 @@ export function createHandoffContext(state: ChatState, source: HandoffSource, no
 
   const important = new Set([first?.index, ...recent.map(item => item.index)]);
   const records: string[] = [];
-  let remaining = Math.max(0, CONTEXT_LIMIT - bytes(fixed) - 350);
+  let remaining = Math.max(0, limit - bytes(fixed) - 350);
   let included = 0;
   for (let index = state.items.length - 1; index >= 0; index--) {
     const item = state.items[index];
@@ -254,7 +311,7 @@ export function createHandoffContext(state: ChatState, source: HandoffSource, no
   }
   const note = truncated ? "El extracto se acotó para conservar el objetivo y los mensajes recientes." : "El extracto incluye los mensajes visibles disponibles; puede faltar historial del proveedor.";
   const content = `${fixed}\n\n## Historial reciente y resultados\n${records.join("\n\n---\n\n") || "Sin mensajes adicionales disponibles."}\n\n${note}`;
-  return { source: { ...source }, content: clip(content, CONTEXT_LIMIT), createdAt: now, messageCount: messages.length, truncated, imagesOmitted };
+  return { source: { ...source }, content: clip(content, limit), createdAt: now, messageCount: messages.length, truncated, imagesOmitted };
 }
 
 function handoffMarker(id: string): string {

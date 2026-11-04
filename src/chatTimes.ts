@@ -17,15 +17,19 @@ export function isHistoryAction(action: { type: string }): boolean {
 export function stampItems(before: ChatItem[], after: ChatItem[], now: number): ChatItem[] {
   if (after === before) return after;
   // Items are appended (or updated in place by spreading, which keeps `at`).
+  // Only the tail can hold new items: a streaming delta touches no array copy.
   const from = Math.max(0, Math.min(before.length, after.length) - 3);
-  const known = new Set(before.slice(from).map(item => item.id));
-  let changed = false;
-  const items = after.map((item, index) => {
-    if (index < from || known.has(item.id) || (item.kind !== "tool" && item.kind !== "user") || item.at !== undefined) return item;
-    changed = true;
-    return { ...item, at: now };
-  });
-  return changed ? items : after;
+  let known: Set<string> | null = null;
+  let items: ChatItem[] | null = null;
+  for (let index = from; index < after.length; index++) {
+    const item = after[index];
+    if ((item.kind !== "tool" && item.kind !== "user") || item.at !== undefined) continue;
+    known ??= new Set(before.slice(from).map(previous => previous.id));
+    if (known.has(item.id)) continue;
+    items ??= after.slice();
+    items[index] = { ...item, at: now };
+  }
+  return items ?? after;
 }
 
 /** Start/end and token usage for response markers this action appended. */

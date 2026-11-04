@@ -1,36 +1,43 @@
-.browser-settings { display:grid; gap:16px; min-width:0; }
-.browser-settings-card { padding:20px; border:1px solid var(--border); border-radius:20px; background:var(--bg-elevated,var(--bg)); box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 3%,transparent); }
-.browser-settings-heading { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
-.browser-settings-heading h4,.browser-settings-card>h4 { margin:0 0 5px; font-size:14px; }
-.browser-settings-heading p { margin:0; color:var(--text-muted); font-size:12px; }
-.browser-settings-badge { display:grid; place-items:center; width:40px; height:40px; border:1px solid var(--border); border-radius:13px; color:var(--accent); font-size:27px; background:color-mix(in srgb,var(--accent) 7%,transparent); }
-.browser-settings-status { margin-left:auto; padding:5px 9px; border:1px solid var(--border); border-radius:9px; font-size:11px; color:var(--text-muted); }
-.browser-settings-status.is-ready { color:var(--accent); }
-.browser-settings-toggle { display:flex; align-items:center; gap:20px; padding:16px 0; cursor:pointer; }
-.browser-settings-toggle span { display:grid; gap:6px; flex:1; }
-.browser-settings-toggle strong { font-size:13px; font-weight:500; }
-.browser-settings-toggle small { color:var(--text-muted); font-size:12px; line-height:1.6; }
+.browser-settings { display:grid; gap:var(--sp-4); min-width:0; }
+/* Ritmo vertical único dentro de cada tarjeta: los bloques nunca quedan pegados. */
+.browser-settings-card { display:flex; flex-direction:column; gap:var(--sp-4); min-width:0; padding:var(--sp-5); border:1px solid var(--border); border-radius:var(--radius-2xl); background:var(--bg-elevated); box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 3%,transparent); }
+.browser-settings-card > * { margin-block:0; }
+.browser-settings-card > h4 + .settings-hint { margin-top:calc(var(--sp-1-5) - var(--sp-4)); }
+.browser-settings-heading { display:flex; align-items:center; gap:var(--sp-3); flex-wrap:wrap; }
+.browser-settings-heading > div { display:grid; gap:var(--sp-1); min-width:0; }
+.browser-settings-heading > .btn { margin-left:auto; }
+.browser-settings-heading h4,.browser-settings-card>h4 { margin:0; font-size:var(--fs-base); }
+.browser-settings-heading p { margin:0; color:var(--text-muted); font-size:var(--fs-sm); }
+.browser-settings-badge { display:grid; place-items:center; flex:0 0 40px; width:40px; height:40px; line-height:0; border:1px solid var(--border); border-radius:var(--radius-xl); color: var(--accent-strong); background:color-mix(in srgb,var(--accent) 7%,transparent); }
+.browser-settings-badge > svg { display:block; }
+.browser-settings-status { margin-left:auto; padding:var(--sp-1) var(--sp-2); border:1px solid var(--border); border-radius:var(--radius-lg); font-size:var(--fs-xs); color:var(--text-muted); }
+.browser-settings-status.is-ready { color: var(--accent-strong); }
+.browser-settings-toggle { display:flex; align-items:center; gap:var(--sp-5); padding:var(--sp-1) 0; cursor:pointer; }
+.browser-settings-toggle span { display:grid; gap:var(--sp-1-5); flex:1; }
+.browser-settings-toggle strong { font-size:var(--fs-md); font-weight:500; }
+.browser-settings-toggle small { color:var(--text-muted); font-size:var(--fs-sm); line-height:1.6; }
 .browser-settings-toggle input { accent-color:var(--accent); width:18px; height:18px; flex-shrink:0; }
-.browser-settings-foot { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-top:12px; border-top:1px solid var(--border); color:var(--text-muted); font-size:11px; }
-.browser-settings-foot button { display:flex; align-items:center; gap:6px; }
-.browser-settings-note { padding:12px; border:1px solid var(--border); border-radius:11px; font-size:12px; line-height:1.6; color:var(--text-muted); }
-.browser-settings-field { display:grid; gap:8px; font-size:12px; color:var(--text-muted); min-width:0; }
+.browser-settings-foot { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-3); padding-top:var(--sp-4); border-top:1px solid var(--border); color:var(--text-muted); font-size:var(--fs-xs); line-height:1.5; }
+.browser-settings-foot button { display:flex; align-items:center; gap:var(--sp-1-5); }
+.browser-settings-note { padding:var(--sp-3) var(--sp-3-5); border:1px solid var(--border); border-radius:var(--radius-lg); font-size:var(--fs-sm); line-height:1.6; color:var(--text-muted); }
+.browser-settings-field { display:grid; gap:var(--sp-2); font-size:var(--fs-sm); color:var(--text-muted); min-width:0; }
 .browser-settings-field .input { width:100%; min-width:0; }
-.browser-profile-menu .select-option-text > span { font-family:var(--font-mono); font-size:12px; }
-.browser-settings-create { display:flex; align-items:end; gap:10px; margin-top:14px; }
+.browser-profile-menu .select-option-text > span { font-family:var(--font-mono); font-size:var(--fs-sm); }
+.browser-settings-create { display:flex; align-items:end; gap:var(--sp-2-5); }
 .browser-settings-create label { flex:1; }
 .browser-settings-create button { min-height:36px; flex-shrink:0; }
-.browser-settings-folders { list-style:none; margin:4px 0 12px; padding:0; display:grid; gap:6px; }
-.browser-settings-folders li { display:flex; align-items:center; gap:10px; min-height:36px; padding:4px 6px 4px 12px; border:1px solid var(--border); border-radius:11px; color:var(--text-muted); font-size:12px; }
+.browser-settings-folders { list-style:none; margin:0; padding:0; display:grid; gap:var(--sp-1-5); }
+.browser-settings-folders li { display:flex; align-items:center; gap:var(--sp-2-5); min-height:36px; padding:var(--sp-1) var(--sp-1-5) var(--sp-1) var(--sp-3); border:1px solid var(--border); border-radius:var(--radius-lg); color:var(--text-muted); font-size:var(--fs-sm); }
 .browser-settings-folders li > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); color:var(--text); }
 .browser-settings-folders li.is-fixed > span { color:var(--text-muted); }
-.browser-settings-folders small { padding-right:8px; font-size:11px; }
-.browser-settings-card > .btn { display:inline-flex; align-items:center; gap:6px; }
-.browser-settings-error { color:var(--error,#df7777); font-size:12px; line-height:1.6; }
-.integration-displays { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 14px; }
-.integration-display { display:flex; align-items:center; gap:10px; padding:10px 13px; border:1px solid var(--border); border-radius:12px; background:var(--bg); min-width:0; }
-.integration-display > span { color:var(--accent); font-size:22px; line-height:1; }
-.integration-display > div { display:grid; gap:4px; min-width:0; }
-.integration-display strong { font-size:12px; font-weight:500; overflow:hidden; text-overflow:ellipsis; }
-.integration-display small { color:var(--text-muted); font-size:11px; }
-@media(max-width:440px) { .browser-settings-card { padding:16px; } .browser-settings-status { margin-left:52px; } .browser-settings-create { align-items:stretch; flex-direction:column; } }
+.browser-settings-folders small { padding-right:var(--sp-2); font-size:var(--fs-xs); }
+.browser-settings-card > .btn { display:inline-flex; align-self:flex-start; align-items:center; gap:var(--sp-1-5); }
+.browser-settings-error { color:var(--danger-text); font-size:var(--fs-sm); line-height:1.6; }
+.integration-displays { display:flex; flex-wrap:wrap; gap:var(--sp-2); }
+.integration-display { display:flex; align-items:center; gap:var(--sp-2-5); padding:var(--sp-2-5) var(--sp-3); border:1px solid var(--border); border-radius:var(--radius-xl); background:var(--bg); min-width:0; }
+.integration-display > span { display:grid; place-items:center; color: var(--accent-strong); line-height:0; }
+.integration-display > span > svg { display:block; }
+.integration-display > div { display:grid; gap:var(--sp-1); min-width:0; }
+.integration-display strong { font-size:var(--fs-sm); font-weight:500; overflow:hidden; text-overflow:ellipsis; }
+.integration-display small { color:var(--text-muted); font-size:var(--fs-xs); }
+@media(max-width:440px) { .browser-settings-card { padding:var(--sp-4); } .browser-settings-status { margin-left:52px; } .browser-settings-create { align-items:stretch; flex-direction:column; } }

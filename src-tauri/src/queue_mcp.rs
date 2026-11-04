@@ -13,7 +13,12 @@ const TOOL_NAME: &str = "trex_read_messages";
 const TASK_TOOL: &str = "trex_update_tasks";
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const PROTOCOL_VERSION: &str = "2025-06-18";
-const TOOL_DESCRIPTION: &str = "Lee los mensajes que el usuario ha dejado en cola durante este turno. El agente decide cuándo consultar este punto de control; consulta antes de la respuesta final para incorporar nuevas indicaciones. Sin argumentos. Un recibo repetido debe procesarse una sola vez.";
+// Trex entrega la cola sola al terminar el turno: la herramienta es solo para
+// puntos de control de trabajos largos, así se evitan peticiones extra.
+const TOOL_DESCRIPTION: &str = "Lee los mensajes que el usuario dejó en cola durante este turno, en orden y con imágenes. Trex los entrega solo al terminar el turno: consúltala únicamente tras un paso importante de un trabajo largo, nunca en bucle. Sin argumentos. Procesa cada recibo una sola vez.";
+// La guía completa va una sola vez en las instrucciones del desarrollador del
+// chat; el servidor solo se presenta (texto estable para la caché del prompt).
+const SERVER_INSTRUCTIONS: &str = "Trex chat tools: trex_update_tasks (visible task list, plan:[{step,status}], metadata only) and, when listed, trex_read_messages (queued user messages).";
 
 struct Launch {
     data_dir: PathBuf,
@@ -330,7 +335,7 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str) -> Option<Val
                 "protocolVersion": version,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "trex-inbox", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "For multi-step work in this chat, use mcp__trex_inbox__trex_update_tasks (trex_update_tasks) with plan:[{step,status}] to publish and maintain the visible task list, even if native update_plan is unavailable. The tool tracks metadata only and is safe in read-only/planning mode. It never executes tasks or grants workspace access. Mark completed only after verification. trex_read_messages reads the user's queued instructions separately."
+                "instructions": SERVER_INSTRUCTIONS
             })
         }
         "ping" => json!({}),
@@ -417,6 +422,17 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const QUEUE: &str = "t-mcp-test";
+    #[test]
+    fn server_guidance_is_a_stable_one_liner_and_never_asks_for_a_final_read() {
+        let dir = TestDir::new();
+        let reply = handle_request(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}), &dir.0, QUEUE).unwrap();
+        let instructions = reply["result"]["instructions"].as_str().unwrap();
+        assert_eq!(instructions, SERVER_INSTRUCTIONS);
+        assert!(instructions.len() < 200, "the developer instructions carry the full guidance once");
+        assert!(!TOOL_DESCRIPTION.contains("antes de la respuesta final"));
+        assert!(TOOL_DESCRIPTION.contains("nunca en bucle"));
+    }
     #[test]
     fn tasks_only_connection_cannot_claim_queued_messages() {
         let dir = TestDir::new();

@@ -1,27 +1,98 @@
-.agent-team-toolbar { flex-shrink: 0; padding: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface); color: var(--text); }
-.agent-team-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.agent-team-heading > svg { flex-shrink: 0; }
-.agent-team-heading > div { flex: 1; display: grid; gap: 3px; min-width: 0; }
-.agent-team-heading strong { font-size: 12px; font-weight: 550; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.agent-team-heading span { color: var(--text-muted); font-size: 10px; line-height: 1.5; }
-.agent-team-control { display: grid; place-items: center; width: 27px; height: 27px; flex-shrink: 0; border: 0; border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer; }
-.agent-team-control:hover { color: var(--text); background: var(--hover); }
-.agent-team-disclosure { display: flex; align-items: center; gap: 7px; width: 100%; margin-top: 9px; padding: 8px 2px 1px; border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--text-muted); font: 10px var(--font-ui); text-align: left; cursor: pointer; }
+/* --- Equipo de agentes -----------------------------------------------------------
+   Se muestra en la pestaña «Equipo» del panel lateral del chat. Sin tarjeta
+   propia allí; fuera del panel (arranque) conserva su contorno. */
+.agent-team-toolbar { flex-shrink: 0; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); color: var(--text); }
+.agent-team-heading { display: flex; align-items: center; gap: var(--sp-2-5); min-width: 0; }
+.agent-team-heading > svg, .agent-team-heading > .agent-icon { flex-shrink: 0; }
+.agent-team-heading > div { flex: 1; display: grid; gap: 2px; min-width: 0; }
+.agent-team-heading strong { overflow: hidden; font-size: var(--fs-md); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.agent-team-heading span { color: var(--text-muted); font-size: var(--fs-xs); line-height: var(--lh-normal); }
+.agent-team-control {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color var(--t), color var(--t), border-color var(--t);
+}
+.agent-team-control:hover:not(:disabled) { border-color: var(--border-strong); background: var(--hover); color: var(--text); }
+.agent-team-control[aria-label="Detener equipo"]:hover { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger); }
+.agent-team-control:disabled { opacity: .5; cursor: default; }
+.agent-team-disclosure {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 36px;
+  margin-top: var(--sp-2-5);
+  padding: var(--sp-2) var(--sp-1);
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+}
 .agent-team-disclosure:hover { color: var(--text); }
 .agent-team-disclosure > span:nth-child(2) { flex: 1; }
-.agent-team-disclosure > svg { transform: rotate(90deg); }
-.agent-team-disclosure[aria-expanded=true] > svg { transform: rotate(-90deg); }
-.agent-team-avatars { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); }
-.agent-team-members { display: grid; gap: 0; margin-top: 9px; }
+.agent-team-disclosure > svg { transform: rotate(90deg); transition: transform var(--dur) var(--ease-out); }
+.agent-team-disclosure[aria-expanded="true"] > svg { transform: rotate(-90deg); }
+.agent-team-avatars { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-dim); }
+.agent-team-members { display: grid; margin-top: var(--sp-1); }
 .agent-team-members[hidden] { display: none; }
-.agent-team-member { display: grid; gap: 5px; padding: 11px 1px; border-top: 1px solid var(--border); min-width: 0; }
-.agent-team-member-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.agent-team-member-title > svg { flex-shrink: 0; }
-.agent-team-member-title strong { font-size: 11px; flex: 1; overflow-wrap: anywhere; font-weight: 550; }
-.agent-team-member-title small { font-size: 9px; color: var(--accent-strong); text-align: right; max-width: 48%; }
-.agent-team-member > span { color: var(--text-dim); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
-.agent-team-task { font-size: 10px; color: var(--accent-strong); }
-.agent-team-member-actions { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 2px; }
-.agent-team-member-actions button { border: 0; background: transparent; color: var(--text-muted); padding: 3px 0; font: 10px var(--font-ui); cursor: pointer; text-align: left; }
-.agent-team-member-actions button:hover { color: var(--text); }
-.agent-team-error { margin: 9px 0 0; padding-top: 8px; border-top: 1px solid var(--border); font-size: 10px; line-height: 1.6; color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-team-member { display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-3) 2px; border-top: 1px solid var(--border); }
+.agent-team-member-title { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.agent-team-member-title > svg, .agent-team-member-title > .agent-icon { flex-shrink: 0; }
+.agent-team-member-title strong { flex: 1; font-size: var(--fs-sm); font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
+/* Permiso del miembro: una insignia neutra (el riesgo lo marca su texto). */
+.agent-team-member-title small {
+  max-width: 52%;
+  padding: 1px var(--sp-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  text-align: right;
+}
+.agent-team-member-title small[data-risk="read"] { border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok-text); }
+.agent-team-member-title small[data-risk="edit"] { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn-text); }
+.agent-team-member-title small[data-risk="full"] { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-text); }
+.agent-team-member > span { color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal); overflow-wrap: anywhere; }
+.agent-team-task { display: inline-flex; align-items: center; gap: var(--sp-1-5); color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-medium); }
+.agent-team-task::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.agent-team-member-actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-1); }
+.agent-team-member-actions button {
+  min-height: var(--hit-min);
+  padding: var(--sp-1) var(--sp-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--t), color var(--t), border-color var(--t);
+}
+.agent-team-member-actions button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--hover); color: var(--text); }
+.agent-team-member-actions button:disabled { opacity: .5; cursor: default; }
+.agent-team-error {
+  margin: var(--sp-2-5) 0 0;
+  padding: var(--sp-2) var(--sp-2-5);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-md);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-relaxed);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

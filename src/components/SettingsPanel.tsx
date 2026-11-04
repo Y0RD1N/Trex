@@ -6,7 +6,7 @@ import { ACCENT_PRESETS, DEFAULT_FONT_FAMILY, clamp } from "../api";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
-import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, InfoIcon, KeyboardIcon, MoonIcon, PanelIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
+import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MoonIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon, WrenchIcon } from "./Icons";
 import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
 import CursorSettings from "./CursorSettings";
@@ -47,9 +47,9 @@ const SECTIONS = [
   { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, description: "Personaliza las combinaciones del teclado." },
   { id: "notifications", label: "Notificaciones", icon: <BellIcon size={16} strokeWidth={1.6} />, description: "Avisos del escritorio cuando tus asistentes necesitan atención." },
   { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, description: "Perfiles independientes para Claude Code, Codex y Trex API." },
-  { id: "browser", label: "Navegador", icon: <PanelIcon size={16} />, description: "Pruebas, capturas y grabaciones con tus agentes." },
-  { id: "integrations", label: "Integraciones", icon: <PanelIcon size={16} />, description: "Estado de las aplicaciones y el control de computadora." },
-  { id: "sessions", label: "Sesiones", icon: <PanelIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
+  { id: "browser", label: "Navegador", icon: <GlobeIcon size={16} />, description: "Pruebas, capturas y grabaciones con tus agentes." },
+  { id: "integrations", label: "Integraciones", icon: <WrenchIcon size={16} />, description: "Estado de las aplicaciones y el control de computadora." },
+  { id: "sessions", label: "Sesiones", icon: <LayoutIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
   { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
 ] as const;
 type SectionId = typeof SECTIONS[number]["id"];

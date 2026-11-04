@@ -2,7 +2,8 @@ import { formatClock, formatDateTime } from "../../timeFormat";
 import { useTimeFormat } from "../../hooks/useTimeFormat";
 import { memo, useMemo, useState, type CSSProperties } from "react";
 import { formatDuration, formatTokens } from "../../chatState";
-import type { ApiUsage } from "../../tokenUsage";
+import { cacheReadTokens, costLabel, newTokens, type ApiUsage } from "../../tokenUsage";
+import "./TokenUsage.css";
 import { changeTree, type ChangeNode, type WorkSummary as Summary } from "../../workSummary";
 import { CheckIcon, ChevronIcon, FileIcon, FolderIcon, SplitIcon } from "../Icons";
 import { DiffView } from "./ChatItems";
@@ -43,10 +44,13 @@ export function TurnMeta({ startedAt, endedAt, usage }: { startedAt?: number; en
   const timeFormat = useTimeFormat();
   const clock = (ms: number, seconds = false) => formatClock(ms, timeFormat, seconds);
   const fullDate = (ms: number) => formatDateTime(ms, timeFormat);
-  const total = usage?.totalTokens ?? (usage ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) : null);
-  const breakdown = usage ? ([["Entrada", usage.inputTokens], ["Salida", usage.outputTokens], ["Razonamiento", usage.reasoningTokens],
-    ["Lectura de caché", usage.cachedReadTokens], ["Escritura de caché", usage.cachedWriteTokens]] as const)
-    .filter(([, value]) => value !== null).map(([label, value]) => `${label}: ${value!.toLocaleString("es")}`).join("\n") : "";
+  // Lo nuevo de la respuesta; las lecturas de caché van aparte para no inflar la cifra.
+  const total = newTokens(usage);
+  const cached = cacheReadTokens(usage);
+  const cost = costLabel(usage?.costUsd);
+  const breakdown = usage ? [...([["Entrada", usage.inputTokens], ["Salida", usage.outputTokens], ["Razonamiento", usage.reasoningTokens],
+    ["Lectura de caché", usage.cachedReadTokens], ["Escritura de caché", usage.cachedWriteTokens], ["Total procesado", usage.totalTokens]] as const)
+    .filter(([, value]) => value !== null).map(([label, value]) => `${label}: ${value!.toLocaleString("es")}`), ...(cost ? [`Coste informado: ${cost}`] : [])].join("\n") : "";
   if (startedAt === undefined && endedAt === undefined && !total) return null;
   const times = startedAt !== undefined && endedAt !== undefined ? `Inicio ${fullDate(startedAt)}\nFin ${fullDate(endedAt)}` : "";
   return <span className="chat-turn-meta">
@@ -57,8 +61,8 @@ export function TurnMeta({ startedAt, endedAt, usage }: { startedAt?: number; en
       {startedAt !== undefined && endedAt !== undefined && <span aria-hidden="true">→</span>}
       {endedAt !== undefined && <span>{clock(endedAt)}</span>}
     </time>}
-    {!!total && <span className="chat-turn-tokens tip" data-tip={breakdown || undefined} aria-label={`${total.toLocaleString("es")} tokens. ${breakdown.split("\n").join(", ")}`}>
-      {formatTokens(total)} tokens</span>}
+    {!!total && <span className="chat-turn-tokens tip" data-tip={breakdown || undefined} aria-label={`${total.toLocaleString("es")} tokens nuevos${cached ? `, más ${cached.toLocaleString("es")} leídos de caché` : ""}. ${breakdown.split("\n").join(", ")}`}>
+      {formatTokens(total)} tokens{cached > 0 && <span className="usage-cache-note" aria-hidden="true"> · +{formatTokens(cached)} caché</span>}</span>}
   </span>;
 }
 

@@ -1,6 +1,6 @@
 import { browserArtifacts, browserResultArtifacts } from "./browser";
 /** Protocolo propio de Trex CLI: la API del proveedor permanece dentro del CLI. */
-import { baseReducer, currentModel, finalize, list, liveCompletion, normalizeEffortChoice, normalizeModelChoice, record, text,
+import { baseReducer, currentModel, finalize, lastIndexWhere, list, liveCompletion, normalizeEffortChoice, normalizeModelChoice, record, text,
   type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type Json, type ModelInfo } from "./chatState";
 import { addApiUsage, readApiUsage } from "./tokenUsage";
 
@@ -115,7 +115,7 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
   if (action.method === "message/delta") {
     const kind = p.kind === "thinking" ? "thinking" : "text";
     const id = text(p.id) || `${userId}:${kind}`;
-    const index = state.items.findIndex(item => item.id === id && item.kind === kind);
+    const index = lastIndexWhere(state.items, item => item.id === id && item.kind === kind);
     const items = [...state.items];
     if (index < 0) items.push({ kind, id, messageId: id, text: text(p.text), final: false });
     else {

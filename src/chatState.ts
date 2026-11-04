@@ -203,6 +203,16 @@ export const record = (value: unknown): Json | null =>
 export const text = (value: unknown): string => typeof value === "string" ? value : "";
 export const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 
+/**
+ * Índice del último elemento que cumple `test`, o -1. Los parsers de streaming
+ * actualizan casi siempre el bloque más reciente: buscar desde el final evita
+ * recorrer toda la conversación en cada fragmento (O(1) en vez de O(n)).
+ */
+export function lastIndexWhere<T>(items: readonly T[], test: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index--) if (test(items[index])) return index;
+  return -1;
+}
+
 /** Cierra los textos que seguían llegando por partes. */
 export const finalize = (items: ChatItem[]): ChatItem[] =>
   items.map(item => (item.kind === "text" || item.kind === "thinking") && !item.final ? { ...item, final: true } : item);

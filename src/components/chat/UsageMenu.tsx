@@ -5,10 +5,11 @@ import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { accountUsageWindows, headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
 import DropdownMenu from "../DropdownMenu";
 import { AlertIcon, CloseIcon, RefreshIcon } from "../Icons";
-import type { ApiUsage } from "../../tokenUsage";
+import { cacheReadTokens, newTokens, type ApiUsage } from "../../tokenUsage";
 import { ContextDetails } from "./ContextMeter";
 import { PlanWindows } from "./PlanMeter";
 import "./UsageMenu.css";
+import "./TokenUsage.css";
 
 type Props = {
   usage: ContextUsage | null;
@@ -67,8 +68,11 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
   const money = (value: number): string => value.toLocaleString("es", { style: "currency", currency: "USD", maximumFractionDigits: 6 });
   const cost = typeof reportedCost === "number" && Number.isFinite(reportedCost) && reportedCost >= 0 ? reportedCost > 0 && reportedCost < .000001 ? `< ${money(.000001)}` : money(reportedCost) : null;
   const costPartial = apiUsage?.costUsd !== null && apiUsage?.costUsd !== undefined && apiUsage.costPartial;
-  const chatTokens = apiUsage?.totalTokens ?? null;
-  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens de este chat: ${chatTokens.toLocaleString("es")}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
+  // Lo nuevo de este chat; las lecturas de caché son reutilización barata del mismo contexto.
+  const chatTokens = newTokens(apiUsage);
+  const cachedTokens = cacheReadTokens(apiUsage);
+  const cacheNote = cachedTokens > 0 ? ` (+ ${cachedTokens.toLocaleString("es")} leídos de caché)` : "";
+  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens nuevos de este chat: ${chatTokens.toLocaleString("es")}${cacheNote}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
   const ringPercent = percent ?? (showPlan ? limiting.percent : 0);
   const ringLength = 2 * Math.PI * 5.5;
   const ringFilled = ringPercent > 0 ? Math.max(ringPercent, 4) : 0;
@@ -104,7 +108,7 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
             strokeDashoffset={ringLength * (1 - ringFilled / 100)} />
         </svg></span>
         <span className="chat-tray-text">{label}</span>
-        {!!chatTokens && <span className="chat-usage-tokens" aria-hidden="true">{formatTokens(chatTokens)} tokens</span>}
+        {!!chatTokens && <span className="chat-usage-tokens" aria-hidden="true">{formatTokens(chatTokens)} tokens nuevos</span>}
       </span>
       {visibleWindows.length > 0 && <span className="chat-usage-windows" aria-hidden="true">
         {visibleWindows.map(({ key, label, window }) => <span key={key} className={`chat-usage-window ${window?.severity ?? "unavailable"}`}>
@@ -144,13 +148,18 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
       {(apiUsage || showUnavailable) && <section className="chat-usage-section" aria-labelledby={`${id}-tokens`}>
         <h3 id={`${id}-tokens`} className="chat-menu-label">Consumo de la conversación</h3>
         {apiUsage ? <>
+          {chatTokens !== null && <p className="chat-usage-plan-name usage-new-tokens">
+            <strong className="usage-number">{chatTokens.toLocaleString("es")}</strong> tokens nuevos
+            {cachedTokens > 0 && <span className="usage-cache-note"> · + {cachedTokens.toLocaleString("es")} leídos de caché</span>}
+            {cost && <span className="usage-cache-note"> · {cost}{costPartial ? " (parcial)" : ""}</span>}
+          </p>}
           <dl className="chat-api-usage">
             {([["Entrada", apiUsage.inputTokens], ["Salida", apiUsage.outputTokens], ["Razonamiento", apiUsage.reasoningTokens],
               ["Lectura de caché", apiUsage.cachedReadTokens], ["Escritura de caché", apiUsage.cachedWriteTokens],
               ["Total procesado", apiUsage.totalTokens], ["Intentos de API", apiUsage.requests]] as const).filter(([, value]) => value !== null).map(([label, value]) =>
               <div key={label}><dt>{label}</dt><dd>{value!.toLocaleString("es")}</dd></div>)}
           </dl>
-          <p className="chat-context-note">{apiUsage.partial ? "El proveedor no informó todos los contadores; el consumo mostrado es parcial. " : ""}Los detalles de caché y razonamiento pueden estar incluidos en entrada o salida; el total no los suma dos veces. El consumo corresponde a este chat.</p>
+          <p className="chat-context-note">{apiUsage.partial ? "El proveedor no informó todos los contadores; el consumo mostrado es parcial. " : ""}Tokens nuevos = entrada sin caché + salida + escritura de caché. Las lecturas de caché reutilizan contexto ya enviado y se muestran aparte. El consumo corresponde a este chat.</p>
         </> : <p className="chat-context-note">Aún sin datos de consumo. Se mostrarán los tokens informados por el proveedor después de responder.</p>}
       </section>}
       <div className="chat-usage-footer">

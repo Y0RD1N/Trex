@@ -15,10 +15,16 @@ const variant = (ui: SurfacePalette, foreground: string, ansi: string[], selecti
     ...Object.fromEntries(ansiKeys.map((key, index) => [key, ansi[index]])) },
 });
 
-/** Surfaces are shared by every preset; ANSI colors remain provider output. */
+/**
+ * Surfaces are shared by every preset; ANSI colors remain provider output.
+ * Dark is graphite rather than pure black (less glare); the sidebar sits one
+ * step deeper and floating surfaces one step lighter. Light keeps white
+ * reading surfaces with a visible gray chrome, so it never looks washed out.
+ * Mirrored as defaults in tokens.css for the first paint.
+ */
 export const MONOCHROME_UI: Record<"dark" | "light", SurfacePalette> = {
-  dark: { app:"#111111",sidebar:"#151515",surface:"#171717",elevated:"#1c1c1c",inset:"#1b1b1b",border:"#292929",borderStrong:"#424242",text:"#eeeeee",muted:"#aaaaaa",dim:"#969696",selected:"#242424" },
-  light: { app:"#ffffff",sidebar:"#fafafa",surface:"#ffffff",elevated:"#fafafa",inset:"#f5f5f5",border:"#e8e8e8",borderStrong:"#cecece",text:"#191919",muted:"#666666",dim:"#707070",selected:"#eeeeee" },
+  dark: { app:"#161616",sidebar:"#111111",surface:"#1c1c1c",elevated:"#212121",inset:"#262626",border:"#2c2c2c",borderStrong:"#404040",text:"#ebebeb",muted:"#a8a8a8",dim:"#8e8e8e",selected:"#2b2b2b" },
+  light: { app:"#ffffff",sidebar:"#f6f6f6",surface:"#ffffff",elevated:"#ffffff",inset:"#f3f3f3",border:"#e6e6e6",borderStrong:"#d2d2d2",text:"#171717",muted:"#5e5e5e",dim:"#6e6e6e",selected:"#ececec" },
 };
 
 const TERMINAL_PALETTES: readonly Palette[] = [
@@ -61,5 +67,5 @@ export const paletteTokens = (variant: PaletteVariant): Record<string, string> =
   return { "--bg-app":u.app,"--bg-sidebar":u.sidebar,"--bg-surface":u.surface,"--bg-elevated":u.elevated,"--bg-inset":u.inset,
     "--term-bg":variant.terminal.background!,"--term-fg":variant.terminal.foreground!,"--border":u.border,"--border-strong":u.borderStrong,
     "--text":u.text,"--text-muted":u.muted,"--text-dim":u.dim,"--session-selected":u.selected,
-    "--glass":`${u.app}f5`,"--glass-strong":`${u.elevated}fa`,"--scroll-thumb":u.border,"--scroll-thumb-hover":u.borderStrong,"--welcome-top":u.inset };
+    "--scroll-thumb":u.borderStrong,"--scroll-thumb-hover":u.dim };
 };

@@ -7,16 +7,18 @@
  * cargan: se muestran como enlace. Los enlaces a archivos locales son archivos
  * compartidos (ver `SharedFiles`). Los bloques de código llevan colores de
  * sintaxis y los avisos `> [!NOTE]` (como en GitHub) se pintan destacados.
+ *
+ * Rendimiento: interpretar Markdown cuesta más cuanto más largo es el texto.
+ * El texto se parte en bloques (`markdownBlocks`) memorizados: mientras una
+ * respuesta llega solo se vuelve a interpretar el último. Los colores se
+ * calculan por bloque de código y se memorizan, con un resaltador que se carga
+ * aparte y se crea una sola vez (`chatHighlight`).
  */
-import { memo, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createElement, memo, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
-import { common } from "lowlight";
-import dockerfile from "highlight.js/lib/languages/dockerfile";
-import powershell from "highlight.js/lib/languages/powershell";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { nodeText, rehypeCallouts, type HastNode } from "../../chatMarkdown";
+import { codeLanguage, markdownBlocks, nodeText, rehypeCallouts, type HastNode } from "../../chatMarkdown";
 import { attachmentsOf, localFilePath } from "../../sharedFiles";
 import { FileCards, FileLink, SharedFilesContext } from "./SharedFiles";
 import { AlertIcon, CheckIcon, CopyIcon, InfoIcon, SparkIcon } from "../Icons";
@@ -62,22 +64,70 @@ const LANGUAGES: Record<string, [name: string, color: string]> = {
 };
 
 
+type Highlight = (language: string, value: string) => HastNode[] | null;
+
+/**
+ * Resaltador compartido. highlight.js va en su propio fragmento: se pide al
+ * quedar libre la app tras arrancar o con el primer bloque de código, y los
+ * bloques ya pintados se colorean al llegar sin volver a interpretar el texto.
+ */
+let highlight: Highlight | null = null;
+let highlightRequested = false;
+const highlightListeners = new Set<() => void>();
+function loadHighlighter(): void {
+  if (highlightRequested) return;
+  highlightRequested = true;
+  void import("../../chatHighlight").then(module => {
+    highlight = module.highlightCode;
+    for (const listener of highlightListeners) listener();
+  }, () => { /* sin resaltador, el código se lee en texto plano */ });
+}
+const subscribeHighlighter = (listener: () => void): (() => void) => {
+  highlightListeners.add(listener);
+  return () => { highlightListeners.delete(listener); };
+};
+const currentHighlighter = (): Highlight | null => highlight;
+if (typeof window !== "undefined") {
+  const idle = (window as Window & { requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number }).requestIdleCallback;
+  if (idle) idle(loadHighlighter, { timeout: 3000 });
+  else window.setTimeout(loadHighlighter, 1500);
+}
+
+/** Tokens de lowlight (solo `span` con clases y texto) como elementos de React. */
+function tokensToReact(nodes: HastNode[]): ReactNode[] {
+  return nodes.map((node, index) => {
+    if (node.type === "text") return node.value ?? "";
+    const classes = node.properties?.className;
+    return createElement(node.tagName ?? "span", { key: index, className: Array.isArray(classes) ? classes.join(" ") : undefined },
+      ...tokensToReact(node.children ?? []));
+  });
+}
+
 function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }) {
   const code = node?.children?.find(child => child.tagName === "code");
+  const language = codeLanguage(code);
+  const label = typeof language === "string" ? language.toLowerCase() : "";
+  const [name, color] = LANGUAGES[label] ?? [label || "Código", ""];
+  const text = nodeText(code);
+  const highlighter = useSyncExternalStore(subscribeHighlighter, currentHighlighter, currentHighlighter);
+  useEffect(() => { if (language) loadHighlighter(); }, [language]);
+  // Un bloque terminado no se vuelve a colorear aunque el mensaje se repinte.
+  const highlighted = useMemo(() => {
+    const tokens = highlighter && language ? highlighter(language, text) : null;
+    return tokens && tokens.length ? tokensToReact(tokens) : tokens && text;
+  }, [highlighter, language, text]);
   const classes = code?.properties?.className;
-  const language = Array.isArray(classes)
-    ? String(classes.find(name => String(name).startsWith("language-")) ?? "").replace("language-", "").toLowerCase()
-    : "";
-  const [name, color] = LANGUAGES[language] ?? [language || "Código", ""];
   return <div className="chat-code">
     <div className="chat-code-bar">
       <span className="chat-code-lang">
         <i className="chat-code-dot" style={color ? { "--lang": color } as CSSProperties : undefined} aria-hidden="true" />
         {name}
       </span>
-      <CopyButton text={nodeText(code).replace(/\n$/, "")} label="Copiar código" />
+      <CopyButton text={text.replace(/\n$/, "")} label="Copiar código" />
     </div>
-    <pre>{children}</pre>
+    <pre>{highlighted === null
+      ? children
+      : <code className={["hljs", ...(Array.isArray(classes) ? classes.map(String).filter(value => value !== "hljs") : [])].join(" ")}>{highlighted}</code>}</pre>
   </div>;
 }
 
@@ -93,11 +143,9 @@ const CALLOUTS: Record<string, { title: string; icon: ReactNode }> = {
 
 // --- Componentes -------------------------------------------------------------
 
-const REHYPE_PLUGINS: Options["rehypePlugins"] = [
-  rehypeCallouts,
-  // Solo se colorean los bloques con lenguaje: adivinarlo es lento y a menudo falla.
-  [rehypeHighlight, { languages: { ...common, dockerfile, powershell }, aliases: { dockerfile: ["docker"], powershell: ["ps1"] } }],
-];
+const REMARK_PLUGINS: Options["remarkPlugins"] = [remarkGfm];
+// Solo se colorean los bloques con lenguaje (en `CodeBlock`): adivinarlo es lento y a menudo falla.
+const REHYPE_PLUGINS: Options["rehypePlugins"] = [rehypeCallouts];
 
 /** Además de lo que permite react-markdown, los enlaces `file://` y las rutas de Windows (archivos compartidos). */
 const urlTransform = (url: string): string => /^(file:|[a-z]:[\\/])/i.test(url) ? url : defaultUrlTransform(url);
@@ -149,9 +197,21 @@ const components: Components = {
   table: ({ children }) => <div className="chat-table"><table>{children}</table></div>,
 };
 
+/** Un trozo de Markdown; memorizado para que los bloques que no cambian no se vuelvan a interpretar. */
+const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
+  return <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components} urlTransform={urlTransform}>{text}</ReactMarkdown>;
+});
+
+/**
+ * Se pinta por bloques independientes (cortes seguros, ver `markdownBlocks`):
+ * mientras la respuesta llega solo cambia, y se vuelve a interpretar, el
+ * último; al terminar no se interpreta nada de nuevo. Interpretar por bloques
+ * cuesta lo mismo que el texto entero.
+ */
 function Markdown({ text }: { text: string }) {
+  const blocks = useMemo(() => markdownBlocks(text), [text]);
   return <div className="chat-markdown">
-    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={REHYPE_PLUGINS} components={components} urlTransform={urlTransform}>{text}</ReactMarkdown>
+    {blocks.map((block, index) => <MarkdownBlock key={index} text={block} />)}
   </div>;
 }
 

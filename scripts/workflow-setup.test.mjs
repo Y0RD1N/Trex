@@ -55,3 +55,17 @@ test('new setup references survive normalization and restoration; malformed setu
  for(const setup of [true,[],{context:'invalid'},{context:{id:'../bad'}}])assert.equal(teamHelpers.normalizeAgentTeam({...team,setup}),null);
  const context=teamHelpers.teamPlanningContext(normalized,'My idea',{sessionId:'chat',provider:'claude',profileId:'claude-default',profileName:'Principal',title:'Plan',projectId:'project',projectName:'Test',cwd:'D:/test'},'Prior discussion');assert.match(context.content,/My idea/);assert.match(context.content,/Prior discussion/);assert.ok(context.content.indexOf('1. implement')<context.content.indexOf('2. review'));
 });
+test('a converted room targets its inherited chat at the role that does not resume it, without a stored Git snapshot',async()=>{
+ const h=harness(true),modes=[];const prepare=h.scope.prepareHandoff;h.scope.prepareHandoff=async(context,options)=>{modes.push(options?.git);return prepare(context);};
+ await handler('startWorkflow',h.scope)({planner:choice('claude-default'),executor:choice('codex-default')});assert.deepEqual(h.errors,[]);
+ const room=h.tabs[0].agentRoom;assert.equal(room.executor.conversationId,'550e8400-e29b-41d4-a716-446655440000');assert.equal(room.setupRole,'planner');assert.deepEqual(modes,['none']);
+ assert.equal(roomHelpers.normalizeAgentRoom(room).setupRole,'planner');
+});
+test('a team whose principal resumes the converted chat does not receive that chat again as setup context',async()=>{
+ const h=harness(true),modes=[];const prepare=h.scope.prepareHandoff;h.scope.prepareHandoff=async(context,options)=>{modes.push(options?.git);return prepare(context);};
+ const request=teamRequest();request.master={...request.master,...choice('codex-default')};request.workers[0]={...request.workers[0],...choice('claude-default')};
+ await handler('startTeam',h.scope)(request);assert.deepEqual(h.errors,[]);
+ const team=h.tabs[0].agentTeam;assert.equal(team.master.conversationId,'550e8400-e29b-41d4-a716-446655440000');assert.deepEqual(team.setup,{context:null});assert.deepEqual(modes,[]);
+ const other=harness(true),otherModes=[];const prepareOther=other.scope.prepareHandoff;other.scope.prepareHandoff=async(context,options)=>{otherModes.push(options?.git);return prepareOther(context);};
+ await handler('startTeam',other.scope)(teamRequest());assert.equal(other.tabs[0].agentTeam.setup.context.id,'saved-context');assert.deepEqual(otherModes,['status']);
+});

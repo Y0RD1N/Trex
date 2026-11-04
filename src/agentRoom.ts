@@ -26,9 +26,21 @@ export type AgentRoom = {
   active: RoomRole;
   phase: WorkflowStatus | "idle";
   cycle: number;
-  pending?: { id: string; role: RoomRole; reference: HandoffReference } | null;
+  /** `cursor` becomes `delivered[role]` once the provider accepts this delivery. */
+  pending?: { id: string; role: RoomRole; reference: HandoffReference; cursor?: string | null } | null;
   /** Optional inherited context, consumed by the first explicit composer send. */
   setupContext?: HandoffReference | null;
+  /**
+   * Role that receives `setupContext`. The other role resumes the original
+   * conversation and already has it. Absent in older rooms: the first send consumes it.
+   */
+  setupRole?: RoomRole | null;
+  /**
+   * Last ledger entry each role already has in its own conversation (its own
+   * items, or the other role's items delivered to it). Absent: the next
+   * delivery to that role carries the full context once; null: delivered before any entry.
+   */
+  delivered?: Partial<Record<RoomRole, string | null>>;
   order: string[];
   plan?: HandoffReference | null;
   error?: string | null;
@@ -103,11 +115,16 @@ export function normalizeAgentRoom(raw: unknown): AgentRoom | null {
     if (!candidate || !validId(candidate.id) || !isRole(candidate.role)) return null;
     const reference = normalizeHandoffReference(candidate.reference);
     if (!reference || !validId(reference.id)) return null;
-    pending = { id: candidate.id, role: candidate.role, reference };
+    pending = { id: candidate.id, role: candidate.role, reference,
+      ...(candidate.cursor === null || ledgerId(candidate.cursor) ? { cursor: candidate.cursor as string | null } : {}) };
   }
   const plan = normalizeHandoffReference(value.plan);
   const setupContext = normalizeHandoffReference(value.setupContext);
   if (value.setupContext != null && (!setupContext || !validId(setupContext.id))) return null;
+  // An unreadable cursor only costs one full delivery; it never invalidates the room.
+  const rawDelivered = object(value.delivered);
+  const delivered = rawDelivered ? Object.fromEntries(ROLES.flatMap(role => rawDelivered[role] === null || ledgerId(rawDelivered[role])
+    ? [[role, rawDelivered[role] as string | null]] : [])) as Partial<Record<RoomRole, string | null>> : null;
   return {
     id: value.id,
     planner: { agent: workflow.planner, conversationId: planner.conversationId as string | null, mode: planner.mode == null ? "plan" : planner.mode as string },
@@ -116,6 +133,8 @@ export function normalizeAgentRoom(raw: unknown): AgentRoom | null {
     active: value.active, phase: value.phase as AgentRoom["phase"], cycle: value.cycle as number,
     pending, order: normalizeOrder(value.order), plan: plan && validId(plan.id) ? plan : null,
     ...(value.setupContext !== undefined ? { setupContext } : {}),
+    ...(isRole(value.setupRole) ? { setupRole: value.setupRole } : {}),
+    ...(delivered ? { delivered } : {}),
     error: typeof value.error === "string" ? [...sanitizeHandoffText(value.error)].slice(0, 1200).join("") : null,
   };
 }
@@ -193,8 +212,47 @@ export function mergeRoomItems(states: Partial<Record<RoomRole, ChatState>>, ord
 }
 
 /** Usa la selección, el filtrado de secretos y los límites del contexto portátil existente. */
-export function roomConversationContext(items: ChatItem[], source: HandoffSource): HandoffContext {
-  return createHandoffContext({ ...initialChatState(), items }, source);
+export function roomConversationContext(items: ChatItem[], source: HandoffSource, limit?: number): HandoffContext {
+  return createHandoffContext({ ...initialChatState(), items }, source, Date.now(), limit);
+}
+
+export type RoomDelivery = {
+  /** First delivery to this role (or its conversation is new): it lacks the context from the start. */
+  full: boolean;
+  /** Entries to transfer: everything for a new conversation, otherwise only the other role's. */
+  items: ChatItem[];
+  /** Ledger position this role will have once the delivery is accepted. */
+  cursor: string | null;
+  /** The other role used tools or changed files since the last delivery. */
+  peerWork: boolean;
+};
+
+/**
+ * Each participant keeps its own provider conversation, so a delivery only
+ * carries what that conversation lacks: the other role's entries after its
+ * cursor. Without a cursor (first delivery or an older saved room) or without
+ * its own history, the full context is sent once.
+ */
+export function roomDelivery(room: AgentRoom, merged: { items: ChatItem[]; order: string[] }, role: RoomRole, ownHistory: boolean): RoomDelivery {
+  const prefix = `${role === "planner" ? "executor" : "planner"}::`;
+  const cursor = room.delivered?.[role];
+  const at = cursor === undefined ? -2 : cursor === null ? -1 : merged.order.indexOf(cursor);
+  const full = !ownHistory || cursor === undefined || (cursor !== null && at < 0);
+  const position = new Map(merged.order.map((id, index) => [id, index]));
+  const items = full && !ownHistory ? merged.items
+    : merged.items.filter(item => item.id.startsWith(prefix) && (full || (position.get(item.id) ?? -1) > at));
+  const peerWork = items.some(item => item.id.startsWith(prefix) && (item.kind === "tool" || item.kind === "turn" && !!item.diff));
+  return { full, items, cursor: merged.order[merged.order.length - 1] ?? null, peerWork };
+}
+
+const REQUEST_HEADING = /^# Solicitud (?:actual del usuario|del usuario)\s*\n+/;
+const REQUEST_END = /\n\n(?:## Contexto de la entrega pendiente que se revisa\n|## Contexto anterior del chat\n|## Novedades de |# Continuidad del proyecto\n|---\n## Estado del proyecto capturado por TREX\n)/;
+/** The user's request at the start of a room delivery, without the transferred context. */
+export function roomRequestText(content: string): string | null {
+  const heading = REQUEST_HEADING.exec(content);
+  if (!heading) return null;
+  const rest = content.slice(heading[0].length), end = REQUEST_END.exec(rest);
+  return (end ? rest.slice(0, end.index) : rest).trim() || null;
 }
 
 /** Solo los prefijos explícitos cambian el destino; el llamador decide si puede enviarse. */

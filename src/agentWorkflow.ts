@@ -26,6 +26,9 @@ export type AgentWorkflow = {
 
 export const PLANNING_INSTRUCTION = "Tu única etapa es planificar. Investiga el proyecto sin modificar archivos ni implementar. Si necesitas aclaraciones, pregunta y espera. Antes de entregar el plan, usa tus herramientas de tareas disponibles para publicar una lista breve de pasos concretos para el ejecutor, incluidos cambios y validación; mantenlos pendientes porque todavía no se han implementado. Si no están disponibles, incluye esos pasos en el plan e indica la limitación; no afirmes que publicaste tareas. Cuando tengas el plan definitivo, tu respuesta final debe contener solamente TODO el plan dentro de <trex_plan> y </trex_plan>, incluyendo objetivo, archivos, pasos y validación. Esas etiquetas significan que el plan está listo para implementarse automáticamente; no las uses en borradores o preguntas. Otro agente ejecutará el plan; no cambies a modo de implementación ni solicites aprobar ExitPlanMode.";
 export const IMPLEMENTATION_INSTRUCTION = "Implementa el plan definitivo transferido en este proyecto. Revisa el plan y las tareas transferidas; son de otra sesión y sus identificadores o estados no se comparten automáticamente. Antes de implementar, publica en tus herramientas de tareas disponibles una lista propia basada en ellas o, si faltan, en los pasos del plan. Comprueba primero los archivos y cambios actuales, respeta las instrucciones del usuario y del proyecto, marca cada tarea en curso al iniciarla y completada solo tras verificarla, manteniendo pendientes las demás. Actualiza la lista conforme avance el trabajo. Si no dispones de herramientas de tareas, indica la limitación y no afirmes haberlas publicado. Al finalizar explica lo implementado y los resultados de la validación. Si hay un bloqueo que cambia el alcance del plan, pregunta antes de improvisar.";
+/** Follow-ups in the same cycle: the full instruction is already in that agent's conversation. */
+export const PLANNING_REMINDER = "Sigues en la etapa de planificación, con los permisos elegidos. Cuando el plan sea definitivo, tu respuesta final debe contener solamente TODO el plan dentro de <trex_plan> y </trex_plan>; no uses esas etiquetas en borradores o preguntas.";
+export const IMPLEMENTATION_REMINDER = "Continúa la implementación con esta indicación: comprueba el estado actual, mantén al día tu lista de tareas y marca cada tarea completada solo tras verificarla. Si cambia el alcance del plan, pregunta antes de improvisar.";
 export function workflowPlanningInstruction(canWrite: boolean): string {
   return canWrite ? PLANNING_INSTRUCTION
     .replace("Tu única etapa es planificar. Investiga el proyecto sin modificar archivos ni implementar.", "Tu etapa es preparar el plan. Puedes modificar archivos con los permisos elegidos por el usuario, cuando sea necesario para preparar o validar el plan. Comprueba los cambios actuales, conserva el trabajo existente y documenta los cambios que realices para que el ejecutor no los repita.")
@@ -120,12 +123,16 @@ export function planningContext(task: string, source: HandoffSource): HandoffCon
   return { source, content: `# Solicitud del usuario\n\n${text}`, createdAt: Date.now(), messageCount: 1, truncated: false, imagesOmitted: 0 };
 }
 
-/** El plan pasa completo: si no cabe, se pide reducirlo en vez de implementar un extracto. */
+/**
+ * El plan pasa completo: si no cabe, se pide reducirlo en vez de implementar un extracto.
+ * `original` es la petición del usuario y sus aclaraciones, nunca el historial que
+ * ya recibió el planificador: el ejecutor revisa el estado actual con sus herramientas.
+ */
 export function workflowPlanContext(plan: string, original: string, source: HandoffSource, tasks: ChatTask[] = []): HandoffContext {
   const text = sanitizeHandoffText(plan), request = sanitizeHandoffText(original.split("\n\n---\n## Estado del proyecto capturado por TREX\n")[0]);
   const list = tasks.map(task => `- [${task.status}] ${sanitizeHandoffText(task.title)}`).join("\n");
   const transferred = list ? `\n\n## Tareas publicadas por el planificador\n\n${list}\n\nSon registros de la sesión de planificación; verifica el trabajo antes de darlo por completado y publica tu propia lista.` : "";
-  const content = `# Plan definitivo para implementar\n\n${text}${transferred}\n\n## Solicitud original y estado del proyecto\n\n${request}`;
+  const content = `# Plan definitivo para implementar\n\n${text}${transferred}\n\n## Solicitud original del usuario\n\n${request}`;
   if (!text || new TextEncoder().encode(content).length > 64 * 1024)
     throw new Error("El plan y su contexto superan 64 KiB. Pide al planificador una versión más breve antes de implementar.");
   return { source, content, createdAt: Date.now(), messageCount: 2, truncated: false, imagesOmitted: 0 };

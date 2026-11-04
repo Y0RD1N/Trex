@@ -108,9 +108,18 @@ export const desktopStatus = (): Promise<DesktopStatus> => invoke("trex_desktop_
 export const saveConfig = (config: AppConfig): Promise<AppConfig> =>
   invoke<AppConfig>("save_config", { config });
 
-export const prepareHandoff = (context: HandoffContext): Promise<PreparedHandoff> =>
+/**
+ * Instantánea de Git que acompaña al traspaso:
+ * - `full` (predeterminado): rama, estado y diferencias (hasta ~7k tokens).
+ * - `status`: rama y estado, sin diferencias.
+ * - `none`: sin instantánea; el agente consulta Git si lo necesita.
+ */
+export type HandoffGitSnapshot = "full" | "status" | "none";
+
+export const prepareHandoff = (context: HandoffContext, options?: { git?: HandoffGitSnapshot }): Promise<PreparedHandoff> =>
   invoke("prepare_handoff", { cwd: context.source.cwd, sourceSessionId: context.source.sessionId,
-    sourceProvider: context.source.provider, sourceLabel: context.source.profileName, content: context.content });
+    sourceProvider: context.source.provider, sourceLabel: context.source.profileName, content: context.content,
+    git: options?.git ?? "full" });
 
 export const loadHandoff = (id: string): Promise<PreparedHandoff> => invoke("load_handoff", { id });
 

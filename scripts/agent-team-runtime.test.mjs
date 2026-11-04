@@ -6,6 +6,7 @@ import { load } from "./ts-loader.mjs";
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 const helpers=await load("agentTeam"), {initialChatState}=await load("chatState");
 const taskHelpers=await load("chatTasks");
+const budgetHelpers=await load("teamBudget"), usageHelpers=await load("teamUsage");
 async function declarations(file,returns){
   const url=new URL(file,import.meta.url), source=await readFile(url,"utf8"), ast=ts.createSourceFile(url.pathname,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
   const body=ast.statements.filter(node=>ts.isVariableStatement(node)||ts.isFunctionDeclaration(node)).map(node=>node.getText(ast)).join("\n").replaceAll("import.meta.url",JSON.stringify(url.href));
@@ -17,8 +18,11 @@ const compiled=new Function("require","exports","window","requestAnimationFrame"
 const agent=(provider)=>({profileId:provider,profileName:provider,provider,model:"model-"+provider,effort:"high",launch:{profileId:provider,profileName:provider,command:provider,args:null,shell:"powershell",launchMode:"arg",env:null}});
 const member=(id,provider,role,canWrite=false)=>({id,name:id,role,canWrite,instructions:"Verify the task",agent:agent(provider),conversationId:null});
 function nodes(node){if(!node||typeof node!=="object")return [];if(Array.isArray(node))return node.flatMap(nodes);return [node,...nodes(node.props?.children),...nodes(node.props?.toolbar)];}
-function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,initial=null,restoredHistory=false,setup,settings={},readerWorkers=false,masterMode=null}={}){
-  let team={id:"team-test",epoch:"epoch-1",phase,master:member("principal","claude","coordinator"),workers:[member("implement","trex","implementation",true),member("review","codex","review")],order:[],initial,error:null};
+function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,initial=null,restoredHistory=false,setup,settings={},readerWorkers=false,masterMode=null,budget,usage,reviewRole,memberBrowser}={}){
+  let team={id:"team-test",epoch:"epoch-1",phase,master:member("principal","claude","coordinator"),workers:[member("implement","trex","implementation",true),member("review","codex",reviewRole??"review")],order:[],initial,error:null};
+  if(budget!==undefined)team.budget=budget;
+  if(memberBrowser)for(const m of [team.master,...team.workers])if(typeof memberBrowser[m.id]==="boolean")m.browser=memberBrowser[m.id];
+  if(usage!==undefined)team.usage=usage;
   if(readerWorkers)team.workers[0].canWrite=false;
   if(masterMode){team.master.mode=masterMode;team.master.canWrite=masterMode!=="plan";}
   if(setup!==undefined)team.setup=setup;
@@ -37,7 +41,7 @@ function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,
     async agentTeamPause(binding){calls.push(["pause",binding.epoch]);snapshot={...snapshot,phase:"paused",tasks:snapshot.tasks.map(task=>["claimed","running"].includes(task.status)?{...task,status:"uncertain"}:task.status==="queued"?{...task,status:"cancelled"}:task)};return structuredClone(snapshot);},
     async agentTeamClaim(_binding,taskId){calls.push(["claim"]);if(claimWait)await claimWait.promise;const task=snapshot.tasks.find(task=>task.status==="queued" && (!taskId||task.id===taskId) && helpers.teamTaskRunnable(snapshot,task,[team.master,...team.workers]));if(task)task.status="claimed";return structuredClone(snapshot);},
     async agentTeamFinish(binding,id,status,report){calls.push(["finish",binding.epoch,id,status,report]);const task=snapshot.tasks.find(task=>task.id===id);assert.ok(task);assert.equal(binding.epoch,snapshot.epoch);task.status=status;task.report=report;return structuredClone(snapshot);},
-    async prepareHandoff(context){calls.push(["prepare",context]);if(prepareError)throw new Error(prepareError);if(prepareWait)await prepareWait.promise;return {id:"handoff",createdAt:1,cwd:"D:/test",content:context.content,truncated:false,sourceLabel:"principal",sourceProvider:"claude",sourceSessionId:"team-test"};},
+    async prepareHandoff(context,options){calls.push(["prepare",context,options]);if(prepareError)throw new Error(prepareError);if(prepareWait)await prepareWait.promise;return {id:"handoff",createdAt:1,cwd:"D:/test",content:context.content,truncated:false,sourceLabel:"principal",sourceProvider:"claude",sourceSessionId:"team-test"};},
     async loadHandoff(id){calls.push(["load",id]);return {id,content:"Saved context from the previous chat"};},
   };
   for(const m of [team.master,...team.workers]){
@@ -46,9 +50,14 @@ function harness(t,{phase="running",prepareWait,prepareError,claimWait,pollWait,
       interrupt(){calls.push(["interrupt",m.id]);},answer(item,allowed){calls.push(["answer",m.id,item.id,allowed]);},async start(){calls.push(["start",m.id]);},setModel(){},setEffort(){},setMode(){},notice(){},runCommand(){return false;},refreshSkills:async()=>{},reset(){},edit:async()=>{},setFast(){}};
     sessions[m.id]=session;
   }
+  const teamApi={
+    async agentTeamFinishTask(binding,id,status,report,usage){calls.push(["finish",binding.epoch,id,status,report,usage]);const task=snapshot.tasks.find(task=>task.id===id);assert.ok(task);assert.equal(binding.epoch,snapshot.epoch);task.status=status;task.report=report;task.usage=usage;return structuredClone(snapshot);},
+    async agentTeamPublishUsage(binding,report){calls.push(["usage",report,binding.epoch]);return structuredClone(snapshot);},
+  };
   const exports={};compiled(name=>{
     if(name==="react")return component.react;if(name==="react/jsx-runtime")return component.jsxRuntime;if(name==="../api")return api;
-    if(name==="../agentTeam")return helpers;if(name==="../chatTasks")return taskHelpers;if(component.dependencies[name])return component.dependencies[name];
+    if(name==="../agentTeam")return helpers;if(name==="../chatTasks")return taskHelpers;
+    if(name==="../teamBudget")return budgetHelpers;if(name==="../teamUsage")return usageHelpers;if(name==="../teamApi")return teamApi;if(component.dependencies[name])return component.dependencies[name];
     if(name.endsWith(".css"))return {};if(name==="./ChatView")return {ChatPanel:"ChatPanel"};
     if(name.startsWith("../hooks/use"))return new Proxy({},{get:()=>()=>assert.fail("Native hooks are represented by their published session boundary")});
     if(name==="./AgentIcon")return {default:"AgentIcon"};if(name==="./Icons")return {RotateIcon:"RotateIcon",StopIcon:"StopIcon"};
@@ -92,12 +101,14 @@ test("writable principal yields before delegation, then resumes once all reports
 });
 test("delegation is claimed once, sends full instructions, and returns only the attributed final report",async t=>{
   const h=harness(t);await h.settle();h.queue();await h.tick();assert.equal(h.delivered.length,1);assert.equal(h.delivered[0].member,"implement");assert.match(h.delivered[0].text,/Implement the specific change/);assert.match(h.delivered[0].text,/Verify the task/);assert.equal(h.snapshot.tasks[0].status,"running");
+  assert.match(h.delivered[0].text,/Resultado, Archivos\/evidencias, Validación, Hallazgos y Limitaciones/);assert.match(h.delivered[0].text,/500 palabras/);assert.doesNotMatch(h.delivered[0].text,/Presupuesto orientativo/);
   await h.tick();assert.equal(h.delivered.length,1);h.complete("implement");h.publish();await h.tick();assert.equal(h.snapshot.tasks[0].status,"completed");assert.equal(h.snapshot.tasks[0].report,"Implementation verified");
 });
-test("each member receives its own browser identity while legacy tasks remain serial",async t=>{
+test("browsing members receive their own browser identity, the principal none, while legacy tasks remain serial",async t=>{
   const h=harness(t,{settings:{browserEnabled:true,browserProfile:"BROWSER1"}});await h.settle();
   const runtimes=nodes(h.tree).filter(node=>node.props?.options);
-  for(const [index,runtime] of runtimes.entries())assert.deepEqual(runtime.props.options.browser,{enabled:true,profile:"BROWSER"+(index+2),clientId:"team-test-"+runtime.props.id});
+  assert.equal(runtimes[0].props.id,"principal");assert.equal(runtimes[0].props.options.browser.enabled,false);
+  for(const [index,runtime] of runtimes.slice(1).entries())assert.deepEqual(runtime.props.options.browser,{enabled:true,profile:"BROWSER"+(index+2),clientId:"team-test-"+runtime.props.id});
   h.queue();h.snapshot.tasks.push({id:"review-task",epoch:"epoch-1",key:"review-key",memberId:"review",instruction:"Review after implementation",status:"queued",report:null,createdAt:2,updatedAt:2});
   await h.tick();await h.tick();await h.tick();
   assert.deepEqual(h.delivered.map(item=>item.member),["implement"]);
@@ -105,6 +116,9 @@ test("each member receives its own browser identity while legacy tasks remain se
   h.complete("implement");h.publish();await h.tick();await h.tick();
   assert.deepEqual(h.delivered.map(item=>item.member),["implement","review"]);
   assert.equal(h.snapshot.tasks[0].status,"completed");assert.equal(h.snapshot.tasks[1].status,"running");
+  // Git context by role: the implementer gets branch/status, the reviewer the diff.
+  const prepared=h.calls.filter(call=>call[0]==="prepare");
+  assert.deepEqual(prepared.map(call=>call[2]),[{git:"status"},{git:"full"}]);
 });
 test("Stop during context preparation prevents provider delivery and preserves uncertainty",async t=>{
   const wait=deferred(),h=harness(t,{prepareWait:wait});await h.settle();h.queue();await h.tick();h.panel().session.interrupt();wait.resolve();await h.settle();
@@ -123,8 +137,9 @@ test("worker exit without a terminal pauses instead of silently leaving the coor
 test("interrupted worker without a final report remains uncertain",async t=>{
   const h=harness(t);await h.settle();h.queue();await h.tick();h.sessions.implement.state={...h.sessions.implement.state,lastCompletion:{id:"interrupted",status:"interrupted",messageIds:["user-implement"],itemIds:[]}};h.publish();await h.tick();assert.equal(h.snapshot.tasks[0].status,"uncertain");assert.equal(h.team.phase,"paused");
 });
-test("oversized reports fail clearly while the original participant history is retained",async t=>{
-  const h=harness(t);await h.settle();h.queue();await h.tick();const report="Verified code and test results. ".repeat(1200);h.complete("implement","completed",report);h.publish();await h.tick();assert.equal(h.snapshot.tasks[0].status,"failed");assert.match(h.snapshot.tasks[0].report,/supera 32 KiB/);assert.equal(h.sessions.implement.state.items.at(-1).text,report);
+test("oversized reports keep their status and reach the native store whole",async t=>{
+  const h=harness(t);await h.settle();h.queue();await h.tick();const report="Verified code and test results. ".repeat(1200);h.complete("implement","completed",report);h.publish();await h.tick();
+  assert.equal(h.snapshot.tasks[0].status,"completed");assert.equal(h.snapshot.tasks[0].report,report.trim());assert.equal(h.sessions.implement.state.items.at(-1).text,report);assert.equal(h.team.phase,"running");
 });
 test("permission replies use the source participant's original identity",async t=>{
   const h=harness(t);await h.settle();for(const id of ["principal","implement","review"])h.sessions[id].state={...h.sessions[id].state,items:[{kind:"permission",id:"same",toolUseId:"tool",toolName:"Read",input:{},state:"pending",suggestions:[],request:{}}]};h.publish();
@@ -157,6 +172,7 @@ test("saving a configured team never sends; first chat message carries roles, or
   assert.equal(await h.panel().session.send("Plan my idea",images,previews),true);h.publish();
   assert.equal(h.delivered.length,1);const sent=h.delivered[0];assert.equal(sent.member,"principal");assert.equal(sent.display,"Plan my idea");assert.deepEqual(sent.images,images);assert.deepEqual(sent.previews,previews);
   assert.match(sent.text,/1\. implement/);assert.match(sent.text,/2\. review/);assert.match(sent.text,/Plan my idea/);assert.equal(h.team.setup,null);
+  assert.deepEqual(h.calls.find(c=>c[0]==="prepare")[2],{git:"status"});assert.match(sent.text,/No consultes en bucle/);
   const before=h.calls.filter(c=>c[0]==="prepare").length;await h.panel().session.send("One clarification",[],[]);assert.equal(h.calls.filter(c=>c[0]==="prepare").length,before);
 });
 test("inherited team context waits for an explicit message and is then consumed",async t=>{
@@ -218,4 +234,56 @@ test("restored team history retains human browser artifact controls without star
   assert.equal(h.panel().browser.enabled,true);assert.deepEqual(h.panel().browserSpaces,[]);
   for(const runtime of nodes(h.tree).filter(node=>node.props?.options))assert.equal(runtime.props.options.browser.enabled,false);
   assert.equal(h.delivered.length,0);
+});
+
+const apiUsage=(input,output,cached=0,cost=null)=>({inputTokens:input,outputTokens:output,reasoningTokens:null,cachedReadTokens:cached,cachedWriteTokens:0,totalTokens:input+output+cached,requests:1,costUsd:cost,partial:false,costPartial:false});
+test("usage of each turn accrues to the member ledger and each finished delegation records its delta",async t=>{
+  const h=harness(t);await h.settle();h.queue();await h.tick();const s=h.sessions.implement;
+  s.state={...s.state,apiUsage:apiUsage(100,50,1000,0.01)};h.publish();
+  assert.equal(h.team.usage.implement.newTokens,150);assert.equal(h.team.usage.implement.cacheReadTokens,1000);
+  h.complete("implement");h.publish();await h.tick();
+  const finish=h.calls.find(call=>call[0]==="finish"&&call[3]==="completed");assert.equal(finish[5].newTokens,150);assert.equal(finish[5].costUsd,0.01);
+  const report=h.calls.filter(call=>call[0]==="usage").at(-1)[1];
+  assert.equal(report.epoch,h.team.epoch);assert.deepEqual(report.members.map(member=>[member.memberId,member.coordinator]),[["principal",true],["implement",false],["review",false]]);
+});
+test("history loaded by a restored conversation is not charged to the team",async t=>{
+  const h=harness(t);await h.settle();const s=h.sessions.review;
+  s.state={...s.state,historyCount:4,apiUsage:apiUsage(90000,9000)};h.publish();
+  assert.equal(h.team.usage?.review,undefined);
+});
+test("an exhausted budget fails the next delegation and pauses the team for the user",async t=>{
+  const h=harness(t,{budget:{teamTokens:1000,memberTokens:null},usage:{principal:{newTokens:1500,cacheReadTokens:0,outputTokens:0,costUsd:null,requests:null}}});
+  await h.settle();h.queue();await h.tick();
+  assert.equal(h.delivered.length,0);assert.equal(h.snapshot.tasks[0].status,"failed");assert.match(h.snapshot.tasks[0].report,/Presupuesto agotado/);
+  assert.equal(h.team.phase,"paused");assert.match(h.team.error,/Presupuesto agotado.*Amplía el presupuesto/);
+});
+test("a soft budget note travels with the delegation while budget remains",async t=>{
+  const h=harness(t,{budget:{teamTokens:500000,memberTokens:null}});await h.settle();h.queue();await h.tick();
+  assert.match(h.delivered[0].text,/Presupuesto orientativo restante: 500\.000 tokens/);
+});
+test("a member whose account is out of quota is not started and the coordinator is told why",async t=>{
+  const h=harness(t);await h.settle();const s=h.sessions.implement;
+  s.state={...s.state,plan:{plan:null,windows:[{id:"session",label:"Sesión (5 h)",percent:99,resetsAt:null,severity:"critical",headline:true}],extra:null,resetCredits:0}};h.publish();
+  h.queue();await h.tick();
+  assert.equal(h.delivered.length,0);assert.equal(h.snapshot.tasks[0].status,"failed");assert.match(h.snapshot.tasks[0].report,/99 % de su cuota/);assert.equal(h.team.phase,"running");
+});
+test("a member with a half-full context is summarized once before its next delegation",async t=>{
+  const h=harness(t);await h.settle();const s=h.sessions.implement,commands=[],notes=[];
+  s.supportsCompact=true;s.runCommand=name=>{commands.push(name);return true;};s.notice=(_tone,text)=>notes.push(text);
+  s.state={...s.state,historyCount:2,usage:{used:70000,window:100000,parts:[],reserve:null,total:null}};h.publish();
+  h.queue();await h.tick();
+  assert.deepEqual(commands,["compact"]);assert.equal(h.delivered.length,0);assert.match(notes[0],/70 %/);
+  s.state={...s.state,usage:{used:8000,window:100000,parts:[],reserve:null,total:null}};h.publish();await h.tick();
+  assert.equal(h.delivered.length,1);assert.deepEqual(commands,["compact"]);
+});
+test("budget and per-member browser choices travel with the team",async t=>{
+  const h=harness(t,{setup:{context:null},budget:{teamTokens:500000,memberTokens:null},memberBrowser:{review:false},settings:{browserEnabled:true,browserProfile:"BROWSER1"}});await h.settle();
+  assert.deepEqual(h.team.budget,{teamTokens:500000,memberTokens:null});assert.equal(h.team.workers[1].browser,false);
+  const runtimes=Object.fromEntries(nodes(h.tree).filter(node=>node.props?.options).map(node=>[node.props.id,node.props.options.browser.enabled]));
+  assert.deepEqual(runtimes,{principal:false,implement:true,review:false});
+});
+test("researchers receive no Git snapshot",async t=>{
+  const h=harness(t,{readerWorkers:true,reviewRole:"research"});await h.settle();
+  h.snapshot.tasks.push({id:"research-task",epoch:"epoch-1",key:"research-key",memberId:"review",instruction:"Investigate the API",status:"queued",report:null,createdAt:2,updatedAt:2});
+  await h.tick();assert.deepEqual(h.calls.filter(call=>call[0]==="prepare").map(call=>call[2]),[{git:"none"}]);
 });

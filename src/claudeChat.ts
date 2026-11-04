@@ -9,7 +9,7 @@ import { browserResultArtifacts, browserToolResultText } from "./browser";
  * toca la interfaz ni el backend, así que se prueba sin Tauri.
  */
 import {
-  addNotice, baseReducer, choiceAnswers, finalize, initialChatState, list, liveCompletion, record, resultText, text,
+  addNotice, baseReducer, choiceAnswers, finalize, initialChatState, lastIndexWhere, list, liveCompletion, record, resultText, text,
   type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type DiffLine, type Json, type ModelInfo, type OutgoingImage,
   type QuestionChoice,
 } from "./chatState";
@@ -18,7 +18,7 @@ import { claudeRateLimitUsage, parseClaudeUsage } from "./planUsage";
 import { FILE_SHARING_INSTRUCTIONS } from "./sharedFiles";
 import { imageReference, withoutImageLabels } from "./imageReferences";
 import { questionInstructions } from "./chatQuestions";
-import { INBOX_INSTRUCTIONS } from "./messageQueue";
+import { INBOX_INSTRUCTIONS, type InboxPart } from "./messageQueue";
 import { taskInstructions } from "./chatTasks";
 import { taskToolInput } from "./taskTools";
 import { addApiUsage, claudeApiUsage, type ApiUsage } from "./tokenUsage";
@@ -42,6 +42,10 @@ export type ChatAction =
 
 // --- Mensajes hacia el CLI ----------------------------------------------------
 
+/** Un perfil con su propio prompt de sistema conserva la precedencia: entonces no se añade el de la app. */
+export const claudeAppendsInstructions = (profileArgs: string | null): boolean =>
+  !/(^|\s)--(append-)?system-prompt(-file)?(\s|=|$)/.test(profileArgs ?? "");
+
 /** Opciones que convierten el CLI en un proceso de chat por stdin/stdout. */
 export function claudeChatFlags(profileArgs: string | null, conversationId: string | null,
   choices: { model?: string | null; effort?: string | null; mode?: string | null; integrations?: IntegrationContext } = {}): string[] {
@@ -55,8 +59,10 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
   const restricted = /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? "");
   if (!restricted && !/(^|\s)--(allow-)?dangerously-skip-permissions(\s|=|$)/.test(profileArgs ?? "")) flags.push("--allow-dangerously-skip-permissions");
   // Instrucciones de la interfaz, salvo que el perfil ya defina las del sistema.
-  if (!/(^|\s)--(append-)?system-prompt(-file)?(\s|=|$)/.test(profileArgs ?? "")) {
-    flags.push("--append-system-prompt", `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("claude")} ${INBOX_INSTRUCTIONS} ${taskInstructions("claude")} ${integrationInstructions("claude", choices.integrations)}`);
+  // Van una sola vez: el servidor MCP de la app solo repite una línea (ver claudeInboxReply).
+  if (claudeAppendsInstructions(profileArgs)) {
+    flags.push("--append-system-prompt", [FILE_SHARING_INSTRUCTIONS, questionInstructions("claude"), INBOX_INSTRUCTIONS, taskInstructions("claude"),
+      integrationInstructions("claude", choices.integrations)].filter(Boolean).join(" "));
   }
   const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
   if (conversationId && !choosesConversation) flags.push("--resume", conversationId);
@@ -77,6 +83,13 @@ export function userMessageLine(text: string, images: OutgoingImage[] = [], uuid
     ]),
       ...(text ? [{ type: "text", text }] : [])]
     : text;
+  return JSON.stringify({ type: "user", message: { role: "user", content }, ...(uuid ? { uuid } : {}) });
+}
+
+/** Mensajes de la cola entregados como un solo turno, cada imagen junto a su mensaje. */
+export function inboxDeliveryLine(parts: InboxPart[], uuid?: string): string {
+  const content = parts.map(part => part.type === "text" ? { type: "text", text: part.text }
+    : { type: "image", source: { type: "base64", media_type: part.image.mediaType, data: part.image.data } });
   return JSON.stringify({ type: "user", message: { role: "user", content }, ...(uuid ? { uuid } : {}) });
 }
 
@@ -137,7 +150,7 @@ const interruptedText = (value: string): boolean => /^\[Request interrupted by u
 function upsertTool(items: ChatItem[], block: Json): ChatItem[] {
   const id = text(block.id);
   const input = record(block.input) ?? {};
-  const index = items.findIndex(item => item.kind === "tool" && item.id === id);
+  const index = lastIndexWhere(items, item => item.kind === "tool" && item.id === id);
   if (index === -1) {
     return [...items, { kind: "tool", id, name: text(block.name) || "Herramienta", input, status: "running", output: null, patch: null }];
   }
@@ -163,7 +176,7 @@ function applyAssistant(state: ChatState, message: Json): ChatState {
     const kind = block.type;
     const value = kind === "text" ? text(block.text) : text(block.thinking);
     // Completa el bloque que llegó por partes; si no existe, lo añade.
-    const position = items.findIndex(item => item.kind === kind && item.messageId === messageId && !item.final);
+    const position = lastIndexWhere(items, item => item.kind === kind && item.messageId === messageId && !item.final);
     if (position !== -1) {
       const current = items[position] as Extract<ChatItem, { kind: "text" | "thinking" }>;
       items = [...items];
@@ -190,7 +203,7 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
     if (!block) continue;
     if (block.type === "tool_result") {
       const id = text(block.tool_use_id);
-      const index = items.findIndex(item => item.kind === "tool" && item.id === id);
+      const index = lastIndexWhere(items, item => item.kind === "tool" && item.id === id);
       if (index === -1) continue;
       const current = items[index];
       if (current.kind !== "tool") continue;
@@ -305,7 +318,7 @@ function applyStream(state: ChatState, event: Json): ChatState {
     const piece = delta.type === "text_delta" ? text(delta.text) : delta.type === "thinking_delta" ? text(delta.thinking) : "";
     const id = state.stream.blocks[index];
     if (!piece || !id) return state;
-    const position = state.items.findIndex(item => item.id === id);
+    const position = lastIndexWhere(state.items, item => item.id === id);
     const current = state.items[position];
     if (!current || (current.kind !== "text" && current.kind !== "thinking") || current.final) return state;
     const items = [...state.items];
