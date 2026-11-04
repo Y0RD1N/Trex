@@ -348,20 +348,31 @@ fn vision_screenshot_follows_whole_native_browser_batch_and_is_durable_metadata_
         .as_str()
         .unwrap()
         .contains("Offline screenshot captured"));
+    // The model reads compact references; receipts, hashes and provenance
+    // stay in the journal and UI events.
     let artifacts = output["artifacts"].as_array().unwrap();
     let image = artifacts
         .iter()
-        .find(|artifact| artifact["storage"] == "local")
+        .find(|artifact| artifact["kind"] == "image")
         .expect("local image reference");
     assert_eq!(image["mimeType"], "image/png");
     assert_eq!(image["width"], 1);
     assert_eq!(image["height"], 1);
-    assert!(image["sizeBytes"].as_u64().unwrap() > 0);
-    assert_eq!(image["provenance"]["toolCallId"], "screen");
+    assert!(image.get("provenance").is_none() && image.get("sha256").is_none());
     assert!(artifacts
         .iter()
-        .any(|artifact| artifact["id"] == "offline-video" && artifact["storage"] == "broker"));
+        .any(|artifact| artifact["artifactId"] == "offline-video" && artifact["kind"] == "video"));
     assert!(output["text"].as_str().unwrap().contains("metadata only"));
+    let stored = execution(&f.base.journal(session), "screen")["output"].clone();
+    let local = stored["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["storage"] == "local")
+        .expect("durable local image reference");
+    assert!(local["sizeBytes"].as_u64().unwrap() > 0);
+    assert_eq!(local["provenance"]["toolCallId"], "screen");
+    assert!(stored["structuredContent"]["receipt"].is_object());
     followup.final_text("Evidence captured.");
     agent.completed("vision-batch", "completed");
     let requests = f.requests();
@@ -739,7 +750,7 @@ fn jpeg_missing_or_truncated_scan_never_publishes_an_image() {
         assert!(image_parts(&request).is_empty());
         assert!(!request.body.to_string().contains(&encoded));
         let result = tool_output(&request, "screen");
-        assert!(result["artifacts"].as_array().unwrap().is_empty());
+        assert!(result["artifacts"].as_array().is_none_or(Vec::is_empty));
         assert!(result["text"].as_str().unwrap().contains("unavailable"));
         request.final_text("The JPEG evidence is unavailable; no pixel inspection was performed.");
         agent.completed("malformed-jpeg", "completed");
@@ -1399,4 +1410,61 @@ fn unavailable_sibling_falls_back_to_native_tools_without_discovering_real_insta
     agent.completed("fallback", "completed");
     assert!(f.requests().is_empty());
     finish_and_check_stderr(&mut agent);
+}
+
+#[test]
+fn advanced_browser_groups_are_appended_by_enable_tools_and_survive_restore() {
+    let f = BrowserFixture::new();
+    let mut agent = f.agent();
+    let session = f.enabled(&mut agent, "full");
+    agent.turn(&session, "groups", "Inspect, then evaluate a script.");
+    let initial = f.base.api.chat();
+    let names: Vec<String> = definitions(&initial).iter().map(|s| s.to_string()).collect();
+    assert!(names.contains(&"browser_snapshot".to_owned()));
+    assert!(names.contains(&"browser_click".to_owned()));
+    for deferred in ["browser_evaluate", "browser_mouse", "browser_artifact", "browser_cancel"] {
+        assert!(!names.contains(&deferred.to_owned()), "advertised {deferred}");
+    }
+    assert_eq!(names.last().unwrap(), "enable_tools");
+    initial.completion(
+        calls(vec![
+            tool("enable", "enable_tools", json!({"group":"browser_devtools"})),
+            tool("screen", SCREENSHOT, json!({})),
+        ]),
+        "tool_calls",
+    );
+    let next = f.base.api.chat();
+    assert_eq!(
+        tool_output(&next, "enable")["tools"],
+        json!(["browser_evaluate", "browser_mouse"])
+    );
+    let after: Vec<String> = definitions(&next).iter().map(|s| s.to_string()).collect();
+    // Appended after the unchanged earlier list (the cached prefix).
+    assert_eq!(after[..names.len()], names[..]);
+    assert_eq!(after[names.len()..], ["browser_evaluate", "browser_mouse"]);
+    next.final_text("Devtools enabled.");
+    agent.completed("groups", "completed");
+    // Agent screenshots default to JPEG; the model's arguments stay as sent.
+    let screenshot = f
+        .requests()
+        .into_iter()
+        .find(|request| request["name"] == SCREENSHOT)
+        .unwrap();
+    assert_eq!(screenshot["arguments"], json!({"type":"jpeg","quality":70}));
+    assert_eq!(execution(&f.base.journal(&session), "screen")["input"], json!({}));
+    assert_eq!(
+        f.base.journal(&session)["enabledToolGroups"],
+        json!(["browser_devtools"])
+    );
+    drop(agent);
+    let mut restored = f.agent();
+    let config = json!({"enabled":true});
+    f.start(&mut restored, "full", config, Some(&session));
+    restored.turn(&session, "restored", "Continue.");
+    let request = f.base.api.chat();
+    let restored_names = definitions(&request);
+    assert_eq!(&restored_names[restored_names.len() - 2..], ["browser_evaluate", "browser_mouse"]);
+    request.final_text("Still enabled.");
+    restored.completed("restored", "completed");
+    finish_and_check_stderr(&mut restored);
 }

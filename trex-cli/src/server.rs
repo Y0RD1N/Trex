@@ -156,6 +156,10 @@ struct Journal {
     recovery_required: bool,
     #[serde(default)]
     rejected_responses: Vec<Value>,
+    /// Deferred tool groups the model enabled (enable_tools), in order. Only
+    /// changes what is advertised; mode and session policy still apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    enabled_tool_groups: Vec<String>,
     // Browser access is an explicit live-session choice, never restored authority.
     #[serde(skip)]
     browser: BrowserConfig,
@@ -803,6 +807,7 @@ impl Server {
                 pending_inbox: vec![],
                 recovery_required: false,
                 rejected_responses: vec![],
+                enabled_tool_groups: vec![],
                 browser: BrowserConfig::default(),
                 browser_available: false,
                 desktop_enabled: false,
@@ -861,6 +866,7 @@ impl Server {
                 pending_inbox: vec![],
                 recovery_required: false,
                 rejected_responses: vec![],
+                enabled_tool_groups: vec![],
                 browser: BrowserConfig::default(),
                 browser_available: false,
                 desktop_enabled: false,
@@ -1142,6 +1148,23 @@ impl Server {
         let guidance =
             tokio::task::spawn_blocking(move || crate::project::guidance(&workspace, &privacy))
                 .await??;
+        // Decided once per user turn: which old tool results are archived and
+        // where this turn starts (image selection). The projection is then
+        // stable for every request of the tool loop, so prefix caches hold.
+        let (archive_before, turn_start) = {
+            let data = session.data.lock().await;
+            (
+                crate::context::archive_boundary(
+                    &data.messages,
+                    settings.context.clear_tool_results_after_turns,
+                ),
+                data.messages
+                    .iter()
+                    .rposition(|m| m["role"] == "user")
+                    .unwrap_or(0),
+            )
+        };
+        let max_history_images = settings.context.max_history_images;
         let mut repeated = HashMap::<String, usize>::new();
         let mut estimated_processed = 0u64;
         let mut tool_count = 0usize;
@@ -1154,22 +1177,19 @@ impl Server {
                 attempted < settings.limits.max_requests_per_turn,
                 "turn API request budget reached"
             );
-            let (cwd, mode, model, effort, mut messages) = {
+            let (cwd, mode, model, effort, enabled_groups, (projected, images)) = {
                 let data = session.data.lock().await;
                 (
                     data.cwd.clone(),
                     data.mode.clone(),
                     data.model.clone(),
                     data.effort.clone(),
-                    crate::context::projection(
-                        &data.messages,
-                        data.context_cutoff,
-                        &data.context_summary,
-                    ),
+                    data.enabled_tool_groups.clone(),
+                    model_projection(&data, archive_before, turn_start, max_history_images),
                 )
             };
             let image_support = self.image_support(&model).await;
-            messages = provider::project_history(&messages, image_support);
+            let mut messages = provider::project_history(&projected, image_support, images);
             let mut policy = system_prompt(&mode);
             policy.push_str(&guidance);
             if let Some(instructions) = session.tools.session_instructions() {
@@ -1183,7 +1203,7 @@ impl Server {
                 policy.push_str(instructions);
             }
             messages.insert(0, json!({"role":"system","content":policy}));
-            let mut definitions = session.tools.definitions(&mode);
+            let mut all_definitions = session.tools.definitions(&mode);
             let metadata = self
                 .models
                 .lock()
@@ -1199,12 +1219,21 @@ impl Server {
             );
             // A model must be able to inspect a screenshot before it can act on it.
             if image_support != Some(true) {
-                definitions.retain(|tool| {
+                all_definitions.retain(|tool| {
                     !tool["function"]["name"].as_str().is_some_and(|name| {
                         name.starts_with("desktop_") && !crate::desktop::read_only(name)
                     })
                 });
             }
+            // Advanced groups stay out of the request until enable_tools.
+            let definitions = tools::advertised(&all_definitions, &enabled_groups);
+            let pricing = settings
+                .provider
+                .pricing
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()?
+                .or_else(|| metadata.as_ref().and_then(|m| m.get("pricing")).cloned());
             let window = self
                 .context_window(&model)
                 .await
@@ -1223,38 +1252,60 @@ impl Server {
             }
             let overhead = crate::context::estimate(&json!(definitions));
             let estimate = crate::context::estimate(&json!(messages)).saturating_add(overhead);
-            if let Some(window) = window {
-                let reserve = settings.context.reserve_tokens.min(window / 8);
-                let desired = window.saturating_sub(output_limit).saturating_sub(reserve);
-                if estimate > desired.min(window * settings.context.threshold_percent / 100)
-                    && settings.context.auto_compact
-                {
-                    let mut data = session.data.lock().await;
-                    if let Some((cutoff, summary)) = crate::context::compact(
-                        &data.messages,
-                        data.context_cutoff,
-                        &data.context_summary,
-                        &settings.context,
-                        estimate > desired,
-                    ) {
-                        data.context_cutoff = cutoff;
-                        data.context_summary = summary;
-                        let record = json!({"at":now(),"cutoff":cutoff,"automatic":true,"method":"extractive","estimatedBefore":estimate});
-                        data.compactions.push(record.clone());
-                        session.persist(&mut data)?;
-                        messages = provider::project_history(
-                            &crate::context::projection(
+            let reserve = window.map(|window| settings.context.reserve_tokens.min(window / 8));
+            let desired = window
+                .zip(reserve)
+                .map(|(window, reserve)| window.saturating_sub(output_limit).saturating_sub(reserve));
+            // The absolute cap applies even to 1M-token or unknown windows.
+            let over_window = desired.is_some_and(|desired| estimate > desired);
+            let over_cap = settings
+                .context
+                .max_active_tokens
+                .is_some_and(|cap| estimate > cap);
+            let threshold = window
+                .zip(desired)
+                .map(|(window, desired)| desired.min(window * settings.context.threshold_percent / 100));
+            if (over_cap || threshold.is_some_and(|threshold| estimate > threshold))
+                && settings.context.auto_compact
+            {
+                let mut data = session.data.lock().await;
+                let compacted = crate::context::compact(
+                    &data.messages,
+                    data.context_cutoff,
+                    &data.context_summary,
+                    &settings.context,
+                    over_window,
+                )
+                .or_else(|| {
+                    // Recent turns alone exceed the cap: summarize older
+                    // batches of this turn too (never an orphan tool result).
+                    (over_cap && !over_window)
+                        .then(|| {
+                            crate::context::compact(
                                 &data.messages,
-                                cutoff,
+                                data.context_cutoff,
                                 &data.context_summary,
-                            ),
-                            image_support,
-                        );
-                        messages.insert(0, json!({"role":"system","content":policy}));
-                        drop(data);
-                        self.notification("context/compacted",json!({"sessionId":session_id,"messageId":message_id,"compaction":record}));
-                    }
+                                &settings.context,
+                                true,
+                            )
+                        })
+                        .flatten()
+                });
+                if let Some((cutoff, summary)) = compacted {
+                    data.context_cutoff = cutoff;
+                    data.context_summary = summary;
+                    let record = json!({"at":now(),"cutoff":cutoff,"automatic":true,"method":"extractive","estimatedBefore":estimate});
+                    data.compactions.push(record.clone());
+                    session.persist(&mut data)?;
+                    let (projected, images) =
+                        model_projection(&data, archive_before, turn_start, max_history_images);
+                    drop(data);
+                    messages = provider::project_history(&projected, image_support, images);
+                    messages.insert(0, json!({"role":"system","content":policy}));
+                    self.notification("context/compacted",json!({"sessionId":session_id,"messageId":message_id,"compaction":record}));
                 }
+            }
+            if let (Some(window), Some(reserve)) = (window, reserve) {
                 let projected = crate::context::estimate(&json!(messages)).saturating_add(overhead);
                 ensure!(projected.saturating_add(output_limit).saturating_add(reserve)<=window,"estimated request exceeds context budget; compact, shorten input, or select a larger context window (estimates are not provider token counts)");
             }
@@ -1262,16 +1313,16 @@ impl Server {
                 crate::context::estimate(&json!(messages)).saturating_add(overhead);
             let totals = api_usage.value();
             if let Some(limit) = settings.limits.max_turn_tokens {
+                // The turn budget counts tokens the provider processed anew:
+                // uncached input plus output. Prompt-cache hits re-read the
+                // same prefix on every tool round and are not counted again.
+                // The next request is still reserved in full (cache unknown).
+                let measured = UsageTotals::new_tokens(&totals);
                 ensure!(
                     (if totals["partial"] == true {
-                        totals["totalTokens"]
-                            .as_u64()
-                            .unwrap_or(0)
-                            .max(estimated_processed)
+                        measured.unwrap_or(0).max(estimated_processed)
                     } else {
-                        totals["totalTokens"]
-                            .as_u64()
-                            .unwrap_or(estimated_processed)
+                        measured.unwrap_or(estimated_processed)
                     })
                     .saturating_add(request_estimate)
                     .saturating_add(output_limit)
@@ -1374,7 +1425,7 @@ impl Server {
                             Ok(completed)=>break completed,
                             Err(error)=>{
                                 let rejected_usage=error.downcast_ref::<provider::ApiError>().map(|e|json!({"trex_request_attempts":e.attempts}));
-                                api_usage.observe(error.downcast_ref::<provider::IncompleteCompletion>().and_then(|v|v.usage.as_ref()).or(rejected_usage.as_ref()));
+                                api_usage.observe_priced(error.downcast_ref::<provider::IncompleteCompletion>().and_then(|v|v.usage.as_ref()).or(rejected_usage.as_ref()), pricing.as_ref());
                                 self.record_usage(&session, message_id, &model, &api_usage, None).await?;
                                 if let Some(incomplete)=error.downcast_ref::<provider::IncompleteCompletion>() {
                                     let mut data=session.data.lock().await;
@@ -1413,7 +1464,7 @@ impl Server {
                 .as_ref()
                 .and_then(provider_token_counts)
                 .map(|(input, output)| input.saturating_add(output));
-            api_usage.observe(completed.usage.as_ref());
+            api_usage.observe_priced(completed.usage.as_ref(), pricing.as_ref());
             let usage = self
                 .record_usage(&session, message_id, &model, &api_usage, context)
                 .await?;
@@ -1571,8 +1622,11 @@ impl Server {
                     session.persist(&mut data)?;
                     continue;
                 }
+                // Deferred (not yet advertised) tools stay callable within the
+                // session policy; enable_tools only adds their definitions.
                 let known = definitions
                     .iter()
+                    .chain(&all_definitions)
                     .any(|tool| tool["function"]["name"] == name);
                 if !known {
                     self.tool_error(
@@ -1644,7 +1698,27 @@ impl Server {
                         .state = "executing".into();
                     session.persist(&mut data)?;
                 }
-                if name == "task_state" || name == "history_search" {
+                if name == "enable_tools" {
+                    let output = {
+                        let mut data = session.data.lock().await;
+                        let before = data.enabled_tool_groups.clone();
+                        let output =
+                            tools::enable_group(&all_definitions, &mut data.enabled_tool_groups, &input);
+                        if data.enabled_tool_groups != before {
+                            if let Err(error) = session.persist(&mut data) {
+                                data.enabled_tool_groups = before;
+                                return Err(error);
+                            }
+                        }
+                        output
+                    };
+                    let (output, error) = match output {
+                        Ok(v) => (v, false),
+                        Err(e) => (json!({"error":e.to_string()}), true),
+                    };
+                    self.tool_result(&session, &session_id, message_id, &id, output, error)
+                        .await?;
+                } else if name == "task_state" || name == "history_search" {
                     let output = {
                         let data = session.data.lock().await;
                         conversation_read(&data, &name, &input)
@@ -2410,6 +2484,61 @@ fn provider_token_counts(usage: &Value) -> Option<(u64, u64)> {
     crate::usage::token_counts(usage)
 }
 
+/// Model-facing history (summary, archived/trimmed tool results) and where
+/// the current turn starts inside it, for the per-turn image budget.
+fn model_projection(
+    data: &Journal,
+    archive_before: usize,
+    turn_start: usize,
+    max_images: usize,
+) -> (Vec<Value>, provider::ImageBudget) {
+    let projected = crate::context::projection_with(
+        &data.messages,
+        data.context_cutoff,
+        &data.context_summary,
+        archive_before,
+    );
+    // projection = optional summary prefix + messages[cutoff..].
+    let start = if turn_start >= data.context_cutoff {
+        projected
+            .len()
+            .saturating_sub(data.messages.len().saturating_sub(turn_start))
+    } else {
+        0
+    };
+    (
+        projected,
+        provider::ImageBudget {
+            max_images,
+            turn_start: start,
+        },
+    )
+}
+
+/// Searchable/readable text of one stored message (never image bytes).
+fn history_text(message: &Value) -> Option<String> {
+    Some(match &message["content"] {
+        Value::String(s) => {
+            if message["role"] == "tool" {
+                serde_json::from_str::<Value>(s)
+                    .map(|mut v| {
+                        omit_binary_history(&mut v);
+                        v.to_string()
+                    })
+                    .unwrap_or_else(|_| s.clone())
+            } else {
+                s.clone()
+            }
+        }
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|v| v["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    })
+}
+
 fn conversation_read(data: &Journal, name: &str, input: &Value) -> Result<Value> {
     let input = input
         .as_object()
@@ -2455,48 +2584,68 @@ fn conversation_read(data: &Journal, name: &str, input: &Value) -> Result<Value>
     ensure!(
         input
             .keys()
-            .all(|k| ["query", "limit"].contains(&k.as_str())),
+            .all(|k| ["query", "limit", "messageIndex", "offset"].contains(&k.as_str())),
         "unknown history query field"
+    );
+    let number = |key: &str| {
+        input
+            .get(key)
+            .map(|v| v.as_u64().with_context(|| format!("invalid {key}")))
+            .transpose()
+    };
+    if let Some(index) = number("messageIndex")? {
+        // Read mode: page through one stored message, e.g. a tool result
+        // archived or trimmed in the model-facing projection.
+        const PAGE: usize = 16 * 1024;
+        let message = data
+            .messages
+            .get(index as usize)
+            .context("messageIndex is outside this conversation")?;
+        let text = history_text(message).context("message has no readable text")?;
+        let mut start = (number("offset")?.unwrap_or(0) as usize).min(text.len());
+        while !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        let page = crate::context::clip(&text[start..], PAGE);
+        let next = start + page.len();
+        return Ok(
+            json!({"messageIndex":index,"role":message["role"],"offset":start,"text":page,"totalBytes":text.len(),"nextOffset":(next<text.len()).then_some(next)}),
+        );
+    }
+    ensure!(
+        input.get("offset").is_none(),
+        "offset requires messageIndex"
     );
     let query = input
         .get("query")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty() && s.len() <= 1024)
-        .context("query must be 1..1024 bytes")?
+        .context("query must be 1..1024 bytes (or pass messageIndex)")?
         .to_lowercase();
-    let limit = input
-        .get("limit")
-        .map(|v| v.as_u64().context("invalid limit"))
-        .transpose()?
-        .unwrap_or(10);
+    let limit = number("limit")?.unwrap_or(10);
     ensure!((1..=20).contains(&limit), "history limit must be 1..20");
     let mut results = Vec::new();
     for (index, message) in data.messages.iter().enumerate().rev() {
-        let text = match &message["content"] {
-            Value::String(s) => {
-                if message["role"] == "tool" {
-                    serde_json::from_str::<Value>(s)
-                        .map(|mut v| {
-                            omit_binary_history(&mut v);
-                            v.to_string()
-                        })
-                        .unwrap_or_else(|_| s.clone())
-                } else {
-                    s.clone()
-                }
-            }
-            Value::Array(a) => a
-                .iter()
-                .filter_map(|v| v["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => continue,
+        let Some(text) = history_text(message) else {
+            continue;
         };
-        if text.to_lowercase().contains(&query) {
-            results.push(json!({"messageIndex":index,"role":message["role"],"excerpt":crate::context::clip(&text,2000),"truncated":text.len()>2000}));
-            if results.len() >= limit as usize {
-                break;
-            }
+        // Lowercasing can change byte lengths; locate the match in a
+        // lowercase copy only when it preserves offsets.
+        let lower = text.to_lowercase();
+        let Some(found) = lower.find(&query) else {
+            continue;
+        };
+        let at = if lower.len() == text.len() { found } else { 0 };
+        // An excerpt around the first match, so a long (archived) tool
+        // result yields the matching part rather than its beginning.
+        let mut start = at.saturating_sub(500);
+        while !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        let excerpt = crate::context::clip(&text[start..], 2000);
+        results.push(json!({"messageIndex":index,"role":message["role"],"offset":start,"excerpt":excerpt,"truncated":start > 0 || start + excerpt.len() < text.len(),"totalBytes":text.len()}));
+        if results.len() >= limit as usize {
+            break;
         }
     }
     Ok(json!({"matches":results,"fullHistoryPreserved":true}))
@@ -2547,6 +2696,8 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
     });
     let mut total = 0u64;
     let mut api_usage = UsageTotals::default();
+    // Measured usage per model (a turn belongs to its recorded model).
+    let mut by_model = BTreeMap::<String, UsageTotals>::new();
     let mut latest = None;
     let mut latest_model = data.model.as_str();
     let mut inherited_model = None;
@@ -2568,6 +2719,10 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
             inherited_model = Some(model);
             latest_model = model;
         }
+        by_model
+            .entry(latest_model.to_owned())
+            .or_insert_with(UsageTotals::default)
+            .merge(&UsageTotals::recorded(usage));
         // Validate the pair before addition: a missing/invalid counter must not
         // silently become zero and make an unknown usage look measured.
         let (Some(input), Some(output)) = (
@@ -2616,6 +2771,13 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
     }
     let mut result =
         json!({"contextModel":latest_model,"totalTokens":total,"apiUsage":api_usage.value()});
+    if !by_model.is_empty() {
+        result["byModel"] = by_model
+            .iter()
+            .map(|(model, usage)| (model.clone(), usage.value()))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+    }
     let mut measured_turn = None;
     if let Some((context, model, window, id)) = latest {
         measured_turn = Some(id.to_owned());
@@ -3023,6 +3185,69 @@ mod tests {
         assert!(data.messages.is_empty());
         assert!(data.items.is_empty());
         assert!(session.active.lock().await.is_none());
+    }
+
+    #[test]
+    fn history_search_finds_and_pages_archived_tool_results() {
+        let mut data = journal();
+        let stdout = format!("{}NEEDLE_FAILURE at line 9000", "build step\n".repeat(3000));
+        data.messages = vec![
+            json!({"role":"user","content":"run the build"}),
+            json!({"role":"assistant","tool_calls":[{"id":"s","function":{"name":"shell","arguments":"{}"}}]}),
+            json!({"role":"tool","tool_call_id":"s","content":json!({"stdout":stdout,"exitCode":1}).to_string()}),
+        ];
+        let found = conversation_read(&data, "history_search", &json!({"query":"needle_failure"})).unwrap();
+        let first = &found["matches"][0];
+        assert_eq!(first["messageIndex"], 2);
+        assert!(first["excerpt"].as_str().unwrap().contains("NEEDLE_FAILURE"));
+        assert!(first["offset"].as_u64().unwrap() > 0);
+        let page = conversation_read(&data, "history_search", &json!({"messageIndex":2})).unwrap();
+        assert_eq!(page["offset"], 0);
+        assert_eq!(page["text"].as_str().unwrap().len(), 16 * 1024);
+        let mut full = page["text"].as_str().unwrap().to_owned();
+        let mut next = page["nextOffset"].clone();
+        while let Some(offset) = next.as_u64() {
+            let page = conversation_read(&data, "history_search", &json!({"messageIndex":2,"offset":offset})).unwrap();
+            assert_eq!(page["offset"], offset);
+            full.push_str(page["text"].as_str().unwrap());
+            next = page["nextOffset"].clone();
+        }
+        assert_eq!(full, history_text(&data.messages[2]).unwrap());
+        assert!(full.ends_with("NEEDLE_FAILURE at line 9000\"}"));
+        for bad in [
+            json!({"messageIndex":99}),
+            json!({"query":"x","offset":3}),
+            json!({"query":"x","unknown":true}),
+            json!({}),
+        ] {
+            assert!(conversation_read(&data, "history_search", &bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn session_usage_is_also_aggregated_per_model() {
+        let mut data = journal();
+        for (id, model, input, cost) in [("a", "model-a", 100, 0.1), ("b", "model-b", 50, 0.2), ("c", "model-a", 10, 0.3)] {
+            data.turns.insert(
+                id.into(),
+                Turn {
+                    request: json!({"model":model}),
+                    status: "completed".into(),
+                    error: None,
+                    error_details: None,
+                    usage: Some(json!({"contextModel":model,"inputTokens":input,"outputTokens":1,
+                        "apiUsage":{"inputTokens":input,"outputTokens":1,"totalTokens":input+1,"requests":1,"costUsd":cost,"partial":false,"costPartial":false}})),
+                    context_cutoff: 0,
+                    started_at: input,
+                },
+            );
+        }
+        let (usage, _) = restored_usage(&data);
+        assert_eq!(usage["apiUsage"]["totalTokens"], 163);
+        assert_eq!(usage["byModel"]["model-a"]["totalTokens"], 112);
+        assert_eq!(usage["byModel"]["model-a"]["requests"], 2);
+        assert_eq!(usage["byModel"]["model-b"]["inputTokens"], 50);
+        assert!((usage["byModel"]["model-a"]["costUsd"].as_f64().unwrap() - 0.4).abs() < 1e-9);
     }
 
     #[test]

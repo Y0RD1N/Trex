@@ -95,6 +95,8 @@ The exact schemas are generated in [docs/tools.json](docs/tools.json) and [docs/
 }
 ```
 
+This full envelope is what hosts get from `call` (the text is the JSON of `structuredContent`). MCP agents (stdio and HTTP) receive only the lean agent view `{ok:true,...data,revision?,artifacts?}` that `modelView` builds; receipts and ownership metadata stay with the host. Hosts that forward results to a model should send that view once, not both the text and `structuredContent` (trex-agent does this and keeps the envelope in its journal).
+
 Screenshots add transient MCP image content. Artifacts contain `{artifactId,mimeType,bytes,sha256,kind,projectId,profile,createdAt,width?,height?,durationMs?}`. They never contain capability tokens or host paths. Binary screenshots are limited to 4 MiB; larger images return an actionable crop/JPEG error. Video remains a private artifact reference. Artifact integrity is rechecked on access.
 
 ## Policy and lifetime

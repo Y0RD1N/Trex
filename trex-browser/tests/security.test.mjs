@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { context, workspaceFile, safePath, Artifacts, sha256, childEnvironment, saveTarget, writeNewFile, safeFileName, updateSaveFolders } from '../worker/security.mjs';
-import { tools, validateArguments } from '../worker/tools.mjs';
+import { tools, validateArguments, modelView } from '../worker/tools.mjs';
 import { BrowserService } from '../worker/browser.mjs';
 
 test('offline state stays consistent with CDP throttling across tabs and partial updates',async()=>{
@@ -40,6 +40,18 @@ test('observe tools are a fixed narrow subset; outer policy cannot be overridden
   assert.throws(()=>validateArguments('browser_tabs',{action:'new'},'observe'));
   assert.throws(()=>validateArguments('browser_artifact',{artifactId:'id',open:true},'observe'));
   assert.throws(()=>validateArguments('browser_evaluate',{function:42},'full'));
+});
+
+test('tool definitions stay compact and agents read only the lean view',()=>{
+  // Sent with every model request: keep descriptions short (bytes as OpenAI function tools).
+  const bytes=mode=>Buffer.byteLength(JSON.stringify(tools(mode).map(t=>({type:'function',function:{name:t.name,description:t.description,parameters:t.inputSchema}}))));
+  assert.ok(bytes('full')<17200,`full ${bytes('full')}`);assert.ok(bytes('observe')<6400,`observe ${bytes('observe')}`);
+  for(const t of tools('full'))assert.ok(t.description.length<=400,t.name);
+  // Recovery guidance survives the shorter wording.
+  const text=name=>tools('full').find(t=>t.name===name).description;
+  assert.match(text('browser_close'),/RECOVERY_PENDING/);assert.match(text('browser_resume'),/never replayed/);assert.match(text('browser_pause'),/explicitly asks/);assert.match(text('browser_batch'),/never rolled back or replayed/);
+  const lean=modelView({data:{tabId:'tab-1',elements:['tab-1-e1 button Save']},revision:4,artifacts:[{artifactId:'a1',kind:'image',mimeType:'image/png',width:2,height:3,sha256:'f'.repeat(64),projectId:'p',profile:'x'}]});
+  assert.deepEqual(lean,{tabId:'tab-1',elements:['tab-1-e1 button Save'],revision:4,artifacts:[{artifactId:'a1',kind:'image',mimeType:'image/png',width:2,height:3}]});
 });
 test('workspace files reject traversal and hard links; artifacts verify identity and integrity',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-security-'));

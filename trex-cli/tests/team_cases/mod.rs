@@ -98,9 +98,19 @@ fn delegated_plan_uses_bound_bridge_returns_report_and_deduplicates_native_call(
     );
     request.completion(calls(vec![call.clone()]), "tool_calls");
     let next = f.base.api.request("POST", "/v1/chat/completions");
+    // One compact copy: the bridge's structuredContent, without its MCP
+    // wrapper or the text pointer (the journal keeps the full response).
+    let delegated = tool_output(&next, "delegate-once");
+    assert_eq!(delegated["task"]["report"], "Worker report: tests passed");
+    assert!(delegated.get("content").is_none() && delegated.get("structuredContent").is_none());
     assert_eq!(
-        tool_output(&next, "delegate-once")["structuredContent"]["task"]["report"],
-        "Worker report: tests passed"
+        f.base.journal(&session)["executions"]
+            .as_object()
+            .unwrap()
+            .values()
+            .find(|e| e["name"] == "trex_delegate_task")
+            .unwrap()["output"]["structuredContent"]["task"]["status"],
+        "completed"
     );
     next.completion(calls(vec![call]), "tool_calls");
     f.base

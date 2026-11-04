@@ -660,6 +660,11 @@ fn normalize_models_with_context(
             if let (Some(input),Some(output))=(model.pointer("/pricing/prompt").and_then(|v|v.as_str().and_then(|s|s.parse::<f64>().ok()).or_else(||v.as_f64())),model.pointer("/pricing/completion").and_then(|v|v.as_str().and_then(|s|s.parse::<f64>().ok()).or_else(||v.as_f64()))) {
                 if input.is_finite() && output.is_finite() && (0.0..=1000.0).contains(&input) && (0.0..=1000.0).contains(&output) {
                     normalized["pricing"] = json!({"inputUsdPerMillion":input*1_000_000.0,"outputUsdPerMillion":output*1_000_000.0});
+                    for (source, target) in [("/pricing/input_cache_read","cachedInputUsdPerMillion"),("/pricing/input_cache_write","cacheWriteUsdPerMillion")] {
+                        if let Some(price) = model.pointer(source).and_then(|v|v.as_str().and_then(|s|s.parse::<f64>().ok()).or_else(||v.as_f64())).filter(|p|p.is_finite()&&(0.0..=1000.0).contains(p)) {
+                            normalized["pricing"][target] = json!(price*1_000_000.0);
+                        }
+                    }
                 }
             }
             let efforts = string_metadata(model, EFFORT_METADATA_PATHS).or_else(|| {
@@ -727,21 +732,130 @@ fn documented_input_modalities(provider: &str, model: &str) -> Option<&'static [
     }
 }
 
+/// Which images a request re-sends. Images before `turn_start` (earlier user
+/// turns) are chosen only from that stable part of history, so the choice
+/// never changes during the current turn's tool loop and the provider's
+/// prompt cache survives. Images at or after `turn_start` (this turn) have
+/// their own cap. Both share the request's 16 image / 16 MiB hard limits.
+#[derive(Clone, Copy, Debug)]
+pub struct ImageBudget {
+    pub max_images: usize,
+    pub turn_start: usize,
+}
+impl ImageBudget {
+    /// The historical behavior: the newest 16 images of the whole history.
+    pub fn unbounded() -> Self {
+        Self {
+            max_images: MAX_REQUEST_IMAGES,
+            turn_start: usize::MAX,
+        }
+    }
+}
+const MAX_REQUEST_IMAGES: usize = 16;
+const MAX_REQUEST_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+
 /// Project durable tool references into one transient provider request. Re-run
 /// this for the selected model after restore or a model switch; never persist
 /// the result. Only explicitly known image support permits image rehydration.
-pub fn project_history(messages: &[Value], vision: Option<bool>) -> Vec<Value> {
-    project_history_with(messages, vision, crate::artifacts::image_data_url)
+pub fn project_history(messages: &[Value], vision: Option<bool>, budget: ImageBudget) -> Vec<Value> {
+    project_history_budgeted(messages, vision, budget, crate::artifacts::image_data_url)
 }
 
+#[cfg(test)]
 fn project_history_with(
     messages: &[Value],
     vision: Option<bool>,
+    image: impl FnMut(&crate::artifacts::ArtifactRef) -> Result<String>,
+) -> Vec<Value> {
+    project_history_budgeted(messages, vision, ImageBudget::unbounded(), image)
+}
+
+/// What the model reads from a normalized MCP/browser/desktop result: one
+/// copy of the structured result (never also its JSON serialization as
+/// text), Trex Browser envelopes reduced to the agent view (ok, data,
+/// revision, error) and compact artifact references. The journal and UI keep
+/// the full envelope with receipts, ownership and provenance.
+fn model_view(output: &Value, notes: &[String]) -> String {
+    let structured = output.get("structuredContent").filter(|v| !v.is_null());
+    let mut text = output["text"].as_str().unwrap_or("").to_owned();
+    if let Some(structured) = structured {
+        // MCP recommends text identical to structuredContent; older journals
+        // stored both. Also drop an error text repeated in error.message.
+        if serde_json::from_str::<Value>(text.trim()).is_ok_and(|parsed| &parsed == structured)
+            || structured["error"]["message"].as_str() == Some(text.trim())
+        {
+            text.clear();
+        }
+    }
+    let mut view = Map::new();
+    if let Some(structured) = structured {
+        if structured["receipt"].is_object() && structured["ok"].is_boolean() {
+            // Same shape Trex Browser gives MCP agents (tools.mjs modelView).
+            view.insert("ok".into(), structured["ok"].clone());
+            match &structured["data"] {
+                Value::Object(data) => view.extend(data.clone()),
+                Value::Null => {}
+                data => {
+                    view.insert("data".into(), data.clone());
+                }
+            }
+            if !view.contains_key("revision") && !structured["revision"].is_null() {
+                view.insert("revision".into(), structured["revision"].clone());
+            }
+            if structured["ok"] == false && !structured["error"].is_null() {
+                view.insert("error".into(), structured["error"].clone());
+            }
+        } else {
+            view.insert("result".into(), structured.clone());
+        }
+    }
+    let mut lines: Vec<&str> = Vec::new();
+    if !text.is_empty() {
+        lines.push(&text);
+    }
+    lines.extend(notes.iter().map(String::as_str));
+    if !lines.is_empty() {
+        view.insert("text".into(), json!(lines.join("\n")));
+    }
+    let artifacts: Vec<Value> = output["artifacts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(64)
+        .filter_map(|raw| {
+            let reference = serde_json::from_value::<crate::artifacts::ArtifactRef>(raw.clone()).ok()?;
+            let mut lean = json!({"artifactId":reference.provenance["brokerArtifactId"].as_str().unwrap_or(&reference.id),"kind":reference.kind,"mimeType":reference.mime_type});
+            if let (Some(width), Some(height)) = (reference.width, reference.height) {
+                lean["width"] = json!(width);
+                lean["height"] = json!(height);
+            }
+            Some(lean)
+        })
+        .collect();
+    if !artifacts.is_empty() {
+        view.insert("artifacts".into(), json!(artifacts));
+    }
+    if output["isError"] == true {
+        view.insert("isError".into(), json!(true));
+    }
+    let serialized = Value::Object(view).to_string();
+    crate::context::head_tail(
+        &serialized,
+        crate::context::MCP_MODEL_BYTES,
+        25,
+        "; result trimmed for the model (the session history keeps it): request a narrower read (e.g. browser_snapshot with selector or compact:true)",
+    )
+}
+
+fn project_history_budgeted(
+    messages: &[Value],
+    vision: Option<bool>,
+    budget: ImageBudget,
     mut image: impl FnMut(&crate::artifacts::ArtifactRef) -> Result<String>,
 ) -> Vec<Value> {
     let mut projected = Vec::with_capacity(messages.len());
     let mut index = 0;
-    let selected_images = select_history_images(messages, vision);
+    let selected_images = select_history_images(messages, vision, budget);
     while index < messages.len() {
         if messages[index]["role"] != "tool" {
             let mut message = messages[index].clone();
@@ -820,15 +934,7 @@ fn project_history_with(
                         }
                     }
                 }
-                if !notes.is_empty() {
-                    let text = output["text"].as_str().unwrap_or("");
-                    output["text"] = json!(if text.is_empty() {
-                        notes.join("\n")
-                    } else {
-                        format!("{text}\n{}", notes.join("\n"))
-                    });
-                }
-                message["content"] = json!(output.to_string());
+                message["content"] = json!(model_view(output, &notes));
             } else if !original.is_string() {
                 // OpenAI-compatible tool messages always contain plain text.
                 message["content"] = json!(original.to_string());
@@ -843,20 +949,41 @@ fn project_history_with(
     projected
 }
 
-fn select_history_images(messages: &[Value], vision: Option<bool>) -> HashSet<(usize, usize)> {
+fn select_history_images(
+    messages: &[Value],
+    vision: Option<bool>,
+    budget: ImageBudget,
+) -> HashSet<(usize, usize)> {
     let mut selected = HashSet::new();
     if vision != Some(true) {
         return selected;
     }
-    let mut bytes_left = 16 * 1024 * 1024u64;
-    const MAX_IMAGES: usize = 16;
+    let mut bytes_left = MAX_REQUEST_IMAGE_BYTES;
+    let split = budget.turn_start.min(messages.len());
+    // Earlier turns first: that choice depends only on history before this
+    // turn, so it stays fixed for every request of the tool loop.
+    for range in [0..split, split..messages.len()] {
+        let limit = (selected.len() + budget.max_images).min(MAX_REQUEST_IMAGES);
+        select_range(messages, range, limit, &mut bytes_left, &mut selected);
+    }
+    selected
+}
+
+fn select_range(
+    messages: &[Value],
+    range: std::ops::Range<usize>,
+    limit: usize,
+    bytes_left: &mut u64,
+    selected: &mut HashSet<(usize, usize)>,
+) {
     // Choose newest observations first, independently of forward message
     // emission. An oversized candidate must not hide smaller earlier images.
-    for (message_index, message) in messages.iter().enumerate().rev() {
+    for message_index in range.rev() {
+        let message = &messages[message_index];
         let mut consider = |part_index, bytes: u64| {
-            if selected.len() < MAX_IMAGES && bytes <= bytes_left {
+            if selected.len() < limit && bytes <= *bytes_left {
                 selected.insert((message_index, part_index));
-                bytes_left -= bytes;
+                *bytes_left -= bytes;
             }
         };
         if message["role"] == "user" {
@@ -893,7 +1020,6 @@ fn select_history_images(messages: &[Value], vision: Option<bool>) -> HashSet<(u
             }
         }
     }
-    selected
 }
 
 fn attachment_image_bytes(part: &Value) -> u64 {
@@ -950,6 +1076,32 @@ fn image_omission(vision: Option<bool>) -> &'static str {
     }
 }
 
+/// Anthropic models need explicit cache breakpoints; OpenAI, DeepSeek, Grok,
+/// Gemini 2.5+ and others cache prefixes automatically (no field is added).
+/// https://openrouter.ai/docs/features/prompt-caching (checked 2026-11-04)
+fn explicit_prompt_cache(model: &str) -> bool {
+    model.starts_with("anthropic/")
+}
+
+/// Two of Anthropic's four breakpoints: the stable system prompt (tools +
+/// policy survive even a compaction) and automatic top-level caching, which
+/// moves the breakpoint to the last block as the tool loop grows. Anthropic
+/// documents the combination ("the automatic cache breakpoint uses one of the
+/// 4 available breakpoint slots").
+fn mark_prompt_cache(body: &mut Value) {
+    body["cache_control"] = json!({"type": "ephemeral"});
+    if let Some(system) = body["messages"]
+        .as_array_mut()
+        .and_then(|messages| messages.first_mut())
+        .filter(|message| message["role"] == "system")
+    {
+        if let Some(text) = system["content"].as_str().filter(|text| !text.is_empty()) {
+            system["content"] =
+                json!([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]);
+        }
+    }
+}
+
 fn request_body(
     profile: &Profile,
     model: &str,
@@ -965,6 +1117,9 @@ fn request_body(
     }
     if profile.provider == "openrouter" {
         body["usage"] = json!({"include": true});
+        if explicit_prompt_cache(model) {
+            mark_prompt_cache(&mut body);
+        }
     }
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.to_vec());
@@ -3230,5 +3385,133 @@ mod tests {
         );
         assert_eq!(incomplete.finish_reason, None);
         server.await.unwrap();
+    }
+
+    /// A realistic Trex Browser snapshot envelope as `trex-browser call`
+    /// returns it (16,000-char accessibility tree + 300 element lines).
+    fn snapshot_envelope() -> Value {
+        let accessibility = "- generic [ref=e1]:\n  - link \"Product details\" [ref=e2]\n".repeat(300);
+        let elements: Vec<String> = (1..=300)
+            .map(|i| format!("tab-1-e{i} button Add item number {i} to the cart"))
+            .collect();
+        let structured = json!({"ok":true,"operationId":"3f0c3bd6-0a4b-4b43-9a55-0a9f4e1d2c11","projectId":"b".repeat(64),"profile":"default","generation":3,"revision":7,
+            "data":{"tabId":"tab-1","url":"http://localhost:5173/","revision":7,"accessibility":crate::context::clip(&accessibility,16000),"omitted":12,"elements":elements,"untrustedContent":true},
+            "artifacts":[],"receipt":{"status":"completed","manualReview":false,"replaySafe":false}});
+        json!({"content":[{"type":"text","text":structured.to_string()}],"structuredContent":structured})
+    }
+
+    #[test]
+    fn browser_results_reach_the_model_once_as_the_lean_agent_view() {
+        let raw = snapshot_envelope();
+        // Before: text + structuredContent both stored and re-serialized.
+        let legacy = json!({"text":raw["content"][0]["text"],"artifacts":[],"structuredContent":raw["structuredContent"]}).to_string();
+        let stored = crate::artifacts::normalize_tool_result(raw.clone(), json!({"toolName":"browser_snapshot"})).unwrap();
+        assert_eq!(stored["text"], "", "duplicate JSON text is not stored twice");
+        assert!(stored["structuredContent"]["receipt"].is_object(), "journal keeps the envelope");
+        for content in [legacy.clone(), stored.to_string()] {
+            let history = vec![json!({"role":"tool","tool_call_id":"snap","content":content})];
+            let projected = project_history_with(&history, Some(true), |_| unreachable!());
+            let model = projected[0]["content"].as_str().unwrap();
+            let view: Value = serde_json::from_str(model).unwrap();
+            assert_eq!(view["ok"], true);
+            assert_eq!(view["revision"], 7);
+            assert_eq!(view["tabId"], "tab-1");
+            assert_eq!(view["elements"].as_array().unwrap().len(), 300);
+            for hidden in ["receipt", "operationId", "projectId", "profile", "generation", "structuredContent", "text"] {
+                assert!(view.get(hidden).is_none(), "{hidden} reached the model");
+            }
+            println!(
+                "browser_snapshot model-facing bytes: before {} -> after {}",
+                legacy.len(),
+                model.len()
+            );
+            assert!(model.len() * 2 < legacy.len());
+        }
+        // Errors keep their message once; plain text and MCP results stay.
+        let error = json!({"text":"Grant expired","artifacts":[],"isError":true,"structuredContent":{"ok":false,"operationId":"x","error":{"code":"BROWSER_ERROR","message":"Grant expired"},"receipt":{"status":"rejected"}}});
+        let view: Value = serde_json::from_str(&model_view(&error, &[])).unwrap();
+        assert_eq!(view, json!({"ok":false,"error":{"code":"BROWSER_ERROR","message":"Grant expired"},"isError":true}));
+        let mcp = json!({"text":"Done","artifacts":[],"structuredContent":{"rows":2}});
+        let view: Value = serde_json::from_str(&model_view(&mcp, &["note".into()])).unwrap();
+        assert_eq!(view, json!({"result":{"rows":2},"text":"Done\nnote"}));
+        // Oversized results keep head and tail within the MCP cap.
+        let huge = json!({"text":"z".repeat(200_000),"artifacts":[]});
+        let view = model_view(&huge, &[]);
+        assert!(view.len() <= crate::context::MCP_MODEL_BYTES && view.contains("bytes omitted"));
+    }
+
+    #[test]
+    fn earlier_turn_images_are_capped_and_stable_during_the_tool_loop() {
+        let mut history = Vec::new();
+        for index in 0..5 {
+            history.push(json!({"role":"user","content":format!("turn {index}")}));
+            history.push(json!({"role":"assistant","tool_calls":[{"id":format!("old-{index}")}]}));
+            history.push(artifact_tool(&format!("old-{index}")));
+        }
+        let turn_start = history.len();
+        history.push(json!({"role":"user","content":"current turn"}));
+        let budget = ImageBudget {
+            max_images: 3,
+            turn_start,
+        };
+        let selected = |history: &[Value]| {
+            let mut ids = Vec::new();
+            for message in project_history_budgeted(history, Some(true), budget, |_| {
+                Ok("data:image/png;base64,x".into())
+            }) {
+                if let Some(parts) = message["content"].as_array() {
+                    for part in parts {
+                        if let Some(id) = part["text"].as_str().and_then(|t| t.split("tool_call_id=").nth(1)) {
+                            ids.push(id.split(';').next().unwrap().to_owned());
+                        }
+                    }
+                }
+            }
+            ids
+        };
+        assert_eq!(selected(&history), ["old-2", "old-3", "old-4"]);
+        // New screenshots in this turn never change the earlier choice.
+        let mut growing = history.clone();
+        for index in 0..5 {
+            growing.push(json!({"role":"assistant","tool_calls":[{"id":format!("new-{index}")}]}));
+            growing.push(artifact_tool(&format!("new-{index}")));
+            let ids = selected(&growing);
+            assert_eq!(ids[..3], ["old-2", "old-3", "old-4"]);
+            assert_eq!(ids.len(), 3 + (index + 1).min(3));
+            assert_eq!(ids.last().unwrap(), &format!("new-{index}"));
+        }
+        // Older images become the existing budget note, never silently lost.
+        let projected = project_history_budgeted(&history, Some(true), budget, |_| {
+            Ok("data:image/png;base64,x".into())
+        });
+        assert!(projected[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("request image budget reached"));
+    }
+
+    #[test]
+    fn anthropic_models_on_openrouter_get_cache_breakpoints_and_others_do_not() {
+        let messages = vec![
+            json!({"role":"system","content":"stable policy"}),
+            json!({"role":"user","content":"hi"}),
+        ];
+        let body = request_body(&profile("openrouter"), "anthropic/claude-sonnet-5", None, &messages, &[]).unwrap();
+        assert_eq!(body["cache_control"], json!({"type":"ephemeral"}));
+        assert_eq!(
+            body["messages"][0]["content"],
+            json!([{"type":"text","text":"stable policy","cache_control":{"type":"ephemeral"}}])
+        );
+        assert_eq!(body["messages"][1], messages[1]);
+        for (provider, model) in [
+            ("openrouter", "openai/gpt-5"),
+            ("openrouter", "google/gemini-2.5-pro"),
+            ("deepseek", "deepseek-flash"),
+            ("custom", "anthropic/claude-sonnet-5"),
+        ] {
+            let body = request_body(&profile(provider), model, None, &messages, &[]).unwrap();
+            assert!(body.get("cache_control").is_none(), "{provider} {model}");
+            assert_eq!(body["messages"][0]["content"], "stable policy");
+        }
     }
 }

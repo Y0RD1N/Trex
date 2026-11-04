@@ -178,6 +178,7 @@ impl BrowserToolProvider {
         .await;
     }
     fn request(&self, cwd: &Path, name: &str, input: &Value, operation_id: &str) -> Value {
+        let input = agent_arguments(name, input);
         let mut request = json!({"name":name,"arguments":input,"cwd":cwd,"mode":self.mode,"clientId":self.client_id,"operationId":operation_id,"timeoutMs":90000});
         if let Some(profile) = &self.config.profile {
             request["profile"] = json!(profile);
@@ -329,6 +330,53 @@ fn decode_result(bytes: &[u8]) -> Result<Value> {
         ExecutionUncertain
     );
     Ok(result)
+}
+
+/// Screenshots for this agent default to JPEG quality 70: a 1024 px PNG
+/// screenshot is typically several times larger and is re-sent with history.
+/// An explicit `type` (or quality) from the model is never overridden.
+fn agent_arguments(name: &str, input: &Value) -> Value {
+    fn default_jpeg(arguments: &mut Value) {
+        if let Some(fields) = arguments.as_object_mut() {
+            if !fields.contains_key("type") {
+                fields.insert("type".into(), json!("jpeg"));
+                fields.entry("quality").or_insert(json!(70));
+            }
+        }
+    }
+    let mut input = input.clone();
+    match name {
+        "browser_take_screenshot" => default_jpeg(&mut input),
+        "browser_batch" => {
+            for step in input["steps"].as_array_mut().into_iter().flatten() {
+                if step["tool"] == "browser_take_screenshot" {
+                    if let Some(arguments) = step.get_mut("arguments") {
+                        default_jpeg(arguments);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    input
+}
+
+/// Advanced browser tools are not advertised until the model enables their
+/// group with enable_tools (they stay callable within the session policy).
+/// The core set covers navigation, reading, ordinary input, screenshots,
+/// waiting, logs and recovery (status/resume/close).
+pub fn tool_group(name: &str) -> Option<&'static str> {
+    match name {
+        "browser_evaluate" | "browser_route" | "browser_emulate" | "browser_resize"
+        | "browser_network_body" | "browser_frames" | "browser_drag" | "browser_mouse"
+        | "browser_hover" | "browser_file_upload" => Some("browser_devtools"),
+        "browser_start_video" | "browser_stop_video" | "browser_start_trace"
+        | "browser_stop_trace" | "browser_perf_start" | "browser_perf_stop"
+        | "browser_cpu_profile_start" | "browser_cpu_profile_stop" | "browser_heap_snapshot"
+        | "browser_artifact" => Some("browser_capture"),
+        "browser_pause" | "browser_takeover" | "browser_cancel" => Some("browser_session"),
+        _ => None,
+    }
 }
 
 // Frozen protocol allowlist. Discovery may narrow it, never add a capability.
@@ -611,6 +659,39 @@ mod tests {
             "browser_batch",
             &json!({"steps":[{"tool":"browser_batch","arguments":{}}]})
         ));
+    }
+
+    #[test]
+    fn agent_screenshots_default_to_jpeg_and_advanced_tools_are_grouped() {
+        assert_eq!(
+            agent_arguments("browser_take_screenshot", &json!({"fullPage":true})),
+            json!({"fullPage":true,"type":"jpeg","quality":70})
+        );
+        for explicit in [json!({"type":"png"}), json!({"type":"jpeg","quality":90})] {
+            assert_eq!(agent_arguments("browser_take_screenshot", &explicit), explicit);
+        }
+        let batch = json!({"steps":[{"tool":"browser_take_screenshot","arguments":{}},{"tool":"browser_click","arguments":{"selector":"b"}},{"tool":"browser_take_screenshot"}]});
+        let sent = agent_arguments("browser_batch", &batch);
+        assert_eq!(sent["steps"][0]["arguments"], json!({"type":"jpeg","quality":70}));
+        assert_eq!(sent["steps"][1], batch["steps"][1]);
+        assert_eq!(sent["steps"][2], batch["steps"][2]);
+        assert_eq!(agent_arguments("browser_click", &json!({"ref":"x"})), json!({"ref":"x"}));
+        for core in [
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_type",
+            "browser_take_screenshot",
+            "browser_status",
+            "browser_resume",
+            "browser_close",
+        ] {
+            assert_eq!(tool_group(core), None, "{core}");
+        }
+        assert_eq!(tool_group("browser_evaluate"), Some("browser_devtools"));
+        assert_eq!(tool_group("browser_heap_snapshot"), Some("browser_capture"));
+        assert_eq!(tool_group("browser_pause"), Some("browser_session"));
+        assert_eq!(tool_group("read_file"), None);
     }
 
     #[test]

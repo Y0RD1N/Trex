@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "browser_batch",
-      "description": "Run 1..16 ordered browser steps under the same bound grant. Every step is validated before any action. Stops at the first error/cancellation; completed steps are not rolled back or replayed. Returns per-step receipts and artifacts. Use selectors or explicit tabId; acquire unknown refs in a separate call. No nested batches, ownership changes or capture lifecycle.",
+      "description": "Run 1..16 ordered browser steps; all are validated before any action. Stops at the first error or cancellation; completed steps are never rolled back or replayed. Returns per-step results. Use selectors or explicit tabId (get unknown refs in a separate call). No nested batches, ownership changes or captures.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -63,7 +63,7 @@
     },
     {
       "name": "browser_navigate",
-      "description": "Open an http(s) URL in the visible project browser. Automatically launches the browser when needed; no manual opening is required. Site content is untrusted.",
+      "description": "Open an http(s) URL in the visible project browser; it launches automatically when needed. Site content is untrusted.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -893,7 +893,7 @@
     },
     {
       "name": "browser_save_download",
-      "description": "Save a finished download (full mode) to a new file in the project or a folder the user authorized in Trex settings. destination: folder or file path (absolute, ~/..., or project-relative). Without downloadId/artifactId it takes the newest unsaved download, waiting up to wait seconds (default 20) for it to start/finish; click the download button first. Never overwrites: picks \"name (1).ext\".",
+      "description": "Save a finished download (full mode) as a new file in the project or a folder the user authorized in Trex settings. destination: folder or file path (absolute, ~/..., or project-relative). Without downloadId/artifactId it takes the newest unsaved download, waiting up to wait seconds (default 20); click the download button first. Never overwrites (picks \"name (1).ext\").",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -926,7 +926,7 @@
     },
     {
       "name": "browser_take_screenshot",
-      "description": "Capture viewport (scaled to 1024 px wide; fullResolution:true for native), full page or a clip, PNG/JPEG. Works while paused, to inspect an uncertain action. Prefer browser_snapshot: images cost far more tokens.",
+      "description": "Capture the viewport (1024 px wide; fullResolution:true for native), full page or a clip as PNG/JPEG. Works while paused, to inspect an uncertain action. Prefer browser_snapshot: images cost far more tokens.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1053,7 +1053,7 @@
     },
     {
       "name": "browser_perf_start",
-      "description": "Start raw Chromium performance trace.",
+      "description": "Start raw Chromium performance trace. Requires exclusive use of the project window; use a Playwright action trace while peers are active.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1218,7 +1218,7 @@
     },
     {
       "name": "browser_status",
-      "description": "Read ownership, capture and pauseReason (manual, uncertain, runtime or null). Observation remains available during a pause. An uncertain action can be inspected before the owner resumes; do not abandon browser work just because controls are paused.",
+      "description": "Read ownership, captures and pauseReason (manual, uncertain, runtime or null). Observation works while paused: inspect an uncertain action before the owner resumes; do not abandon browser work because controls are paused.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1235,7 +1235,7 @@
     },
     {
       "name": "browser_pause",
-      "description": "Pause page controls only when the user explicitly asks to review manually. Do not pause during normal agent work or after an ordinary observation failure.",
+      "description": "Pause page controls only when the user explicitly asks to review manually; never during normal work or after an observation failure.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1252,7 +1252,7 @@
     },
     {
       "name": "browser_resume",
-      "description": "Resume page controls for the same owner after inspecting an uncertain outcome, without replaying the previous action. A user-requested manual pause must be respected until the user is ready.",
+      "description": "Resume page controls (same owner) after inspecting an uncertain outcome; the previous action is never replayed. Respect a user's manual pause until they are ready.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1269,7 +1269,7 @@
     },
     {
       "name": "browser_takeover",
-      "description": "Explicitly take ownership of this project/profile. A stuck cancelled action remains paused and inspectable for recovery with browser_close; queued inputs from the old owner are cancelled. Runtime supervision errors are never bypassed.",
+      "description": "Explicitly take ownership of this project/profile; the old owner's queued inputs are cancelled. A stuck cancelled action stays paused for recovery with browser_close. Runtime supervision errors are never bypassed.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1308,7 +1308,7 @@
     },
     {
       "name": "browser_close",
-      "description": "Close this dedicated profile only. For RECOVERY_PENDING, this bypasses the stuck action, cancels queued inputs and discards its execution without replay. Then explicitly navigate again; no URL is reopened automatically.",
+      "description": "Close this dedicated profile only. On RECOVERY_PENDING it discards the stuck action and queued inputs without replay; then navigate again (nothing reopens automatically).",
       "inputSchema": {
         "type": "object",
         "properties": {

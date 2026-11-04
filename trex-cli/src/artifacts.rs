@@ -79,10 +79,20 @@ fn normalize_at(
     let mut text = Vec::new();
     let mut artifacts = Vec::new();
     let mut count = 0;
+    let structured = raw.get("structuredContent").filter(|v| !v.is_null());
     for item in content {
         match item.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(value) = item.get("text").and_then(Value::as_str) {
+                    // MCP servers (Trex Browser included) repeat structuredContent
+                    // as its JSON text. Keep one copy instead of a second,
+                    // escaped serialization inside the stored result.
+                    if structured.is_some_and(|structured| {
+                        value.trim_start().starts_with('{')
+                            && serde_json::from_str::<Value>(value).is_ok_and(|v| &v == structured)
+                    }) {
+                        continue;
+                    }
                     text.push(scrub_text(value, &payloads));
                 }
             }
@@ -1214,14 +1224,16 @@ mod tests {
         let output = normalize_at(json!({"content":[{"type":"text","text":structured.to_string()}],"structuredContent":structured}), Value::Null, &|| bail!("no typed image bytes")).unwrap();
         assert!(!output.to_string().contains(PNG));
         assert!(!output.to_string().contains("data:image"));
-        assert!(output["text"]
-            .as_str()
-            .unwrap()
-            .contains("metadata: captured page"));
+        // The JSON text duplicate of structuredContent is stored once.
+        assert_eq!(output["text"], "");
+        assert_eq!(output.to_string().matches("metadata: captured page").count(), 1);
         assert_eq!(
             output["structuredContent"]["description"],
             "metadata: captured page"
         );
+        // A different JSON text (or plain text) is never discarded.
+        let output = normalize_at(json!({"content":[{"type":"text","text":"{\"description\":\"other\"}"},{"type":"text","text":"note"}],"structuredContent":structured}), Value::Null, &|| bail!("no typed image bytes")).unwrap();
+        assert_eq!(output["text"], "{\"description\":\"other\"}\nnote");
     }
 
     #[test]

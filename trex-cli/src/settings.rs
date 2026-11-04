@@ -36,7 +36,20 @@ pub struct ContextSettings {
     pub auto_compact: bool,
     pub threshold_percent: u64,
     pub reserve_tokens: u64,
+    /// Window assumed when neither the catalog nor documentation knows the
+    /// model. An explicit null keeps the window unknown.
     pub fallback_window: Option<u64>,
+    /// Absolute compaction trigger, applied even with a 1M-token or unknown
+    /// window. null disables the cap (threshold/window rules still apply).
+    pub max_active_tokens: Option<u64>,
+    /// Tool results older than this many user turns (and larger than 1 KiB)
+    /// are replaced by a short placeholder in the model-facing projection
+    /// only. The journal keeps them; history_search retrieves them. null
+    /// disables clearing.
+    pub clear_tool_results_after_turns: Option<usize>,
+    /// Images (tool screenshots and user attachments) re-sent from earlier
+    /// turns. Images produced in the current turn have the same separate cap.
+    pub max_history_images: usize,
     pub keep_recent_turns: usize,
     pub summary_max_chars: usize,
 }
@@ -46,7 +59,10 @@ impl Default for ContextSettings {
             auto_compact: true,
             threshold_percent: 80,
             reserve_tokens: 2048,
-            fallback_window: None,
+            fallback_window: Some(128_000),
+            max_active_tokens: Some(128_000),
+            clear_tool_results_after_turns: Some(2),
+            max_history_images: 3,
             keep_recent_turns: 4,
             summary_max_chars: 24000,
         }
@@ -88,6 +104,14 @@ impl Default for ProviderSettings {
 pub struct Pricing {
     pub input_usd_per_million: f64,
     pub output_usd_per_million: f64,
+    /// Price of prompt tokens served from the provider cache. Defaults to the
+    /// input price when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_usd_per_million: Option<f64>,
+    /// Price of prompt tokens written to the provider cache. Defaults to the
+    /// input price when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_usd_per_million: Option<f64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -240,6 +264,22 @@ impl Settings {
             "fallbackWindow must be 256..16000000"
         );
         ensure!(
+            self.context
+                .max_active_tokens
+                .is_none_or(|v| (4096..=16_000_000).contains(&v)),
+            "maxActiveTokens must be 4096..16000000"
+        );
+        ensure!(
+            self.context
+                .clear_tool_results_after_turns
+                .is_none_or(|v| (1..=64).contains(&v)),
+            "clearToolResultsAfterTurns must be 1..64"
+        );
+        ensure!(
+            self.context.max_history_images <= 16,
+            "maxHistoryImages must be 0..16"
+        );
+        ensure!(
             self.context.reserve_tokens <= 1_000_000,
             "reserveTokens exceeds 1000000"
         );
@@ -250,8 +290,10 @@ impl Settings {
         if let Some(p) = &self.provider.pricing {
             ensure!(
                 [p.input_usd_per_million, p.output_usd_per_million]
-                    .iter()
-                    .all(|v| v.is_finite() && *v >= 0.0 && *v <= 1_000_000_000.0),
+                    .into_iter()
+                    .chain(p.cached_input_usd_per_million)
+                    .chain(p.cache_write_usd_per_million)
+                    .all(|v| v.is_finite() && v >= 0.0 && v <= 1_000_000_000.0),
                 "invalid configured token prices"
             );
         }
@@ -489,6 +531,60 @@ mod tests {
         s = Settings::default();
         s.tools.parallel_reads = 0;
         assert!(s.validate().is_err());
+    }
+    #[test]
+    fn context_token_controls_default_on_and_explicit_null_disables_them() {
+        let s = Settings::default();
+        assert_eq!(s.context.fallback_window, Some(128_000));
+        assert_eq!(s.context.max_active_tokens, Some(128_000));
+        assert_eq!(s.context.clear_tool_results_after_turns, Some(2));
+        assert_eq!(s.context.max_history_images, 3);
+        // Omitted fields take the defaults; explicit null opts out.
+        let s: Settings = serde_json::from_value(json!({"context":{"thresholdPercent":70}})).unwrap();
+        assert_eq!(s.context.max_active_tokens, Some(128_000));
+        let s = overlay(
+            Settings::default(),
+            Some(&json!({"context":{"fallbackWindow":null,"maxActiveTokens":null,"clearToolResultsAfterTurns":null,"maxHistoryImages":0}})),
+        )
+        .unwrap();
+        assert_eq!(s.context.fallback_window, None);
+        assert_eq!(s.context.max_active_tokens, None);
+        assert_eq!(s.context.clear_tool_results_after_turns, None);
+        assert_eq!(s.context.max_history_images, 0);
+        for bad in [
+            json!({"context":{"maxActiveTokens":100}}),
+            json!({"context":{"clearToolResultsAfterTurns":0}}),
+            json!({"context":{"maxHistoryImages":17}}),
+            json!({"provider":{"pricing":{"inputUsdPerMillion":1.0,"outputUsdPerMillion":1.0,"cachedInputUsdPerMillion":-1.0}}}),
+            json!({"provider":{"pricing":{"inputUsdPerMillion":1.0,"outputUsdPerMillion":1.0,"cachedInput":0.1}}}),
+        ] {
+            assert!(overlay(Settings::default(), Some(&bad)).is_err(), "{bad}");
+        }
+        let priced = overlay(
+            Settings::default(),
+            Some(&json!({"provider":{"pricing":{"inputUsdPerMillion":0.28,"outputUsdPerMillion":0.42,"cachedInputUsdPerMillion":0.028,"cacheWriteUsdPerMillion":0.28}}})),
+        )
+        .unwrap();
+        let pricing = priced.provider.pricing.unwrap();
+        assert_eq!(pricing.cached_input_usd_per_million, Some(0.028));
+        // Prices without cache fields serialize exactly as before.
+        let plain = Pricing {
+            input_usd_per_million: 1.0,
+            output_usd_per_million: 2.0,
+            cached_input_usd_per_million: None,
+            cache_write_usd_per_million: None,
+        };
+        assert_eq!(
+            serde_json::to_value(plain).unwrap(),
+            json!({"inputUsdPerMillion":1.0,"outputUsdPerMillion":2.0})
+        );
+    }
+    #[test]
+    fn documented_example_settings_are_valid() {
+        let doc: Document =
+            serde_json::from_str(include_str!("../settings.example.json")).unwrap();
+        doc.defaults.validate().unwrap();
+        assert_eq!(doc.defaults.context, ContextSettings::default());
     }
     #[test]
     fn profile_merge_preserves_other_limits() {

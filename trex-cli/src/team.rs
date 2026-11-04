@@ -109,11 +109,12 @@ impl TeamToolProvider {
 }
 impl ToolProvider for TeamToolProvider {
     fn definitions(&self, _mode: &str) -> Vec<Value> {
+        // Mirrors the app's coordinator protocol (src-tauri agent_team.rs).
         vec![
-            json!({"type":"function","function":{"name":NAMES[0],"description":"List the team's configured subagents and policies. Cannot create agents or change models.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}),
-            json!({"type":"function","function":{"name":NAMES[1],"description":"Delegate to a configured member. Use wait:false to enqueue independent work and receive its taskId immediately, then trex_task_status to retrieve reports. The plan dependsOn controls dependencies; workspace writers are exclusive. Reuse the same stable taskKey only to retrieve the same task; use a new key for different work. Never automatically replay an uncertain/cancelled task.","parameters":{"type":"object","properties":{"memberId":{"type":"string"},"taskKey":{"type":"string","maxLength":100},"task":{"type":"string","maxLength":16384},"wait":{"type":"boolean","default":true}},"required":["memberId","taskKey","task"],"additionalProperties":false}}}),
-            json!({"type":"function","function":{"name":NAMES[2],"description":"Inspect task status, or retrieve a stored report by taskId. Use waitMs up to 30000 to await a pending result without repeated polling. Never reruns work.","parameters":{"type":"object","properties":{"taskId":{"type":"string"},"waitMs":{"type":"integer","minimum":0,"maximum":30000}},"additionalProperties":false}}}),
-            json!({"type":"function","function":{"name":NAMES[3],"description":"Publish the team's task list before delegating, without executing work. Use the same taskKey, memberId and task when delegating. Progress comes from actual task results; never mark unverified work complete. Keep the whole request under 48 KiB.","parameters":{"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"taskKey":{"type":"string","maxLength":100},"memberId":{"type":"string"},"task":{"type":"string","maxLength":16384},"dependsOn":{"type":"array","maxItems":8,"items":{"type":"string"}}},"required":["taskKey","memberId","task"],"additionalProperties":false}}},"required":["steps"],"additionalProperties":false}}}),
+            json!({"type":"function","function":{"name":NAMES[0],"description":"List the configured members: role, permissions, browser access, new-token usage, remaining budget, context use and account quota (5h/week) when known. Prefer members whose accounts have headroom; members may share an account. Cannot create agents or change models.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}),
+            json!({"type":"function","function":{"name":NAMES[1],"description":"Delegate a task to a configured member; returns {taskId, status, member}. Use wait:false to enqueue independent work, then end your turn: Trex opens a new turn when delegations finish. With awaitCoordinatorTurnEnd:true, end your turn so the member can start. The plan's dependsOn defines dependencies; workspace writers are exclusive, up to four readers run at once. Use a unique, stable taskKey; reuse it only to retrieve the same task, never to repeat uncertain or cancelled work.","parameters":{"type":"object","properties":{"memberId":{"type":"string"},"taskKey":{"type":"string","maxLength":100},"task":{"type":"string","maxLength":16384},"wait":{"type":"boolean","default":true}},"required":["memberId","taskKey","task"],"additionalProperties":false}}}),
+            json!({"type":"function","function":{"name":NAMES[2],"description":"Compact task status. Without taskId: every task plus new reports, each delivered once. With taskId: that task; an already delivered report returns as reportPreview. detail:\"full\" adds the instruction and full report. Do not poll: Trex opens a new turn when delegations finish, then call this once without taskId. waitMs is for short waits only. Never reruns work.","parameters":{"type":"object","properties":{"taskId":{"type":"string"},"waitMs":{"type":"integer","minimum":0,"maximum":30000},"detail":{"type":"string","enum":["compact","full"]}},"additionalProperties":false}}}),
+            json!({"type":"function","function":{"name":NAMES[3],"description":"Publish the team's task list before delegating; executes nothing and returns a compact confirmation (keys and status). Use the same taskKey, memberId and task when delegating; progress comes from actual results, never mark unverified work complete. Unsent steps may be revised; issued tasks stay. Keep the request under 48 KiB.","parameters":{"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"taskKey":{"type":"string","maxLength":100},"memberId":{"type":"string"},"task":{"type":"string","maxLength":16384},"dependsOn":{"type":"array","maxItems":8,"items":{"type":"string"}}},"required":["taskKey","memberId","task"],"additionalProperties":false}}},"required":["steps"],"additionalProperties":false}}}),
         ]
     }
     fn is_mutating(&self, _name: &str, _input: &Value) -> bool {
@@ -195,5 +196,31 @@ impl ToolProvider for TeamToolProvider {
                 _=cancel.cancelled()=>Err(DelegationUncertain.into()),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn definitions_follow_the_app_coordinator_protocol() {
+        let provider = TeamToolProvider::new(TeamConfig {
+            command: PathBuf::new(),
+            args: vec![],
+        });
+        let tools = provider.definitions("plan");
+        let names: Vec<_> = tools.iter().map(|t| t["function"]["name"].as_str().unwrap()).collect();
+        assert_eq!(names, NAMES);
+        let status = &tools[2]["function"];
+        assert_eq!(
+            status["parameters"]["properties"]["detail"]["enum"],
+            json!(["compact", "full"])
+        );
+        let description = status["description"].as_str().unwrap();
+        assert!(description.contains("Do not poll") && description.contains("short waits"));
+        assert!(tools[1]["function"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("awaitCoordinatorTurnEnd"));
     }
 }

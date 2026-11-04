@@ -140,6 +140,20 @@ switching models reprojects the saved references; missing images never cause
 the tool to repeat. Videos remain opaque broker artifact references. See the
 protocol for artifact/event fields and operation cancellation semantics.
 
+The model reads one lean copy of each browser/MCP result: Trex Browser
+envelopes become the same agent view MCP clients get (`ok`, the result data,
+`revision`, `error`) plus compact artifact references, and a text block that only
+repeats `structuredContent` is dropped. Receipts, operation/project IDs, hashes
+and provenance stay in the journal, `tool/result` events and the UI. Results over
+48 KiB keep their head and tail. Agent screenshots default to JPEG quality 70
+unless the model asks for `type`. Advanced browser tools are grouped
+(`browser_devtools`: evaluate, mocking, emulation, frames, bodies, hover, drag,
+mouse, uploads; `browser_capture`: video, traces, profiles, heap, artifacts;
+`browser_session`: pause, takeover, cancel) and are only advertised after the
+model calls `enable_tools({group})`. Enabled groups are appended to the end of
+the tool list, persisted in the conversation and restored with it; deferred
+tools remain callable within the session policy.
+
 Servers and watches can use `shell({command,background:true})`. They remain
 available between model turns; `process_list`, `process_output`, and
 `process_stop` inspect or stop individual owned terminals. The desktop exposes
@@ -164,7 +178,11 @@ See [settings.example.json](settings.example.json) for a partial document.
 Unspecified fields keep their defaults. `profiles` contains partial overrides.
 
 Default guards are 64 rounds, 64 HTTP attempts, 256 tool calls, 1,000,000 processed
-turn tokens and one hour per turn. Configure `limits` to change them, including
+turn tokens and one hour per turn. `limits.maxTurnTokens` counts tokens the
+provider processed anew: uncached input plus output (prompt-cache hits re-read on
+every tool round are not counted again); the next request is still reserved in
+full. `maxConversationTokens` keeps counting total tokens. Configure `limits` to
+change them, including
 conversation token and estimated USD reservations. `provider.maxOutputTokens`
 reserves and caps output; context metadata can reduce it. USD checks require
 configured `provider.pricing` or catalog prices. A missing price does not mean
@@ -174,12 +192,55 @@ Token reservations persist across process restarts, including requests whose API
 omits usage. Unmeasured legacy history or unpriced prior requests cannot silently
 count as zero when a newly enabled conversation budget needs those values.
 
+`provider.pricing` takes `inputUsdPerMillion` and `outputUsdPerMillion` plus the
+optional `cachedInputUsdPerMillion` and `cacheWriteUsdPerMillion` (both default to
+the input price; OpenRouter catalog cache prices are used when present). When a
+provider reports no `usage.cost` (DeepSeek, MiniMax, most custom APIs) the cost is
+computed locally from these prices, billing prompt-cache hits at the cached price,
+and the usage is marked `costEstimated: true`. Session usage also includes
+`byModel`, the measured totals per model.
+
+Prompt caching: DeepSeek, OpenAI, Gemini 2.5+, Grok and similar providers cache
+prompt prefixes automatically, so nothing is added. For OpenRouter `anthropic/*`
+models the request adds top-level automatic `cache_control` (the breakpoint moves
+with the conversation) and a breakpoint on the system prompt, two of Anthropic's
+four. Unknown fields are never sent to other providers. The system prompt, tool
+list and history projection are kept stable within a turn so caches survive the
+tool loop.
+
 Context preflight reserves output and headroom. Automatic extractive compaction
 archives complete tool batches, keeps recent work and records its cutoff. It
 makes no extra paid summarization call. `/compact` and the app's context menu
 also compact while idle. Original messages, artifacts and task state stay on
 disk; `history_search` and `task_state` recover details omitted from the extract.
 The UI shows measured provider usage separately from internal estimates.
+
+Context settings that bound what is re-sent on every request:
+
+- `context.maxActiveTokens` (default 128000; `null` disables): compaction starts
+  when the estimated request exceeds it, even for 1M-token or unknown windows,
+  in addition to `thresholdPercent` of a known window. When recent turns alone
+  exceed it, older completed tool batches of the current turn are summarized too.
+- `context.fallbackWindow` (default 128000): the window assumed for models whose
+  window is not in the catalog or documentation. An explicit `null` keeps it
+  unknown (no window preflight; `maxActiveTokens` still applies).
+- `context.clearToolResultsAfterTurns` (default 2; `null` disables): at the start
+  of a user turn, tool results from turns older than this and larger than 1 KiB are
+  replaced in the request by a short placeholder with a preview and their
+  `messageIndex`. Call/result pairing is unchanged, the journal keeps the result,
+  and `history_search({messageIndex, offset})` pages it back. Within a turn the
+  projection never changes, so prompt caches hold during the tool loop.
+- `context.maxHistoryImages` (default 3, max 16): screenshots and attachments
+  re-sent from earlier turns, chosen once per user turn; images produced in the
+  current turn have the same separate cap. Older images become a text note.
+
+Model-facing output caps (journal, UI and `history_search` keep the stored text):
+shell stdout+stderr 32 KiB, `process_output` 32 KiB (tail-biased), `git_diff`
+48 KiB, browser/MCP results 48 KiB and any other result 64 KiB, each keeping head
+and tail with a marker of the omitted bytes. Shell and Git capture keep the first
+quarter and the last three quarters of 64 KiB per stream, so failures at the end
+of build/test output are never lost. `read_file`, `list_files` and `search` cap
+each page at 64 KiB and keep their paging.
 
 Explicit HTTP 429/503 responses can retry before any successful stream, honoring
 numeric or HTTP-date Retry-After with a bounded delay. Partial streams, ambiguous
@@ -199,8 +260,14 @@ non-text OpenRouter models. Standalone chat/exec load metadata before starting.
 
 ## Workspace instructions, files and checkpoints
 
-Root/ancestor `AGENTS.md` and bounded, scoped child instructions are loaded each
-turn, with more specific directories taking precedence. Native file tools respect
+Root/ancestor `AGENTS.md` files are loaded in full each turn (32 KiB each, 64 KiB
+total). Nested `AGENTS.md` files that pass the privacy policy are only listed by
+relative path (up to 32 paths / 4 KiB, sorted); the agent reads the relevant one
+with `read_file` before working in that directory, where it takes precedence.
+Reasoning (`reasoning_content`/`reasoning_details`) of earlier turns is still sent
+back unchanged: DeepSeek documents that requests with tools must pass back the
+reasoning of all previous turns (a 400 error otherwise), and MiniMax asks for the
+complete assistant message in tool-call history. Native file tools respect
 `.gitignore`, `.trexignore`, sensitive-file defaults and link/path checks. `.env`,
 private keys and common credential locations are excluded. `privacy.allowPaths`
 allows an exact workspace-relative file explicitly; `allowSensitiveFiles` and

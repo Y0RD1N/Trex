@@ -121,6 +121,14 @@ impl Policy {
         Ok(())
     }
 }
+/// Nested AGENTS.md files are listed, not inlined: their paths cost a few
+/// tokens per request, their contents only when the agent works there.
+const MAX_NESTED_INDEX: usize = 32;
+const MAX_NESTED_INDEX_BYTES: usize = 4 * 1024;
+
+/// System-prompt guidance: AGENTS.md of the workspace root and its ancestors
+/// in full (32 KiB each, 64 KiB total), plus an index of nested AGENTS.md
+/// files that pass the privacy policy, to be read with read_file on demand.
 pub fn guidance(root: &Path, privacy: &PrivacySettings) -> Result<String> {
     let policy = Policy::new(root, privacy.clone())?;
     let mut files = Vec::new();
@@ -133,6 +141,7 @@ pub fn guidance(root: &Path, privacy: &PrivacySettings) -> Result<String> {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .max_depth(Some(8))
+        .sort_by_file_path(|a, b| a.cmp(b))
         .filter_entry(|e| {
             !matches!(
                 e.file_name().to_str(),
@@ -140,8 +149,10 @@ pub fn guidance(root: &Path, privacy: &PrivacySettings) -> Result<String> {
             ) && !e.path_is_symlink()
         })
         .build();
+    let mut nested = Vec::new();
+    let mut omitted = 0usize;
     for (n, entry) in walker.enumerate() {
-        if n >= 10000 || files.len() >= 64 {
+        if n >= 10000 {
             break;
         }
         let Ok(e) = entry else {
@@ -149,12 +160,21 @@ pub fn guidance(root: &Path, privacy: &PrivacySettings) -> Result<String> {
         };
         if e.file_name() == "AGENTS.md"
             && e.path() != root.join("AGENTS.md")
+            && e.file_type().is_some_and(|kind| kind.is_file())
             && policy.allowed(e.path(), false)
         {
-            files.push((
-                e.path().to_path_buf(),
-                e.path().parent().unwrap_or(root).to_path_buf(),
-            ));
+            let relative = e
+                .path()
+                .strip_prefix(root)
+                .unwrap_or(e.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            let used: usize = nested.iter().map(|p: &String| p.len() + 2).sum();
+            if nested.len() < MAX_NESTED_INDEX && used + relative.len() <= MAX_NESTED_INDEX_BYTES {
+                nested.push(relative);
+            } else {
+                omitted += 1;
+            }
         }
     }
     let mut result = String::new();
@@ -176,6 +196,17 @@ pub fn guidance(root: &Path, privacy: &PrivacySettings) -> Result<String> {
         }
         result.push_str(&format!("\nProject instructions, scope {} (more specific directories take precedence; tool permissions remain authoritative):\n{text}\n",scope.display()));
     }
+    if !nested.is_empty() {
+        result.push_str(&format!(
+            "\nMore specific project instructions exist in: {}{}. Read the relevant AGENTS.md with read_file before working in that directory; it takes precedence there.\n",
+            nested.join(", "),
+            if omitted > 0 {
+                format!(" (and {omitted} more; find them with list_files/search)")
+            } else {
+                String::new()
+            }
+        ));
+    }
     Ok(result)
 }
 
@@ -191,5 +222,28 @@ mod tests {
         assert!(!p.allowed(&d.path().join("cache/file"), false));
         assert!(!p.allowed(&d.path().join(".env"), false));
         assert!(p.allowed(&d.path().join(".env.example"), false));
+    }
+
+    #[test]
+    fn root_guidance_is_inlined_and_nested_guidance_is_only_indexed() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("AGENTS.md"), "ROOT_RULES: run tests").unwrap();
+        fs::write(d.path().join(".gitignore"), "generated/\n").unwrap();
+        for dir in ["web/app", "api", "generated"] {
+            fs::create_dir_all(d.path().join(dir)).unwrap();
+            fs::write(
+                d.path().join(dir).join("AGENTS.md"),
+                format!("NESTED_RULES_{dir}"),
+            )
+            .unwrap();
+        }
+        let text = guidance(d.path(), &PrivacySettings::default()).unwrap();
+        assert!(text.contains("ROOT_RULES: run tests"));
+        assert!(!text.contains("NESTED_RULES"), "nested contents are not inlined");
+        assert!(text.contains("api/AGENTS.md, web/app/AGENTS.md"), "{text}");
+        assert!(text.contains("read_file"));
+        assert!(!text.contains("generated/AGENTS.md"), "privacy policy applies");
+        // Deterministic order keeps the system prompt (and its cache) stable.
+        assert_eq!(text, guidance(d.path(), &PrivacySettings::default()).unwrap());
     }
 }

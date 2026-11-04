@@ -14,11 +14,15 @@
       "autoCompact": true,
       "thresholdPercent": 80,
       "reserveTokens": 2048,
-      "fallbackWindow": null,
+      "fallbackWindow": 128000,
+      "maxActiveTokens": 128000,
+      "clearToolResultsAfterTurns": 2,
+      "maxHistoryImages": 3,
       "keepRecentTurns": 4,
       "summaryMaxChars": 24000
     },
     "provider": {
+      "pricing": null,
       "maxOutputTokens": 16384,
       "customOutputParameter": "max_tokens",
       "customEffortParameter": null,

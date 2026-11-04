@@ -166,6 +166,10 @@ an earlier one. Missing/invalid counters remain unknown: `contextTokens` is
 omitted, rather than reported as zero. `totalTokens` sums each durable turn's
 valid input/output counts once. `contextModel` and any usage `contextWindow`
 belong to the measured model and can differ from the selected model on restore.
+`usage.byModel?:{[model]:ApiUsage}` adds the measured totals per recorded model.
+`apiUsage.costEstimated?:true` marks a `costUsd` computed locally from
+`provider.pricing`/catalog prices because the provider reported no cost; it is
+not a provider bill.
 Existing version-1 journals remain loadable; historical missing counts are not
 estimated.
 
@@ -218,8 +222,14 @@ receipts stop the turn and require explicit recovery acknowledgement. They
 never cause automatic retries or duplicate clicks.
 
 MCP tool results normalize to
-`{text,structuredContent?,artifacts:ArtifactRef[],isError?}`. Native tool JSON
-retains its existing shape. An artifact reference is
+`{text,structuredContent?,artifacts:ArtifactRef[],isError?}`. A text block whose
+JSON equals `structuredContent` (the MCP convention, used by Trex Browser) is not
+stored again, so `text` may be empty. The model receives a lean projection only:
+Trex Browser envelopes become `{ok, ...data, revision?, error?}`, other structured
+results `{result}`, plus `text` (remaining text and artifact notes), compact
+`artifacts:[{artifactId,kind,mimeType,width?,height?}]` and `isError`. Receipts,
+operation/project IDs, hashes and provenance stay in `tool/result` events and the
+journal. Native tool JSON retains its existing shape. An artifact reference is
 `{id,sha256,mimeType,sizeBytes,width?,height?,kind,storage:"local"|"broker",provenance}`.
 `tool/result` includes a top-level `artifacts` array, and projected tool history
 items expose the same metadata. Image bytes are stored in the private
@@ -387,6 +397,18 @@ lease independently of provider acknowledgements. Stop, lost ownership, an
 uncertain reply or transport failure ends delegation with recovery required.
 Measurements already received remain accounted for.
 
+The tool definitions mirror the app protocol: `trex_task_status({taskId?,waitMs?,
+detail?:"compact"|"full"})` returns compact statuses and delivers each new report
+once (a delivered report returns as `reportPreview` with `reportDelivered:true`;
+`detail:"full"` adds the instruction and full report); coordinators end their
+turn instead of polling, since the app opens a new turn when delegations finish.
+`trex_team_plan` returns `{published,issued,steps:[{taskKey,memberId,dependsOn?,
+taskId?,status?}]}`; `trex_delegate_task` returns `{taskId,status,member,task:{id,
+status},awaitCoordinatorTurnEnd?,usage?,report?}` and the CLI still reads
+`task.status` for uncertain/cancelled results. The journal keeps the bridge's MCP
+response; the model receives only its `structuredContent` (plus `isError:true`),
+never the wrapper or a duplicated text copy.
+
 Task histories and provider histories are separate. Report/argument bounds and
 configured member/policy checks are enforced in the app bridge. The bridge
 inherits only the operating-system environment needed to run; provider API keys
@@ -484,8 +506,21 @@ Native tools also include `edit_file`, `make_directory`, `rename_file`,
 allows only read tools and `update_plan`; unknown names remain mutating.
 `task_state({offset?,limit?})` reads the last durable successful plan, including
 archived tasks. `history_search({query,limit?})` returns bounded retained-history
-excerpts, omitting structured image bytes. Compaction is an extract, not a claim
-that every prior detail remains in the provider's active context.
+excerpts around the first match (`messageIndex`, `offset`, `excerpt`, `truncated`,
+`totalBytes`), omitting structured image bytes. `history_search({messageIndex,
+offset?})` reads 16 KiB of that stored message (`text`, `nextOffset` or null);
+archived and trimmed tool results name their `messageIndex`. Compaction is an
+extract, not a claim that every prior detail remains in the provider's active
+context. Tool results older than `context.clearToolResultsAfterTurns` user turns
+are replaced only in the provider request, at turn boundaries; events, journal
+and `session/history` are unchanged.
+
+`enable_tools({group})` is a server-handled, read-only tool advertised when a
+deferred group is available (`browser_devtools`, `browser_capture`,
+`browser_session`). It returns `{group,enabled,alreadyEnabled,tools}` and appends
+that group's definitions to the end of the tool list from the next request on.
+The journal stores `enabledToolGroups` (omitted when empty; older readers ignore
+it). Deferred tools stay callable within the session mode and policy.
 
 `shell({command,background:true,interactive?:true,pty?:true,rows?,cols?})`
 starts an owned job; foreground commands do not accept interactive/PTY options.

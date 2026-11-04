@@ -31,7 +31,11 @@ use tokio_util::sync::CancellationToken;
 use walkdir::WalkDir;
 
 const MAX_FILE_BYTES: usize = 1024 * 1024;
+/// Captured shell/Git output kept in the journal and UI (half per stream).
+/// The model receives a smaller head+tail projection (see context.rs).
 const MAX_OUTPUT_BYTES: usize = 128 * 1024;
+/// read_file/list_files/search results: paged, so the model asks for more.
+const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_RESULTS: usize = 1000;
 const MAX_VISITED: usize = 10_000;
 // Every iterator stays open within the depth budget. A smaller max_open would
@@ -328,6 +332,10 @@ impl ToolRegistry {
             .collect()
     }
     pub fn is_mutating(&self, mode: &str, name: &str, input: &Value) -> bool {
+        // Server-handled: it only changes which tools are advertised.
+        if name == "enable_tools" {
+            return false;
+        }
         self.provider(mode, name)
             .is_none_or(|provider| provider.is_mutating(name, input))
     }
@@ -350,30 +358,30 @@ impl ToolRegistry {
 /// OpenAI Chat Completions function-tool definitions.
 pub fn definitions() -> Vec<Value> {
     let specs = [
-        ("read_file", "Read a UTF-8 workspace file (max 1 MiB). offset is a zero-based line offset; limit defaults to 200 (max 2000). Output is capped at 128 KiB.", json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":2000}}), vec!["path"]),
-        ("list_files", "List workspace text files and directories, skipping symlinks, binary files, .git, node_modules and target. At most 1000 entries and 10000 visited entries. Defaults: path '.', recursive false.", json!({"path":{"type":"string"},"recursive":{"type":"boolean"}}), vec![]),
-        ("search", "Search UTF-8 workspace files with a Rust regex. Skips symlinks, binary/oversized files, .git, node_modules and target. One result per matching line. maxResults defaults to 100 (max 1000); scanned bytes and output are bounded.", json!({"pattern":{"type":"string"},"path":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}}), vec!["pattern"]),
-        ("write_file", "Atomically replace or create a UTF-8 workspace file (max 1 MiB). Parent directory must already exist. Symlinks and reparse points are rejected.", json!({"path":{"type":"string"},"content":{"type":"string"}}), vec!["path","content"]),
-        ("edit_file","Replace one exact text fragment in a UTF-8 file. Fails on missing or ambiguous matches. Optional expectedHash is the SHA256 from read_file. Preserves all untouched text and line endings.",json!({"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"expectedHash":{"type":"string"}}),vec!["path","oldText","newText"]),
-        ("make_directory","Create one workspace directory; the parent must exist. No recursive creation or links.",json!({"path":{"type":"string"}}),vec!["path"]),
-        ("rename_file","Rename a UTF-8 workspace file without overwriting another file; native checkpoints preserve the change.",json!({"path":{"type":"string"},"destination":{"type":"string"}}),vec!["path","destination"]),
-        ("remove_file","Remove one UTF-8 workspace file, with a private checkpoint when enabled. Never recursively deletes directories.",json!({"path":{"type":"string"}}),vec!["path"]),
-        ("checkpoint_list","List this workspace's native-file checkpoints. Shell changes are not included.",json!({}),vec![]),
+        ("read_file", "Read a UTF-8 workspace file (max 1 MiB) by lines: offset is zero-based, limit defaults to 200 (max 2000). Output is capped at 64 KiB; page with offset.", json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":2000}}), vec!["path"]),
+        ("list_files", "List workspace text files and directories (skips symlinks, binaries, .git, node_modules, target; max 1000 entries). Defaults: path '.', recursive false.", json!({"path":{"type":"string"},"recursive":{"type":"boolean"}}), vec![]),
+        ("search", "Search UTF-8 workspace files with a Rust regex, one result per matching line (same skips as list_files). maxResults defaults to 100 (max 1000); output is bounded.", json!({"pattern":{"type":"string"},"path":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":1000}}), vec!["pattern"]),
+        ("write_file", "Atomically create or replace a UTF-8 workspace file (max 1 MiB). The parent directory must exist; links are rejected.", json!({"path":{"type":"string"},"content":{"type":"string"}}), vec!["path","content"]),
+        ("edit_file","Replace one exact, unique text fragment in a UTF-8 file, preserving everything else. Optional expectedHash is read_file's sha256.",json!({"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"expectedHash":{"type":"string"}}),vec!["path","oldText","newText"]),
+        ("make_directory","Create one workspace directory; the parent must exist.",json!({"path":{"type":"string"}}),vec!["path"]),
+        ("rename_file","Rename a UTF-8 workspace file without overwriting another file.",json!({"path":{"type":"string"},"destination":{"type":"string"}}),vec!["path","destination"]),
+        ("remove_file","Remove one UTF-8 workspace file (checkpointed when enabled). Never deletes directories.",json!({"path":{"type":"string"}}),vec!["path"]),
+        ("checkpoint_list","List this workspace's native-file checkpoints (shell changes are not included).",json!({}),vec![]),
         ("checkpoint_diff","Review a native-file checkpoint's recorded changes.",json!({"id":{"type":"string"}}),vec!["id"]),
-        ("checkpoint_restore","Restore one workspace checkpoint only when every affected file still matches its recorded result. Never overwrites newer changes.",json!({"id":{"type":"string"}}),vec!["id"]),
-        ("git_status","Inspect Git status with optional locks and filesystem-monitor execution disabled.",json!({}),vec![]),
-        ("git_diff","Inspect tracked Git changes; external diff and textconv are disabled. Optional path stays in the workspace.",json!({"path":{"type":"string"},"staged":{"type":"boolean"}}),vec![]),
-        ("apply_patch", "Apply a strict JSON patch string: {\"files\":[{\"path\":\"relative/path\",\"before\":\"exact entire current text\",\"after\":\"entire replacement text\"}]}. before:null creates a file. No deletes or directory creation. All preconditions validated before replacements. Max 32 files, 1 MiB/file, 4 MiB patch. Atomic per file; OS commit failures may partially apply a multi-file patch.", json!({"patch":{"type":"string"}}), vec!["patch"]),
-        ("shell", "Run an authorized shell command. Foreground timeoutMs defaults to 60000 (max 600000); interrupted commands may require recovery. Use background:true for servers and watches. Add interactive:true to send stdin, or pty:true for a real interactive terminal. Background mode omits timeoutMs. Retain the owned id for process_output/process_write/process_stop; closing this CLI ends its terminals.", json!({"command":{"type":"string"},"background":{"type":"boolean"},"interactive":{"type":"boolean"},"pty":{"type":"boolean"},"rows":{"type":"integer","minimum":10,"maximum":500},"cols":{"type":"integer","minimum":10,"maximum":500},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000}}), vec!["command"]),
-        ("process_list", "List this session's background terminals and their current status. Does not launch or restart commands.", json!({}), vec![]),
-        ("process_output", "Read up to the last 64 KiB of output. Pass the previous nextOffset as after to read incremental output; truncated indicates lost older bytes.", json!({"id":{"type":"string"},"after":{"type":"integer","minimum":0}}), vec!["id"]),
-        ("process_write","Send text to stdin of one owned interactive process or PTY. This can execute commands and follows mutation permissions.",json!({"id":{"type":"string"},"text":{"type":"string","maxLength":32768}}),vec!["id","text"]),
+        ("checkpoint_restore","Restore a checkpoint only if every affected file still matches its recorded result; never overwrites newer changes.",json!({"id":{"type":"string"}}),vec!["id"]),
+        ("git_status","Show Git status (no locks, no fsmonitor).",json!({}),vec![]),
+        ("git_diff","Show tracked Git changes (no external diff/textconv), optionally for one workspace path or staged.",json!({"path":{"type":"string"},"staged":{"type":"boolean"}}),vec![]),
+        ("apply_patch", "Apply a strict JSON patch string: {\"files\":[{\"path\":\"relative/path\",\"before\":\"exact entire current text\",\"after\":\"entire replacement text\"}]}. before:null creates a file; no deletes or directories. Preconditions are checked first; max 32 files, 1 MiB/file. Atomic per file: an OS failure may partially apply a multi-file patch.", json!({"patch":{"type":"string"}}), vec!["patch"]),
+        ("shell", "Run an authorized shell command. Foreground timeoutMs defaults to 60000 (max 600000); an interrupted command may need recovery. background:true for servers/watches (no timeoutMs); interactive:true to send stdin, pty:true for a terminal. Keep the returned id for process_output/process_write/process_stop. Long output keeps its head and tail.", json!({"command":{"type":"string"},"background":{"type":"boolean"},"interactive":{"type":"boolean"},"pty":{"type":"boolean"},"rows":{"type":"integer","minimum":10,"maximum":500},"cols":{"type":"integer","minimum":10,"maximum":500},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000}}), vec!["command"]),
+        ("process_list", "List this session's background terminals and their status.", json!({}), vec![]),
+        ("process_output", "Read the latest output (up to 64 KiB). Pass the previous nextOffset as after for new output only; truncated means older bytes were lost.", json!({"id":{"type":"string"},"after":{"type":"integer","minimum":0}}), vec!["id"]),
+        ("process_write","Send text to an owned interactive process or PTY. This can execute commands and follows mutation permissions.",json!({"id":{"type":"string"},"text":{"type":"string","maxLength":32768}}),vec!["id","text"]),
         ("process_resize","Resize one owned active PTY.",json!({"id":{"type":"string"},"rows":{"type":"integer","minimum":10,"maximum":500},"cols":{"type":"integer","minimum":10,"maximum":500}}),vec!["id","rows","cols"]),
-        ("process_stop", "Stop exactly one owned background terminal and its descendants, preserving the chat and other terminals. Never use an OS PID.", json!({"id":{"type":"string"}}), vec!["id"]),
-        ("trex_read_messages", "Read newly queued user messages. Handled by the server, not the native tool executor.", json!({}), vec![]),
-        ("task_state","Read the latest durable task list, including after context compaction. offset defaults to 0, limit to 10 (max 64). Does not change tasks.",json!({"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":64}}),vec![]),
-        ("history_search","Search this conversation's full retained text history, including context archived by compaction. Returns bounded text excerpts, never image bytes or opaque reasoning.",json!({"query":{"type":"string","maxLength":1024},"limit":{"type":"integer","minimum":1,"maximum":20}}),vec!["query"]),
-        ("update_plan", "Publish or update your visible task list. Keep completed work marked completed, the current step in_progress, and future steps pending. Do not mark unverified work complete. This only updates the plan; it does not execute tasks.", json!({"plan":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"step":{"type":"string","maxLength":2000},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["step","status"],"additionalProperties":false}}}), vec!["plan"]),
+        ("process_stop", "Stop one owned background terminal and its descendants (never an OS PID).", json!({"id":{"type":"string"}}), vec!["id"]),
+        ("trex_read_messages", "Read newly queued user messages.", json!({}), vec![]),
+        ("task_state","Read the latest durable task list (also after compaction). offset defaults to 0, limit to 10 (max 64).",json!({"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":64}}),vec![]),
+        ("history_search","Search this conversation's full retained history, including compacted context and archived tool results (excerpts around the match). With messageIndex (from a match or an archive note) read that message instead, 16 KiB from offset.",json!({"query":{"type":"string","maxLength":1024},"limit":{"type":"integer","minimum":1,"maximum":20},"messageIndex":{"type":"integer","minimum":0},"offset":{"type":"integer","minimum":0}}),vec![]),
+        ("update_plan", "Publish or update your visible task list: completed work completed, the current step in_progress, future steps pending. Never mark unverified work complete.", json!({"plan":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"step":{"type":"string","maxLength":2000},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["step","status"],"additionalProperties":false}}}), vec!["plan"]),
     ];
     specs.into_iter().map(|(name, description, properties, required)| json!({
         "type":"function", "function": {"name":name,"description":description,
@@ -381,11 +389,84 @@ pub fn definitions() -> Vec<Value> {
     })).collect()
 }
 
+/// Deferred tool groups: not advertised until enable_tools turns them on for
+/// the session. Order is fixed so the advertised list stays deterministic.
+pub const TOOL_GROUPS: &[(&str, &str)] = &[
+    ("browser_devtools", "browser_evaluate, request mocking, viewport/color/network emulation, frames, response bodies, hover, drag, raw mouse, file upload"),
+    ("browser_capture", "video, Playwright traces, performance/CPU profiles, heap snapshots, reading or opening generated artifacts"),
+    ("browser_session", "manual pause, ownership takeover, cancelling one operation"),
+];
+
+pub fn tool_group(name: &str) -> Option<&'static str> {
+    crate::browser::tool_group(name)
+}
+
+fn tool_name(tool: &Value) -> &str {
+    tool["function"]["name"].as_str().unwrap_or("")
+}
+
+/// The tools sent to the model: the core set, then enable_tools (when a
+/// deferred group is available), then each enabled group in the order it was
+/// enabled. Enabling only appends, so the earlier prefix stays cacheable.
+pub fn advertised(all: &[Value], enabled: &[String]) -> Vec<Value> {
+    let mut result: Vec<Value> = all
+        .iter()
+        .filter(|tool| tool_group(tool_name(tool)).is_none())
+        .cloned()
+        .collect();
+    let available: Vec<_> = TOOL_GROUPS
+        .iter()
+        .filter(|(group, _)| all.iter().any(|tool| tool_group(tool_name(tool)) == Some(group)))
+        .collect();
+    if available.is_empty() {
+        return result;
+    }
+    let summary = available
+        .iter()
+        .map(|(group, description)| format!("{group} ({description})"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    result.push(json!({"type":"function","function":{"name":"enable_tools","description":format!("Advertise an advanced tool group for the rest of this session; its tools appear from your next step. Groups: {summary}."),
+        "parameters":{"type":"object","properties":{"group":{"type":"string","enum":available.iter().map(|(group, _)| *group).collect::<Vec<_>>()}},"required":["group"],"additionalProperties":false}}}));
+    for group in enabled {
+        if available.iter().any(|(name, _)| name == group) {
+            result.extend(
+                all.iter()
+                    .filter(|tool| tool_group(tool_name(tool)) == Some(group.as_str()))
+                    .cloned(),
+            );
+        }
+    }
+    result
+}
+
+/// enable_tools: validates the group against this session's tools and
+/// records it once. Returns the group's tool names.
+pub fn enable_group(all: &[Value], enabled: &mut Vec<String>, input: &Value) -> Result<Value> {
+    let obj = fields(input, &["group"], &["group"])?;
+    let group = string(obj, "group")?;
+    let tools: Vec<&str> = all
+        .iter()
+        .map(tool_name)
+        .filter(|name| tool_group(name) == Some(group))
+        .collect();
+    ensure!(
+        !tools.is_empty(),
+        "unknown tool group or no tools available in this mode"
+    );
+    let already = enabled.iter().any(|name| name == group);
+    if !already {
+        enabled.push(group.to_owned());
+    }
+    Ok(json!({"group":group,"enabled":true,"alreadyEnabled":already,"tools":tools,"note":"These tools are available from your next step."}))
+}
+
 /// Unknown tool names fail closed under a caller's read-only policy.
 pub fn is_mutating(name: &str) -> bool {
     !matches!(
         name,
         "read_file"
+            | "enable_tools"
             | "list_files"
             | "search"
             | "trex_read_messages"
@@ -860,7 +941,7 @@ fn read_file(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Resul
     let mut clipped = false;
     for line in lines.iter().skip(offset).take(limit) {
         check_cancel(cancel)?;
-        let chunk = prefix(line, MAX_OUTPUT_BYTES - content.len());
+        let chunk = prefix(line, MAX_READ_BYTES - content.len());
         content.push_str(chunk);
         count += 1;
         if chunk.len() < line.len() {
@@ -939,7 +1020,7 @@ fn list_files(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Resu
             if meta.is_dir() || (meta.is_file() && text_sample(&checked)?) {
                 let result = json!({"path":rel,"type":if meta.is_dir(){"directory"}else{"file"}});
                 let cost = serde_json::to_vec(&result)?.len();
-                if output_bytes + cost > MAX_OUTPUT_BYTES {
+                if output_bytes + cost > MAX_READ_BYTES {
                     truncated = true;
                     break;
                 }
@@ -1037,7 +1118,7 @@ fn search(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Result<V
             let excerpt = prefix(line, 2048);
             let result = json!({"path":rel,"line":line_number+1,"text":excerpt,"lineTruncated":excerpt.len()<line.len()});
             let cost = serde_json::to_vec(&result)?.len();
-            if matches.len() == max || output + cost > MAX_OUTPUT_BYTES {
+            if matches.len() == max || output + cost > MAX_READ_BYTES {
                 truncated = true;
                 break 'files;
             }
@@ -1683,20 +1764,50 @@ fn apply_patch(ws: &Workspace, input: &Value, cancel: &CancellationToken) -> Res
     )
 }
 
+/// Bounded capture of one stream: the first quarter and the last three
+/// quarters of MAX_OUTPUT_BYTES / 2. Build and test failures are usually
+/// reported at the end, so the tail is never dropped for the head.
 async fn capture(mut pipe: impl tokio::io::AsyncRead + Unpin) -> Result<(Vec<u8>, bool)> {
-    let mut result = Vec::new();
-    let mut truncated = false;
+    const MARKER_RESERVE: usize = 64;
+    let limit = MAX_OUTPUT_BYTES / 2;
+    let head_limit = limit / 4;
+    let tail_limit = limit - head_limit - MARKER_RESERVE;
+    let mut head = Vec::new();
+    let mut tail = std::collections::VecDeque::<u8>::new();
+    let mut total = 0usize;
     let mut buffer = [0u8; 8192];
     loop {
         let n = pipe.read(&mut buffer).await?;
         if n == 0 {
             break;
         }
-        let keep = n.min(MAX_OUTPUT_BYTES / 2 - result.len());
-        result.extend_from_slice(&buffer[..keep]);
-        truncated |= keep < n;
+        total = total.saturating_add(n);
+        let take = n.min(head_limit - head.len());
+        head.extend_from_slice(&buffer[..take]);
+        tail.extend(&buffer[take..n]);
+        if tail.len() > tail_limit {
+            let excess = tail.len() - tail_limit;
+            tail.drain(..excess);
+        }
     }
-    Ok((result, truncated))
+    let omitted = total - head.len() - tail.len();
+    if omitted == 0 {
+        head.extend(tail);
+        return Ok((head, false));
+    }
+    // Cut both parts at UTF-8 boundaries (text output stays valid text).
+    if let Err(error) = std::str::from_utf8(&head) {
+        if error.error_len().is_none() {
+            head.truncate(error.valid_up_to());
+        }
+    }
+    while tail.front().is_some_and(|byte| byte & 0xc0 == 0x80) {
+        tail.pop_front();
+    }
+    let omitted = total - head.len() - tail.len();
+    head.extend_from_slice(format!("\n[... {omitted} bytes omitted ...]\n").as_bytes());
+    head.extend(tail);
+    Ok((head, true))
 }
 
 #[cfg(windows)]
@@ -2018,13 +2129,14 @@ pub(crate) async fn shell_configured(
             guard.pid = None;
             let stdout = String::from_utf8_lossy(&stdout);
             let stderr = String::from_utf8_lossy(&stderr);
-            let stdout_text = prefix(&stdout, MAX_OUTPUT_BYTES / 2);
-            let stderr_text = prefix(&stderr, MAX_OUTPUT_BYTES / 2);
+            // Lossy decoding of binary output can grow; keep head and tail.
+            let stdout_text = crate::context::head_tail(&stdout, MAX_OUTPUT_BYTES / 2, 25, "");
+            let stderr_text = crate::context::head_tail(&stderr, MAX_OUTPUT_BYTES / 2, 25, "");
             Ok(
                 json!({"exitCode":status.code(),"success":status.success(),"isError":!status.success(),
-                "stdout":stdout_text,"stderr":stderr_text,
-                "stdoutTruncated":out_truncated || stdout_text.len() < stdout.len(),
-                "stderrTruncated":err_truncated || stderr_text.len() < stderr.len()}),
+                "stdoutTruncated":out_truncated || stdout_text.len() != stdout.len(),
+                "stderrTruncated":err_truncated || stderr_text.len() != stderr.len(),
+                "stdout":stdout_text,"stderr":stderr_text}),
             )
         }
         Err(error) => {
@@ -2182,7 +2294,7 @@ mod tests {
         assert!(read_file(&ws, &json!({"path":"large"}), &cancel).is_err());
         fs::write(dir.path().join("long"), "é".repeat(MAX_OUTPUT_BYTES)).unwrap();
         let result = read_file(&ws, &json!({"path":"long"}), &cancel).unwrap();
-        assert!(result["content"].as_str().unwrap().len() <= MAX_OUTPUT_BYTES);
+        assert!(result["content"].as_str().unwrap().len() <= MAX_READ_BYTES);
         assert_eq!(result["truncated"], true);
     }
     #[test]
@@ -2234,6 +2346,96 @@ mod tests {
         assert_eq!(result["success"], true);
         assert_eq!(result["stdoutTruncated"], true);
         assert!(result["stdout"].as_str().unwrap().len() <= MAX_OUTPUT_BYTES / 2);
+        assert!(result["stdout"].as_str().unwrap().contains("bytes omitted"));
+    }
+
+    #[tokio::test]
+    async fn captured_output_keeps_head_and_tail_where_errors_are() {
+        let mut text = String::from("FIRST LINE\n");
+        while text.len() < 300 * 1024 {
+            text.push_str("progress line ü\n");
+        }
+        text.push_str("error[E0308]: mismatched types at the very end\n");
+        let (bytes, truncated) = capture(text.as_bytes()).await.unwrap();
+        let captured = String::from_utf8(bytes).expect("tail starts on a UTF-8 boundary");
+        assert!(truncated);
+        assert!(captured.len() <= MAX_OUTPUT_BYTES / 2);
+        assert!(captured.starts_with("FIRST LINE"));
+        assert!(captured.ends_with("mismatched types at the very end\n"));
+        assert!(captured.contains("bytes omitted"));
+        let (small, truncated) = capture(&b"short output"[..]).await.unwrap();
+        assert_eq!((small.as_slice(), truncated), (&b"short output"[..], false));
+    }
+
+    #[test]
+    fn native_definitions_stay_compact() {
+        let tools = definitions();
+        let bytes = serde_json::to_vec(&tools).unwrap().len();
+        println!("native tool definitions: {} tools, {bytes} bytes", tools.len());
+        // Sent with every request; keep descriptions short (9,253 bytes before
+        // the descriptions were tightened).
+        assert!(bytes < 9 * 1024, "{bytes} bytes");
+        let history = tools
+            .iter()
+            .find(|tool| tool["function"]["name"] == "history_search")
+            .unwrap();
+        assert!(history["function"]["parameters"]["properties"]["messageIndex"].is_object());
+    }
+
+    #[test]
+    fn deferred_groups_are_appended_only_after_enable_tools() {
+        let browser = |name: &str| {
+            json!({"type":"function","function":{"name":name,"description":"fixture","parameters":{"type":"object"}}})
+        };
+        let mut all = definitions();
+        for name in [
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_evaluate",
+            "browser_start_video",
+            "browser_artifact",
+            "browser_pause",
+        ] {
+            all.push(browser(name));
+        }
+        let names = |tools: &[Value]| {
+            tools
+                .iter()
+                .map(|tool| tool["function"]["name"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let initial = advertised(&all, &[]);
+        let initial_names = names(&initial);
+        assert!(initial_names.contains(&"browser_snapshot".to_owned()));
+        assert!(!initial_names.contains(&"browser_evaluate".to_owned()));
+        assert_eq!(initial_names.last().unwrap(), "enable_tools");
+        println!(
+            "enable_tools definition: {} bytes",
+            serde_json::to_vec(initial.last().unwrap()).unwrap().len()
+        );
+        assert_eq!(
+            initial.last().unwrap()["function"]["parameters"]["properties"]["group"]["enum"],
+            json!(["browser_devtools", "browser_capture", "browser_session"])
+        );
+        let mut enabled = vec![];
+        let result = enable_group(&all, &mut enabled, &json!({"group":"browser_capture"})).unwrap();
+        assert_eq!(result["tools"], json!(["browser_start_video", "browser_artifact"]));
+        assert!(enable_group(&all, &mut enabled, &json!({"group":"desktop"})).is_err());
+        assert!(enable_group(&all, &mut enabled, &json!({"group":"browser_capture","x":1})).is_err());
+        let again = enable_group(&all, &mut enabled, &json!({"group":"browser_capture"})).unwrap();
+        assert_eq!(again["alreadyEnabled"], true);
+        assert_eq!(enabled, vec!["browser_capture".to_owned()]);
+        let after = advertised(&all, &enabled);
+        // Enabling only appends: the earlier (cached) prefix is unchanged.
+        assert_eq!(after[..initial.len()], initial[..]);
+        assert_eq!(
+            names(&after[initial.len()..]),
+            vec!["browser_start_video", "browser_artifact"]
+        );
+        // Without deferred tools there is no enable_tools at all.
+        assert!(!names(&advertised(&definitions(), &[])).contains(&"enable_tools".to_owned()));
+        assert!(!is_mutating("enable_tools"));
+        assert!(!ToolRegistry::new(None).is_mutating("ask", "enable_tools", &json!({})));
     }
 
     #[test]

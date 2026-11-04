@@ -882,3 +882,117 @@ fn oversized_completed_tool_batch_is_compacted_without_losing_original_history_o
             >= 2000
     );
 }
+
+#[test]
+fn old_tool_results_are_archived_at_turn_boundaries_and_stay_searchable() {
+    let f = Fixture::new();
+    let body = format!("ARCHIVE_ME_HEAD\n{}", "padding line\n".repeat(400));
+    fs::write(f.workspace.path().join("big.txt"), &body).unwrap();
+    let mut agent = f.agent();
+    let session = start(&f, &mut agent, "plan", json!({}));
+    agent.turn(&session, "one", "Read big.txt");
+    f.api.chat().completion(
+        calls(vec![tool("read", "read_file", json!({"path":"big.txt","limit":2000}))]),
+        "tool_calls",
+    );
+    let next = f.api.chat();
+    assert!(tool_output(&next, "read")["content"].as_str().unwrap().starts_with("ARCHIVE_ME_HEAD"));
+    next.final_text("Read it");
+    agent.completed("one", "completed");
+    // The previous turn's results stay verbatim.
+    agent.turn(&session, "two", "Anything else?");
+    let second = f.api.chat();
+    assert!(tool_output(&second, "read")["content"].is_string());
+    second.final_text("No");
+    agent.completed("two", "completed");
+    // Two user turns later the large result is a short placeholder, and it
+    // stays identical for every request of this turn's tool loop.
+    agent.turn(&session, "three", "Recall the first line of big.txt");
+    let third = f.api.chat();
+    let archived = |request: &HttpRequest| {
+        messages(request)
+            .iter()
+            .find(|m| m["role"] == "tool" && m["tool_call_id"] == "read")
+            .unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let placeholder = archived(&third);
+    assert!(placeholder.starts_with("[Archived read_file result ("), "{placeholder}");
+    assert!(placeholder.contains("history_search {\"messageIndex\":2}"));
+    assert!(placeholder.len() < 600);
+    third.completion(
+        calls(vec![tool("recall", "history_search", json!({"messageIndex":2}))]),
+        "tool_calls",
+    );
+    let fourth = f.api.chat();
+    assert_eq!(archived(&fourth), placeholder);
+    assert!(tool_output(&fourth, "recall")["text"]
+        .as_str()
+        .unwrap()
+        .contains("ARCHIVE_ME_HEAD"));
+    fourth.final_text("The first line is ARCHIVE_ME_HEAD");
+    agent.completed("three", "completed");
+    // Only the provider projection changed: the journal keeps the result.
+    let journal = f.journal(&session);
+    assert!(journal["messages"][2]["content"]
+        .as_str()
+        .unwrap()
+        .contains("ARCHIVE_ME_HEAD"));
+}
+
+#[test]
+fn absolute_active_token_cap_compacts_even_without_a_known_window() {
+    let f = Fixture::new();
+    let mut agent = f.agent();
+    let session = start(
+        &f,
+        &mut agent,
+        "plan",
+        json!({"context":{"fallbackWindow":null,"maxActiveTokens":4096,"keepRecentTurns":1}}),
+    );
+    for (id, text) in [("first", "ORIGINAL_REQUEST_MARKER explain"), ("second", "continue")] {
+        agent.turn(&session, id, text);
+        let request = f.api.chat();
+        if id == "second" {
+            assert!(messages(&request).iter().any(|m| m["content"]
+                .as_str()
+                .is_some_and(|s| s.contains("Earlier conversation reference")
+                    && s.contains("ORIGINAL_REQUEST_MARKER"))));
+            assert!(!messages(&request)
+                .iter()
+                .any(|m| m["content"] == "ORIGINAL_REQUEST_MARKER explain"));
+        }
+        request.final_text(&"answer ".repeat(1000));
+        agent.completed(id, "completed");
+    }
+    let journal = f.journal(&session);
+    assert_eq!(journal["compactions"].as_array().unwrap().len(), 1);
+    assert_eq!(journal["messages"][0]["content"], "ORIGINAL_REQUEST_MARKER explain");
+}
+
+#[test]
+fn turn_token_budget_counts_uncached_input_and_output() {
+    let f = Fixture::new();
+    let mut agent = f.agent();
+    let session = start(
+        &f,
+        &mut agent,
+        "plan",
+        json!({"limits":{"maxTurnTokens":12000},"provider":{"maxOutputTokens":100}}),
+    );
+    agent.turn(&session, "cached", "Plan with a warm prompt cache");
+    // 20,010 total tokens, but 19,990 were prompt-cache hits: 20 new tokens.
+    f.api.chat().json(json!({"choices":[{"index":0,"message":calls(vec![tool(
+        "plan",
+        "update_plan",
+        json!({"plan":[{"step":"Inspect","status":"in_progress"}]}),
+    )]),"finish_reason":"tool_calls"}],
+        "usage":{"prompt_tokens":20000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":19990}}}));
+    let next = f.api.chat();
+    next.final_text("Planned");
+    let end = agent.completed("cached", "completed");
+    assert_eq!(end["params"]["usage"]["apiUsage"]["cachedReadTokens"], 19990);
+    assert_eq!(end["params"]["usage"]["apiUsage"]["totalTokens"], 20024);
+}
