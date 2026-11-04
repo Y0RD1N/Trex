@@ -15,14 +15,20 @@
 .chat-task-panel header p { margin: var(--sp-1) 0 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .chat-task-panel header .icon-btn { flex-shrink: 0; }
 
-.chat-task-progress { flex-shrink: 0; padding: 0 var(--sp-4) var(--sp-3); }
-.chat-task-progress > div:first-child { display: flex; justify-content: space-between; gap: var(--sp-2); color: var(--text-muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
-.chat-task-progress strong { font-weight: var(--fw-medium); }
-.chat-task-total { display: flex; justify-content: space-between; gap: var(--sp-2); margin: var(--sp-2) 0 0; color: var(--text-muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
-.chat-task-total b { color: var(--text); font-weight: var(--fw-semibold); }
-.chat-task-track { height: 4px; margin-top: var(--sp-2-5); overflow: hidden; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text) 9%, transparent); }
+.chat-task-progress { flex-shrink: 0; display: grid; gap: var(--sp-2); padding: var(--sp-1) var(--sp-4) var(--sp-3-5); font-variant-numeric: tabular-nums; }
+.chat-task-count { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); font-size: var(--fs-sm); }
+.chat-task-count strong { color: var(--text); font-weight: var(--fw-medium); }
+.chat-task-count span { flex-shrink: 0; color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-medium); white-space: nowrap; }
+.chat-task-track { height: 4px; overflow: hidden; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text) 9%, transparent); }
 /* El progreso avanza con transform: no mueve el layout del panel. */
-.chat-task-track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transform-origin: left center; transition: transform var(--dur) var(--ease-out); }
+.chat-task-track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transform-origin: left center; transition: transform var(--dur) var(--ease-out), background-color var(--dur) var(--ease-out); }
+/* Lista terminada: el estado de éxito sustituye al acento. */
+.chat-task-progress[data-complete] .chat-task-track > span { background: var(--ok); }
+.chat-task-progress[data-complete] .chat-task-count span { color: var(--ok-text); }
+.chat-task-total { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--sp-1) var(--sp-3); margin: 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: var(--lh-normal, 1.5); }
+.chat-task-total > span { white-space: nowrap; }
+.chat-task-total b { color: var(--text); font-weight: var(--fw-semibold); }
+.chat-task-range { color: var(--text-dim); }
 
 .chat-task-list { flex: 1 1 auto; min-height: 60px; margin: 0; padding: 0 var(--sp-2) var(--sp-2); overflow: auto; list-style: none; overscroll-behavior: contain; }
 .chat-task-list li { margin: 2px 0 0; }

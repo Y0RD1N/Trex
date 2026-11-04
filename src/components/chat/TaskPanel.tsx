@@ -1,4 +1,4 @@
-import { formatClock } from "../../timeFormat";
+import { formatClock, formatClockRange } from "../../timeFormat";
 import { useTimeFormat } from "../../hooks/useTimeFormat";
 import { useEffect, useId, useState } from "react";
 import { formatDuration } from "../../chatState";
@@ -34,12 +34,16 @@ export default function TaskPanel({ tasks, author, paused, onClose, onReveal, pa
     <header><div><h2 id={id}><ListIcon size={16} />Tareas</h2><p>{tasks.length ? `Por ${author}` : "Organiza el trabajo de este chat"}</p></div>
       <button type="button" className="icon-btn" onClick={onClose} aria-label="Contraer lista de tareas"><CloseIcon size={14} /></button></header>
     {tasks.length > 0 ? <>
-      <div className="chat-task-progress"><div><strong>{done} de {tasks.length} completadas</strong><span>{Math.round(done / tasks.length * 100)}%</span></div>
-        {totalMs !== null && <p className="chat-task-total" aria-live="off">
-          <span>{allDone ? "Tiempo total" : "Tiempo transcurrido"} <b>{formatDuration(totalMs)}</b></span>
-          <span>{clock(Math.min(...starts))}{allDone && ends.length ? ` → ${clock(Math.max(...ends))}` : ""}</span></p>}
+      {/* Recuento, barra y tiempos: cada valor se mantiene en una línea; si no caben
+          juntos, el intervalo horario pasa entero a la línea siguiente. */}
+      <div className="chat-task-progress" data-complete={allDone || undefined}>
+        <div className="chat-task-count"><strong>{done} de {tasks.length} completadas</strong><span>{Math.round(done / tasks.length * 100)}{" "}%</span></div>
         <div className="chat-task-track" role="progressbar" aria-label="Tareas completadas" aria-valuemin={0} aria-valuemax={tasks.length} aria-valuenow={done}>
-          <span style={{ transform: `scaleX(${done / tasks.length})` }} /></div></div>
+          <span style={{ transform: `scaleX(${done / tasks.length})` }} /></div>
+        {totalMs !== null && <p className="chat-task-total" aria-live="off">
+          <span className="chat-task-duration">{allDone ? "Tiempo total" : "Tiempo transcurrido"} <b>{formatDuration(totalMs)}</b></span>
+          <span className="chat-task-range">{allDone && ends.length ? formatClockRange(Math.min(...starts), Math.max(...ends), timeFormat) : `Desde ${clock(Math.min(...starts))}`}</span></p>}
+      </div>
       <ol className="chat-task-list">{tasks.map((task, index) => <li key={task.id} data-status={task.status}>
         <button type="button" aria-current={selected?.id === task.id ? "step" : undefined} onClick={() => setSelected(task.id)}>
           <span className="chat-task-mark" aria-hidden="true">{task.status === "in_progress" ? <svg width="16" height="16" viewBox="0 0 16 16">

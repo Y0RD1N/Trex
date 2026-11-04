@@ -15,6 +15,27 @@ export function formatClock(value: number | Date, format: TimeFormat = current, 
   if (!Number.isFinite(date.getTime())) return "—";
   return new Intl.DateTimeFormat("es", { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hourCycle: format === "12h" ? "h12" : "h23" }).format(date);
 }
+/**
+ * Intervalo «inicio → fin» compacto: en 12 h, si ambas horas comparten «a. m.»
+ * o «p. m.», solo lo lleva la segunda (03:47 → 04:02 p. m.). Los espacios son
+ * duros para que una hora nunca se parta entre líneas.
+ */
+export function formatClockRange(start: number | Date, end: number | Date, format: TimeFormat = current): string {
+  const parts = (value: number | Date) => {
+    const date = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(date.getTime())) return null;
+    const pieces = new Intl.DateTimeFormat("es", { hour: "2-digit", minute: "2-digit", hourCycle: format === "12h" ? "h12" : "h23" }).formatToParts(date);
+    const period = pieces.filter(part => part.type === "dayPeriod").map(part => part.value).join("").trim();
+    const clock = pieces.filter(part => part.type !== "dayPeriod").map(part => part.value).join("").trim();
+    return { clock, period };
+  };
+  const from = parts(start), to = parts(end);
+  if (!from || !to) return "—";
+  const hard = (text: string) => text.replace(/\s+/g, " ");
+  const tail = to.period ? ` ${hard(to.period)}` : "";
+  const head = from.period && from.period !== to.period ? `${from.clock} ${hard(from.period)}` : from.clock;
+  return `${head} → ${to.clock}${tail}`;
+}
 export function formatDateTime(value: number, format: TimeFormat = current): string {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? `${date.toLocaleDateString("es", { dateStyle: "medium" })}, ${formatClock(date, format, true)}` : "—";

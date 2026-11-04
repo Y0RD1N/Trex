@@ -15,6 +15,15 @@ test('12/24-hour setting migrates old configurations and preserves the saved cho
     assert.match(time.formatClock(date, '12h'), hour < 12 ? /a.*m/i : /p.*m/i);
   }
 });
+test('clock ranges share the day period once and never break inside a time', () => {
+  const at = (hour, minute) => new Date(2026, 0, 1, hour, minute);
+  const afternoon = time.formatClockRange(at(15, 47), at(16, 2), '12h');
+  assert.match(afternoon, /^03:47 → 04:02 p\. m\.$/);
+  const across = time.formatClockRange(at(11, 50), at(12, 10), '12h');
+  assert.match(across, /^11:50 a\. m\. → 12:10 p\. m\.$/);
+  assert.equal(time.formatClockRange(at(15, 47), at(16, 2), '24h'), '15:47 → 16:02');
+  assert.equal(time.formatClockRange(Number.NaN, at(16, 2), '24h'), '—');
+});
 test('saved time changes notify mounted views and keep duration data untouched', () => {
   let calls = 0; const unsubscribe = time.subscribeTimeFormat(() => calls++);
   time.applyTimeFormat('12h'); time.applyTimeFormat('12h'); assert.equal(calls, 1);
