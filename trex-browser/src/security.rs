@@ -938,7 +938,9 @@ fn chromium_managed_data_child(home: &Path, path: &Path) -> bool {
         return false;
     };
     let parts: Vec<_> = relative.iter().collect();
-    let profile_depth = if parts[0].eq_ignore_ascii_case(OsStr::new("personal")) {
+    let profile_depth = if parts[0].eq_ignore_ascii_case(OsStr::new("personal"))
+        || parts[0].eq_ignore_ascii_case(OsStr::new("browser-window"))
+    {
         2
     } else {
         4
@@ -952,7 +954,8 @@ fn chromium_profile_path(home: &Path, path: &Path) -> bool {
     };
     let parts: Vec<_> = relative.components().map(|part| part.as_os_str()).collect();
     if parts.len() >= 2
-        && parts[0].eq_ignore_ascii_case(OsStr::new("personal"))
+        && (parts[0].eq_ignore_ascii_case(OsStr::new("personal"))
+            || parts[0].eq_ignore_ascii_case(OsStr::new("browser-window")))
         && parts[1].eq_ignore_ascii_case(OsStr::new("user-data"))
     {
         return true;
@@ -972,8 +975,8 @@ fn chromium_profile_path(home: &Path, path: &Path) -> bool {
     let Some(profile) = parts[2].to_str() else {
         return false;
     };
-    // The shared project window has its own Chromium UI session. Agent data
-    // remains in the existing BROWSERn paths with the same narrow ACL rules.
+    // Older project windows retain their existing Chromium UI sessions. The
+    // global window above and agent BROWSERn paths use the same narrow rules.
     if profile.eq_ignore_ascii_case("browser-window") {
         return true;
     }
@@ -1487,8 +1490,11 @@ mod tests {
             for (relative, accepted) in [
                 (PROFILE_DATA, true),
                 ("personal/user-data", true),
+                ("browser-window/user-data", true),
+                ("browser-window/user-data/Network", true),
                 ("artifacts", false),
                 ("personal", false),
+                ("browser-window", false),
                 ("", false),
             ] {
                 let test = TestHome::new();
@@ -1520,7 +1526,11 @@ mod tests {
             .cast();
         let observed = sid("S-1-15-3-1024-395641907-2340533657-1796656376-1949871151-3167452726-3934347287-2361051074-3061173417");
         assert_ne!(unsafe { EqualSid(electron, observed.0) }, 0);
-        for relative in [PROFILE_DATA, "personal/user-data"] {
+        for relative in [
+            PROFILE_DATA,
+            "personal/user-data",
+            "browser-window/user-data",
+        ] {
             let test = TestHome::new();
             let home = PrivateHome::at(&test.0).unwrap();
             let target = home.path().join(relative);
@@ -1551,26 +1561,36 @@ mod tests {
             (everyone.0, FILE_GENERIC_READ),
             (stable, FILE_ALL_ACCESS),
         ] {
-            let test = TestHome::new();
-            let home = PrivateHome::at(&test.0).unwrap();
-            let target = home.path().join(PROFILE_DATA);
-            fs::create_dir_all(&target).unwrap();
-            extra_ace(
-                &target,
-                principal,
-                mask,
-                SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-                GRANT_ACCESS,
-            );
-            drop(home);
-            assert!(PrivateHome::at(&test.0).is_err());
+            for relative in [
+                PROFILE_DATA,
+                "personal/user-data",
+                "browser-window/user-data",
+            ] {
+                let test = TestHome::new();
+                let home = PrivateHome::at(&test.0).unwrap();
+                let target = home.path().join(relative);
+                fs::create_dir_all(&target).unwrap();
+                extra_ace(
+                    &target,
+                    principal,
+                    mask,
+                    SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+                    GRANT_ACCESS,
+                );
+                drop(home);
+                assert!(PrivateHome::at(&test.0).is_err(), "{relative}");
+            }
         }
     }
 
     #[test]
     fn chromium_nonexecutable_file_deny_is_scoped_to_profile_data() {
         let everyone = sid("S-1-1-0");
-        for (relative, accepted) in [(PROFILE_DATA, true), ("artifacts", false)] {
+        for (relative, accepted) in [
+            (PROFILE_DATA, true),
+            ("browser-window/user-data", true),
+            ("artifacts", false),
+        ] {
             let test = TestHome::new();
             let home = PrivateHome::at(&test.0).unwrap();
             let target = home.path().join(relative).join("state");
@@ -1586,6 +1606,18 @@ mod tests {
     fn profile_exception_requires_exact_worker_layout() {
         let home = Path::new("C:/private");
         assert!(chromium_profile_path(home, &home.join(PROFILE_DATA)));
+        assert!(chromium_profile_path(
+            home,
+            &home.join("browser-window/user-data")
+        ));
+        assert!(!chromium_managed_data_child(
+            home,
+            &home.join("browser-window/user-data")
+        ));
+        assert!(chromium_managed_data_child(
+            home,
+            &home.join("browser-window/user-data/Network")
+        ));
         assert!(chromium_profile_path(
             home,
             &home.join("projects/0123456789abcdef01234567/browser-window/user-data")
@@ -1615,6 +1647,11 @@ mod tests {
             "personal",
             "personal/profile.json",
             "personal-other/user-data",
+            "browser-window",
+            "browser-window/profile.json",
+            "browser-window/user-data-other",
+            "browser-window-other/user-data",
+            "artifacts/browser-window/user-data",
             "projects/short/BROWSER1/user-data",
             "projects/short/browser-window/user-data",
             "projects/0123456789abcdef01234567/browser-window-other/user-data",

@@ -94,6 +94,27 @@ test('native MCP opens Chrome without manual controls and survives an adapter pr
     assert.equal((await rpc(4, 'tools/call', { name: 'browser_click', arguments: { role: 'button', name: 'Test button' } })).result.structuredContent.ok, true);
     const snapshot = await rpc(5, 'tools/call', { name: 'browser_snapshot', arguments: {} });
     assert.match(JSON.stringify(snapshot.result.structuredContent), /Clicked/);
+    // Claude connects through HTTP after another agent has already opened the
+    // global window. Re-enter the native ACL audit, including Electron's real
+    // Network/Cache capabilities, instead of calling BrowserService directly.
+    const peerWorkspace = path.join(root, 'workspace-peer'); await fs.mkdir(peerWorkspace);
+    const peerBinding = { cwd: peerWorkspace, mode: 'full', clientId: 'claude-native-peer', profile: 'BROWSER2' };
+    assert.equal((await run(['prepare', '--json'])).ready, true);
+    const peerSession = await run(['mcp-session', '--stdin-json'], peerBinding);
+    const peerRpc = async (id, method, params) => {
+      const response = await fetch(peerSession.url, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${peerSession.token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id, method, params }), signal: AbortSignal.timeout(20_000),
+      });
+      assert.equal(response.status, 200); return response.json();
+    };
+    const peerInitialized = await peerRpc(1, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-native-test', version: '1' } });
+    assert.equal(peerInitialized.error, undefined);
+    const peerNavigation = await peerRpc(2, 'tools/call', { name: 'browser_navigate', arguments: { url: `http://127.0.0.1:${server.address().port}/peer` } });
+    assert.equal(peerNavigation.result?.structuredContent?.ok, true, peerNavigation.result?.structuredContent?.error?.message);
+    const peerSnapshot = await peerRpc(3, 'tools/call', { name: 'browser_snapshot', arguments: {} });
+    assert.match(JSON.stringify(peerSnapshot.result.structuredContent), /Test button/);
+    assert.equal(JSON.parse(await fs.readFile(path.join(home, 'broker.json'), 'utf8')).pid, broker.pid);
     const closed = once(adapter, 'close');
     await new Promise((resolve, reject) => {
       const killer = spawn(path.join(process.env.SystemRoot, 'System32', 'taskkill.exe'), ['/PID', String(adapter.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
