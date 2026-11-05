@@ -14,6 +14,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Color que la ventana deja transparente (magenta) y color del marco (#E8834A en BGR).
+/// Clase de la ventana del marco: no se lista como ventana de la persona.
+pub const CLASS: &str = "TrexA11yHighlight";
 const KEY: COLORREF = COLORREF(0x00FF_00FF);
 const ACCENT: COLORREF = COLORREF(0x004A_83E8);
 const WHITE: COLORREF = COLORREF(0x00FF_FFFF);

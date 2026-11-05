@@ -49,6 +49,8 @@ test("accessibility control is opt-in and announced only when the gateway is att
   const claude = integrations.integrationInstructions("claude", integrations.integrationContext(preference, { a11y: true }));
   assert.match(claude, /trex_a11y MCP tools \(a11y_\*\)/);
   assert.doesNotMatch(claude, /Computer control/, "it does not enable computer control");
+  assert.match(claude, /single ToolSearch call \(select:mcp__trex_a11y__a11y_list_windows,[\w,]*mcp__trex_a11y__a11y_scroll,/, "deferred tools load together");
+  assert.doesNotMatch(integrations.integrationInstructions("codex", integrations.integrationContext(preference, { a11y: true })), /ToolSearch/);
   assert.match(integrations.integrationInstructions("trex", integrations.integrationContext(preference, { a11y: true })), /mcp_trex_a11y_\* tools/);
 });
 

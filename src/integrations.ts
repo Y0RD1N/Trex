@@ -73,6 +73,10 @@ export function assertIntegrationRestrictions(result: unknown, raw?: Application
  * Announce only what this session can use: enabled applications that were not
  * detected as missing, the desktop when enabled, and an attached browser.
  */
+/** Claude Code difiere las herramientas MCP: cargarlas de una vez ahorra una vuelta por herramienta. */
+const A11Y_DEFERRED_QUERY = `select:${["list_windows", "snapshot", "find", "get", "click", "set_value", "type", "scroll", "scroll_to", "wait", "launch", "expand", "select"]
+  .map(tool => `mcp__trex_a11y__a11y_${tool}`).join(",")}`;
+
 export function integrationInstructions(provider: AgentProvider, context: IntegrationContext = {}): string {
   const flags = normalizeIntegrations(context.applications), available = context.available ?? {}, parts: string[] = [];
   const on = (key: keyof ApplicationIntegrations): boolean => flags[key] && available[key] !== false;
@@ -82,7 +86,7 @@ export function integrationInstructions(provider: AgentProvider, context: Integr
   if (on("hyperframes")) parts.push(`HyperFrames: use ${native ? "the advertised hyperframes_run tool" : "the project-local or global CLI"} to lint, snapshot or render compositions.`);
   if (parts.length) parts.push("Check real results; explain missing dependencies instead of installing them silently; never execute a mutation in read-only planning mode; inspect uncertain operations before retrying.");
   if (context.desktop) parts.push(`Computer control: prefer ${native ? "advertised desktop_* tools" : "connected trex_desktop MCP tools"}. Check desktop_status and desktop_monitors, inspect a desktop_screenshot before input and verify focus; one screenshot covers up to 3 inputs while the screen is unchanged, capture again after changes, prefer region screenshots for details. Never claim access when these tools are unavailable.`);
-  if (context.a11y) parts.push(`Accessibility control (experimental): for desktop apps prefer ${native ? "the advertised mcp_trex_a11y_* tools" : "the connected trex_a11y MCP tools (a11y_*)"}. They work through the accessibility tree without moving the user's mouse or keyboard: list windows, snapshot one app, act on a fresh @ref; each action reports what changed (new elements with refs). Line breaks show as ⏎. Never use the clipboard, shell commands or files as a workaround to put text into an app, and do not repeat secrets read from the screen.`);
+  if (context.a11y) parts.push(`Accessibility control (experimental): for desktop apps prefer ${native ? "the advertised mcp_trex_a11y_* tools" : "the connected trex_a11y MCP tools (a11y_*)"}. They work through the accessibility tree without moving the user's mouse or keyboard: list windows, snapshot one app, act on a fresh @ref; each action reports what changed (new elements with refs, changed values), and a11y_scroll reaches content beyond the window. Line breaks show as ⏎. Never use the clipboard, shell commands or files as a workaround to put text into an app, and do not repeat secrets read from the screen.${provider === "claude" ? ` If these tools are deferred, load the ones you need in a single ToolSearch call (${A11Y_DEFERRED_QUERY}) instead of one at a time.` : ""}`);
   if (context.browser) parts.push(provider === "codex" || provider === "antigravity" ? BROWSER_INSTRUCTIONS
     : "Websites: prefer the connected Trex Browser tools, starting with browser_navigate and the app's http(s) URL; failures of other computer-use tools say nothing about this browser.");
   return parts.join(" ");

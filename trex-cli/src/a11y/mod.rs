@@ -134,9 +134,17 @@ fn definition(tool: &str) -> (&'static str, Value, Vec<&'static str>) {
         "collapse" => ("Collapse a menu, tree item, combobox or disclosure and verify it.", ref_only.0, ref_only.1),
         "select" => ("Select a list, tab or tree item ref, or pass value to choose an option of a list or combobox by its name.",
             with(reference(), json!({"value": {"type": "string", "description": "Option name inside the referenced list or combobox."}})), vec!["ref_id"]),
-        "scroll" => ("Scroll the element or its nearest scrollable container.",
-            with(reference(), json!({"direction": {"type": "string", "enum": ["up", "down", "left", "right"]}, "amount": {"type": "integer", "description": "Small steps, 1 to 20 (default 3)."}})), vec!["ref_id", "direction"]),
-        "scroll_to" => ("Scroll an element into view.", ref_only.0, ref_only.1),
+        "scroll" => ("Scroll to read or reach more: pass ref_id to scroll its nearest scrollable container, or a window (window_id/app) to scroll its \
+main content. Uses the app's own scrolling, or mouse-wheel messages sent to the window when it has none (the user's pointer never moves). The \
+response lists what came into view, with refs.",
+            with(with(window_target(), reference()), json!({
+                "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+                "amount": {"type": "integer", "description": "Steps, 1 to 20 (default 3 small steps, or 1 page)."},
+                "page": {"type": "boolean", "description": "Steps of about a screen instead of a few lines."},
+                "to": {"type": "string", "enum": ["top", "bottom"], "description": "Jump to the top or the bottom instead of a direction."}
+            })), vec![]),
+        "scroll_to" => ("Bring an element that is off screen into view (any ref; uses mouse-wheel messages when the app has no scroll support) and report \
+what came into view.", ref_only.0, ref_only.1),
         "launch" => ("Open an application (notepad, calc, a path or a document) without activating it when the app allows, and report its new windows.",
             json!({"app": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}), vec!["app"]),
         "close_app" => ("Ask a window to close, as its close button would (it may show a save dialog).", window_target(), vec![]),
@@ -180,8 +188,9 @@ pub fn instructions(mode: &str, keyboard: bool) -> String {
 mouse, never types on their keyboard and never brings windows to the front, so the user can keep working. Loop: a11y_list_windows, then \
 a11y_snapshot of one window (compact text; each line is `@ref role \"name\" states [actions]`; line breaks inside text appear as ⏎), act on a \
 fresh @ref, and read the result in the tool response: state changes are verified, and it lists what changed (new elements with refs, new \
-windows), so use those refs directly instead of taking another snapshot. Refs expire after a few snapshots. USER_ACTIVE means the user is working \
-in that window right now: wait (a11y_wait) and retry. WINDOW_BUSY means another Trex agent is using that window. NOT_KEPT means the app did not keep \
+windows, changed values or focus), so use those refs directly instead of taking another snapshot. To read or reach content beyond the window \
+(long pages and lists, hidden bars), use a11y_scroll or a11y_scroll_to: they report what came into view. Refs expire after a few snapshots. \
+USER_ACTIVE means the user kept working in that window: wait (a11y_wait) and retry. WINDOW_BUSY means another Trex agent is using that window. NOT_KEPT means the app did not keep \
 a value: do not claim success. Never repeat an uncertain action automatically. Snapshots include visible text: never repeat secrets. Never use \
 the clipboard, shell commands or files as a workaround to put text into an app; if a field refuses text, explain it. {permissions}"
     )

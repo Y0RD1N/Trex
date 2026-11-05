@@ -145,13 +145,33 @@ Va dentro de `trex-agent` (`trex-cli/src/a11y/`), sin dependencias externas:
   en una sola llamada entre procesos por ventana, y las ventanas se listan con
   la API clásica de Windows (milisegundos);
 - `AutoSetFocus` desactivado: ninguna acción trae la ventana al frente. Si la
-  persona usó ratón o teclado en la ventana destino hace menos de 2 s, la
-  acción se rechaza con `USER_ACTIVE` sin enviarse. Si la aplicación activa
+  persona usó ratón o teclado en la ventana destino hace menos de 2 s, se
+  espera hasta 4 s a que haga una pausa y, si sigue, la acción se rechaza con
+  `USER_ACTIVE` sin enviarse (abrir una app espera igual a que nadie teclee).
+  Si la aplicación activa
   una de sus ventanas (un diálogo) sin que la persona toque nada, el foco
   vuelve a la ventana que estaba usando;
-- cada acción que puede cambiar la ventana dice qué apareció: elementos nuevos
-  (con referencia, sin otro snapshot) y ventanas nuevas con sus elementos, sin
-  los avisos del propio shell de Windows;
+- cada acción dice qué cambió: el título de la ventana, elementos nuevos (con
+  referencia, sin otro snapshot), elementos que cambiaron de valor o de estado
+  (incluido cuál recibió el foco), los que entraron en pantalla y ventanas
+  nuevas con sus elementos, sin los avisos del shell de Windows ni el propio
+  marco de Trex. Los elementos se reconocen por su ruta de rol y nombre sin los
+  nombres de contenedores y documentos, que suelen llevar el título de la
+  ventana o de la página: cambiar de pestaña no hace parecer nueva toda la
+  ventana;
+- desplazar (`a11y_scroll`, por referencia o por ventana, por pasos, por
+  páginas o hasta el principio o el final) usa el patrón de desplazamiento de
+  la app y verifica la posición; las apps que no lo tienen (Qt, como Jellyfin
+  Media Player) reciben la rueda del ratón como mensaje a su ventana, sin mover
+  el puntero, y se mide cuánto se movió el contenido. La rueda solo se envía si
+  hay contenido fuera de la ventana: en un reproductor, un mapa o un visor
+  cambiaría el volumen o el zoom. `a11y_scroll_to` trae a la vista cualquier
+  referencia, y un clic sobre un elemento oculto que no hace nada lo dice;
+- Qt anuncia un valor editable en casi todo: escribir solo se ofrece en
+  campos de texto, documentos, desplegables y celdas, y los contenedores vacíos
+  no se listan;
+- abrir una app que reutiliza su ventana (el Bloc de notas con pestañas) se
+  detecta por el cambio de título, sin esperar a una ventana nueva;
 - un marco naranja con la etiqueta «Trex · acción» marca durante un instante
   el elemento en el que actúa; no recibe clics ni foco;
 - los botones clásicos (Win32 y WinForms) reciben el clic como mensaje
@@ -173,7 +193,8 @@ Va dentro de `trex-agent` (`trex-cli/src/a11y/`), sin dependencias externas:
   recortan y no se escribe nada en disco: las referencias viven en memoria y
   caducan a los ocho snapshots o listas de cambios;
 - las instrucciones piden no usar el portapapeles, la terminal ni archivos
-  como atajo para meter texto en una aplicación.
+  como atajo para meter texto en una aplicación, y a Claude Code, cargar las
+  herramientas diferidas en una sola búsqueda.
 
 En el chat, las acciones se leen en castellano («Escribió 1043 caracteres»,
 «Abrió notepad») con la marca «verificado» cuando la aplicación conservó el

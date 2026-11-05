@@ -12,7 +12,7 @@
 //!   ventanas nuevos, ya con referencia), y se marca en pantalla dónde actúa.
 //! - Lo que podría quedarse esperando (un botón que abre un diálogo modal) corre
 //!   en otro hilo: la respuesta llega igual a los 2,5 s.
-use super::highlight::Highlighter;
+use super::highlight::{Highlighter, CLASS as HIGHLIGHT_CLASS};
 use super::locks::Locks;
 use super::{format_node, keys, lines, quote, Engine, Node, ToolError, ToolResult};
 use serde_json::Value;
@@ -22,11 +22,12 @@ use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use windows::core::{AgileReference, Interface, BOOL, BSTR, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -34,8 +35,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SendMessageTimeoutW, BM_CLICK, SMTO_ABORTIFHUNG, SW_SHOWNOACTIVATE, WM_GETOBJECT,
+    EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SendMessageTimeoutW, BM_CLICK, SMTO_ABORTIFHUNG, SW_SHOWNOACTIVATE, WM_GETOBJECT,
+    WM_MOUSEHWHEEL, WM_MOUSEWHEEL,
 };
 
 /// Snapshots (y listas de cambios) cuyas referencias siguen valiendo.
@@ -47,6 +49,14 @@ const NEW_WINDOW_LINES: usize = 25;
 const KEYBOARD_IDLE_MS: u32 = 3_000;
 /// Si la persona usó ratón o teclado hace menos de esto en la ventana destino, no se actúa.
 const USER_ACTIVE_MS: u32 = 2_000;
+/// Si la persona está usando la ventana (o el equipo, al abrir una app), se
+/// espera hasta esto a que haga una pausa antes de devolver USER_ACTIVE.
+const PAUSE_WAIT: Duration = Duration::from_millis(4_000);
+/// Elementos que cambiaron de valor o de estado que se listan tras una acción.
+const CHANGED_LINES: usize = 12;
+/// Una muesca de la rueda del ratón, y cuántas forman una «página».
+const WHEEL_NOTCH: i32 = 120;
+const NOTCHES_PER_PAGE: i32 = 5;
 /// Lo más que se lee de un valor o del texto de un documento.
 const MAX_TEXT: i32 = 20_000;
 
@@ -145,10 +155,34 @@ fn pattern<T: Interface>(element: &IUIAutomationElement, id: UIA_PATTERN_ID) -> 
     unsafe { element.GetCurrentPatternAs::<T>(id) }.ok()
 }
 
+/// Se puede desplazar en ese eje.
+fn scrollable(pattern: &IUIAutomationScrollPattern, horizontal: bool) -> bool {
+    unsafe { if horizontal { pattern.CurrentHorizontallyScrollable() } else { pattern.CurrentVerticallyScrollable() } }.is_ok_and(|value| value.as_bool())
+}
+
 /// Lo que se sabe de un elemento ya cacheado, y si se le da referencia.
 struct Described {
     node: Node,
     referenced: bool,
+}
+
+/// Contenedores: su «foco» o «fuera de pantalla» es ruido, y su nombre (a veces
+/// el título de la ventana) no identifica lo que contienen.
+fn is_container(role: &str) -> bool {
+    matches!(role, "window" | "pane" | "group" | "menu" | "menubar" | "list" | "tree" | "toolbar" | "tab" | "table" | "datagrid"
+        | "header" | "statusbar" | "titlebar" | "appbar")
+}
+
+/// Roles cuyo nombre suele ser un título que cambia solo (la ventana, la página):
+/// no sirve para reconocerlos ni a lo que contienen tras una acción.
+fn titled(role: &str) -> bool {
+    is_container(role) || role == "document"
+}
+
+/// Roles que de verdad reciben texto. Qt anuncia un valor editable en casi todo
+/// (contenedores, enlaces, imágenes): sin esto, cada línea ofrecería escribir.
+pub(super) fn takes_text(role: &str) -> bool {
+    matches!(role, "edit" | "document" | "combobox" | "spinner" | "dataitem")
 }
 
 fn describe(element: &IUIAutomationElement) -> Described {
@@ -167,8 +201,7 @@ fn describe(element: &IUIAutomationElement) -> Described {
     let focused = has(UIA_HasKeyboardFocusPropertyId);
     // En un contenedor, «tiene el foco» (porque lo tiene un hijo) o «fuera de
     // pantalla» (un menú emergente) son ruido: lo que importa es el control.
-    let container = matches!(role, "window" | "pane" | "group" | "menu" | "menubar" | "list" | "tree" | "toolbar" | "tab" | "table" | "datagrid"
-        | "header" | "statusbar" | "titlebar" | "appbar");
+    let container = is_container(role);
     let focused = focused && !container;
     let offscreen = offscreen && !container;
     let mut states = Vec::new();
@@ -218,10 +251,11 @@ fn describe(element: &IUIAutomationElement) -> Described {
     if select {
         actions.push("select");
     }
-    if (value && !read_only && !password) || range {
+    let writable = value && !read_only && !password && takes_text(role);
+    if writable || range {
         actions.push("set_value");
     }
-    if value && !read_only && !password {
+    if writable {
         actions.push("type");
     }
     if scroll {
@@ -369,10 +403,115 @@ fn send_combo(combo: &keys::Combo) {
     }
 }
 
+/// Rueda del ratón como mensaje a una ventana, en un punto de la pantalla: no
+/// mueve el puntero de la persona. Para apps sin desplazamiento por
+/// accesibilidad (Qt y otras). `notches` > 0 sube (o va a la derecha en horizontal).
+fn post_wheel(window: isize, (x, y): (i32, i32), notches: i32, horizontal: bool) -> windows::core::Result<()> {
+    let message = if horizontal { WM_MOUSEHWHEEL } else { WM_MOUSEWHEEL };
+    let delta = if notches > 0 { WHEEL_NOTCH } else { -WHEEL_NOTCH };
+    let wparam = WPARAM((delta as i16 as u16 as usize) << 16);
+    let lparam = LPARAM(((y as i16 as u16 as isize) << 16) | x as i16 as u16 as isize);
+    for _ in 0..notches.abs() {
+        unsafe { PostMessageW(Some(HWND(window as _)), message, wparam, lparam) }?;
+        sleep(Duration::from_millis(15));
+    }
+    Ok(())
+}
+
+/// Rectángulo de una ventana en la pantalla.
+fn window_rect(window: isize) -> Option<RECT> {
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(HWND(window as _), &mut rect) }.ok().map(|()| rect)
+}
+
+/// Dónde girar la rueda: el centro de la parte visible del elemento dentro de la
+/// ventana, o el centro de la ventana si el elemento no se ve.
+pub(super) fn wheel_point(element: Option<RECT>, window: RECT) -> (i32, i32) {
+    if let Some(rect) = element {
+        let (left, top, right, bottom) = (rect.left.max(window.left), rect.top.max(window.top), rect.right.min(window.right), rect.bottom.min(window.bottom));
+        if right - left > 4 && bottom - top > 4 {
+            return ((left + right) / 2, (top + bottom) / 2);
+        }
+    }
+    ((window.left + window.right) / 2, (window.top + window.bottom) / 2)
+}
+
+/// El elemento se ve dentro de su ventana (su centro cae en ella).
+pub(super) fn inside(rect: RECT, window: RECT) -> bool {
+    let (x, y) = ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+    rect.right > rect.left && rect.bottom > rect.top && x > window.left && x < window.right && y > window.top && y < window.bottom
+}
+
+/// Hay contenido fuera de la ventana (debajo, encima o a un lado): solo entonces
+/// tiene sentido la rueda. En un reproductor, un mapa o un visor de imágenes, sin
+/// nada fuera, la rueda cambiaría el volumen o el zoom.
+pub(super) fn beyond(rects: &[RECT], window: RECT) -> bool {
+    rects.iter().any(|rect| rect.right > rect.left && rect.bottom > rect.top && !inside(*rect, window))
+}
+
+/// Cuánto se movió el contenido entre dos lecturas de posiciones: el
+/// desplazamiento más común de los elementos que siguen ahí ((0, 0) si nada).
+pub(super) fn moved(before: &HashMap<String, (i32, i32)>, after: &HashMap<String, (i32, i32)>) -> (i32, i32) {
+    let mut counts: HashMap<(i32, i32), usize> = HashMap::new();
+    for (name, old) in before {
+        if let Some(new) = after.get(name) {
+            let shift = (new.0 - old.0, new.1 - old.1);
+            if shift != (0, 0) {
+                *counts.entry(shift).or_insert(0) += 1;
+            }
+        }
+    }
+    let few = before.len() < 4;
+    counts.into_iter().filter(|(_, count)| few || *count >= 2).max_by_key(|(_, count)| *count).map_or((0, 0), |(shift, _)| shift)
+}
+
+/// Nombre de archivo sin carpeta ni extensión, en minúsculas: «notepad», «poema».
+pub(super) fn stem(text: &str) -> String {
+    let file = text.trim().rsplit(['\\', '/']).next().unwrap_or("");
+    file.rsplit_once('.').map_or(file, |(base, _)| base).trim().to_lowercase()
+}
+
+/// Valor y estados de un elemento, para saber si cambió tras una acción.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Signature {
+    pub(super) value: Option<String>,
+    pub(super) states: Vec<&'static str>,
+}
+impl Signature {
+    fn of(node: &Node) -> Self {
+        Self { value: node.value.clone(), states: node.states.clone() }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) enum Change {
+    Same,
+    /// Cambió su valor, ganó un estado (foco, marcado, desplegado…) o dejó de estar desactivado.
+    Changed,
+    /// Entró en la pantalla (al desplazar).
+    Shown,
+}
+
+/// Qué le pasó a un elemento que ya estaba. Perder el foco o la selección, o
+/// salir de la pantalla, no cuenta: ya lo dice el elemento que los ganó.
+pub(super) fn change(before: &Signature, after: &Signature) -> Change {
+    let gained = after.states.iter().any(|state| *state != "offscreen" && !before.states.contains(state));
+    let lost = before.states.iter().any(|state| !matches!(*state, "focused" | "selected" | "offscreen") && !after.states.contains(state));
+    if before.value != after.value || gained || lost {
+        Change::Changed
+    } else if before.states.contains(&"offscreen") && !after.states.contains(&"offscreen") {
+        Change::Shown
+    } else {
+        Change::Same
+    }
+}
+
 /// Lo que había antes de una acción, para decir después qué cambió.
 struct Before {
     window: isize,
-    keys: HashMap<String, usize>,
+    title: Option<String>,
+    /// Por clave (ruta de rol y nombre), el valor y los estados de cada elemento.
+    entries: HashMap<String, VecDeque<Signature>>,
     windows: HashSet<isize>,
 }
 
@@ -400,7 +539,8 @@ fn top_windows() -> Vec<(isize, String, u32, i32)> {
     unsafe {
         let _ = EnumWindows(Some(collect), LPARAM(&mut handles as *mut Vec<isize> as isize));
     }
-    handles.into_iter().filter_map(window_facts).collect()
+    // El marco naranja de Trex no es una ventana de la persona.
+    handles.into_iter().filter_map(window_facts).filter(|facts| class_name(facts.0) != HIGHLIGHT_CLASS).collect()
 }
 
 /// Título, proceso y estado de una ventana visible con título; None si no lo es.
@@ -453,6 +593,8 @@ pub struct UiaEngine {
     tree: IUIAutomationCacheRequest,
     /// Un elemento (find, get).
     single: IUIAutomationCacheRequest,
+    /// Nombre y posición (desplazamientos).
+    places: IUIAutomationCacheRequest,
     keeps_focus: bool,
     refs: HashMap<String, Target>,
     kept: VecDeque<u32>,
@@ -490,9 +632,12 @@ impl UiaEngine {
                 tree.AddProperty(id)?;
                 single.AddProperty(id)?;
             }
+            let places = automation.CreateCacheRequest()?;
+            places.AddProperty(UIA_NamePropertyId)?;
+            places.AddProperty(UIA_BoundingRectanglePropertyId)?;
             tree.SetTreeScope(TreeScope_Subtree)?;
             tree.SetTreeFilter(&view)?;
-            Ok(Self { automation, view, walker, tree, single, keeps_focus, refs: HashMap::new(), kept: VecDeque::new(), next: 0, process_names: HashMap::new(),
+            Ok(Self { automation, view, walker, tree, single, places, keeps_focus, refs: HashMap::new(), kept: VecDeque::new(), next: 0, process_names: HashMap::new(),
                 keyboard, locks: Locks::default(), highlighter: None, highlight_started: false, woken: HashSet::new(), own_input: None })
         }
     }
@@ -579,11 +724,17 @@ impl UiaEngine {
 
     /// No actuar sobre la ventana que la persona está usando ahora mismo, ni
     /// sobre la que usa otro agente de Trex.
+    /// Si la persona la está usando, se espera un poco a que haga una pausa.
     fn guard(&mut self, window: isize) -> Result<isize, ToolError> {
+        let deadline = Instant::now() + PAUSE_WAIT;
+        while user_active(foreground(), window, self.idle_ms()) && Instant::now() < deadline {
+            sleep(Duration::from_millis(100));
+        }
         let (front, idle) = (foreground(), self.idle_ms());
         if user_active(front, window, idle) {
             return Err(ToolError::new("USER_ACTIVE", format!(
-                "The user is working in this window right now (last input {idle} ms ago). Nothing was done; wait a few seconds with a11y_wait and retry.")));
+                "The user kept working in this window for {} s (last input {idle} ms ago). Nothing was done; wait a few seconds with a11y_wait and retry.",
+                PAUSE_WAIT.as_secs())));
         }
         self.claim(window)?;
         Ok(front)
@@ -681,18 +832,18 @@ impl UiaEngine {
     }
 
     fn before(&mut self, window: isize) -> Before {
-        let keys = unsafe { self.automation.ElementFromHandle(HWND(window as _)) }
+        let entries = unsafe { self.automation.ElementFromHandle(HWND(window as _)) }
             .ok()
             .and_then(|root| self.walk(&root, window, true, 25, 600).ok())
             .map(|walk| {
-                let mut keys = HashMap::new();
+                let mut entries: HashMap<String, VecDeque<Signature>> = HashMap::new();
                 for entry in walk.entries {
-                    *keys.entry(entry.key).or_insert(0) += 1;
+                    entries.entry(entry.key).or_default().push_back(Signature::of(&entry.node));
                 }
-                keys
+                entries
             })
             .unwrap_or_default();
-        Before { window, keys, windows: top_windows().into_iter().map(|facts| facts.0).collect() }
+        Before { window, title: window_facts(window).map(|facts| facts.1), entries, windows: top_windows().into_iter().map(|facts| facts.0).collect() }
     }
 
     /// Ventanas que no estaban, con sus elementos (y referencias). Tras una
@@ -725,45 +876,155 @@ impl UiaEngine {
         text
     }
 
-    /// Qué cambió tras una acción: elementos nuevos de la ventana y ventanas nuevas.
-    fn changes(&mut self, before: Before) -> String {
+    /// Qué cambió tras una acción: el título, elementos nuevos, elementos que
+    /// cambiaron (valor, estado, foco) o entraron en pantalla, y ventanas nuevas.
+    /// `acted` es el elemento sobre el que se actuó: su resultado ya está en la respuesta.
+    fn changes(&mut self, before: Before, acted: Option<&IUIAutomationElement>) -> String {
         sleep(Duration::from_millis(250));
         let mut slot = None;
         let mut counter = 0;
         let mut text = String::new();
-        if window_facts(before.window).is_none() {
-            text.push_str("\nThe window closed.");
-        } else if let Ok(root) = unsafe { self.automation.ElementFromHandle(HWND(before.window as _)) } {
-            if let Ok(walk) = self.walk(&root, before.window, true, 25, 600) {
-                let mut remaining = before.keys;
-                let fresh: Vec<Entry> = walk
-                    .entries
-                    .into_iter()
-                    .filter(|entry| match remaining.get_mut(&entry.key) {
-                        Some(count) if *count > 0 => {
-                            *count -= 1;
-                            false
-                        }
-                        _ => true,
-                    })
-                    .collect();
-                let gone: usize = remaining.values().sum();
-                if !fresh.is_empty() {
-                    let total = fresh.len();
-                    let base = fresh.iter().map(|entry| entry.node.depth).min().unwrap_or(0);
-                    let id = *slot.get_or_insert_with(|| self.begin_snapshot());
-                    let lines = self.render(fresh.into_iter().take(CHANGE_LINES).collect(), before.window, id, base, &mut counter);
-                    let more = if total > CHANGE_LINES { format!(", first {CHANGE_LINES} of {total}") } else { String::new() };
-                    text.push_str(&format!("\nNew in the window (snapshot s{id}{more}):\n{}", lines.join("\n")));
-                } else if gone == 0 {
+        if let Some((_, title, _, _)) = window_facts(before.window) {
+            let retitled = before.title.as_ref().is_some_and(|old| *old != title);
+            if retitled {
+                text.push_str(&format!("\nWindow title is now {}.", quote(&title, 100)));
+            }
+            let walk = unsafe { self.automation.ElementFromHandle(HWND(before.window as _)) }
+                .ok()
+                .and_then(|root| self.walk(&root, before.window, true, 25, 600).ok());
+            if let Some(walk) = walk {
+                let mut remaining = before.entries;
+                let (mut fresh, mut changed, mut shown) = (Vec::new(), Vec::new(), Vec::new());
+                for entry in walk.entries {
+                    match remaining.get_mut(&entry.key).and_then(VecDeque::pop_front) {
+                        None => fresh.push(entry),
+                        Some(old) => match change(&old, &Signature::of(&entry.node)) {
+                            Change::Changed => changed.push(entry),
+                            Change::Shown => shown.push(entry),
+                            Change::Same => {}
+                        },
+                    }
+                }
+                if let Some(acted) = acted {
+                    changed.retain(|entry| !unsafe { self.automation.CompareElements(&entry.element, acted) }.is_ok_and(|same| same.as_bool()));
+                }
+                let gone: usize = remaining.values().map(VecDeque::len).sum();
+                let quiet = fresh.is_empty() && changed.is_empty() && shown.is_empty() && gone == 0 && !retitled;
+                let window = before.window;
+                self.section(&mut text, "New in the window", fresh, CHANGE_LINES, true, window, &mut slot, &mut counter);
+                self.section(&mut text, "Changed", changed, CHANGED_LINES, false, window, &mut slot, &mut counter);
+                self.section(&mut text, "Now visible", shown, CHANGE_LINES, true, window, &mut slot, &mut counter);
+                if quiet {
                     text.push_str("\nNo visible change in the window.");
                 }
                 if gone > 0 {
                     text.push_str(&format!("\n{gone} elements disappeared."));
                 }
             }
+        } else {
+            text.push_str("\nThe window closed.");
         }
         text + &self.new_windows(&before.windows, &mut slot, &mut counter)
+    }
+
+    /// Una parte del informe de cambios, con referencias del mismo snapshot.
+    /// `tree` conserva la sangría relativa; si no, cada elemento va en su línea.
+    #[allow(clippy::too_many_arguments)]
+    fn section(&mut self, text: &mut String, title: &str, entries: Vec<Entry>, limit: usize, tree: bool, window: isize, slot: &mut Option<u32>,
+        counter: &mut usize) {
+        if entries.is_empty() {
+            return;
+        }
+        let total = entries.len();
+        let base = if tree { entries.iter().map(|entry| entry.node.depth).min().unwrap_or(0) } else { usize::MAX };
+        let id = *slot.get_or_insert_with(|| self.begin_snapshot());
+        let lines = self.render(entries.into_iter().take(limit).collect(), window, id, base, counter);
+        let more = if total > limit { format!(", first {limit} of {total}") } else { String::new() };
+        text.push_str(&format!("\n{title} (snapshot s{id}{more}):\n{}", lines.join("\n")));
+    }
+
+    /// El elemento se ve dentro de su ventana.
+    fn on_screen(&self, element: &IUIAutomationElement, window: isize) -> bool {
+        match (unsafe { element.CurrentBoundingRectangle() }, window_rect(window)) {
+            (Ok(rect), Some(frame)) => inside(rect, frame),
+            _ => true,
+        }
+    }
+
+    /// Nombre y posición de los elementos con nombre de una ventana, para saber
+    /// si el contenido se movió.
+    fn positions(&self, root: &IUIAutomationElement) -> HashMap<String, (i32, i32)> {
+        let mut found = HashMap::new();
+        let Ok(list) = (unsafe { root.FindAllBuildCache(TreeScope_Descendants, &self.view, &self.places) }) else { return found };
+        for index in 0..unsafe { list.Length() }.unwrap_or(0) {
+            let Ok(element) = (unsafe { list.GetElement(index) }) else { continue };
+            let name = unsafe { element.CachedName() }.map(|name| name.to_string()).unwrap_or_default();
+            let Ok(rect) = (unsafe { element.CachedBoundingRectangle() }) else { continue };
+            if !name.trim().is_empty() && rect.right > rect.left {
+                found.entry(name).or_insert((rect.left, rect.top));
+            }
+        }
+        found
+    }
+
+    /// Rectángulos de todos los elementos de una ventana.
+    fn rects(&self, root: &IUIAutomationElement) -> Vec<RECT> {
+        let Ok(list) = (unsafe { root.FindAllBuildCache(TreeScope_Descendants, &self.view, &self.places) }) else { return Vec::new() };
+        (0..unsafe { list.Length() }.unwrap_or(0))
+            .filter_map(|index| unsafe { list.GetElement(index) }.ok())
+            .filter_map(|element| unsafe { element.CachedBoundingRectangle() }.ok())
+            .collect()
+    }
+
+    /// La ventana nativa que contiene un elemento (la suya o la de un antepasado).
+    fn native_window(&self, element: &IUIAutomationElement, fallback: isize) -> isize {
+        let mut current = Some(element.clone());
+        for _ in 0..12 {
+            let Some(item) = current else { break };
+            if let Ok(handle) = unsafe { item.CurrentNativeWindowHandle() } {
+                if !handle.is_invalid() {
+                    return handle.0 as isize;
+                }
+            }
+            current = unsafe { self.walker.GetParentElement(&item) }.ok();
+        }
+        fallback
+    }
+
+    /// El elemento o su antepasado más cercano que se puede desplazar en ese eje.
+    fn scroller(&self, element: &IUIAutomationElement, horizontal: bool) -> Option<IUIAutomationScrollPattern> {
+        let mut current = Some(element.clone());
+        for _ in 0..10 {
+            let item = current?;
+            if let Some(pattern) = pattern::<IUIAutomationScrollPattern>(&item, UIA_ScrollPatternId) {
+                if scrollable(&pattern, horizontal) {
+                    return Some(pattern);
+                }
+            }
+            current = unsafe { self.walker.GetParentElement(&item) }.ok();
+        }
+        None
+    }
+
+    /// El contenedor desplazable principal de una ventana: el más grande que se
+    /// puede desplazar en ese eje.
+    fn main_scroller(&self, root: &IUIAutomationElement, horizontal: bool) -> Option<IUIAutomationScrollPattern> {
+        let condition = unsafe { self.automation.CreatePropertyCondition(UIA_IsScrollPatternAvailablePropertyId, &VARIANT::from(true)) }.ok()?;
+        let list = unsafe { root.FindAllBuildCache(TreeScope_Subtree, &condition, &self.places) }.ok()?;
+        let mut best: Option<(i64, IUIAutomationScrollPattern)> = None;
+        for index in 0..unsafe { list.Length() }.unwrap_or(0) {
+            let Ok(element) = (unsafe { list.GetElement(index) }) else { continue };
+            let Some(pattern) = pattern::<IUIAutomationScrollPattern>(&element, UIA_ScrollPatternId) else { continue };
+            if !scrollable(&pattern, horizontal) {
+                continue;
+            }
+            let area = unsafe { element.CachedBoundingRectangle() }
+                .map_or(0, |rect| i64::from(rect.right - rect.left).max(0) * i64::from(rect.bottom - rect.top).max(0));
+            if best.as_ref().is_none_or(|(size, _)| area > *size) {
+                best = Some((area, pattern));
+            }
+        }
+        best.map(|(_, pattern)| pattern)
     }
 
     /// Devuelve el foco a la ventana que tenía la persona. true si lo consiguió.
@@ -997,6 +1258,7 @@ impl UiaEngine {
         let target = self.target(args)?;
         let front = self.guard(target.window)?;
         let started = Instant::now();
+        let hidden = !self.on_screen(&target.element, target.window);
         let seen = self.before(target.window);
         self.mark(&target.element, "clic");
         let head = match bounded(&target.element, activate)? {
@@ -1004,7 +1266,11 @@ impl UiaEngine {
             Outcome::Unsupported => return Err(ToolError::new("NOT_ACTIONABLE", "The element cannot be activated semantically.")),
             Outcome::Pending => "Clicked; the application is still handling it (for example, a modal dialog opened).".into(),
         };
-        let changes = self.changes(seen);
+        let mut changes = self.changes(seen, Some(&target.element));
+        if hidden && changes.contains("No visible change in the window.") {
+            changes.push_str("\nThe element is off screen (hidden or scrolled away) and the app did not react; many apps ignore hidden controls. \
+Bring it into view with a11y_scroll_to (or a11y_scroll) and click it again.");
+        }
         Ok(format!("{head}{}{changes}", self.settle_focus(front, target.window, started)))
     }
 
@@ -1019,7 +1285,7 @@ impl UiaEngine {
             Outcome::Unsupported => return Err(ToolError::new("NOT_SUPPORTED", "This element has no context menu (needs Windows 8.1 or later).")),
             Outcome::Pending => "Context menu requested; the application is still handling it.".into(),
         };
-        let changes = self.changes(seen);
+        let changes = self.changes(seen, Some(&target.element));
         Ok(format!("{head}{}{changes}", self.settle_focus(front, target.window, started)))
     }
 
@@ -1066,7 +1332,7 @@ impl UiaEngine {
         sleep(Duration::from_millis(150));
         let back = previous != window && self.restore_focus(previous);
         let note = if back { " The window came to the front for a moment; the focus went back to the user's window." } else { " The window is now in front." };
-        Ok(format!("Pressed {} in w{window:X}.{note}{}", combo.label, self.changes(seen)))
+        Ok(format!("Pressed {} in w{window:X}.{note}{}", combo.label, self.changes(seen, None)))
     }
 
     /// set_value, type y clear: escribe con el patrón Value y comprueba que se conserva.
@@ -1111,6 +1377,7 @@ impl UiaEngine {
             _ => args["value"].as_str().ok_or_else(|| ToolError::new("INVALID_ARGS", "value is required."))?.to_owned(),
         };
         let before = self.guard(target.window)?;
+        let seen = self.before(target.window);
         self.mark(&target.element, "escribir");
         unsafe { pattern.SetValue(&BSTR::from(expected.as_str())) }.map_err(failure)?;
         // Releer un poco después: algunos controles aceptan el valor y luego lo descartan.
@@ -1118,7 +1385,8 @@ impl UiaEngine {
         let actual = unsafe { pattern.CurrentValue() }.map_err(failure)?.to_string();
         let normalize = |text: &str| text.replace("\r\n", "\n").replace('\r', "\n");
         if normalize(&actual) == normalize(&expected) {
-            Ok(format!("Value verified: {}.{}", quote(&actual, 200), Self::focus_note(before, target.window)))
+            let note = Self::focus_note(before, target.window);
+            Ok(format!("Value verified: {}.{note}{}", quote(&actual, 200), self.changes(seen, Some(element))))
         } else {
             Err(ToolError::new("NOT_KEPT", format!(
                 "The control accepted the value but now reports {}; the application did not keep it. Do not claim it was written.", quote(&actual, 200))))
@@ -1140,6 +1408,7 @@ impl UiaEngine {
             return Ok(format!("Already {}; nothing changed.", label(current)));
         }
         let before = self.guard(target.window)?;
+        let seen = self.before(target.window);
         self.mark(&target.element, "marcar");
         unsafe { pattern.Toggle() }.map_err(failure)?;
         sleep(Duration::from_millis(100));
@@ -1152,7 +1421,8 @@ impl UiaEngine {
         }
         let ok = match wanted { Some(wanted) => after == wanted, None => after != current };
         if ok {
-            Ok(format!("Now {} (verified).{}", label(after), Self::focus_note(before, target.window)))
+            let note = Self::focus_note(before, target.window);
+            Ok(format!("Now {} (verified).{note}{}", label(after), self.changes(seen, Some(&target.element))))
         } else {
             Err(ToolError::new("NOT_KEPT", format!("The control is still {}.", label(after))))
         }
@@ -1167,13 +1437,13 @@ impl UiaEngine {
         let seen = self.before(target.window);
         self.mark(&target.element, if expand { "desplegar" } else { "plegar" });
         if let Outcome::Pending = bounded(&target.element, if expand { open_element } else { close_element })? {
-            return Ok(format!("Requested; the application is still handling it.{}", self.changes(seen)));
+            return Ok(format!("Requested; the application is still handling it.{}", self.changes(seen, Some(&target.element))));
         }
         sleep(Duration::from_millis(100));
         let state = unsafe { pattern.CurrentExpandCollapseState() }.map_err(failure)?;
         let done = if expand { state == ExpandCollapseState_Expanded || state == ExpandCollapseState_PartiallyExpanded } else { state == ExpandCollapseState_Collapsed };
         if done {
-            let changes = self.changes(seen);
+            let changes = self.changes(seen, Some(&target.element));
             Ok(format!("{} (verified).{}{changes}", if expand { "Expanded" } else { "Collapsed" }, self.settle_focus(front, target.window, started)))
         } else {
             Err(ToolError::new("NOT_KEPT", "The element did not change state."))
@@ -1184,6 +1454,7 @@ impl UiaEngine {
         let target = self.target(args)?;
         let element = target.element.clone();
         let before = self.guard(target.window)?;
+        let seen = self.before(target.window);
         self.mark(&element, "elegir");
         let Some(wanted) = args["value"].as_str().map(str::to_owned) else {
             let pattern = pattern::<IUIAutomationSelectionItemPattern>(&element, UIA_SelectionItemPatternId)
@@ -1191,7 +1462,8 @@ impl UiaEngine {
             unsafe { pattern.Select() }.map_err(failure)?;
             sleep(Duration::from_millis(150));
             return if unsafe { pattern.CurrentIsSelected() }.map(|value| value.as_bool()).unwrap_or(false) {
-                Ok(format!("Selected (verified).{}", Self::focus_note(before, target.window)))
+                let note = Self::focus_note(before, target.window);
+                Ok(format!("Selected (verified).{note}{}", self.changes(seen, Some(&element))))
             } else {
                 Err(ToolError::new("NOT_KEPT", "The item is not selected."))
             };
@@ -1224,7 +1496,8 @@ impl UiaEngine {
                     sleep(Duration::from_millis(100));
                     let now = unsafe { value.CurrentValue() }.map(|text| text.to_string()).unwrap_or_default();
                     if now.to_lowercase() == wanted.to_lowercase() || (!now.is_empty() && now.to_lowercase().starts_with(&wanted.to_lowercase())) {
-                        return Ok(format!("Selected {} (verified).{}", quote(&now, 80), Self::focus_note(before, target.window)));
+                        let note = Self::focus_note(before, target.window);
+                        return Ok(format!("Selected {} (verified).{note}{}", quote(&now, 80), self.changes(seen, Some(&element))));
                     }
                 }
             }
@@ -1257,67 +1530,189 @@ impl UiaEngine {
         result?;
         let name = unsafe { item.CurrentName() }.map(|name| name.to_string()).unwrap_or(wanted);
         if selected {
-            Ok(format!("Selected {} (verified).{}", quote(&name, 80), Self::focus_note(before, target.window)))
+            let note = Self::focus_note(before, target.window);
+            Ok(format!("Selected {} (verified).{note}{}", quote(&name, 80), self.changes(seen, Some(&element))))
         } else {
             Err(ToolError::new("NOT_KEPT", format!("{} is not selected.", quote(&name, 80))))
         }
     }
 
+    /// Desplaza el contenedor de un elemento o el contenido principal de una
+    /// ventana: con el patrón de desplazamiento si la app lo tiene y, si no, con
+    /// la rueda del ratón como mensaje (el puntero de la persona no se mueve).
     fn scroll(&mut self, args: &Value) -> ToolResult {
-        let target = self.target(args)?;
-        let amount = args["amount"].as_u64().unwrap_or(3).clamp(1, 20);
-        let (horizontal, vertical) = match args["direction"].as_str() {
-            Some("down") => (ScrollAmount_NoAmount, ScrollAmount_SmallIncrement),
-            Some("up") => (ScrollAmount_NoAmount, ScrollAmount_SmallDecrement),
-            Some("right") => (ScrollAmount_SmallIncrement, ScrollAmount_NoAmount),
-            Some("left") => (ScrollAmount_SmallDecrement, ScrollAmount_NoAmount),
-            _ => return Err(ToolError::new("INVALID_ARGS", "direction must be up, down, left or right.")),
+        let to = args["to"].as_str();
+        let (horizontal, forward) = match (to, args["direction"].as_str()) {
+            (Some("top"), _) => (false, false),
+            (Some("bottom"), _) => (false, true),
+            (Some(_), _) => return Err(ToolError::new("INVALID_ARGS", "to must be top or bottom.")),
+            (None, Some("down")) => (false, true),
+            (None, Some("up")) => (false, false),
+            (None, Some("right")) => (true, true),
+            (None, Some("left")) => (true, false),
+            _ => return Err(ToolError::new("INVALID_ARGS", "Pass direction (up, down, left or right) or to (top or bottom).")),
         };
-        // El propio elemento o su contenedor desplazable más cercano.
-        let mut current = Some(target.element.clone());
-        let mut scrollable = None;
-        for _ in 0..8 {
-            let Some(element) = current else { break };
-            if let Some(pattern) = pattern::<IUIAutomationScrollPattern>(&element, UIA_ScrollPatternId) {
-                scrollable = Some(pattern);
-                break;
+        let page = args["page"].as_bool().unwrap_or(false);
+        let amount = args["amount"].as_u64().unwrap_or(if page { 1 } else { 3 }).clamp(1, 20) as i32;
+        let (element, window, whole) = if args["ref_id"].is_string() {
+            let target = self.target(args)?;
+            (target.element, target.window, false)
+        } else {
+            let info = self.resolve_window(args)?;
+            (self.element(&info)?, info.hwnd, true)
+        };
+        let container = if whole { self.main_scroller(&element, horizontal) } else { self.scroller(&element, horizontal) };
+        let front = self.guard(window)?;
+        let started = Instant::now();
+        let seen = self.before(window);
+        if !whole {
+            self.mark(&element, "desplazar");
+        }
+        let edge = if forward { "end" } else { "start" };
+        let head = if let Some(pattern) = container {
+            let position = |pattern: &IUIAutomationScrollPattern| {
+                unsafe { if horizontal { pattern.CurrentHorizontalScrollPercent() } else { pattern.CurrentVerticalScrollPercent() } }.unwrap_or(-1.0)
+            };
+            let start = position(&pattern);
+            let result = if let Some(to) = to {
+                let percent = if to == "top" { 0.0 } else { 100.0 };
+                unsafe { pattern.SetScrollPercent(UIA_ScrollPatternNoScroll, percent) }
+            } else {
+                let step = match (forward, page) {
+                    (true, false) => ScrollAmount_SmallIncrement,
+                    (true, true) => ScrollAmount_LargeIncrement,
+                    (false, false) => ScrollAmount_SmallDecrement,
+                    (false, true) => ScrollAmount_LargeDecrement,
+                };
+                let mut result = Ok(());
+                for done in 0..amount {
+                    let step = unsafe { if horizontal { pattern.Scroll(step, ScrollAmount_NoAmount) } else { pattern.Scroll(ScrollAmount_NoAmount, step) } };
+                    // Al llegar al final, algunos controles responden con error: lo hecho vale.
+                    if step.is_err() {
+                        if done == 0 {
+                            result = step;
+                        }
+                        break;
+                    }
+                }
+                result
+            };
+            // Chromium actualiza la posición un poco después: se relee durante un momento.
+            let deadline = Instant::now() + Duration::from_millis(700);
+            let mut end = position(&pattern);
+            while (end - start).abs() < 0.01 && Instant::now() < deadline {
+                sleep(Duration::from_millis(100));
+                end = position(&pattern);
             }
-            current = unsafe { self.walker.GetParentElement(&element) }.ok();
-        }
-        let pattern = scrollable.ok_or_else(|| ToolError::new("NOT_SCROLLABLE", "Nothing scrollable around this element."))?;
-        let before = self.guard(target.window)?;
-        self.mark(&target.element, "desplazar");
-        for _ in 0..amount {
-            unsafe { pattern.Scroll(horizontal, vertical) }.map_err(failure)?;
-        }
-        let position = unsafe { (pattern.CurrentHorizontalScrollPercent(), pattern.CurrentVerticalScrollPercent()) };
-        let percent = |value: windows::core::Result<f64>| value.ok().filter(|value| *value >= 0.0).map_or("-".into(), |value| format!("{value:.0}%"));
-        Ok(format!("Scrolled; position horizontal {} vertical {}. Take a snapshot to see what is visible.{}", percent(position.0), percent(position.1),
-            Self::focus_note(before, target.window)))
+            let unmoved = (end - start).abs() < 0.01;
+            match result {
+                Err(_) if unmoved && (end <= 0.0 || end >= 100.0) => format!("Nothing moved: it is already at the {edge}."),
+                Err(error) => return Err(failure(error)),
+                Ok(()) if unmoved => format!("Nothing moved: it is already at the {edge}."),
+                Ok(()) if end >= 0.0 => format!("Scrolled; position now {end:.0}%."),
+                Ok(()) => "Scrolled.".into(),
+            }
+        } else {
+            // Sin desplazamiento por accesibilidad (Qt y otras): la rueda, como mensaje.
+            let frame = window_rect(window).ok_or_else(|| ToolError::new("NOT_FOUND", "The window is no longer open."))?;
+            let root = unsafe { self.automation.ElementFromHandle(HWND(window as _)) }.map_err(failure)?;
+            if !beyond(&self.rects(&root), frame) {
+                return Ok("Nothing to scroll: everything in this window is already in view, so no mouse wheel was sent (in a player, a map or an image viewer the wheel would change the volume or the zoom).".into());
+            }
+            let earlier = self.positions(&root);
+            let rect = if whole { None } else { unsafe { element.CurrentBoundingRectangle() }.ok() };
+            let host = if whole { window } else { self.native_window(&element, window) };
+            let notches = if to.is_some() { 25 } else { amount * if page { NOTCHES_PER_PAGE } else { 1 } };
+            // La rueda vertical sube con valores positivos; la horizontal va a la derecha.
+            let signed = if horizontal == forward { notches } else { -notches };
+            post_wheel(host, wheel_point(rect, frame), signed, horizontal).map_err(failure)?;
+            sleep(Duration::from_millis(350));
+            let (x, y) = moved(&earlier, &self.positions(&root));
+            if (x, y) == (0, 0) {
+                format!("Sent the mouse wheel to the window (the pointer did not move), but nothing moved: it may be at the {edge}, or the app ignores background scrolling.")
+            } else {
+                format!("Scrolled with the mouse wheel sent to the window (the pointer did not move); the content moved {} px.", x.abs().max(y.abs()))
+            }
+        };
+        // Tras desplazar, «sin cambios» quiere decir que no apareció nada nuevo.
+        let changes = self.changes(seen, None).replace("
+No visible change in the window.", "
+Nothing new came into view.");
+        Ok(format!("{head}{}{changes}", self.settle_focus(front, window, started)))
     }
 
+    /// Trae un elemento a la vista: con ScrollItem si la app lo tiene y, si no,
+    /// con la rueda hacia donde está hasta que se vea.
     fn scroll_to(&mut self, args: &Value) -> ToolResult {
         let target = self.target(args)?;
-        let pattern = pattern::<IUIAutomationScrollItemPattern>(&target.element, UIA_ScrollItemPatternId)
-            .ok_or_else(|| ToolError::new("NOT_SCROLLABLE", "The element cannot be scrolled into view."))?;
-        let before = self.guard(target.window)?;
-        unsafe { pattern.ScrollIntoView() }.map_err(failure)?;
-        Ok(format!("Scrolled into view.{}", Self::focus_note(before, target.window)))
+        let element = target.element.clone();
+        let frame = window_rect(target.window).ok_or_else(|| ToolError::new("NOT_FOUND", "The window is no longer open."))?;
+        let front = self.guard(target.window)?;
+        let started = Instant::now();
+        let seen = self.before(target.window);
+        let head = if let Some(pattern) = pattern::<IUIAutomationScrollItemPattern>(&element, UIA_ScrollItemPatternId) {
+            unsafe { pattern.ScrollIntoView() }.map_err(failure)?;
+            sleep(Duration::from_millis(150));
+            if self.on_screen(&element, target.window) { "Scrolled into view (verified).".to_owned() } else { "Scroll requested; the element still is not inside the window.".to_owned() }
+        } else if self.on_screen(&element, target.window) {
+            "Already in view.".to_owned()
+        } else {
+            let host = self.native_window(&element, target.window);
+            let mut last = None;
+            loop {
+                let rect = unsafe { element.CurrentBoundingRectangle() }.map_err(failure)?;
+                if inside(rect, frame) {
+                    break "Scrolled into view with the mouse wheel sent to the window (the pointer did not move).".to_owned();
+                }
+                if rect.right <= rect.left || rect.bottom <= rect.top {
+                    return Err(ToolError::new("NOT_SCROLLABLE", "The element has no place on screen: it is hidden, not scrolled away."));
+                }
+                // Sin avance tras la última vuelta (o demasiadas vueltas): se deja.
+                if last == Some((rect.left, rect.top)) || started.elapsed() > Duration::from_secs(6) {
+                    let changes = self.changes(seen, None);
+                    return Err(ToolError::new("NOT_SCROLLABLE", format!(
+                        "Could not bring it into view: the app did not scroll any further with the mouse wheel.{changes}")));
+                }
+                last = Some((rect.left, rect.top));
+                let horizontal = rect.bottom > frame.top && rect.top < frame.bottom;
+                let forward = if horizontal { rect.left >= frame.right } else { rect.top >= frame.bottom };
+                let signed = if horizontal == forward { 3 } else { -3 };
+                post_wheel(host, wheel_point(None, frame), signed, horizontal).map_err(failure)?;
+                sleep(Duration::from_millis(300));
+            }
+        };
+        let changes = self.changes(seen, None).replace("
+No visible change in the window.", "
+Nothing new came into view.");
+        Ok(format!("{head}{}{changes}", self.settle_focus(front, target.window, started)))
     }
 
     fn launch(&mut self, args: &Value, cancel: &AtomicBool) -> ToolResult {
         let app = args["app"].as_str().filter(|app| !app.trim().is_empty()).ok_or_else(|| ToolError::new("INVALID_ARGS", "app is required."))?;
+        // Una ventana nueva podría llevarse lo que la persona teclea: se espera una pausa.
+        let deadline = Instant::now() + PAUSE_WAIT;
+        while self.idle_ms() < USER_ACTIVE_MS && Instant::now() < deadline {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ToolError::new("CANCELLED", "Cancelled."));
+            }
+            sleep(Duration::from_millis(100));
+        }
         let idle = self.idle_ms();
         if idle < USER_ACTIVE_MS {
             return Err(ToolError::new("USER_ACTIVE", format!(
-                "The user is typing or moving the mouse (last input {idle} ms ago); a new window now could take their keystrokes. Wait with a11y_wait and retry.")));
+                "The user kept typing or moving the mouse for {} s (last input {idle} ms ago); a new window now could take their keystrokes. Wait with a11y_wait and retry.",
+                PAUSE_WAIT.as_secs())));
         }
         let parameters = args["args"].as_array().map(|items| {
             items.iter().filter_map(Value::as_str).map(|item| {
                 if item.contains([' ', '"']) { format!("\"{}\"", item.replace('"', "\\\"")) } else { item.to_owned() }
             }).collect::<Vec<_>>().join(" ")
         }).unwrap_or_default();
-        let known: HashSet<isize> = self.windows()?.iter().map(|window| window.hwnd).collect();
+        let titles: HashMap<isize, String> = top_windows().into_iter().map(|facts| (facts.0, facts.1)).collect();
+        let known: HashSet<isize> = titles.keys().copied().collect();
+        // Lo que identificaría a la app en una ventana que ya estaba abierta.
+        let names: Vec<String> = std::iter::once(app).chain(args["args"].as_array().into_iter().flatten().filter_map(Value::as_str))
+            .map(stem).filter(|name| name.chars().count() >= 3).collect();
         let file = HSTRING::from(app);
         let parameters = HSTRING::from(parameters);
         let mut info = SHELLEXECUTEINFOW {
@@ -1338,14 +1733,28 @@ impl UiaEngine {
                 return Err(ToolError::new("CANCELLED", "Cancelled after starting the application."));
             }
             sleep(Duration::from_millis(250));
-            if top_windows().iter().any(|facts| !known.contains(&facts.0)) {
+            let now = top_windows();
+            if now.iter().any(|facts| !known.contains(&facts.0)) {
                 // Dejar que termine de pintarse antes de leerla.
                 sleep(Duration::from_millis(300));
                 let opened = self.new_windows(&known, &mut None, &mut 0);
                 return Ok(format!("Opened {app}.{opened}"));
             }
+            // Apps de una sola ventana (el Bloc de notas con pestañas) abren en la que ya
+            // estaba: cambia su título.
+            let reused = now.into_iter().find(|facts| {
+                titles.get(&facts.0).is_some_and(|title| *title != facts.1) && {
+                    let (process, title) = (self.process_name(facts.2), facts.1.to_lowercase());
+                    names.iter().any(|name| process.trim_end_matches(".exe") == name || title.contains(name.as_str()))
+                }
+            });
+            if let Some(facts) = reused {
+                sleep(Duration::from_millis(300));
+                let line = self.info(facts).line(foreground());
+                return Ok(format!("Started {app}; it opened in a window that was already open (its title changed):\n{line}"));
+            }
         }
-        Ok(format!("Started {app}, but no new window appeared within 8 s (it may still be starting, or reused an open window). Use a11y_list_windows or a11y_wait."))
+        Ok(format!("Started {app}, but no new window appeared within 8 s (it may still be starting). Use a11y_list_windows or a11y_wait."))
     }
 
     fn window_action(&mut self, args: &Value, operation: &str) -> ToolResult {
@@ -1430,7 +1839,11 @@ impl Walk {
         if self.interactive_only && matches!(described.node.role, "scrollbar" | "titlebar" | "thumb") {
             return;
         }
-        let key = format!("{path}/{}:{}", described.node.role, described.node.name);
+        let role = described.node.role;
+        // El nombre de un contenedor o de un documento (a menudo el título de la
+        // ventana o de la página, que cambia solo) no forma parte de las claves.
+        let key = if titled(role) { format!("{path}/{role}") } else { format!("{path}/{role}:{}", described.node.name) };
+        let inner = key.clone();
         let include = described.referenced
             || (!self.interactive_only && (!described.node.name.trim().is_empty() || described.node.value.is_some()));
         let mut next_indent = indent;
@@ -1444,7 +1857,7 @@ impl Walk {
             self.entries.push(Entry { key: key.clone(), node, element: element.clone(), referenced: described.referenced });
             next_indent += 1;
         }
-        self.children(element, depth, next_indent, &key);
+        self.children(element, depth, next_indent, &inner);
     }
 }
 
