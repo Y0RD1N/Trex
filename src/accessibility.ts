@@ -28,6 +28,11 @@ export const A11Y_CORE_ACTION_TOOLS = ["a11y_click", "a11y_right_click", "a11y_s
   "a11y_check", "a11y_uncheck", "a11y_expand", "a11y_collapse", "a11y_select", "a11y_scroll", "a11y_scroll_to", "a11y_launch",
   "a11y_close_app", "a11y_minimize", "a11y_maximize", "a11y_restore"] as const;
 
+/** Si la pasarela lleva el permiso de atajos de teclado (`--keyboard`). */
+export function accessibilityKeyboard(config: BrowserConfig): boolean {
+  return Array.isArray(config.args) && config.args.includes("--keyboard");
+}
+
 /** El motor que eligió la app para esta pasarela (`--engine`), si lo indica. */
 export function accessibilityEngine(config: BrowserConfig): "trex" | "agent-desktop" | null {
   const args = Array.isArray(config.args) ? config.args : [];

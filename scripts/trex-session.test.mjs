@@ -219,6 +219,10 @@ test("Trex asks for the accessibility gateway only when agent-desktop is ready a
   const failed = harness(t, { a11yEnabled: true, accessibilityAck: false, accessibility: ready });
   await failed.start();
   assert.ok(failed.state.items.some(item => item.kind === "notice" && /no pudo conectarse/.test(item.text)));
+  // Con el permiso de atajos, Trex CLI lo recibe junto al motor.
+  const keyboard = harness(t, { a11yEnabled: true, accessibility: { accessibilityServer: async () => ({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--engine", "trex", "--keyboard"] }) } });
+  await keyboard.start();
+  assert.deepEqual(keyboard.writes.find(w => w.method === "session/start").params.accessibility, { engine: "trex", keyboard: true });
   // Sin la preferencia, nada cambia.
   const off = harness(t, { accessibility: ready });
   await off.start();

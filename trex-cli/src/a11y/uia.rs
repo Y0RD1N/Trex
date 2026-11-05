@@ -6,28 +6,45 @@
 //!   subárbol) y se recorre en memoria; las referencias apuntan a esos elementos.
 //! - Las acciones usan los patrones de cada control (Invoke, Value, Toggle,
 //!   ExpandCollapse, SelectionItem, Scroll, Window…), nunca ratón ni teclado, y
-//!   se rechazan si la persona está usando esa misma ventana justo ahora.
-use super::{format_node, quote, Engine, Node, ToolError, ToolResult};
+//!   se rechazan si la persona está usando esa misma ventana justo ahora, o si
+//!   otro agente de Trex la está usando.
+//! - Cada acción que puede cambiar la ventana dice qué apareció (elementos y
+//!   ventanas nuevos, ya con referencia), y se marca en pantalla dónde actúa.
+//! - Lo que podría quedarse esperando (un botón que abre un diálogo modal) corre
+//!   en otro hilo: la respuesta llega igual a los 2,5 s.
+use super::highlight::Highlighter;
+use super::locks::Locks;
+use super::{format_node, keys, lines, quote, Engine, Node, ToolError, ToolResult};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use windows::core::{Interface, BOOL, BSTR, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HWND, LPARAM};
+use windows::core::{AgileReference, Interface, BOOL, BSTR, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HWND, LPARAM, WPARAM};
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::Accessibility::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetLastInputInfo, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, LASTINPUTINFO, VIRTUAL_KEY,
+};
 use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-    SW_SHOWNOACTIVATE,
+    EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SendMessageTimeoutW, BM_CLICK, SMTO_ABORTIFHUNG, SW_SHOWNOACTIVATE, WM_GETOBJECT,
 };
 
-/// Snapshots cuyas referencias siguen valiendo.
-const KEEP_SNAPSHOTS: usize = 5;
+/// Snapshots (y listas de cambios) cuyas referencias siguen valiendo.
+const KEEP_SNAPSHOTS: usize = 8;
+/// Elementos nuevos que se listan tras una acción, y de cada ventana nueva.
+const CHANGE_LINES: usize = 40;
+const NEW_WINDOW_LINES: usize = 25;
+/// Un atajo de teclado solo si la persona lleva este tiempo sin tocar nada.
+const KEYBOARD_IDLE_MS: u32 = 3_000;
 /// Si la persona usó ratón o teclado hace menos de esto en la ventana destino, no se actúa.
 const USER_ACTIVE_MS: u32 = 2_000;
 /// Lo más que se lee de un valor o del texto de un documento.
@@ -77,13 +94,29 @@ fn failure(error: windows::core::Error) -> ToolError {
     }
 }
 
-fn idle_ms() -> u32 {
+/// Momento (en ticks) de la última entrada de ratón o teclado del sistema.
+fn last_input_tick() -> Option<u32> {
     let mut info = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
-    if unsafe { GetLastInputInfo(&mut info) }.as_bool() {
-        unsafe { GetTickCount() }.wrapping_sub(info.dwTime)
-    } else {
-        u32::MAX
+    unsafe { GetLastInputInfo(&mut info) }.as_bool().then_some(info.dwTime)
+}
+
+/// Milisegundos desde la última entrada de la persona. Si la última fue un atajo
+/// que envió Trex (entre `own.0` y `own.1`), la de la persona es anterior.
+pub(super) fn user_idle(now: u32, last: Option<u32>, own: Option<(u32, u32)>) -> u32 {
+    let Some(last) = last else { return u32::MAX };
+    match own {
+        Some((from, until)) if last.wrapping_sub(from) <= until.wrapping_sub(from).wrapping_add(100) => now.wrapping_sub(from),
+        _ => now.wrapping_sub(last),
     }
+}
+
+fn same_process(first: isize, second: isize) -> bool {
+    let pid = |window: isize| {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(HWND(window as _), Some(&mut pid)) };
+        pid
+    };
+    first != 0 && second != 0 && pid(first) == pid(second)
 }
 
 fn foreground() -> isize {
@@ -132,6 +165,12 @@ fn describe(element: &IUIAutomationElement) -> Described {
     let read_only = has(UIA_ValueIsReadOnlyPropertyId);
     let offscreen = has(UIA_IsOffscreenPropertyId);
     let focused = has(UIA_HasKeyboardFocusPropertyId);
+    // En un contenedor, «tiene el foco» (porque lo tiene un hijo) o «fuera de
+    // pantalla» (un menú emergente) son ruido: lo que importa es el control.
+    let container = matches!(role, "window" | "pane" | "group" | "menu" | "menubar" | "list" | "tree" | "toolbar" | "tab" | "table" | "datagrid"
+        | "header" | "statusbar" | "titlebar" | "appbar");
+    let focused = focused && !container;
+    let offscreen = offscreen && !container;
     let mut states = Vec::new();
     if !has(UIA_IsEnabledPropertyId) {
         states.push("disabled");
@@ -205,6 +244,136 @@ fn describe(element: &IUIAutomationElement) -> Described {
         referenced: !actions.is_empty() || editable || focused,
         node: Node { depth: 0, reference: None, role, name, value: value_text, states, actions },
     }
+}
+
+fn class_name(window: isize) -> String {
+    let mut buffer = [0u16; 256];
+    let length = unsafe { GetClassNameW(HWND(window as _), &mut buffer) };
+    String::from_utf16_lossy(&buffer[..length.max(0) as usize])
+}
+
+/// Ventanas de contenido de Chromium y Electron dentro de una ventana.
+fn render_hosts(window: isize) -> Vec<isize> {
+    unsafe extern "system" fn collect(hwnd: HWND, list: LPARAM) -> BOOL {
+        unsafe { (*(list.0 as *mut Vec<isize>)).push(hwnd.0 as isize) };
+        true.into()
+    }
+    let mut children: Vec<isize> = Vec::new();
+    unsafe {
+        let _ = EnumChildWindows(Some(HWND(window as _)), Some(collect), LPARAM(&mut children as *mut Vec<isize> as isize));
+    }
+    children.into_iter().filter(|child| class_name(*child) == "Chrome_RenderWidgetHostHWND").collect()
+}
+
+enum Outcome {
+    Done(&'static str),
+    Unsupported,
+    /// Sigue en curso (p. ej. un botón que abrió un diálogo modal y espera a que se cierre).
+    Pending,
+}
+
+/// Corre una acción en otro hilo y espera como mucho 2,5 s: la llamada de UI
+/// Automation puede quedarse esperando a la aplicación.
+fn bounded(element: &IUIAutomationElement, action: fn(&IUIAutomationElement) -> windows::core::Result<Option<&'static str>>) -> Result<Outcome, ToolError> {
+    let agile = AgileReference::new(element).map_err(failure)?;
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let _ = sender.send(agile.resolve().and_then(|element| action(&element)));
+    });
+    match receiver.recv_timeout(Duration::from_millis(2_500)) {
+        Ok(Ok(Some(method))) => Ok(Outcome::Done(method)),
+        Ok(Ok(None)) => Ok(Outcome::Unsupported),
+        Ok(Err(error)) => Err(failure(error)),
+        Err(_) => Ok(Outcome::Pending),
+    }
+}
+
+/// Botón clásico (Win32 o WinForms): su propia ventana, de clase BUTTON.
+fn classic_button(element: &IUIAutomationElement) -> Option<HWND> {
+    let handle = unsafe { element.CurrentNativeWindowHandle() }.ok().filter(|handle| !handle.is_invalid())?;
+    let kind = unsafe { element.CurrentControlType() }.ok()?;
+    (kind == UIA_ButtonControlTypeId && class_name(handle.0 as isize).to_ascii_uppercase().contains("BUTTON")).then_some(handle)
+}
+
+/// Lo que haría un clic, con el primer patrón que tenga el elemento.
+fn activate(element: &IUIAutomationElement) -> windows::core::Result<Option<&'static str>> {
+    unsafe {
+        // Un botón clásico recibe el clic como mensaje encolado, igual que el de un
+        // ratón: si abre un diálogo modal, la aplicación sigue atendiendo a UI
+        // Automation (con Invoke se quedaba esperando a que se cerrara el diálogo).
+        if let Some(button) = classic_button(element) {
+            PostMessageW(Some(button), BM_CLICK, WPARAM(0), LPARAM(0))?;
+            return Ok(Some("button message"));
+        }
+        if let Some(pattern) = pattern::<IUIAutomationInvokePattern>(element, UIA_InvokePatternId) {
+            pattern.Invoke()?;
+            Ok(Some("invoked"))
+        } else if let Some(pattern) = pattern::<IUIAutomationTogglePattern>(element, UIA_TogglePatternId) {
+            pattern.Toggle()?;
+            Ok(Some("toggled"))
+        } else if let Some(pattern) = pattern::<IUIAutomationSelectionItemPattern>(element, UIA_SelectionItemPatternId) {
+            pattern.Select()?;
+            Ok(Some("selected"))
+        } else if let Some(pattern) = pattern::<IUIAutomationExpandCollapsePattern>(element, UIA_ExpandCollapsePatternId) {
+            if pattern.CurrentExpandCollapseState()? == ExpandCollapseState_Collapsed {
+                pattern.Expand()?;
+                Ok(Some("expanded"))
+            } else {
+                pattern.Collapse()?;
+                Ok(Some("collapsed"))
+            }
+        } else if let Some(pattern) = pattern::<IUIAutomationLegacyIAccessiblePattern>(element, UIA_LegacyIAccessiblePatternId) {
+            pattern.DoDefaultAction()?;
+            Ok(Some("default action"))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn context_menu(element: &IUIAutomationElement) -> windows::core::Result<Option<&'static str>> {
+    let Ok(element) = element.cast::<IUIAutomationElement3>() else { return Ok(None) };
+    unsafe { element.ShowContextMenu() }?;
+    Ok(Some("context menu"))
+}
+
+fn open_element(element: &IUIAutomationElement) -> windows::core::Result<Option<&'static str>> {
+    let Some(pattern) = pattern::<IUIAutomationExpandCollapsePattern>(element, UIA_ExpandCollapsePatternId) else { return Ok(None) };
+    unsafe { pattern.Expand() }?;
+    Ok(Some("expanded"))
+}
+
+fn close_element(element: &IUIAutomationElement) -> windows::core::Result<Option<&'static str>> {
+    let Some(pattern) = pattern::<IUIAutomationExpandCollapsePattern>(element, UIA_ExpandCollapsePatternId) else { return Ok(None) };
+    unsafe { pattern.Collapse() }?;
+    Ok(Some("collapsed"))
+}
+
+/// Pulsa y suelta una combinación con el teclado real (modificadores primero).
+fn send_combo(combo: &keys::Combo) {
+    let key = |code: u16, up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT { wVk: VIRTUAL_KEY(code), wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: 0 },
+        },
+    };
+    let mut inputs: Vec<INPUT> = combo.modifiers.iter().map(|code| key(*code, false)).collect();
+    inputs.push(key(combo.key, false));
+    inputs.push(key(combo.key, true));
+    inputs.extend(combo.modifiers.iter().rev().map(|code| key(*code, true)));
+    unsafe {
+        SendInput(&inputs, size_of::<INPUT>() as i32);
+    }
+}
+
+/// Lo que había antes de una acción, para decir después qué cambió.
+struct Before {
+    window: isize,
+    keys: HashMap<String, usize>,
+    windows: HashSet<isize>,
 }
 
 #[derive(Clone)]
@@ -289,11 +458,22 @@ pub struct UiaEngine {
     kept: VecDeque<u32>,
     next: u32,
     process_names: HashMap<u32, String>,
+    /// Atajos de teclado permitidos en Ajustes.
+    keyboard: bool,
+    locks: Locks,
+    highlighter: Option<Highlighter>,
+    highlight_started: bool,
+    /// Ventanas de Chromium/Electron a las que ya se pidió el árbol.
+    woken: HashSet<isize>,
+    /// Último atajo enviado por Trex (ticks de inicio y fin), para no tomarlo por la persona.
+    own_input: Option<(u32, u32)>,
 }
 
 impl UiaEngine {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(keyboard: bool) -> anyhow::Result<Self> {
         unsafe {
+            // Coordenadas físicas en todas las pantallas: el resaltado coincide con el elemento.
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             // S_FALSE (ya iniciado) también vale.
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let automation: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
@@ -312,7 +492,8 @@ impl UiaEngine {
             }
             tree.SetTreeScope(TreeScope_Subtree)?;
             tree.SetTreeFilter(&view)?;
-            Ok(Self { automation, view, walker, tree, single, keeps_focus, refs: HashMap::new(), kept: VecDeque::new(), next: 0, process_names: HashMap::new() })
+            Ok(Self { automation, view, walker, tree, single, keeps_focus, refs: HashMap::new(), kept: VecDeque::new(), next: 0, process_names: HashMap::new(),
+                keyboard, locks: Locks::default(), highlighter: None, highlight_started: false, woken: HashSet::new(), own_input: None })
         }
     }
 
@@ -396,19 +577,219 @@ impl UiaEngine {
         }
     }
 
-    /// No actuar sobre la ventana que la persona está usando ahora mismo.
-    fn guard(&self, window: isize) -> Result<isize, ToolError> {
-        let (front, idle) = (foreground(), idle_ms());
+    /// No actuar sobre la ventana que la persona está usando ahora mismo, ni
+    /// sobre la que usa otro agente de Trex.
+    fn guard(&mut self, window: isize) -> Result<isize, ToolError> {
+        let (front, idle) = (foreground(), self.idle_ms());
         if user_active(front, window, idle) {
             return Err(ToolError::new("USER_ACTIVE", format!(
                 "The user is working in this window right now (last input {idle} ms ago). Nothing was done; wait a few seconds with a11y_wait and retry.")));
         }
+        self.claim(window)?;
         Ok(front)
     }
 
-    fn focus_note(before: isize, window: isize) -> &'static str {
+    fn idle_ms(&self) -> u32 {
+        user_idle(unsafe { GetTickCount() }, last_input_tick(), self.own_input)
+    }
+
+    /// Tras una acción: si la aplicación activó una de sus ventanas (un diálogo)
+    /// y la persona no tocó nada mientras, el foco vuelve a la ventana que usaba.
+    fn settle_focus(&self, user_window: isize, target: isize, started: Instant) -> String {
+        let now = foreground();
+        if now == user_window || now == 0 {
+            return String::new();
+        }
+        let app_took_it = !same_process(user_window, target) && same_process(now, target)
+            && u128::from(self.idle_ms()) >= started.elapsed().as_millis();
+        if !app_took_it {
+            return if now == target { " Note: the window came to the front.".into() } else { String::new() };
+        }
+        if self.restore_focus(user_window) {
+            " The application activated one of its windows; the focus went back to the user's window.".into()
+        } else {
+            format!(" Note: the application activated w{now:X} and kept the focus.")
+        }
+    }
+
+    fn claim(&mut self, window: isize) -> Result<(), ToolError> {
+        self.locks.claim(window).map_err(|owner| ToolError::new("WINDOW_BUSY", format!(
+            "Another Trex agent (process {owner}) is working in this window. Nothing was done; use another window or try again in a minute.")))
+    }
+
+    /// Marca en pantalla dónde se va a actuar, si el elemento se ve.
+    fn mark(&mut self, element: &IUIAutomationElement, label: &str) {
+        if !self.highlight_started {
+            self.highlight_started = true;
+            self.highlighter = Highlighter::start();
+        }
+        let Some(highlighter) = &self.highlighter else { return };
+        if unsafe { element.CurrentIsOffscreen() }.map(|value| value.as_bool()).unwrap_or(true) {
+            return;
+        }
+        if let Ok(rect) = unsafe { element.CurrentBoundingRectangle() } {
+            highlighter.show(rect, label);
+        }
+    }
+
+    /// Chromium y Electron solo construyen su árbol de accesibilidad cuando un
+    /// cliente lo pide: se lo pedimos una vez por ventana. true si se acaba de pedir.
+    fn wake_chromium(&mut self, window: isize) -> bool {
+        if !self.woken.insert(window) || !class_name(window).starts_with("Chrome_WidgetWin") {
+            return false;
+        }
+        for host in render_hosts(window) {
+            // OBJID_CLIENT y UiaRootObjectId.
+            for object in [-4isize, -25] {
+                unsafe {
+                    SendMessageTimeoutW(HWND(host as _), WM_GETOBJECT, WPARAM(0), LPARAM(object), SMTO_ABORTIFHUNG, 500, None);
+                }
+            }
+        }
+        true
+    }
+
+    /// Recorre una ventana o un elemento con una sola llamada entre procesos.
+    fn walk(&mut self, root: &IUIAutomationElement, window: isize, interactive_only: bool, max_depth: usize, max_elements: usize) -> Result<Walk, ToolError> {
+        if self.wake_chromium(window) {
+            // Chromium construye el árbol de la página al primer pedido y tarda un
+            // momento: se pide, se espera y se lee de nuevo (solo la primera vez).
+            let _ = unsafe { root.BuildUpdatedCache(&self.tree) };
+            sleep(Duration::from_millis(1_200));
+        }
+        let cached = unsafe { root.BuildUpdatedCache(&self.tree) }.map_err(failure)?;
+        let mut walk = Walk { interactive_only, max_depth, max_elements, entries: Vec::new(), truncated: false };
+        walk.children(&cached, 0, 0, "");
+        Ok(walk)
+    }
+
+    /// Da referencia a lo que tiene acciones y lo convierte en líneas.
+    fn render(&mut self, entries: Vec<Entry>, window: isize, id: u32, base_depth: usize, counter: &mut usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        for entry in entries {
+            *counter += 1;
+            let mut node = entry.node;
+            node.depth = node.depth.saturating_sub(base_depth);
+            if entry.referenced {
+                let reference = format!("@s{id}:e{counter}");
+                node.reference = Some(reference.clone());
+                self.refs.insert(reference, Target { element: entry.element, window });
+            }
+            lines.push(format_node(&node));
+        }
+        lines
+    }
+
+    fn before(&mut self, window: isize) -> Before {
+        let keys = unsafe { self.automation.ElementFromHandle(HWND(window as _)) }
+            .ok()
+            .and_then(|root| self.walk(&root, window, true, 25, 600).ok())
+            .map(|walk| {
+                let mut keys = HashMap::new();
+                for entry in walk.entries {
+                    *keys.entry(entry.key).or_insert(0) += 1;
+                }
+                keys
+            })
+            .unwrap_or_default();
+        Before { window, keys, windows: top_windows().into_iter().map(|facts| facts.0).collect() }
+    }
+
+    /// Ventanas que no estaban, con sus elementos (y referencias). Tras una
+    /// acción se omiten las del propio Windows (avisos y ventanas emergentes del shell).
+    fn new_windows(&mut self, known: &HashSet<isize>, slot: &mut Option<u32>, counter: &mut usize) -> String {
+        const SHELL: [&str; 6] = ["explorer.exe", "shellexperiencehost.exe", "searchhost.exe", "textinputhost.exe", "startmenuexperiencehost.exe", "lockapp.exe"];
+        let front = foreground();
+        let mut text = String::new();
+        let fresh: Vec<_> = top_windows().into_iter().filter(|facts| !known.contains(&facts.0)).collect();
+        let mut shown = 0;
+        for facts in fresh {
+            if shown == 3 {
+                break;
+            }
+            let info = self.info(facts);
+            if SHELL.contains(&info.app.as_str()) || info.title == "PopupHost" {
+                continue;
+            }
+            shown += 1;
+            text.push_str(&format!("\nNew window {}", info.line(front)));
+            let Ok(root) = self.element(&info) else { continue };
+            let Ok(walk) = self.walk(&root, info.hwnd, true, 25, NEW_WINDOW_LINES) else { continue };
+            if walk.entries.is_empty() {
+                continue;
+            }
+            let id = *slot.get_or_insert_with(|| self.begin_snapshot());
+            let lines = self.render(walk.entries, info.hwnd, id, 0, counter);
+            text.push_str(&format!(" (snapshot s{id}):\n{}", lines.join("\n")));
+        }
+        text
+    }
+
+    /// Qué cambió tras una acción: elementos nuevos de la ventana y ventanas nuevas.
+    fn changes(&mut self, before: Before) -> String {
+        sleep(Duration::from_millis(250));
+        let mut slot = None;
+        let mut counter = 0;
+        let mut text = String::new();
+        if window_facts(before.window).is_none() {
+            text.push_str("\nThe window closed.");
+        } else if let Ok(root) = unsafe { self.automation.ElementFromHandle(HWND(before.window as _)) } {
+            if let Ok(walk) = self.walk(&root, before.window, true, 25, 600) {
+                let mut remaining = before.keys;
+                let fresh: Vec<Entry> = walk
+                    .entries
+                    .into_iter()
+                    .filter(|entry| match remaining.get_mut(&entry.key) {
+                        Some(count) if *count > 0 => {
+                            *count -= 1;
+                            false
+                        }
+                        _ => true,
+                    })
+                    .collect();
+                let gone: usize = remaining.values().sum();
+                if !fresh.is_empty() {
+                    let total = fresh.len();
+                    let base = fresh.iter().map(|entry| entry.node.depth).min().unwrap_or(0);
+                    let id = *slot.get_or_insert_with(|| self.begin_snapshot());
+                    let lines = self.render(fresh.into_iter().take(CHANGE_LINES).collect(), before.window, id, base, &mut counter);
+                    let more = if total > CHANGE_LINES { format!(", first {CHANGE_LINES} of {total}") } else { String::new() };
+                    text.push_str(&format!("\nNew in the window (snapshot s{id}{more}):\n{}", lines.join("\n")));
+                } else if gone == 0 {
+                    text.push_str("\nNo visible change in the window.");
+                }
+                if gone > 0 {
+                    text.push_str(&format!("\n{gone} elements disappeared."));
+                }
+            }
+        }
+        text + &self.new_windows(&before.windows, &mut slot, &mut counter)
+    }
+
+    /// Devuelve el foco a la ventana que tenía la persona. true si lo consiguió.
+    fn restore_focus(&self, window: isize) -> bool {
+        if window == 0 || window_facts(window).is_none() {
+            return false;
+        }
+        if let Ok(element) = unsafe { self.automation.ElementFromHandle(HWND(window as _)) } {
+            let _ = unsafe { element.SetFocus() };
+        }
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while foreground() != window && Instant::now() < deadline {
+            sleep(Duration::from_millis(20));
+        }
+        foreground() == window
+    }
+
+    fn focus_note(before: isize, window: isize) -> String {
         let after = foreground();
-        if after != before && after == window { " Note: the window came to the front." } else { "" }
+        if after == before || after == 0 {
+            String::new()
+        } else if after == window {
+            " Note: the window came to the front.".into()
+        } else {
+            format!(" Note: the foreground window changed to w{after:X} (the application may have activated a dialog).")
+        }
     }
 
     // --- Lectura -------------------------------------------------------------------
@@ -438,14 +819,15 @@ impl UiaEngine {
             (self.element(&info)?, info.hwnd, header)
         };
         let started = Instant::now();
-        let cached = unsafe { root.BuildUpdatedCache(&self.tree) }.map_err(failure)?;
-        let id = self.begin_snapshot();
-        let mut walk = Walk { id, interactive_only, max_depth, max_elements, lines: Vec::new(), count: 0, refs: Vec::new(), truncated: false };
-        walk.children(&cached, 0, 0);
-        let Walk { lines, count, refs, truncated, .. } = walk;
-        for (reference, element) in refs {
-            self.refs.insert(reference, Target { element, window });
+        let mut walk = self.walk(&root, window, interactive_only, max_depth, max_elements)?;
+        // Chromium/Electron recién despertado tarda un momento en construir su árbol.
+        if walk.entries.len() <= 3 && class_name(window).starts_with("Chrome_WidgetWin") {
+            sleep(Duration::from_millis(700));
+            walk = self.walk(&root, window, interactive_only, max_depth, max_elements)?;
         }
+        let id = self.begin_snapshot();
+        let (count, truncated) = (walk.entries.len(), walk.truncated);
+        let lines = self.render(walk.entries, window, id, 0, &mut 0);
         let mut text = format!("{header} · snapshot s{id} · {count} elements · {} ms", started.elapsed().as_millis());
         if truncated {
             text.push_str(&format!(" · truncated at {max_elements}: narrow it with root or raise max_elements"));
@@ -466,6 +848,9 @@ impl UiaEngine {
     /// Elementos de una ventana que coinciden con un rol y/o un nombre.
     fn matches(&mut self, args: &Value) -> Result<(WindowInfo, Vec<(IUIAutomationElement, Described)>), ToolError> {
         let info = self.resolve_window(args)?;
+        if self.wake_chromium(info.hwnd) {
+            sleep(Duration::from_millis(500));
+        }
         let role = args["role"].as_str().map(str::to_lowercase).filter(|text| !text.is_empty());
         let name = args["name"].as_str().map(str::to_lowercase).filter(|text| !text.is_empty());
         let list = unsafe { self.element(&info)?.FindAllBuildCache(TreeScope_Descendants, &self.view, &self.single) }.map_err(failure)?;
@@ -514,7 +899,7 @@ impl UiaEngine {
         }
         let value = || -> Option<String> {
             if let Some(pattern) = pattern::<IUIAutomationValuePattern>(element, UIA_ValuePatternId) {
-                return unsafe { pattern.CurrentValue() }.ok().map(|text| text.to_string());
+                return unsafe { pattern.CurrentValue() }.ok().map(|text| lines(&text.to_string()));
             }
             pattern::<IUIAutomationRangeValuePattern>(element, UIA_RangeValuePatternId).and_then(|pattern| unsafe { pattern.CurrentValue() }.ok()).map(|number| number.to_string())
         };
@@ -527,7 +912,7 @@ impl UiaEngine {
             "text" => {
                 let document = pattern::<IUIAutomationTextPattern>(element, UIA_TextPatternId)
                     .and_then(|pattern| unsafe { pattern.DocumentRange().and_then(|range| range.GetText(MAX_TEXT + 1)) }.ok())
-                    .map(|text| text.to_string());
+                    .map(|text| lines(&text.to_string()));
                 Ok(clip(document.or_else(value).or_else(|| unsafe { element.CurrentName() }.ok().map(|name| name.to_string())).unwrap_or_default()))
             }
             "name" => unsafe { element.CurrentName() }.map(|name| name.to_string()).map_err(failure),
@@ -551,10 +936,16 @@ impl UiaEngine {
         }
     }
 
-    fn wait(&mut self, args: &Value) -> ToolResult {
+    fn wait(&mut self, args: &Value, cancel: &AtomicBool) -> ToolResult {
         if let Some(ms) = args["ms"].as_u64() {
             let ms = ms.min(10_000);
-            sleep(Duration::from_millis(ms));
+            let deadline = Instant::now() + Duration::from_millis(ms);
+            while Instant::now() < deadline {
+                if cancel.load(Ordering::SeqCst) {
+                    return Err(ToolError::new("CANCELLED", "Cancelled."));
+                }
+                sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
+            }
             return Ok(format!("Waited {ms} ms."));
         }
         let timeout = Duration::from_millis(args["timeout_ms"].as_u64().unwrap_or(5_000).min(15_000));
@@ -584,15 +975,19 @@ impl UiaEngine {
             if Instant::now() >= deadline {
                 return Err(ToolError::new("TIMEOUT", format!("Still {} after {} ms.", if gone { "present" } else { "absent" }, timeout.as_millis())));
             }
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ToolError::new("CANCELLED", "Cancelled."));
+            }
             sleep(Duration::from_millis(300));
         }
     }
 
     fn status(&mut self) -> ToolResult {
         Ok(format!(
-            "engine: trex (Windows UI Automation)\nactions keep the user's focus: {}\nuser last input: {} ms ago\nforeground window: w{:X}\nlive refs: {}",
+            "engine: trex (Windows UI Automation)\nactions keep the user's focus: {}\nkeyboard shortcuts: {}\nuser last input: {} ms ago\nforeground window: w{:X}\nlive refs: {}",
             if self.keeps_focus { "yes" } else { "no (older Windows: windows may come to the front)" },
-            idle_ms(), foreground(), self.refs.len()
+            if self.keyboard { "allowed (a11y_press)" } else { "disabled in Trex settings" },
+            self.idle_ms(), foreground(), self.refs.len()
         ))
     }
 
@@ -600,42 +995,78 @@ impl UiaEngine {
 
     fn click(&mut self, args: &Value) -> ToolResult {
         let target = self.target(args)?;
-        let before = self.guard(target.window)?;
-        let element = &target.element;
-        let method = unsafe {
-            if let Some(pattern) = pattern::<IUIAutomationInvokePattern>(element, UIA_InvokePatternId) {
-                pattern.Invoke().map_err(failure)?;
-                "invoked"
-            } else if let Some(pattern) = pattern::<IUIAutomationTogglePattern>(element, UIA_TogglePatternId) {
-                pattern.Toggle().map_err(failure)?;
-                "toggled"
-            } else if let Some(pattern) = pattern::<IUIAutomationSelectionItemPattern>(element, UIA_SelectionItemPatternId) {
-                pattern.Select().map_err(failure)?;
-                "selected"
-            } else if let Some(pattern) = pattern::<IUIAutomationExpandCollapsePattern>(element, UIA_ExpandCollapsePatternId) {
-                if pattern.CurrentExpandCollapseState().map_err(failure)? == ExpandCollapseState_Collapsed {
-                    pattern.Expand().map_err(failure)?;
-                    "expanded"
-                } else {
-                    pattern.Collapse().map_err(failure)?;
-                    "collapsed"
-                }
-            } else if let Some(pattern) = pattern::<IUIAutomationLegacyIAccessiblePattern>(element, UIA_LegacyIAccessiblePatternId) {
-                pattern.DoDefaultAction().map_err(failure)?;
-                "default action"
-            } else {
-                return Err(ToolError::new("NOT_ACTIONABLE", "The element cannot be activated semantically."));
-            }
+        let front = self.guard(target.window)?;
+        let started = Instant::now();
+        let seen = self.before(target.window);
+        self.mark(&target.element, "clic");
+        let head = match bounded(&target.element, activate)? {
+            Outcome::Done(method) => format!("Clicked ({method})."),
+            Outcome::Unsupported => return Err(ToolError::new("NOT_ACTIONABLE", "The element cannot be activated semantically.")),
+            Outcome::Pending => "Clicked; the application is still handling it (for example, a modal dialog opened).".into(),
         };
-        Ok(format!("Clicked ({method}).{}", Self::focus_note(before, target.window)))
+        let changes = self.changes(seen);
+        Ok(format!("{head}{}{changes}", self.settle_focus(front, target.window, started)))
     }
 
     fn right_click(&mut self, args: &Value) -> ToolResult {
         let target = self.target(args)?;
-        let before = self.guard(target.window)?;
-        let element = target.element.cast::<IUIAutomationElement3>().map_err(|_| ToolError::new("NOT_SUPPORTED", "Context menus need Windows 8.1 or later."))?;
-        unsafe { element.ShowContextMenu() }.map_err(failure)?;
-        Ok(format!("Context menu requested; take a snapshot (menus can appear as their own window in a11y_list_windows).{}", Self::focus_note(before, target.window)))
+        let front = self.guard(target.window)?;
+        let started = Instant::now();
+        let seen = self.before(target.window);
+        self.mark(&target.element, "menú contextual");
+        let head = match bounded(&target.element, context_menu)? {
+            Outcome::Done(_) => "Context menu opened.".to_owned(),
+            Outcome::Unsupported => return Err(ToolError::new("NOT_SUPPORTED", "This element has no context menu (needs Windows 8.1 or later).")),
+            Outcome::Pending => "Context menu requested; the application is still handling it.".into(),
+        };
+        let changes = self.changes(seen);
+        Ok(format!("{head}{}{changes}", self.settle_focus(front, target.window, started)))
+    }
+
+    /// Atajo de teclado real (solo con el permiso de Ajustes): trae la ventana al
+    /// frente un instante, pulsa y devuelve el foco a la de la persona.
+    fn press(&mut self, args: &Value) -> ToolResult {
+        if !self.keyboard {
+            return Err(ToolError::new("NOT_ALLOWED", "Keyboard shortcuts are disabled in Trex settings."));
+        }
+        let combo = keys::parse(args["keys"].as_str().unwrap_or("")).map_err(|message| ToolError::new("INVALID_ARGS", message))?;
+        let (element, window) = if args["ref_id"].is_string() {
+            let target = self.target(args)?;
+            (target.element, target.window)
+        } else {
+            let info = self.resolve_window(args)?;
+            (self.element(&info)?, info.hwnd)
+        };
+        let idle = self.idle_ms();
+        if idle < KEYBOARD_IDLE_MS {
+            return Err(ToolError::new("USER_ACTIVE", format!(
+                "The user is using the mouse or keyboard (last input {idle} ms ago); a shortcut now would mix with their typing. Nothing was done; wait and retry.")));
+        }
+        self.claim(window)?;
+        let seen = self.before(window);
+        let previous = foreground();
+        self.mark(&element, &combo.label);
+        unsafe { element.SetFocus() }.map_err(failure)?;
+        let deadline = Instant::now() + Duration::from_millis(800);
+        while foreground() != window && Instant::now() < deadline {
+            sleep(Duration::from_millis(20));
+        }
+        if foreground() != window {
+            self.restore_focus(previous);
+            return Err(ToolError::new("FOCUS_FAILED", "Windows did not let the window come to the front; nothing was typed."));
+        }
+        // Última comprobación justo antes de usar el teclado.
+        if self.idle_ms() < 300 {
+            self.restore_focus(previous);
+            return Err(ToolError::new("USER_ACTIVE", "The user started typing; nothing was sent."));
+        }
+        let from = unsafe { GetTickCount() };
+        send_combo(&combo);
+        self.own_input = Some((from, unsafe { GetTickCount() }));
+        sleep(Duration::from_millis(150));
+        let back = previous != window && self.restore_focus(previous);
+        let note = if back { " The window came to the front for a moment; the focus went back to the user's window." } else { " The window is now in front." };
+        Ok(format!("Pressed {} in w{window:X}.{note}{}", combo.label, self.changes(seen)))
     }
 
     /// set_value, type y clear: escribe con el patrón Value y comprueba que se conserva.
@@ -680,6 +1111,7 @@ impl UiaEngine {
             _ => args["value"].as_str().ok_or_else(|| ToolError::new("INVALID_ARGS", "value is required."))?.to_owned(),
         };
         let before = self.guard(target.window)?;
+        self.mark(&target.element, "escribir");
         unsafe { pattern.SetValue(&BSTR::from(expected.as_str())) }.map_err(failure)?;
         // Releer un poco después: algunos controles aceptan el valor y luego lo descartan.
         sleep(Duration::from_millis(150));
@@ -708,6 +1140,7 @@ impl UiaEngine {
             return Ok(format!("Already {}; nothing changed.", label(current)));
         }
         let before = self.guard(target.window)?;
+        self.mark(&target.element, "marcar");
         unsafe { pattern.Toggle() }.map_err(failure)?;
         sleep(Duration::from_millis(100));
         let mut after = unsafe { pattern.CurrentToggleState() }.map_err(failure)?;
@@ -729,13 +1162,19 @@ impl UiaEngine {
         let target = self.target(args)?;
         let pattern = pattern::<IUIAutomationExpandCollapsePattern>(&target.element, UIA_ExpandCollapsePatternId)
             .ok_or_else(|| ToolError::new("NOT_EXPANDABLE", "The element cannot be expanded or collapsed."))?;
-        let before = self.guard(target.window)?;
-        unsafe { if expand { pattern.Expand() } else { pattern.Collapse() } }.map_err(failure)?;
-        sleep(Duration::from_millis(150));
+        let front = self.guard(target.window)?;
+        let started = Instant::now();
+        let seen = self.before(target.window);
+        self.mark(&target.element, if expand { "desplegar" } else { "plegar" });
+        if let Outcome::Pending = bounded(&target.element, if expand { open_element } else { close_element })? {
+            return Ok(format!("Requested; the application is still handling it.{}", self.changes(seen)));
+        }
+        sleep(Duration::from_millis(100));
         let state = unsafe { pattern.CurrentExpandCollapseState() }.map_err(failure)?;
         let done = if expand { state == ExpandCollapseState_Expanded || state == ExpandCollapseState_PartiallyExpanded } else { state == ExpandCollapseState_Collapsed };
         if done {
-            Ok(format!("{} (verified); take a snapshot to see its items.{}", if expand { "Expanded" } else { "Collapsed" }, Self::focus_note(before, target.window)))
+            let changes = self.changes(seen);
+            Ok(format!("{} (verified).{}{changes}", if expand { "Expanded" } else { "Collapsed" }, self.settle_focus(front, target.window, started)))
         } else {
             Err(ToolError::new("NOT_KEPT", "The element did not change state."))
         }
@@ -745,6 +1184,7 @@ impl UiaEngine {
         let target = self.target(args)?;
         let element = target.element.clone();
         let before = self.guard(target.window)?;
+        self.mark(&element, "elegir");
         let Some(wanted) = args["value"].as_str().map(str::to_owned) else {
             let pattern = pattern::<IUIAutomationSelectionItemPattern>(&element, UIA_SelectionItemPatternId)
                 .ok_or_else(|| ToolError::new("NOT_SELECTABLE", "The element is not a selectable item; pass value to pick an option inside it."))?;
@@ -846,6 +1286,7 @@ impl UiaEngine {
         }
         let pattern = scrollable.ok_or_else(|| ToolError::new("NOT_SCROLLABLE", "Nothing scrollable around this element."))?;
         let before = self.guard(target.window)?;
+        self.mark(&target.element, "desplazar");
         for _ in 0..amount {
             unsafe { pattern.Scroll(horizontal, vertical) }.map_err(failure)?;
         }
@@ -864,9 +1305,9 @@ impl UiaEngine {
         Ok(format!("Scrolled into view.{}", Self::focus_note(before, target.window)))
     }
 
-    fn launch(&mut self, args: &Value) -> ToolResult {
+    fn launch(&mut self, args: &Value, cancel: &AtomicBool) -> ToolResult {
         let app = args["app"].as_str().filter(|app| !app.trim().is_empty()).ok_or_else(|| ToolError::new("INVALID_ARGS", "app is required."))?;
-        let idle = idle_ms();
+        let idle = self.idle_ms();
         if idle < USER_ACTIVE_MS {
             return Err(ToolError::new("USER_ACTIVE", format!(
                 "The user is typing or moving the mouse (last input {idle} ms ago); a new window now could take their keystrokes. Wait with a11y_wait and retry.")));
@@ -893,11 +1334,15 @@ impl UiaEngine {
         }
         let deadline = Instant::now() + Duration::from_secs(8);
         while Instant::now() < deadline {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ToolError::new("CANCELLED", "Cancelled after starting the application."));
+            }
             sleep(Duration::from_millis(250));
-            let front = foreground();
-            let fresh: Vec<String> = self.windows()?.iter().filter(|window| !known.contains(&window.hwnd)).map(|window| window.line(front)).collect();
-            if !fresh.is_empty() {
-                return Ok(format!("Opened {app}. New windows:\n{}", fresh.join("\n")));
+            if top_windows().iter().any(|facts| !known.contains(&facts.0)) {
+                // Dejar que termine de pintarse antes de leerla.
+                sleep(Duration::from_millis(300));
+                let opened = self.new_windows(&known, &mut None, &mut 0);
+                return Ok(format!("Opened {app}.{opened}"));
             }
         }
         Ok(format!("Started {app}, but no new window appeared within 8 s (it may still be starting, or reused an open window). Use a11y_list_windows or a11y_wait."))
@@ -948,67 +1393,69 @@ fn json_ref(value: &Value) -> Value {
     serde_json::json!({"ref_id": value})
 }
 
+/// Un elemento recorrido. La clave (ruta de rol y nombre desde la ventana)
+/// sirve para saber qué es nuevo tras una acción.
+struct Entry {
+    key: String,
+    node: Node,
+    element: IUIAutomationElement,
+    referenced: bool,
+}
+
 /// Recorrido en memoria del subárbol cacheado.
 struct Walk {
-    id: u32,
     interactive_only: bool,
     max_depth: usize,
     max_elements: usize,
-    lines: Vec<String>,
-    count: usize,
-    refs: Vec<(String, IUIAutomationElement)>,
+    entries: Vec<Entry>,
     truncated: bool,
 }
 impl Walk {
-    fn children(&mut self, parent: &IUIAutomationElement, depth: usize, indent: usize) {
+    fn children(&mut self, parent: &IUIAutomationElement, depth: usize, indent: usize, path: &str) {
         let Ok(children) = (unsafe { parent.GetCachedChildren() }) else { return };
         for index in 0..unsafe { children.Length() }.unwrap_or(0) {
             if self.truncated {
                 return;
             }
             let Ok(child) = (unsafe { children.GetElement(index) }) else { continue };
-            self.visit(&child, depth + 1, indent);
+            self.visit(&child, depth + 1, indent, path);
         }
     }
-    fn visit(&mut self, element: &IUIAutomationElement, depth: usize, indent: usize) {
+    fn visit(&mut self, element: &IUIAutomationElement, depth: usize, indent: usize, path: &str) {
         if depth > self.max_depth {
             return;
         }
-        let mut described = describe(element);
+        let described = describe(element);
         // Barras de desplazamiento y de título: ruido para el agente (hay herramientas propias).
         if self.interactive_only && matches!(described.node.role, "scrollbar" | "titlebar" | "thumb") {
             return;
         }
+        let key = format!("{path}/{}:{}", described.node.role, described.node.name);
         let include = described.referenced
             || (!self.interactive_only && (!described.node.name.trim().is_empty() || described.node.value.is_some()));
         let mut next_indent = indent;
         if include {
-            if self.count >= self.max_elements {
+            if self.entries.len() >= self.max_elements {
                 self.truncated = true;
                 return;
             }
-            self.count += 1;
-            if described.referenced {
-                let reference = format!("@s{}:e{}", self.id, self.count);
-                described.node.reference = Some(reference.clone());
-                self.refs.push((reference, element.clone()));
-            }
-            described.node.depth = indent;
-            self.lines.push(format_node(&described.node));
+            let mut node = described.node;
+            node.depth = indent;
+            self.entries.push(Entry { key: key.clone(), node, element: element.clone(), referenced: described.referenced });
             next_indent += 1;
         }
-        self.children(element, depth, next_indent);
+        self.children(element, depth, next_indent, &key);
     }
 }
 
 impl Engine for UiaEngine {
-    fn call(&mut self, tool: &str, args: &Value) -> ToolResult {
+    fn call(&mut self, tool: &str, args: &Value, cancel: &AtomicBool) -> ToolResult {
         match tool {
             "list_windows" => self.list_windows(args),
             "snapshot" => self.snapshot(args),
             "find" => self.find(args),
             "get" => self.get(args),
-            "wait" => self.wait(args),
+            "wait" => self.wait(args, cancel),
             "status" => self.status(),
             "click" => self.click(args),
             "right_click" => self.right_click(args),
@@ -1019,10 +1466,19 @@ impl Engine for UiaEngine {
             "select" => self.select(args),
             "scroll" => self.scroll(args),
             "scroll_to" => self.scroll_to(args),
-            "launch" => self.launch(args),
+            "launch" => self.launch(args, cancel),
+            "press" => self.press(args),
             "close_app" | "minimize" | "maximize" | "restore" => self.window_action(args, tool),
             other => Err(ToolError::new("INVALID_ARGS", format!("Unknown tool {other}."))),
         }
+    }
+}
+
+#[cfg(test)]
+impl UiaEngine {
+    /// Una llamada sin cancelación, para las pruebas.
+    fn run(&mut self, tool: &str, args: &Value) -> ToolResult {
+        self.call(tool, args, &AtomicBool::new(false))
     }
 }
 

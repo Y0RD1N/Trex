@@ -125,8 +125,8 @@ listo en vez de simular éxito.
 Alternativa en desarrollo al control de computadora, que no lo sustituye: los
 agentes manejan las aplicaciones a través del árbol de accesibilidad del sistema
 (UI Automation en Windows), sin mover el ratón ni escribir con el teclado de la
-persona. Se activa en Ajustes → Integraciones para los chats nuevos (no en
-equipos ni salas), donde se elige el motor.
+persona. Se activa en Ajustes → Integraciones para los chats nuevos, los
+equipos y las salas, donde se elige el motor y si se permiten atajos de teclado.
 
 Cada chat arranca su propia pasarela, `trex-agent a11y-mcp --mode plan|full
 --engine trex|agent-desktop` (servidor MCP `trex_a11y`). Las herramientas se
@@ -137,24 +137,54 @@ llaman `a11y_*` con los dos motores.
 Va dentro de `trex-agent` (`trex-cli/src/a11y/`), sin dependencias externas:
 
 - 6 herramientas de lectura (`list_windows`, `snapshot`, `find`, `get`, `wait`,
-  `status`) y 18 acciones semánticas (clic, menú contextual, valor, escribir,
+  `status`), 18 acciones semánticas y `press` con permiso (clic, menú contextual, valor, escribir,
   vaciar, casillas, desplegar, elegir, desplazar, abrir, cerrar, minimizar,
   maximizar y restaurar); unos 3 000 tokens de esquemas en modo completo;
-- el árbol se devuelve como texto compacto (`- @s1:e3 edit "Nombre" [set_value,type]`)
+- el árbol se devuelve como texto compacto (`- @s1:e3 edit "Nombre" [set_value,type]`),
+  con los saltos de línea del texto como `⏎`,
   en una sola llamada entre procesos por ventana, y las ventanas se listan con
   la API clásica de Windows (milisegundos);
 - `AutoSetFocus` desactivado: ninguna acción trae la ventana al frente. Si la
   persona usó ratón o teclado en la ventana destino hace menos de 2 s, la
-  acción se rechaza con `USER_ACTIVE` sin enviarse;
+  acción se rechaza con `USER_ACTIVE` sin enviarse. Si la aplicación activa
+  una de sus ventanas (un diálogo) sin que la persona toque nada, el foco
+  vuelve a la ventana que estaba usando;
+- cada acción que puede cambiar la ventana dice qué apareció: elementos nuevos
+  (con referencia, sin otro snapshot) y ventanas nuevas con sus elementos, sin
+  los avisos del propio shell de Windows;
+- un marco naranja con la etiqueta «Trex · acción» marca durante un instante
+  el elemento en el que actúa; no recibe clics ni foco;
+- los botones clásicos (Win32 y WinForms) reciben el clic como mensaje
+  encolado, igual que el de un ratón, así que un diálogo modal no bloquea la
+  pasarela; el resto de acciones que podrían esperar corren en otro hilo con
+  un límite de 2,5 s, y las llamadas se pueden cancelar;
+- Chromium y Electron: la primera vez se les pide el árbol de la página
+  (`WM_GETOBJECT`) y se lee de nuevo cuando lo han construido;
+- en un equipo o una sala, cada agente reserva durante un minuto la ventana en
+  la que actúa (`WINDOW_BUSY` para los demás); leer no reserva nada;
+- `a11y_press` (atajos reales como Ctrl+S) solo existe con el permiso de
+  Ajustes y en modo completo: exige 3 s sin tocar nada, trae la ventana al
+  frente un instante, pulsa y devuelve el foco. Sus pulsaciones no cuentan
+  como actividad de la persona. Sin la tecla Windows;
 - cada acción con estado se comprueba releyendo el control (`NOT_KEPT` si la
   aplicación no conserva un valor, en vez de un falso «verificado»); los campos
   que solo admiten pulsaciones reales se rechazan con `KEYBOARD_ONLY`;
 - los campos de contraseña nunca se leen ni se escriben, los valores largos se
   recortan y no se escribe nada en disco: las referencias viven en memoria y
-  caducan a los cinco snapshots.
+  caducan a los ocho snapshots o listas de cambios;
+- las instrucciones piden no usar el portapapeles, la terminal ni archivos
+  como atajo para meter texto en una aplicación.
+
+En el chat, las acciones se leen en castellano («Escribió 1043 caracteres»,
+«Abrió notepad») con la marca «verificado» cuando la aplicación conservó el
+cambio, y mientras el agente maneja una aplicación el aviso de trabajo dice
+«Manejando notepad…» con un botón «Detener».
 
 Las pruebas manejan una ventana Win32 real del propio proceso (fuera de la
-pantalla y sin activarse) y comprueban que la ventana en primer plano no cambia.
+pantalla y sin activarse): valores, casillas, desplegables, elementos y
+ventanas nuevos, y que la ventana en primer plano no cambia. Además se probó a
+mano con una app WinForms (diálogo modal, atajo Enter) y con un formulario en
+Chrome.
 
 ### agent-desktop
 

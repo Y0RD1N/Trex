@@ -693,12 +693,17 @@ impl Server {
             Some(Value::Bool(value)) => *value,
             _ => bail!("desktopEnabled must be a boolean"),
         };
-        // true (motor automático) o el motor elegido en la app.
+        // true (motor automático), el motor elegido en la app, o {engine, keyboard}
+        // cuando además se permiten los atajos de teclado.
         let accessibility = match params.get("accessibility") {
             None | Some(Value::Null) | Some(Value::Bool(false)) => None,
-            Some(Value::Bool(true)) => Some(crate::a11y_mcp::resolve_engine("auto")?),
-            Some(Value::String(engine)) => Some(crate::a11y_mcp::resolve_engine(engine)?),
-            _ => bail!("accessibility must be a boolean or an engine name"),
+            Some(Value::Bool(true)) => Some((crate::a11y_mcp::resolve_engine("auto")?, false)),
+            Some(Value::String(engine)) => Some((crate::a11y_mcp::resolve_engine(engine)?, false)),
+            Some(Value::Object(options)) => Some((
+                crate::a11y_mcp::resolve_engine(options.get("engine").and_then(Value::as_str).unwrap_or("auto"))?,
+                options.get("keyboard").and_then(Value::as_bool).unwrap_or(false),
+            )),
+            _ => bail!("accessibility must be a boolean, an engine name or {{engine, keyboard}}"),
         };
         let cwd = fs::canonicalize(required(params, "cwd")?)
             .context("cwd must be an existing directory")?;
@@ -851,11 +856,15 @@ impl Server {
         }
         // Pasarela propia (este mismo ejecutable) hacia agent-desktop. Va en modo
         // full: el modo plan de la sesión ya oculta y rechaza lo que no es lectura.
-        let accessibility = if let Some(engine) = accessibility {
+        let accessibility = if let Some((engine, keyboard)) = accessibility {
+            let mut args: Vec<String> = vec!["a11y-mcp".into(), "--mode".into(), "full".into(), "--engine".into(), engine.into()];
+            if keyboard {
+                args.push("--keyboard".into());
+            }
             let config = crate::settings::McpServer {
                 name: "trex_a11y".into(),
                 command: std::env::current_exe()?,
-                args: vec!["a11y-mcp".into(), "--mode".into(), "full".into(), "--engine".into(), engine.into()],
+                args,
                 // Solo el nombre: la ruta fijada a mano para agent-desktop, si la hay (pruebas, instalaciones propias).
                 env: vec!["TREX_AGENT_DESKTOP".into()],
                 read_only_tools: crate::a11y_mcp::READ_TOOLS.iter().map(|tool| format!("{}{tool}", crate::a11y_mcp::PREFIX)).collect(),

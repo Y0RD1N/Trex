@@ -549,7 +549,7 @@ fn the_builtin_accessibility_engine_needs_no_external_tool() {
     // Sin agent-desktop: el motor propio no lo necesita.
     command.env("TREX_AGENT_DESKTOP", f.home.path().join("missing-agent-desktop"));
     let mut agent = Agent::spawn_command(command, "TREX1");
-    let started = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":"ask","accessibility":"trex"}));
+    let started = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":"ask","accessibility":{"engine":"trex","keyboard":true}}));
     if !cfg!(windows) {
         assert_eq!(started["accessibilityEnabled"], false, "only Windows has the built-in engine");
         return;
@@ -566,7 +566,8 @@ fn the_builtin_accessibility_engine_needs_no_external_tool() {
         .collect();
     let status = names.iter().find(|name| name.contains("a11y_status")).expect("status tool").clone();
     assert!(names.iter().any(|name| name.contains("a11y_set_value")));
-    assert!(!names.iter().any(|name| name.contains("a11y_press") || name.contains("a11y_focus_window")), "the built-in engine never takes focus");
+    assert!(names.iter().any(|name| name.contains("a11y_press")), "shortcuts were allowed for this session");
+    assert!(!names.iter().any(|name| name.contains("a11y_focus_window")), "the built-in engine has no plain focus tool");
     request.completion(calls(vec![tool("native-status", &status, json!({}))]), "tool_calls");
     let next = f.api.chat();
     let output = tool_output(&next, "native-status").to_string();

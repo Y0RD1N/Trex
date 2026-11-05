@@ -44,6 +44,8 @@ export default function AgentTeamView(props: Props) {
   const browser = useRef(browserOptions(props.settings, team.id)).current;
   const [spaces,setSpaces]=useState<BrowserSpace[]>([]);
   const desktopEnabled = useRef(props.settings.desktopEnabled).current;
+  // Control por accesibilidad: cada miembro reserva las ventanas en las que actúa.
+  const a11yEnabled = useRef(props.settings.a11yEnabled === true).current;
   const root = useRef<HTMLDivElement>(null);
   const mounted = useRef(true), generation = useRef(0), ticking = useRef(false);
   const sessionsRef = useRef<Record<string,ChatSession>>({});
@@ -422,7 +424,7 @@ export default function AgentTeamView(props: Props) {
       const readOnly=!member.canWrite || historyOnly;
       const space=spaces.find(space=>space.clientId===team.id+"-"+member.id);
       const memberBrowser=space?{enabled:browser.enabled,clientId:space.clientId,profile:space.profile}:{...browser,enabled:false,clientId:team.id+"-"+member.id};
-      const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,desktopEnabled: !historyOnly && desktopEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
+      const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,desktopEnabled: !historyOnly && desktopEnabled, a11yEnabled: !historyOnly && a11yEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
         sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
         conversationId:member.conversationId,mode:readOnly?"plan":member.mode??defaultAgentPermission(member.agent.provider),
         model:member.agent.model,effort:member.agent.effort,planningOnly:readOnly,

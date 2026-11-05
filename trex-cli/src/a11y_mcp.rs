@@ -62,8 +62,14 @@ const STALE_AFTER: Duration = Duration::from_secs(15 * 60);
 const HEARTBEAT: Duration = Duration::from_secs(60);
 const ROOT_PREFIX: &str = "trex-a11y-";
 
+/// Acciones que usan el teclado o mueven el foco: solo con el permiso de atajos de Ajustes.
+const KEYBOARD_GATED: [&str; 3] = ["press", "focus", "focus_window"];
+/// Modo interno del modo completo con permiso de teclado.
+const FULL_WITH_KEYBOARD: &str = "full+keyboard";
+
 fn allowed(tool: &str, mode: &str) -> bool {
-    READ_TOOLS.contains(&tool) || (mode == "full" && ACTION_TOOLS.contains(&tool))
+    let full = mode == "full" || mode == FULL_WITH_KEYBOARD;
+    READ_TOOLS.contains(&tool) || (full && ACTION_TOOLS.contains(&tool) && (mode == FULL_WITH_KEYBOARD || !KEYBOARD_GATED.contains(&tool)))
 }
 
 /// Nombre en agent-desktop de una herramienta publicada, si este modo la permite.
@@ -438,11 +444,12 @@ fn send(output: &Mutex<io::Stdout>, message: &Value) {
     let _ = output.flush();
 }
 
-pub fn serve(mode: &str, engine: &str) -> Result<()> {
+pub fn serve(mode: &str, engine: &str, keyboard: bool) -> Result<()> {
     ensure!(matches!(mode, "plan" | "full"), "accessibility MCP mode must be plan or full");
     if resolve_engine(engine)? == "trex" {
-        return crate::a11y::serve(mode);
+        return crate::a11y::serve(mode, keyboard);
     }
+    let mode = if mode == "full" && keyboard { FULL_WITH_KEYBOARD } else { mode };
     let binary = locate().context("agent-desktop is not installed")?;
     let mut root = StateRoot::create()?;
     let mut command = Command::new(&binary);
@@ -515,6 +522,11 @@ mod tests {
         assert_eq!(upstream_name("a11y_snapshot", "plan").as_deref(), Some("desktop_snapshot"));
         assert_eq!(upstream_name("a11y_click", "plan"), None, "plan is read-only");
         assert_eq!(upstream_name("a11y_click", "full").as_deref(), Some("desktop_click"));
+        // Teclado y foco: solo con el permiso de atajos.
+        assert_eq!(upstream_name("a11y_press", "full"), None);
+        assert_eq!(upstream_name("a11y_focus_window", "full"), None);
+        assert_eq!(upstream_name("a11y_press", FULL_WITH_KEYBOARD).as_deref(), Some("desktop_press"));
+        assert_eq!(upstream_name("a11y_press", "plan"), None);
         for hidden in ["a11y_mouse_click", "a11y_hover", "a11y_drag", "a11y_batch", "a11y_clipboard_get", "a11y_session_end", "a11y_screenshot", "desktop_click", "click"] {
             assert_eq!(upstream_name(hidden, "full"), None, "{hidden}");
         }

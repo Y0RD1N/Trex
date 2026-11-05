@@ -13,14 +13,26 @@
 //! - los campos de contraseña nunca se leen, los valores largos se recortan y no
 //!   se escribe nada en disco: las referencias viven en memoria;
 //! - el árbol se devuelve como texto compacto con referencias `@s1:e4`, mucho
-//!   más corto que JSON.
+//!   más corto que JSON, y cada acción dice qué cambió (elementos y ventanas
+//!   nuevos, ya con referencia), sin tener que releer la ventana;
+//! - un resaltado translúcido marca dónde actúa, sin bloquear el ratón;
+//! - varios agentes no actúan a la vez sobre la misma ventana (`locks`);
+//! - los atajos de teclado solo existen si se permiten en Ajustes (`--keyboard`).
 //!
 //! Este archivo es común a todas las plataformas (catálogo, formato y servidor
 //! MCP); el motor de Windows está en `uia.rs`.
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::io::{BufRead, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+mod highlight;
+pub mod keys;
+pub mod locks;
 #[cfg(windows)]
 mod uia;
 
@@ -31,6 +43,9 @@ pub const ACTION_TOOLS: [&str; 18] = [
     "click", "right_click", "set_value", "type", "clear", "toggle", "check", "uncheck", "expand", "collapse", "select",
     "scroll", "scroll_to", "launch", "close_app", "minimize", "maximize", "restore",
 ];
+
+/// Teclado real: solo con el permiso de Ajustes y en modo completo.
+pub const KEYBOARD_TOOLS: [&str; 1] = ["press"];
 
 /// Error de una herramienta: un código estable para el agente y una explicación.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,13 +60,15 @@ impl ToolError {
 }
 pub type ToolResult = std::result::Result<String, ToolError>;
 
-/// Un motor de accesibilidad: recibe el nombre sin prefijo (`snapshot`) y sus argumentos.
+/// Un motor de accesibilidad: recibe el nombre sin prefijo (`snapshot`) y sus
+/// argumentos. `cancel` se activa si el agente cancela la llamada.
 pub trait Engine {
-    fn call(&mut self, tool: &str, args: &Value) -> ToolResult;
+    fn call(&mut self, tool: &str, args: &Value, cancel: &AtomicBool) -> ToolResult;
 }
 
-fn allowed(tool: &str, mode: &str) -> bool {
-    READ_TOOLS.contains(&tool) || (mode == "full" && ACTION_TOOLS.contains(&tool))
+fn allowed(tool: &str, mode: &str, keyboard: bool) -> bool {
+    READ_TOOLS.contains(&tool)
+        || (mode == "full" && (ACTION_TOOLS.contains(&tool) || (keyboard && KEYBOARD_TOOLS.contains(&tool))))
 }
 
 // --- Catálogo ----------------------------------------------------------------------
@@ -126,6 +143,8 @@ fn definition(tool: &str) -> (&'static str, Value, Vec<&'static str>) {
         "minimize" => ("Minimize a window.", window_target(), vec![]),
         "maximize" => ("Maximize a window.", window_target(), vec![]),
         "restore" => ("Restore a minimized or maximized window.", window_target(), vec![]),
+        "press" => ("Send a real key combination (ctrl+s, alt+f, enter) to a window or element. It briefly brings the window to the front and uses the keyboard, only while the user is not typing, then returns the focus. Use it only when no semantic action exists.",
+            with(with(window_target(), reference()), json!({"keys": {"type": "string", "description": "For example ctrl+s, ctrl+shift+n, alt+f4, enter, f5. No Windows-key shortcuts."}})), vec!["keys"]),
         _ => ("", json!({}), vec![]),
     };
     let schema = json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false});
@@ -133,10 +152,12 @@ fn definition(tool: &str) -> (&'static str, Value, Vec<&'static str>) {
 }
 
 /// Herramientas publicadas en este modo, con el prefijo `a11y_`.
-pub fn tools(mode: &str) -> Vec<Value> {
+pub fn tools(mode: &str, keyboard: bool) -> Vec<Value> {
     READ_TOOLS
         .iter()
-        .chain(if mode == "full" { ACTION_TOOLS.iter() } else { [].iter() })
+        .chain(ACTION_TOOLS.iter())
+        .chain(KEYBOARD_TOOLS.iter())
+        .filter(|tool| allowed(tool, mode, keyboard))
         .map(|tool| {
             let (description, schema, _) = definition(tool);
             let read_only = READ_TOOLS.contains(tool);
@@ -146,28 +167,37 @@ pub fn tools(mode: &str) -> Vec<Value> {
         .collect()
 }
 
-pub fn instructions(mode: &str) -> String {
+pub fn instructions(mode: &str, keyboard: bool) -> String {
     let permissions = if mode == "plan" {
         "This process is read-only: only observation tools are available."
+    } else if keyboard {
+        "Actions follow the host agent's permission policy. a11y_press uses the real keyboard for shortcuts such as ctrl+s; prefer menus and buttons when they exist."
     } else {
-        "Actions follow the host agent's permission policy."
+        "Actions follow the host agent's permission policy. Keyboard shortcuts are disabled; use menus and buttons."
     };
     format!(
         "Trex accessibility engine (experimental) operates desktop apps through the operating system accessibility tree. It never moves the user's \
 mouse, never types on their keyboard and never brings windows to the front, so the user can keep working. Loop: a11y_list_windows, then \
-a11y_snapshot of one window (compact text; each line is `@ref role \"name\" states [actions]`), act on a fresh @ref, and read the result in the \
-tool response (state changes are verified). Refs expire after a few snapshots: take a new one after the window changes. USER_ACTIVE means the \
-user is working in that window right now: wait (a11y_wait) and retry. NOT_KEPT means the app did not keep a value: do not claim success. Never \
-repeat an uncertain action automatically. Snapshots include visible text: never repeat secrets. Fields that only accept real keystrokes are \
-refused; explain it instead of switching to other control tools unless the user asks. {permissions}"
+a11y_snapshot of one window (compact text; each line is `@ref role \"name\" states [actions]`; line breaks inside text appear as ⏎), act on a \
+fresh @ref, and read the result in the tool response: state changes are verified, and it lists what changed (new elements with refs, new \
+windows), so use those refs directly instead of taking another snapshot. Refs expire after a few snapshots. USER_ACTIVE means the user is working \
+in that window right now: wait (a11y_wait) and retry. WINDOW_BUSY means another Trex agent is using that window. NOT_KEPT means the app did not keep \
+a value: do not claim success. Never repeat an uncertain action automatically. Snapshots include visible text: never repeat secrets. Never use \
+the clipboard, shell commands or files as a workaround to put text into an app; if a field refuses text, explain it. {permissions}"
     )
 }
 
 // --- Formato -----------------------------------------------------------------------
 
+/// Saltos de línea de cualquier sistema (`\r\n`, `\r` del Bloc de notas, `\n`) como `\n`.
+pub fn lines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// Texto entre comillas, en una línea y recortado: `"Guardar…(1204 chars)"`.
+/// Los saltos de línea se ven como ⏎ (no se borran: el agente creería que se perdieron).
 pub fn quote(text: &str, max: usize) -> String {
-    let flat = text.replace('\r', "").replace('\n', "⏎");
+    let flat = lines(text).replace('\n', "⏎");
     let total = flat.chars().count();
     let shown: String = flat.chars().take(max).collect();
     let mut quoted = serde_json::to_string(&shown).unwrap_or_default();
@@ -227,50 +257,116 @@ fn respond(output: &mut impl Write, message: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Lo que está atendiendo el motor y lo que se canceló antes de empezar.
+#[derive(Default)]
+struct Flight {
+    current: Option<String>,
+    cancelled: HashSet<String>,
+}
+
 /// Atiende peticiones MCP por líneas hasta que se cierre la entrada.
-pub fn serve_with(engine: &mut dyn Engine, mode: &str, input: impl BufRead, mut output: impl Write) -> Result<()> {
+///
+/// El motor vive en su propio hilo (UI Automation es COM): este hilo sigue
+/// leyendo mientras una acción tarda, para atender `ping`, la lista de
+/// herramientas y las cancelaciones. Una llamada cancelada no responde.
+pub fn serve_with<E, F>(factory: F, mode: &str, keyboard: bool, input: impl BufRead, output: impl Write + Send + 'static) -> Result<()>
+where
+    E: Engine,
+    F: FnOnce() -> Result<E> + Send + 'static,
+{
+    let output = Arc::new(Mutex::new(output));
+    let flight = Arc::new(Mutex::new(Flight::default()));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (jobs, receiver) = mpsc::channel::<(Value, String, Value)>();
+    let worker = {
+        let (output, flight, cancel) = (output.clone(), flight.clone(), cancel.clone());
+        std::thread::spawn(move || {
+            let mut engine = factory().map_err(|error| error.to_string());
+            for (id, tool, args) in receiver {
+                let key = id.to_string();
+                {
+                    let mut flight = flight.lock().unwrap();
+                    if flight.cancelled.remove(&key) {
+                        continue;
+                    }
+                    flight.current = Some(key.clone());
+                }
+                cancel.store(false, Ordering::SeqCst);
+                let result = match &mut engine {
+                    Ok(engine) => engine.call(&tool, &args, &cancel),
+                    Err(error) => Err(ToolError::new("ENGINE_UNAVAILABLE", error.clone())),
+                };
+                let cancelled = {
+                    let mut flight = flight.lock().unwrap();
+                    flight.current = None;
+                    flight.cancelled.remove(&key)
+                };
+                if cancelled {
+                    continue;
+                }
+                let mut result = match result {
+                    Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
+                    Err(error) => json!({"content": [{"type": "text", "text": format!("{}: {}", error.code, error.message)}], "isError": true}),
+                };
+                crate::a11y_mcp::rewrite_result(&mut result);
+                let _ = respond(&mut *output.lock().unwrap(), &json!({"jsonrpc": "2.0", "id": id, "result": result}));
+            }
+        })
+    };
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
-            respond(&mut output, &json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "Invalid JSON"}}))?;
+            respond(&mut *output.lock().unwrap(), &json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "Invalid JSON"}}))?;
             continue;
         };
-        // Las notificaciones (sin id) no tienen respuesta.
+        let method = message["method"].as_str().unwrap_or("");
+        if method == "notifications/cancelled" {
+            let request = message["params"]["requestId"].to_string();
+            let mut flight = flight.lock().unwrap();
+            if flight.current.as_deref() == Some(request.as_str()) {
+                cancel.store(true, Ordering::SeqCst);
+            }
+            flight.cancelled.insert(request);
+            continue;
+        }
+        // Las demás notificaciones (sin id) no tienen respuesta.
         let Some(id) = message.get("id").cloned() else { continue };
         let reply = |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result});
         let fail = |code: i32, text: String| json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": text}});
-        let response = match message["method"].as_str().unwrap_or("") {
+        let response = match method {
             "initialize" => {
                 let asked = message["params"]["protocolVersion"].as_str().unwrap_or("");
                 let protocol = if PROTOCOLS.contains(&asked) { asked } else { "2025-06-18" };
                 reply(json!({"protocolVersion": protocol, "capabilities": {"tools": {}},
                     "serverInfo": {"name": "trex-a11y", "version": format!("trex {}", env!("CARGO_PKG_VERSION"))},
-                    "instructions": instructions(mode)}))
+                    "instructions": instructions(mode, keyboard)}))
             }
             "ping" => reply(json!({})),
-            "tools/list" => reply(json!({"tools": tools(mode)})),
+            "tools/list" => reply(json!({"tools": tools(mode, keyboard)})),
             "tools/call" => {
                 let name = message["params"]["name"].as_str().unwrap_or("");
-                match name.strip_prefix(crate::a11y_mcp::PREFIX).filter(|tool| allowed(tool, mode)) {
+                match name.strip_prefix(crate::a11y_mcp::PREFIX).filter(|tool| allowed(tool, mode, keyboard)) {
                     None => fail(-32602, format!("Tool {name} is not available in this accessibility session.")),
                     Some(tool) => {
-                        let empty = json!({});
-                        let args = message["params"].get("arguments").filter(|value| value.is_object()).unwrap_or(&empty);
-                        let mut result = match engine.call(tool, args) {
-                            Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
-                            Err(error) => json!({"content": [{"type": "text", "text": format!("{}: {}", error.code, error.message)}], "isError": true}),
-                        };
-                        crate::a11y_mcp::rewrite_result(&mut result);
-                        reply(result)
+                        let args = message["params"].get("arguments").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({}));
+                        let _ = jobs.send((id.clone(), tool.to_owned(), args));
+                        continue;
                     }
                 }
             }
             other => fail(-32601, format!("Unknown method {other}")),
         };
-        respond(&mut output, &response)?;
+        respond(&mut *output.lock().unwrap(), &response)?;
+    }
+    // Entrada cerrada: lo pendiente termina (o se abandona si sigue bloqueado al salir).
+    drop(jobs);
+    cancel.store(true, Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !worker.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
     }
     Ok(())
 }
@@ -280,13 +376,12 @@ pub fn available() -> bool {
     cfg!(windows)
 }
 
-pub fn serve(mode: &str) -> Result<()> {
+pub fn serve(mode: &str, keyboard: bool) -> Result<()> {
     anyhow::ensure!(matches!(mode, "plan" | "full"), "accessibility MCP mode must be plan or full");
     #[cfg(windows)]
     {
-        let mut engine = uia::UiaEngine::new()?;
         let stdin = std::io::stdin();
-        serve_with(&mut engine, mode, stdin.lock(), std::io::stdout().lock())
+        serve_with(move || uia::UiaEngine::new(keyboard), mode, keyboard, stdin.lock(), std::io::stdout())
     }
     #[cfg(not(windows))]
     anyhow::bail!("the Trex accessibility engine is only available on Windows; use the agent-desktop engine")
@@ -296,24 +391,51 @@ pub fn serve(mode: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    struct Echo(Vec<String>);
+    struct Echo(Arc<Mutex<Vec<String>>>);
     impl Engine for Echo {
-        fn call(&mut self, tool: &str, args: &Value) -> ToolResult {
-            self.0.push(tool.to_owned());
+        fn call(&mut self, tool: &str, args: &Value, cancel: &AtomicBool) -> ToolResult {
+            self.0.lock().unwrap().push(tool.to_owned());
             if tool == "click" {
                 return Err(ToolError::new("USER_ACTIVE", "the user is working in that window"));
+            }
+            if tool == "wait" {
+                // Una espera larga que solo termina si se cancela.
+                while !cancel.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                return Err(ToolError::new("CANCELLED", "cancelled"));
             }
             Ok(format!("{tool} {args}"))
         }
     }
 
-    fn run(mode: &str, requests: &[Value]) -> (Vec<Value>, Vec<String>) {
+    #[derive(Clone, Default)]
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+    impl Write for Shared {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run_with(mode: &str, keyboard: bool, requests: &[Value]) -> (Vec<Value>, Vec<String>) {
         let input = requests.iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
-        let mut output = Vec::new();
-        let mut engine = Echo(vec![]);
-        serve_with(&mut engine, mode, input.as_bytes(), &mut output).unwrap();
-        let replies = String::from_utf8(output).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-        (replies, engine.0)
+        let output = Shared::default();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let engine_calls = calls.clone();
+        serve_with(move || Ok(Echo(engine_calls)), mode, keyboard, input.as_bytes(), output.clone()).unwrap();
+        let text = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
+        let mut replies: Vec<Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        replies.sort_by_key(|reply| reply["id"].to_string());
+        let calls = calls.lock().unwrap().clone();
+        (replies, calls)
+    }
+
+    fn run(mode: &str, requests: &[Value]) -> (Vec<Value>, Vec<String>) {
+        run_with(mode, false, requests)
     }
 
     #[test]
@@ -324,10 +446,13 @@ mod tests {
         for tool in ACTION_TOOLS {
             assert!(crate::a11y_mcp::ACTION_TOOLS.contains(&tool), "{tool}");
         }
-        let plan: Vec<_> = tools("plan").iter().map(|tool| tool["name"].as_str().unwrap().to_owned()).collect();
-        assert_eq!(plan.len(), READ_TOOLS.len());
+        let plan: Vec<_> = tools("plan", true).iter().map(|tool| tool["name"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(plan.len(), READ_TOOLS.len(), "plan never gets actions, not even the keyboard");
         assert!(plan.iter().all(|name| name.starts_with("a11y_")));
-        let full = tools("full");
+        assert!(KEYBOARD_TOOLS.iter().all(|tool| crate::a11y_mcp::ACTION_TOOLS.contains(tool)));
+        assert!(!tools("full", false).iter().any(|tool| tool["name"] == "a11y_press"), "shortcuts need the setting");
+        assert!(tools("full", true).iter().any(|tool| tool["name"] == "a11y_press"));
+        let full = tools("full", false);
         assert_eq!(full.len(), READ_TOOLS.len() + ACTION_TOOLS.len());
         assert!(full.iter().all(|tool| !tool["description"].as_str().unwrap().is_empty()));
         assert!(full.iter().any(|tool| tool["name"] == "a11y_set_value" && tool["inputSchema"]["required"] == json!(["ref_id", "value"])));
@@ -346,6 +471,7 @@ mod tests {
             json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "a11y_click", "arguments": {"ref_id": "@s1:e1"}}}),
         ]);
         assert_eq!(replies.len(), 4, "notifications get no reply");
+        // Respuestas ordenadas por id: 1 initialize, 2 tools/list, 3 snapshot, 4 click rechazado.
         assert_eq!(replies[0]["result"]["protocolVersion"], "2025-11-25");
         assert_eq!(replies[0]["result"]["serverInfo"]["name"], "trex-a11y");
         assert!(replies[0]["result"]["instructions"].as_str().unwrap().contains("read-only"));
@@ -356,6 +482,22 @@ mod tests {
         let (replies, _) = run("full", &[json!({"jsonrpc": "2.0", "id": "x", "method": "tools/call", "params": {"name": "a11y_click", "arguments": {}}})]);
         assert_eq!(replies[0]["result"]["isError"], true);
         assert_eq!(replies[0]["result"]["content"][0]["text"], "USER_ACTIVE: the user is working in that window");
+        let (replies, _) = run_with("full", false, &[json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "a11y_press", "arguments": {"keys": "ctrl+s"}}})]);
+        assert_eq!(replies[0]["error"]["code"], -32602, "no keyboard without the setting");
+    }
+
+    #[test]
+    fn a_slow_call_does_not_block_the_server_and_can_be_cancelled() {
+        let (replies, calls) = run("plan", &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "a11y_wait", "arguments": {}}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}}),
+            json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "a11y_status", "arguments": {}}}),
+        ]);
+        let ids: Vec<String> = replies.iter().map(|reply| reply["id"].to_string()).collect();
+        assert_eq!(ids, ["2", "3"], "the cancelled call gets no reply and the next one still runs");
+        // Según cuándo llegue la cancelación, la espera ni empieza o se corta a mitad.
+        assert!(calls == ["wait", "status"] || calls == ["status"], "{calls:?}");
     }
 
     #[test]
@@ -365,6 +507,9 @@ mod tests {
         let line = format_node(&node);
         assert!(line.starts_with("    - @s3:e5 edit \"Texto⏎largo\" value=\""), "{line}");
         assert!(line.ends_with("…(130 chars)\" focused [set_value,type]"), "{line}");
+        // Los saltos del Bloc de notas (\r) se ven, no desaparecen.
+        assert_eq!(quote("Título\r\rVerso\r\nOtro\nFin", 80), "\"Título⏎⏎Verso⏎Otro⏎Fin\"");
+        assert_eq!(lines("a\r\rb\r\nc"), "a\n\nb\nc");
         assert_eq!(format_node(&Node { role: "text", name: "Hola".into(), ..Node::default() }), "- text \"Hola\"");
         assert_eq!(quote("comillas \"y\" barra \\", 80), r#""comillas \"y\" barra \\""#);
     }

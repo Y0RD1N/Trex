@@ -59,3 +59,37 @@ test("an unavailable agent-desktop becomes a chat notice instead of a failed sta
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /^El control por accesibilidad \(experimental\) no se activó en este chat: /);
 });
+
+test("accessibility tools read as plain Spanish in the chat, with the verified mark", async () => {
+  const chat = await load("chatState");
+  for (const name of ["mcp__trex_a11y__a11y_list_windows", "mcp_trex_a11y_a11y_list_windows_1a2b3c4d"]) assert.equal(chat.a11yToolName(name), "list_windows");
+  assert.equal(chat.a11yToolName("mcp__trex_desktop__desktop_click"), null);
+  const row = (tool, input, running = false) => chat.describeTool(`mcp__trex_a11y__a11y_${tool}`, input, "C:/", running);
+  assert.deepEqual(row("launch", { app: "notepad" }), { icon: "run", verb: "Abrió", target: "notepad" });
+  assert.deepEqual(row("type", { ref_id: "@s1:e1", text: "x".repeat(1043) }, true), { icon: "edit", verb: "Escribiendo", target: "1043 caracteres" });
+  assert.equal(row("select", { value: "Verde" }).target, "«Verde»");
+  assert.equal(row("press", { keys: "ctrl+s" }).target, "ctrl+s");
+  assert.equal(chat.a11yVerified("mcp__trex_a11y__a11y_type", "Value verified: \"hola\"."), true);
+  assert.equal(chat.a11yVerified("mcp__trex_a11y__a11y_check", "Now checked (verified)."), true);
+  assert.equal(chat.a11yVerified("mcp__trex_a11y__a11y_click", "Clicked (invoked)."), false, "a click has no state to verify");
+  assert.equal(chat.a11yVerified("Bash", "Value verified"), false);
+});
+
+test("the working row names the app the agent is driving, only while it is", async () => {
+  const chat = await load("chatState");
+  const tool = (tool, input, output = "") => ({ kind: "tool", id: tool, name: `mcp__trex_a11y__a11y_${tool}`, input, status: "done", output, patch: null });
+  const user = { kind: "user", id: "u", text: "abre el bloc de notas", images: 0, previews: [] };
+  assert.equal(chat.a11yActivity([user]), null);
+  assert.deepEqual(chat.a11yActivity([user, tool("launch", { app: "notepad" })]), { app: "notepad" });
+  const read = tool("snapshot", { window_id: "w44" }, "window w44 \"Sin título: Bloc de notas\" (notepad.exe) · snapshot s1 · 26 elements · 61 ms");
+  assert.deepEqual(chat.a11yActivity([user, read, tool("type", { ref_id: "@s1:e1", text: "hola" })]), { app: "notepad" });
+  // Después de otra herramienta (por ejemplo, leer un archivo), ya no está manejando apps.
+  assert.equal(chat.a11yActivity([user, read, { kind: "tool", id: "r", name: "Read", input: {}, status: "done", output: "", patch: null }]), null);
+});
+
+test("keyboard shortcuts travel with the gateway only when allowed", async () => {
+  assert.equal(normalizeConfig({}).settings.a11yKeyboard, false);
+  assert.equal(normalizeConfig({ settings: { a11yKeyboard: true } }).settings.a11yKeyboard, true);
+  assert.equal(accessibility.accessibilityKeyboard({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--engine", "trex", "--keyboard"] }), true);
+  assert.equal(accessibility.accessibilityKeyboard({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--engine", "trex"] }), false);
+});

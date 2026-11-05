@@ -312,7 +312,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 onChange={(profiles, defaultProfileId) => patch({ profiles, defaultProfileId })} />}
 
               {item.id === "browser" && section === "browser" && <BrowserSettings settings={draft} cwd={cwd} onChange={patch} onBusyChange={changeProfileBusy} />}
-              {item.id === "integrations" && section === "integrations" && <IntegrationSettings cwd={cwd} integrations={draft.integrations} onIntegrationsChange={integrations => patch({ integrations })} desktopEnabled={draft.desktopEnabled} onDesktopChange={desktopEnabled => patch({ desktopEnabled })} a11yEnabled={draft.a11yEnabled} onA11yChange={a11yEnabled => patch({ a11yEnabled })} a11yEngine={draft.a11yEngine} onA11yEngineChange={a11yEngine => patch({ a11yEngine })} />}
+              {item.id === "integrations" && section === "integrations" && <IntegrationSettings cwd={cwd} integrations={draft.integrations} onIntegrationsChange={integrations => patch({ integrations })} desktopEnabled={draft.desktopEnabled} onDesktopChange={desktopEnabled => patch({ desktopEnabled })} a11yEnabled={draft.a11yEnabled} onA11yChange={a11yEnabled => patch({ a11yEnabled })} a11yEngine={draft.a11yEngine} onA11yEngineChange={a11yEngine => patch({ a11yEngine })} a11yKeyboard={draft.a11yKeyboard} onA11yKeyboardChange={a11yKeyboard => patch({ a11yKeyboard })} />}
 
               {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
               {item.id === "notifications" && <NotificationsSettings settings={draft} onChange={patch} />}

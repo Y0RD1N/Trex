@@ -95,6 +95,9 @@ enum Command {
         /// trex: built-in engine (Windows); agent-desktop: external tool; auto: built-in when available.
         #[arg(long, default_value = "auto", value_parser = ["auto", "trex", "agent-desktop"])]
         engine: String,
+        /// Allow real keyboard shortcuts (a11y_press); off unless enabled in Trex settings.
+        #[arg(long)]
+        keyboard: bool,
     },
     /// Find agent-desktop and its version without opening applications.
     A11yDoctor {
@@ -536,7 +539,7 @@ async fn run() -> Result<()> {
         Command::AppServer => server::run(selected(cli.profile)?).await?,
         Command::DesktopMcp { mode } => trex_agent::desktop_mcp::serve(&mode).await?,
         Command::DesktopDoctor { json: _ } => print_json(&trex_agent::desktop::doctor().await?)?,
-        Command::A11yMcp { mode, engine } => tokio::task::spawn_blocking(move || trex_agent::a11y_mcp::serve(&mode, &engine)).await??,
+        Command::A11yMcp { mode, engine, keyboard } => tokio::task::spawn_blocking(move || trex_agent::a11y_mcp::serve(&mode, &engine, keyboard)).await??,
         Command::A11yDoctor { json: _ } => print_json(&tokio::task::spawn_blocking(trex_agent::a11y_mcp::doctor).await?)?,
         Command::Chat { launch } => {
             let profile = selected(cli.profile)?;

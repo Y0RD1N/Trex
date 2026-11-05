@@ -47,8 +47,10 @@ carpeta, con el asistente y el perfil que elijas.
 - **Control por accesibilidad (experimental)**: Claude Code, Codex, Trex CLI y
   Antigravity manejan las aplicaciones a través del árbol de accesibilidad del
   sistema, sin mover tu ratón, sin escribir con tu teclado y sin traer ventanas
-  al frente. En Windows usa el motor propio de Trex, que no requiere instalar
-  nada; también puede usar [agent-desktop](https://github.com/vercel-labs/agent-desktop).
+  al frente; un marco naranja muestra dónde actúa y puedes detenerlo desde el
+  chat. En Windows usa el motor propio de Trex, que no requiere instalar nada,
+  también con Chrome y Electron; también puede usar
+  [agent-desktop](https://github.com/vercel-labs/agent-desktop).
   Es una integración aparte que no sustituye al control de computadora y se
   activa en Ajustes → Integraciones. Detalles en
   [integraciones de escritorio](docs/integraciones-escritorio.md#control-por-accesibilidad-experimental).

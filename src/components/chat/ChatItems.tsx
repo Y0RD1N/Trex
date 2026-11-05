@@ -4,7 +4,7 @@
  */
 import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  answersOf, describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
+  a11yVerified, answersOf, describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
   type DiffLine, type PermissionItem, type ToolItem, type ToolSummary,
 } from "../../chatState";
 import { AlertIcon, CheckIcon, ChevronIcon, CloseIcon, FileIcon, GlobeIcon, ImageIcon, InfoIcon, ListIcon, MapIcon, PencilIcon,
@@ -243,6 +243,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onIm
   const summary = useMemo(() => describeTool(item.name, item.input, cwd, running), [item.name, item.input, cwd, running]);
   const stats = useMemo(() => diffStats(item.patch ?? inputDiff(item.name, item.input)), [item.patch, item.name, item.input]);
   const answer = useMemo(() => answerSummary(item), [item]);
+  const verified = item.status === "done" && a11yVerified(item.name, typeof item.output === "string" ? item.output : null);
   if (item.name === "TodoWrite" && expanded) return <TodoCard input={item.input} />;
   if (item.name === "ExitPlanMode" && expanded && typeof item.input.plan === "string") return <PlanCard plan={item.input.plan} onImplement={onImplement} />;
   const description = item.name === "Bash" && typeof item.input.description === "string" ? item.input.description : undefined;
@@ -252,6 +253,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onIm
       <span className="chat-tool-verb">{summary.verb}</span>
       {summary.target && <span className={`chat-tool-target${summary.icon === "run" || summary.icon === "search" ? " mono" : ""}`}>{summary.target}</span>}
       {answer && <span className={`chat-tool-answer${answer === "Sin respuesta" ? " empty" : ""}`}>{answer}</span>}
+      {verified && <span className="chat-tool-verified" title="La app conservó el cambio: se comprobó releyendo el control"><CheckIcon size={12} />verificado</span>}
       <DiffCount added={stats.added} removed={stats.removed} />
       <StatusMark status={item.status} />
       <span className="chat-tool-chevron" aria-hidden="true"><ChevronIcon size={13} /></span>

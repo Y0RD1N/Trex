@@ -20,7 +20,7 @@ import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from 
 import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
 import { matchesPasteShortcut } from "../paste";
 import {
-  chatActivity, contextPercent, contextTokensLabel, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, modelName, pendingPermissions,
+  a11yActivity, chatActivity, contextPercent, contextTokensLabel, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, modelName, pendingPermissions,
   shownUsage, supportedEfforts, type ChatItem, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
@@ -1028,6 +1028,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
 
   const lastItem = state.items[state.items.length - 1];
   const thinking = !lastItem || lastItem.kind === "user" || lastItem.kind === "thinking";
+  // El agente está manejando tus aplicaciones: el aviso lo dice y deja detenerlo.
+  const controlling = useMemo(() => running ? a11yActivity(state.items) : null, [running, state.items]);
   const empty = state.items.length === 0;
   // Solo la lista de tareas y el plan más recientes se muestran enteros; los anteriores quedan plegados.
   const { latestTodos, latestPlan, planIndex } = useMemo(() => {
@@ -1203,12 +1205,13 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
           Mostrar mensajes anteriores
         </button>}
         {rows}
-        {running && permissions === 0 && <div className="chat-working" role="status">
+        {running && permissions === 0 && <div className={`chat-working${controlling ? " is-controlling" : ""}`} role="status">
           <span className="chat-working-dot" aria-hidden="true" />
-          <span className="chat-working-label">{thinking ? "Pensando…" : "Trabajando…"}</span>
+          <span className="chat-working-label">{controlling ? `Manejando ${controlling.app ?? "tus aplicaciones"}…` : thinking ? "Pensando…" : "Trabajando…"}</span>
           {state.turnStartedAt !== null && <WorkingTime since={state.turnStartedAt} live={visible} />}
           {state.turnStartedAt !== null && <span className="chat-working-since">desde las {formatClock(state.turnStartedAt, props.settings.timeFormat)}</span>}
-          <span className="chat-working-hint">Esc para detener</span>
+          {controlling ? <button type="button" className="chat-working-stop" onClick={stopResponse} title="Detiene al agente (Esc)">
+            <StopIcon size={11} />Detener</button> : <span className="chat-working-hint">Esc para detener</span>}
         </div>}
         {handoffPending && <div className="chat-handoff-status" role={handoffDelivery.error ? "alert" : "status"}>
           <div className="chat-handoff-heading"><RotateIcon size={16} /><strong>Continuación de {props.handoff?.sourceLabel}</strong></div>
@@ -1469,7 +1472,7 @@ function ChatView(input: ChatViewProps) {
   const browser = useRef(browserOptions(input.settings, input.sessionId,
     [input.profileName ?? (input.provider === "claude" ? "Claude Code" : input.provider === "codex" ? "Codex" : input.provider === "antigravity" ? "Antigravity" : "Trex CLI"),input.sessionTitle].filter(Boolean).join(" · "))).current;
   const desktopEnabled = useRef(input.settings.desktopEnabled).current;
-  // Experimental: solo en chats normales (los equipos y las salas aún no lo usan).
+  // Experimental; en equipos y salas cada agente reserva las ventanas en las que actúa.
   const a11yEnabled = useRef(input.settings.a11yEnabled === true).current;
   const props = { ...input, browser, desktopEnabled, a11yEnabled, integrations: input.settings.integrations };
   return props.provider === "antigravity" ? <AntigravityChat {...props} /> : props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;

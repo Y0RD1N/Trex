@@ -62,6 +62,8 @@ pub struct Settings {
     pub a11y_enabled: bool,
     /// Motor de accesibilidad: "trex" (propio, Windows) o "agent-desktop".
     pub a11y_engine: String,
+    /// Atajos de teclado reales en el control por accesibilidad (desactivado por defecto).
+    pub a11y_keyboard: bool,
     pub browser_enabled: bool,
     pub browser_profile: String,
     pub profiles: Vec<LauncherProfile>,
@@ -104,6 +106,7 @@ impl Default for Settings {
             desktop_enabled: false,
             a11y_enabled: false,
             a11y_engine: "trex".into(),
+            a11y_keyboard: false,
             browser_enabled: true,
             browser_profile: "BROWSER1".into(),
             // Vacío indica al frontend que debe migrar la instalación anterior.
@@ -168,6 +171,7 @@ mod browser_preference_tests {
         let old: AppConfig = serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
         assert!(!old.settings.a11y_enabled);
         assert_eq!(old.settings.a11y_engine, "trex");
+        assert!(!old.settings.a11y_keyboard, "keyboard shortcuts need explicit permission");
         for enabled in [false, true] {
             let config: AppConfig = serde_json::from_value(serde_json::json!({"settings":{"a11yEnabled":enabled}})).unwrap();
             assert_eq!(config.settings.a11y_enabled, enabled);

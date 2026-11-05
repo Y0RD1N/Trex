@@ -788,14 +788,20 @@ pub async fn trex_a11y_mcp_config(app: tauri::AppHandle, mode: String) -> Result
         "qa" | "full" => "full",
         _ => return Err("Modo de control por accesibilidad no válido.".into()),
     };
-    let preferred = crate::config::load(&app).settings.a11y_engine;
+    let settings = crate::config::load(&app).settings;
+    let preferred = settings.a11y_engine;
     let status: serde_json::Value = crate::blocking(|| parse_json(&invoke_cli(&["a11y-doctor", "--json"], None)?)).await
         .map_err(|_| "Actualiza Trex CLI para usar el control por accesibilidad.".to_string())?;
     let native = status["native"]["available"] == true;
     let engine = choose_a11y_engine(&preferred, native, &status)?;
     let binary = installed_cli_path()?;
     let command = binary.to_str().ok_or("La ruta del agente no es UTF-8 válida.")?;
-    Ok(serde_json::json!({"command":command,"args":["a11y-mcp","--mode",fixed_mode,"--engine",engine]}))
+    let mut args = vec!["a11y-mcp", "--mode", fixed_mode, "--engine", engine];
+    // Atajos de teclado solo con el permiso de Ajustes (y nunca al planificar: el motor lo impide).
+    if settings.a11y_keyboard {
+        args.push("--keyboard");
+    }
+    Ok(serde_json::json!({"command":command,"args":args}))
 }
 
 /// Motor que se usará, o por qué no se puede usar ninguno.

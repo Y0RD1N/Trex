@@ -525,10 +525,93 @@ const firstLine = (value: string, max = 120): string => {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
+/**
+ * Herramienta del control por accesibilidad (`a11y_click`…) sin el prefijo de
+ * cada proveedor: `mcp__trex_a11y__a11y_click` (Claude, Codex) o
+ * `mcp_trex_a11y_a11y_click_1a2b3c4d` (Trex CLI). null si es otra.
+ */
+export function a11yToolName(name: string): string | null {
+  return /trex_a11y.*?a11y_([a-z_]+?)(?:_[0-9a-f]{8})?$/.exec(name)?.[1] ?? null;
+}
+
+/** Si la respuesta de una acción del control por accesibilidad confirma que se comprobó. */
+export function a11yVerified(name: string, output: string | null | undefined): boolean {
+  return a11yToolName(name) !== null && /^(Value verified|Now (checked|unchecked|mixed) \(verified\)|Selected .*\(verified\)|(Expanded|Collapsed) \(verified\)|Window w[0-9A-F]+ is now .* \(verified\))/.test(output ?? "");
+}
+
+function describeA11y(tool: string, input: Json, running: boolean): ToolSummary {
+  const verb = (live: string, done: string): string => running ? live : done;
+  const quoted = (value: unknown): string => text(value) ? `«${text(value)}»` : "";
+  const window = text(input.app) || "una ventana";
+  const characters = (value: unknown): string => {
+    const count = text(value).length;
+    return count === 1 ? "1 carácter" : `${count.toLocaleString("es")} caracteres`;
+  };
+  const labels: Record<string, [ToolSummary["icon"], string, string, string]> = {
+    list_windows: ["search", "Revisando", "Revisó", "las ventanas abiertas"],
+    snapshot: ["read", "Leyendo", "Leyó", text(input.app) || "la ventana"],
+    find: ["search", "Buscando", "Buscó", quoted(input.name) || text(input.role) || "en la ventana"],
+    get: ["read", "Leyendo", "Leyó", "un elemento"],
+    wait: ["tool", "Esperando", "Esperó", typeof input.ms === "number" ? `${input.ms} ms` : "a que cambie la ventana"],
+    status: ["tool", "Comprobando", "Comprobó", "el control por accesibilidad"],
+    click: ["tool", "Pulsando", "Pulsó", "un elemento"],
+    right_click: ["tool", "Abriendo", "Abrió", "un menú contextual"],
+    set_value: ["edit", "Escribiendo", "Escribió", characters(input.value)],
+    type: ["edit", "Escribiendo", "Escribió", characters(input.text)],
+    clear: ["edit", "Vaciando", "Vació", "un campo"],
+    toggle: ["tool", "Cambiando", "Cambió", "una casilla"],
+    check: ["tool", "Marcando", "Marcó", "una casilla"],
+    uncheck: ["tool", "Desmarcando", "Desmarcó", "una casilla"],
+    expand: ["tool", "Desplegando", "Desplegó", "un menú"],
+    collapse: ["tool", "Plegando", "Plegó", "un menú"],
+    select: ["tool", "Eligiendo", "Eligió", quoted(input.value) || "una opción"],
+    scroll: ["tool", "Desplazando", "Desplazó", text(input.direction) === "up" ? "hacia arriba" : text(input.direction) === "down" ? "hacia abajo" : "la vista"],
+    scroll_to: ["tool", "Desplazando", "Desplazó", "hasta un elemento"],
+    launch: ["run", "Abriendo", "Abrió", text(input.app) || "una aplicación"],
+    close_app: ["tool", "Cerrando", "Cerró", window],
+    minimize: ["tool", "Minimizando", "Minimizó", window],
+    maximize: ["tool", "Maximizando", "Maximizó", window],
+    restore: ["tool", "Restaurando", "Restauró", window],
+    press: ["run", "Pulsando", "Pulsó", text(input.keys) || "un atajo"],
+    focus: ["tool", "Enfocando", "Enfocó", "un elemento"],
+    focus_window: ["tool", "Trayendo al frente", "Trajo al frente", window],
+  };
+  const [icon, live, done, target] = labels[tool] ?? ["tool", "Usando", "Usó", `el control por accesibilidad (${tool})`];
+  return { icon, verb: verb(live, done), target };
+}
+
+/**
+ * La aplicación que el agente está manejando, si lo último que hizo en este
+ * turno fue usar el control por accesibilidad; null si no. Se saca de la
+ * respuesta del propio motor (`(notepad.exe)`) o, si no, de lo que pidió.
+ */
+export function a11yActivity(items: readonly ChatItem[]): { app: string | null } | null {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index];
+    if (item.kind === "user") return null;
+    if (item.kind !== "tool") continue;
+    if (!a11yToolName(item.name)) return null;
+    // La app: la más reciente que nombre alguna respuesta o petición del turno.
+    for (let back = index; back >= 0; back--) {
+      const tool = items[back];
+      if (tool.kind === "user") break;
+      if (tool.kind !== "tool" || !a11yToolName(tool.name)) continue;
+      const output = typeof tool.output === "string" ? tool.output : "";
+      const app = /^(?:window|New window) w[0-9A-F]+ (?:"[^"]*" \(([^)\s]+)\)|([^\s"]+) ")/m.exec(output);
+      const named = app?.[1] ?? app?.[2] ?? (text(tool.input.app) || null);
+      if (named) return { app: named.replace(/\.exe$/i, "") };
+    }
+    return { app: null };
+  }
+  return null;
+}
+
 /** Frase corta para la fila de una herramienta, en presente o en pasado. */
 export function describeTool(name: string, input: Json, cwd: string, running: boolean): ToolSummary {
   const path = (key: string): string => relativePath(text(input[key]), cwd);
   const verb = (live: string, done: string): string => running ? live : done;
+  const a11y = a11yToolName(name);
+  if (a11y) return describeA11y(a11y, input, running);
   const browser = name.replace(/^mcp__trex_browser__/, "");
   const browserLabels: Record<string, [string, string, string]> = {
     browser_batch: ["Ejecutando", "Ejecutó", "un flujo del navegador"],

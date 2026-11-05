@@ -2555,3 +2555,36 @@ pre.chat-ask-preview-body {
   .chat-side-tabs .chat-git-toggle small { max-width: 72px; }
 }
 @media (prefers-reduced-motion: reduce) { .chat-side.is-open { animation: none; } }
+
+/* El agente está manejando tus aplicaciones (control por accesibilidad): el
+   aviso lo dice y deja detenerlo con un clic, además de con Esc. */
+.chat-working.is-controlling .chat-working-label { color: var(--text); }
+.chat-working-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  margin-left: auto;
+  padding: var(--sp-1) var(--sp-2-5);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-pill);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  transition: background-color var(--t), border-color var(--t);
+}
+.chat-working-stop:hover { border-color: var(--danger); }
+.chat-working-stop:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }
+.chat-tool-verified {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 1px var(--sp-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--ok-bg);
+  color: var(--ok-text);
+  font-size: var(--fs-xs);
+}
