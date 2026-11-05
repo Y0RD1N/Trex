@@ -180,6 +180,9 @@ struct Session {
     data: Mutex<Journal>,
     active: Mutex<Option<Active>>,
     tools: tools::ToolRegistry,
+    /// Control por accesibilidad (experimental): None si no se pidió; si se
+    /// pidió, si la pasarela con agent-desktop llegó a conectarse.
+    accessibility: Option<bool>,
 }
 
 impl Session {
@@ -690,6 +693,13 @@ impl Server {
             Some(Value::Bool(value)) => *value,
             _ => bail!("desktopEnabled must be a boolean"),
         };
+        // true (motor automático) o el motor elegido en la app.
+        let accessibility = match params.get("accessibility") {
+            None | Some(Value::Null) | Some(Value::Bool(false)) => None,
+            Some(Value::Bool(true)) => Some(crate::a11y_mcp::resolve_engine("auto")?),
+            Some(Value::String(engine)) => Some(crate::a11y_mcp::resolve_engine(engine)?),
+            _ => bail!("accessibility must be a boolean or an engine name"),
+        };
         let cwd = fs::canonicalize(required(params, "cwd")?)
             .context("cwd must be an existing directory")?;
         ensure!(cwd.is_dir(), "cwd must be a directory");
@@ -710,6 +720,7 @@ impl Server {
                 "mode is fixed for this live session; restart the process to change mode"
             );
             ensure!(data.desktop_enabled == desktop_enabled, "desktop configuration is fixed for this live session; restart the process to change it");
+            ensure!(session.accessibility.is_some() == accessibility.is_some(), "accessibility configuration is fixed for this live session; restart the process to change it");
             ensure!(data.browser == browser, "browser configuration is fixed for this live session; restart the process to change it");
             ensure!(
                 session.tools.team_config() == &team,
@@ -723,6 +734,9 @@ impl Server {
                 "session instructions are immutable for this live session; restart the process to change them");
             let mut summary = self.session_summary(&data).await;
             summary["instructionsApplied"] = json!(instructions.is_some());
+            if let Some(connected) = session.accessibility {
+                summary["accessibilityEnabled"] = json!(connected);
+            }
             if team.is_some() {
                 summary["teamEnabled"] = json!(true);
             }
@@ -835,6 +849,31 @@ impl Server {
                 Err(_) => unavailable.push(config.name.clone()),
             }
         }
+        // Pasarela propia (este mismo ejecutable) hacia agent-desktop. Va en modo
+        // full: el modo plan de la sesión ya oculta y rechaza lo que no es lectura.
+        let accessibility = if let Some(engine) = accessibility {
+            let config = crate::settings::McpServer {
+                name: "trex_a11y".into(),
+                command: std::env::current_exe()?,
+                args: vec!["a11y-mcp".into(), "--mode".into(), "full".into(), "--engine".into(), engine.into()],
+                // Solo el nombre: la ruta fijada a mano para agent-desktop, si la hay (pruebas, instalaciones propias).
+                env: vec!["TREX_AGENT_DESKTOP".into()],
+                read_only_tools: crate::a11y_mcp::READ_TOOLS.iter().map(|tool| format!("{}{tool}", crate::a11y_mcp::PREFIX)).collect(),
+                enabled: true,
+            };
+            match crate::mcp::McpProvider::connect(&config, &data.cwd, &settings.shell).await {
+                Ok(provider) => {
+                    mcp.push(provider);
+                    Some(true)
+                }
+                Err(_) => {
+                    unavailable.push(config.name);
+                    Some(false)
+                }
+            }
+        } else {
+            None
+        };
         let session = Arc::new(Session {
             path,
             _lock: lock,
@@ -879,6 +918,7 @@ impl Server {
                 .with_team(team.clone())
                 .with_session_instructions(instructions.clone())
                 .with_role_instructions(role_instructions.clone()),
+            accessibility,
         });
         session.persist(&mut data)?;
         let notifications = self.output.clone();
@@ -887,6 +927,9 @@ impl Server {
         let mut summary = self.session_summary(&data).await;
         summary["unavailableMcpServers"] = json!(unavailable);
         summary["instructionsApplied"] = json!(instructions.is_some());
+        if let Some(connected) = accessibility {
+            summary["accessibilityEnabled"] = json!(connected);
+        }
         if team.is_some() {
             summary["teamEnabled"] = json!(true);
         }
@@ -3169,6 +3212,7 @@ mod tests {
             data: Mutex::new(data),
             active: Mutex::new(None),
             tools: tools::ToolRegistry::new(None),
+            accessibility: None,
         });
         let (tx, _rx) = mpsc::unbounded_channel();
         let server = Server::new(profile(), tx);
@@ -3333,6 +3377,7 @@ mod tests {
                 cancel: cancel.clone(),
             })),
             tools: tools::ToolRegistry::new(None),
+            accessibility: None,
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
         let server = Server::new(profile(), tx);

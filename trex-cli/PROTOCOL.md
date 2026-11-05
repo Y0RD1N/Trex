@@ -498,6 +498,15 @@ they do not revoke the agent's general shell permissions.
   `notProviderBill:true`. Reservations persist even when a provider omits usage.
   It is not a guaranteed financial limit or a provider bill.
 - `unavailableMcpServers`: optional startup diagnostics for configured servers.
+- `session/start.accessibility: true | "trex" | "agent-desktop"` (experimental,
+  immutable for a live session): the CLI starts its own `a11y-mcp` gateway with
+  the built-in Windows engine (`trex`; `true` picks it when available) or an
+  installed agent-desktop, and exposes its `a11y_*` tools as the `trex_a11y` MCP server.
+  Plan mode keeps only the read-only tools; actions need approval outside
+  full mode. The result includes `accessibilityEnabled` (false and
+  `trex_a11y` in `unavailableMcpServers` when agent-desktop is missing).
+  `a11y-doctor --json` reports agent-desktop as `{available,path?,version?,minimumVersion,reason}`
+  plus `native:{available,engine:"trex"}`, without opening applications.
 
 Native tools also include `edit_file`, `make_directory`, `rename_file`,
 `remove_file`, `checkpoint_list`, `checkpoint_diff`, `checkpoint_restore`,

@@ -24,6 +24,8 @@ export type ChatSessionOptions = {
   team?: { id: string; epoch: string };
   browser?: BrowserOptions;
   desktopEnabled?: boolean;
+  /** Control por accesibilidad (experimental): pasarela `trex_a11y` hacia agent-desktop. */
+  a11yEnabled?: boolean;
   integrations?: ApplicationIntegrations;
   sessionId: string;
   cwd: string;

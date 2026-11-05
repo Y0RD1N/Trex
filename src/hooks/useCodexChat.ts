@@ -1,5 +1,6 @@
 import { connectBrowser } from "../browserConnection";
 import { agentTeamMcpConfig, trexDesktopMcpConfig } from "../api";
+import { A11Y_ACTION_TOOLS, A11Y_CORE_ACTION_TOOLS, A11Y_CORE_READ_TOOLS, A11Y_SERVER, accessibilityServer } from "../accessibility";
 import { browserConfigForShell, browserEnv, BROWSER_INSTRUCTIONS, BROWSER_TOKEN_ENV, isBrowserHttp } from "../browser";
 import { browserMode, type BrowserMode } from "../browser";
 /**
@@ -122,8 +123,9 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const availableRef = useRef<IntegrationContext["available"]>(null);
   /** Browser guidance only when this process really attached trex_browser (it also enters via integrations). */
   const browserAttached = (): boolean => inboxConfigRef.current["mcp_servers.trex_browser.enabled"] === true;
+  const a11yAttached = (): boolean => inboxConfigRef.current[`mcp_servers.${A11Y_SERVER}.enabled`] === true;
   const chatInstructions = () => [CHAT_INSTRUCTIONS, integrationInstructions("codex",
-    integrationContext(callbacks.current, { browser: browserAttached(), available: availableRef.current }))].filter(Boolean).join(" ");
+    integrationContext(callbacks.current, { browser: browserAttached(), available: availableRef.current, a11y: a11yAttached() }))].filter(Boolean).join(" ");
   const isCurrentRef = useRef<(id: string) => boolean>(() => false);
 
   const nextIdRef = useRef(1);
@@ -387,9 +389,10 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     const expected = [
       ...(inboxConfigRef.current["mcp_servers.trex_browser.enabled"] === true ? [{ server: "trex_browser", tools: ["browser_navigate", "browser_snapshot", "browser_status"] }] : []),
       ...(inboxConfigRef.current["mcp_servers.trex_desktop.enabled"] === true ? [{ server: "trex_desktop", tools: browserBindingRef.current?.mode === "observe" ? [...DESKTOP_READ_TOOLS] : [...DESKTOP_READ_TOOLS, ...DESKTOP_INPUT_TOOLS] }] : []),
+      ...(a11yAttached() ? [{ server: A11Y_SERVER, tools: browserBindingRef.current?.mode === "observe" ? [...A11Y_CORE_READ_TOOLS] : [...A11Y_CORE_READ_TOOLS, ...A11Y_CORE_ACTION_TOOLS] }] : []),
     ];
     for (const integration of expected) {
-      const label = integration.server === "trex_browser" ? "Trex Browser" : "el control de computadora";
+      const label = integration.server === "trex_browser" ? "Trex Browser" : integration.server === A11Y_SERVER ? "el control por accesibilidad" : "el control de computadora";
       let response: Json;
       try { response = await request<Json>("mcpServerStatus/list", { threadId, serverName: integration.server, detail: "toolsAndAuthOnly", limit: 100 }, procId); }
       catch { assertCurrent(); throw new CodexBrowserConnectionError(`Codex no pudo confirmar la conexión con ${label}.`); }
@@ -398,7 +401,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       const tools = record(server?.tools);
       if (!server || server.toolsError != null || server.runtimeStatus !== undefined && server.runtimeStatus !== "connected"
         || !tools || !integration.tools.every(name => record(tools[name]))
-        || integration.server === "trex_desktop" && browserBindingRef.current?.mode === "observe" && DESKTOP_INPUT_TOOLS.some(name => record(tools[name]))) {
+        || integration.server === "trex_desktop" && browserBindingRef.current?.mode === "observe" && DESKTOP_INPUT_TOOLS.some(name => record(tools[name]))
+        || integration.server === A11Y_SERVER && browserBindingRef.current?.mode === "observe" && A11Y_ACTION_TOOLS.some(name => record(tools[name]))) {
         throw new CodexBrowserConnectionError(`Codex no recibió las herramientas de ${label}. Reinicia esta conversación.`);
       }
     }
@@ -518,18 +522,25 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         const launch = parsed ?? codexLaunch(null)!;
         // Unknown global/-c permissions get an observe grant until the native thread confirms them.
         let bindingMode = browserMode(choicesRef.current.mode ?? (launch.thread.sandbox ? browserChoice(sandboxBrowserMode(launch.thread.sandbox)) : "read-only"), planningOnly);
-        if (callbacks.current.browser?.enabled || callbacks.current.desktopEnabled) browserBindingRef.current = { mode: bindingMode, pending: true };
+        if (callbacks.current.browser?.enabled || callbacks.current.desktopEnabled || callbacks.current.a11yEnabled) browserBindingRef.current = { mode: bindingMode, pending: true };
         const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId);
         if (!isCurrent()) return;
         const detection = detectedIntegrations(cwd);
         availableRef.current = detection instanceof Promise ? await detection : detection;
         if (!isCurrent()) return;
+        // A missing agent-desktop is reported once, not on each attempt.
+        let a11yUnavailable = false;
         for (let attempt = 0; attempt < 2; attempt++) {
         const browser = callbacks.current.browser?.enabled ? await connectBrowser(callbacks.current.browser, cwd, browserChoice(bindingMode), planningOnly, shell, message => notice("warn", message), true) : null;
         if (!isCurrent()) return;
         const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await trexDesktopMcpConfig(bindingMode), shell) : null;
         if (!isCurrent()) return;
-        browserBindingRef.current = browser || desktop ? { mode: bindingMode, pending: false } : null;
+        // Experimental: without a usable agent-desktop the thread starts without it, with a notice.
+        const a11yConfig = callbacks.current.a11yEnabled && !a11yUnavailable ? await accessibilityServer(bindingMode, message => notice("warn", message)) : null;
+        if (!isCurrent()) return;
+        if (callbacks.current.a11yEnabled && !a11yConfig) a11yUnavailable = true;
+        const a11y = a11yConfig ? browserConfigForShell(a11yConfig, shell) : null;
+        browserBindingRef.current = browser || desktop || a11y ? { mode: bindingMode, pending: false } : null;
         inboxConfigRef.current = { ...inboxConfigForShell(config, shell), ...(browser ? {
           // MCP over HTTP (token read from the environment) or the stdio adapter.
           ...(isBrowserHttp(browser) ? { "mcp_servers.trex_browser.url": browser.url, "mcp_servers.trex_browser.bearer_token_env_var": BROWSER_TOKEN_ENV }
@@ -544,6 +555,12 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
           "mcp_servers.trex_desktop.enabled": true, "mcp_servers.trex_desktop.required": true,
           "mcp_servers.trex_desktop.tool_timeout_sec": 120,
           "mcp_servers.trex_desktop.default_tools_approval_mode": bindingMode === "full" ? "approve" : "prompt",
+        });
+        if (a11y) Object.assign(inboxConfigRef.current, {
+          [`mcp_servers.${A11Y_SERVER}.command`]: a11y.command, [`mcp_servers.${A11Y_SERVER}.args`]: a11y.args,
+          [`mcp_servers.${A11Y_SERVER}.enabled`]: true, [`mcp_servers.${A11Y_SERVER}.required`]: true,
+          [`mcp_servers.${A11Y_SERVER}.tool_timeout_sec`]: 120,
+          [`mcp_servers.${A11Y_SERVER}.default_tools_approval_mode`]: bindingMode === "full" ? "approve" : "prompt",
         });
         if (callbacks.current.team) {
           const teamConfig = browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell);

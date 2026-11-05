@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { load } from "./ts-loader.mjs";
-const deps = Object.fromEntries(await Promise.all(["chatState", "chatTimes", "messageQueue", "trexChat", "chatTasks", "integrations", "sharedFiles"].map(async name => ["../" + name, await load(name)])));
+const deps = Object.fromEntries(await Promise.all(["chatState", "chatTimes", "messageQueue", "trexChat", "chatTasks", "integrations", "accessibility", "sharedFiles"].map(async name => ["../" + name, await load(name)])));
 const source = await readFile(new URL("../src/hooks/useTrexChat.ts", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 const compile = new Function("require", "exports", "crypto", compiled);
@@ -28,7 +28,7 @@ function harness(t, extra = {}) {
     const p = JSON.parse(raw); writes.push({ process: id, ...p });
     if (p.method === "initialize" && !holdInit) respond(p, { protocolVersion: 1 });
     if (p.method === "models/list") respond(p, { models: [{ id: "deepseek", name: "DeepSeek", efforts: ["high", "max"], contextWindow: 1_000_000 }, { id: "mini", efforts: ["low"], contextWindow: 32_000 }] });
-    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true, ...(extra.compaction ? { contextManagement: { fullHistoryPreserved: true } } : {}), ...(extra.integrationAck === false ? {} : { applicationIntegrations: { github: true, blender: true, hyperframes: true, ...p.params.settings?.tools } }) });
+    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, ...(p.params.accessibility ? { accessibilityEnabled: extra.accessibilityAck ?? true } : {}), instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true, ...(extra.compaction ? { contextManagement: { fullHistoryPreserved: true } } : {}), ...(extra.integrationAck === false ? {} : { applicationIntegrations: { github: true, blender: true, hyperframes: true, ...p.params.settings?.tools } }) });
     if (p.method === "turn/start" && !holdTurn) respond(p, { accepted: true });
     if (["turn/interrupt", "permission/respond", "session/recover"].includes(p.method)) respond(p, {});
   };
@@ -37,7 +37,8 @@ function harness(t, extra = {}) {
   const exports = {};
   compile(name => name === "react" ? hooks : name === "../api" ? { agentWrite: nativeWrite, formatError: e => e.message ?? String(e) }
     : name === "./chatSession" ? { useAgentProcess: (_, cb) => { handlers = cb; return agent; }, localId: () => `rpc-${++counter}` }
-    : name === "./useMessageQueue" ? { useMessageQueue: () => queue } : deps[name], exports, { randomUUID: () => `message-${++counter}` });
+    : name === "./useMessageQueue" ? { useMessageQueue: () => queue }
+    : name === "../accessibility" && extra.accessibility ? { ...deps[name], ...extra.accessibility } : deps[name], exports, { randomUUID: () => `message-${++counter}` });
   const options = { sessionId: "tab", cwd: "D:/project", command: "trex-agent", args: "--profile TREX1", shell: "wsl", env: null,
     conversationId: null, mode: "ask", model: "deepseek", effort: "high", visible: false, onExit() {}, onRunning() {}, ...extra };
   const render = () => { cursor = 0; session = exports.useTrexChat(options); for (const e of effects.splice(0)) e(); return session; };
@@ -196,4 +197,31 @@ test("Trex refuses an older CLI that ignores disabled integrations", async t => 
   const h = harness(t, { integrations: { github: false, blender: false, hyperframes: false }, integrationAck: false });
   await assert.rejects(h.start(), /no confirmó las integraciones/);
   assert.equal(h.writes.some(w => w.method === "turn/start"), false);
+});
+test("Trex asks for the accessibility gateway only when agent-desktop is ready and reports a failed connection", async t => {
+  const modes = [];
+  const ready = { accessibilityServer: async mode => { modes.push(mode); return { command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--engine", "trex"] }; } };
+  const h = harness(t, { a11yEnabled: true, accessibility: ready });
+  await h.start();
+  const start = h.writes.find(w => w.method === "session/start");
+  assert.equal(start.params.accessibility, "trex", "Trex CLI starts the gateway with the engine the app chose");
+  assert.match(start.params.instructions, /Accessibility control \(experimental\)/);
+  assert.deepEqual(modes, ["full"], "Trex CLI applies the session mode itself");
+  assert.ok(!h.state.items.some(item => item.kind === "notice"));
+  // Sin agent-desktop: no se pide la pasarela ni se anuncia, y el chat lo avisa.
+  const missing = harness(t, { a11yEnabled: true, accessibility: { accessibilityServer: async (_mode, warn) => { warn("agent-desktop no está instalado."); return null; } } });
+  await missing.start();
+  const plain = missing.writes.find(w => w.method === "session/start");
+  assert.equal(plain.params.accessibility, undefined);
+  assert.doesNotMatch(plain.params.instructions, /Accessibility control/);
+  assert.ok(missing.state.items.some(item => item.kind === "notice" && /agent-desktop no está instalado/.test(item.text)));
+  // Si la pasarela no llega a conectar, la conversación sigue con un aviso.
+  const failed = harness(t, { a11yEnabled: true, accessibilityAck: false, accessibility: ready });
+  await failed.start();
+  assert.ok(failed.state.items.some(item => item.kind === "notice" && /no pudo conectarse/.test(item.text)));
+  // Sin la preferencia, nada cambia.
+  const off = harness(t, { accessibility: ready });
+  await off.start();
+  assert.equal(off.writes.find(w => w.method === "session/start").params.accessibility, undefined);
+  assert.deepEqual(modes, ["full", "full"]);
 });

@@ -768,3 +768,66 @@ struct DesktopMonitor {
 pub async fn trex_desktop_status() -> Result<DesktopStatus, String> {
     crate::blocking(|| parse_json(&invoke_cli(&["desktop-doctor", "--json"], None)?)).await
 }
+
+/// Control por accesibilidad (experimental): si agent-desktop está instalado y
+/// su versión. Solo ejecuta `agent-desktop version`: no abre ni lee aplicaciones.
+#[tauri::command]
+pub async fn trex_a11y_status() -> Result<serde_json::Value, String> {
+    crate::blocking(|| parse_json(&invoke_cli(&["a11y-doctor", "--json"], None)?)).await
+}
+
+/// Pasarela de accesibilidad de una sesión, con el modo fijado al arrancar.
+/// El motor elegido en Ajustes: el propio de Trex (Windows) o agent-desktop. Si
+/// se prefiere el de Trex y la plataforma no lo tiene, se usa agent-desktop.
+/// Antes comprueba que se pueda usar, para avisar en el chat en vez de arrancar
+/// un servidor que fallaría.
+#[tauri::command]
+pub async fn trex_a11y_mcp_config(app: tauri::AppHandle, mode: String) -> Result<serde_json::Value, String> {
+    let fixed_mode = match mode.as_str() {
+        "observe" => "plan",
+        "qa" | "full" => "full",
+        _ => return Err("Modo de control por accesibilidad no válido.".into()),
+    };
+    let preferred = crate::config::load(&app).settings.a11y_engine;
+    let status: serde_json::Value = crate::blocking(|| parse_json(&invoke_cli(&["a11y-doctor", "--json"], None)?)).await
+        .map_err(|_| "Actualiza Trex CLI para usar el control por accesibilidad.".to_string())?;
+    let native = status["native"]["available"] == true;
+    let engine = choose_a11y_engine(&preferred, native, &status)?;
+    let binary = installed_cli_path()?;
+    let command = binary.to_str().ok_or("La ruta del agente no es UTF-8 válida.")?;
+    Ok(serde_json::json!({"command":command,"args":["a11y-mcp","--mode",fixed_mode,"--engine",engine]}))
+}
+
+/// Motor que se usará, o por qué no se puede usar ninguno.
+fn choose_a11y_engine(preferred: &str, native: bool, status: &serde_json::Value) -> Result<&'static str, String> {
+    if preferred != "agent-desktop" && native {
+        return Ok("trex");
+    }
+    if status["available"] == true {
+        return Ok("agent-desktop");
+    }
+    let missing = match status["reason"].as_str() {
+        Some("unsupportedVersion") => format!("agent-desktop {} es anterior a la versión {} necesaria.",
+            status["version"].as_str().unwrap_or("?"), status["minimumVersion"].as_str().unwrap_or("1.2.0")),
+        Some("notInstalled") => "agent-desktop no está instalado.".into(),
+        _ => "No se pudo comprobar agent-desktop.".into(),
+    };
+    Err(if preferred != "agent-desktop" { format!("El motor de Trex solo existe en Windows y {}", missing.to_lowercase()) } else { missing })
+}
+
+#[cfg(test)]
+mod a11y_engine_tests {
+    use super::choose_a11y_engine;
+    use serde_json::json;
+
+    #[test]
+    fn the_preferred_engine_is_used_when_possible() {
+        let ready = json!({"available": true, "version": "1.2.0"});
+        let missing = json!({"available": false, "reason": "notInstalled"});
+        assert_eq!(choose_a11y_engine("trex", true, &missing), Ok("trex"), "the built-in engine needs nothing installed");
+        assert_eq!(choose_a11y_engine("agent-desktop", true, &ready), Ok("agent-desktop"));
+        assert_eq!(choose_a11y_engine("trex", false, &ready), Ok("agent-desktop"), "elsewhere it falls back to agent-desktop");
+        assert!(choose_a11y_engine("agent-desktop", true, &missing).unwrap_err().contains("no está instalado"));
+        assert!(choose_a11y_engine("trex", false, &missing).unwrap_err().starts_with("El motor de Trex solo existe en Windows"));
+    }
+}

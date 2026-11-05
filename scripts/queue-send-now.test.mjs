@@ -8,7 +8,7 @@ import { load } from "./ts-loader.mjs";
 // process boundary and both kinds of browser timer are local, offline fakes.
 const dependencies = Object.fromEntries(await Promise.all([
   "chatMessages", "chatCommands", "chatState", "chatTimes", "claudeChat", "codexChat", "trexChat",
-  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations",
+  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility",
 ].map(async name => [`../${name}`, await load(name)])));
 const compiled = Object.fromEntries(await Promise.all(["Trex", "Claude", "Codex"].map(async provider => {
   const source = await readFile(new URL(`../src/hooks/use${provider}Chat.ts`, import.meta.url), "utf8");
@@ -180,6 +180,7 @@ function harness(t, provider, extra = {}) {
   ].map(name => [name, async (...args) => { queueCalls.push({ name, args }); return snapshot; }])) };
   const modules = {
     ...dependencies,
+    ...(extra.accessibility ? { "../accessibility": { ...dependencies["../accessibility"], ...extra.accessibility } } : {}),
     react: hooks,
     "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },
     "../api": { agentWrite: nativeWrite, formatError: error => error?.message ?? String(error),

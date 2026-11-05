@@ -74,6 +74,10 @@ export type Settings = {
   timeFormat: import("./timeFormat").TimeFormat;
   integrations: ApplicationIntegrations;
   desktopEnabled: boolean;
+  /** Control por accesibilidad (experimental). */
+  a11yEnabled: boolean;
+  /** Motor: el propio de Trex (Windows) o agent-desktop. */
+  a11yEngine: "trex" | "agent-desktop";
   browserEnabled: boolean;
   browserProfile: string;
   profiles: LauncherProfile[];

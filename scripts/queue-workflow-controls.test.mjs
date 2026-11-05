@@ -8,7 +8,7 @@ import { load } from "./ts-loader.mjs";
 // scheduler/JSX, DOM surfaces, queue storage and native process IPC are mocked.
 const names = ["agentPermissions", "agentTeam", "timeFormat", "agentRoom", "agentWorkflow", "handoff", "chatState", "chatTimes", "chatMessages", "chatCommands", "chatQuestions",
   "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "agentNotices",
-  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations"];
+  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations", "accessibility"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));
 const sources = {
   stable: "hooks/useStableCallback.ts", workflow: "hooks/useAgentWorkflow.ts", trex: "hooks/useTrexChat.ts",

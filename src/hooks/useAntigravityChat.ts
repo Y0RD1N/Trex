@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { formatError, installAntigravity, messageQueueMcpConfig, trexDesktopMcpConfig } from "../api";
+import { A11Y_SERVER, accessibilityServer } from "../accessibility";
 import { openAntigravity, type AntigravityConnection } from "../antigravityConnection";
 import { AntigravityUsageReader, antigravityTier } from "../antigravityUsage";
 import { AcpError, acpMcpServer, acpPrompt, validAcpSessionId } from "../acpProtocol";
@@ -36,7 +37,7 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
   const controller = useRef<AbortController | null>(null);
   const choices = useRef({ model: options.model, effort: options.effort, mode: options.mode });
   /** What this ACP session has: an attached browser and the installed applications. */
-  const tools = useRef<{ browser: boolean; available: Partial<Record<"github" | "blender" | "hyperframes", boolean>> | null }>({ browser: false, available: null });
+  const tools = useRef<{ browser: boolean; available: Partial<Record<"github" | "blender" | "hyperframes", boolean>> | null; a11y?: boolean }>({ browser: false, available: null });
   /** The <trex_context> stays in the session's history: it is sent again only for a new/reloaded session or new content. */
   const contextSent = useRef<{ session: string; text: string } | null>(null);
   const notice = (tone: "info" | "warn" | "error", value: string): void => { if (alive.current) dispatch({ type: "notice", id: localId(), tone, text: value }); };
@@ -129,10 +130,13 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       const native = connection.current;
       const browser = await connectBrowser(current.browser, current.cwd, null, false, "", message => notice("warn", message));
       const detection = detectedIntegrations(current.cwd);
-      tools.current = { browser: !!browser, available: detection instanceof Promise ? await detection : detection };
+      // Experimental: without a usable agent-desktop the session starts without it, with a notice.
+      const a11y = current.a11yEnabled ? await accessibilityServer("full", message => notice("warn", message)) : null;
+      tools.current = { browser: !!browser, available: detection instanceof Promise ? await detection : detection, a11y: !!a11y };
       const tasks = await messageQueueMcpConfig(messageQueueId(current.queueId ?? current.sessionId), true);
       const servers = [acpMcpServer("trex_inbox", { command: text(tasks["mcp_servers.trex_inbox.command"]), args: tasks["mcp_servers.trex_inbox.args"] as string[] }),
-        ...(browser ? [acpMcpServer("trex_browser", browser)] : []), ...(current.desktopEnabled ? [acpMcpServer("trex_desktop", await trexDesktopMcpConfig("full"))] : [])];
+        ...(browser ? [acpMcpServer("trex_browser", browser)] : []), ...(current.desktopEnabled ? [acpMcpServer("trex_desktop", await trexDesktopMcpConfig("full"))] : []),
+        ...(a11y ? [acpMcpServer(A11Y_SERVER, a11y)] : [])];
       if (!isCurrent(token)) throw new Error("Se canceló la conexión.");
       const capabilities = record(native.init.agentCapabilities);
       const saved = conversation.current;

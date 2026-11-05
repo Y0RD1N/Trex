@@ -120,6 +120,79 @@ X11 necesita un backend propio; verificar captura, entrada, DPI y ventanas en
 una sesión real. Un servicio sin sesión gráfica debe informar que no está
 listo en vez de simular éxito.
 
+## Control por accesibilidad (experimental)
+
+Alternativa en desarrollo al control de computadora, que no lo sustituye: los
+agentes manejan las aplicaciones a través del árbol de accesibilidad del sistema
+(UI Automation en Windows), sin mover el ratón ni escribir con el teclado de la
+persona. Se activa en Ajustes → Integraciones para los chats nuevos (no en
+equipos ni salas), donde se elige el motor.
+
+Cada chat arranca su propia pasarela, `trex-agent a11y-mcp --mode plan|full
+--engine trex|agent-desktop` (servidor MCP `trex_a11y`). Las herramientas se
+llaman `a11y_*` con los dos motores.
+
+### Motor de Trex (Windows, predeterminado)
+
+Va dentro de `trex-agent` (`trex-cli/src/a11y/`), sin dependencias externas:
+
+- 6 herramientas de lectura (`list_windows`, `snapshot`, `find`, `get`, `wait`,
+  `status`) y 18 acciones semánticas (clic, menú contextual, valor, escribir,
+  vaciar, casillas, desplegar, elegir, desplazar, abrir, cerrar, minimizar,
+  maximizar y restaurar); unos 3 000 tokens de esquemas en modo completo;
+- el árbol se devuelve como texto compacto (`- @s1:e3 edit "Nombre" [set_value,type]`)
+  en una sola llamada entre procesos por ventana, y las ventanas se listan con
+  la API clásica de Windows (milisegundos);
+- `AutoSetFocus` desactivado: ninguna acción trae la ventana al frente. Si la
+  persona usó ratón o teclado en la ventana destino hace menos de 2 s, la
+  acción se rechaza con `USER_ACTIVE` sin enviarse;
+- cada acción con estado se comprueba releyendo el control (`NOT_KEPT` si la
+  aplicación no conserva un valor, en vez de un falso «verificado»); los campos
+  que solo admiten pulsaciones reales se rechazan con `KEYBOARD_ONLY`;
+- los campos de contraseña nunca se leen ni se escriben, los valores largos se
+  recortan y no se escribe nada en disco: las referencias viven en memoria y
+  caducan a los cinco snapshots.
+
+Las pruebas manejan una ventana Win32 real del propio proceso (fuera de la
+pantalla y sin activarse) y comprueban que la ventana en primer plano no cambia.
+
+### agent-desktop
+
+Con [agent-desktop](https://github.com/vercel-labs/agent-desktop) 1.2.0 o
+posterior (`npm install -g agent-desktop`), también en macOS y Linux, la
+pasarela lanza `agent-desktop mcp` y:
+
+- publica una selección con el prefijo `a11y_`: 11 herramientas de lectura en
+  `plan` (snapshot, find, get, is, ventanas, apps, pantallas, superficies,
+  wait, status y guías) y además 21 acciones semánticas en `full` (clic,
+  escribir, valor, marcar, desplegar, desplazar, teclas, abrir y cerrar apps,
+  ventanas). Nunca entrada física (`mouse_*`, `hover`, `drag`…), sesiones,
+  trazas, portapapeles, notificaciones ni `batch`, ni pasa `--headed`;
+- reduce el coste: unos 2 300 tokens de esquemas en `plan` y 5 000 en `full`
+  frente a los ~10 000 de las 67 herramientas originales; quita el
+  `structuredContent` duplicado y recorta las respuestas de más de 40 000
+  caracteres. Los snapshots son `interactive_only` y `compact` salvo que el
+  agente pida otra cosa;
+- guarda el estado de agent-desktop (refmaps con el texto leído) en una
+  carpeta temporal privada por proceso (`AGENT_DESKTOP_HOME`) que se borra al
+  cerrar; las abandonadas sin latido durante 15 minutos se eliminan al arrancar
+  otra pasarela.
+
+Claude y Codex reciben el servidor con el modo fijado como `trex_desktop`
+(observar al planificar) y se reinician al cambiar de modo; Codex comprueba el
+inventario antes del primer turno. Antigravity lo recibe en modo completo con
+sus permisos. Trex CLI lo arranca él mismo con `accessibility: true` en
+`session/start` y aplica el modo de la sesión. Si agent-desktop falta o es
+antiguo, el chat arranca sin la integración y lo avisa.
+
+Si se elige el motor de Trex en una plataforma sin él, se usa agent-desktop.
+
+Limitaciones conocidas con agent-desktop 1.2.0 en Windows: algunas acciones
+pueden traer la ventana al frente
+([#567](https://github.com/vercel-labs/agent-desktop/issues/567)), `set-value`
+verifica el valor del control pero no que la aplicación lo conserve, y el texto
+visible de los documentos llega al proveedor del modelo.
+
 ## Blender
 
 Detectar la instalación sin iniciar escenas ni ejecutar scripts. Para trabajo

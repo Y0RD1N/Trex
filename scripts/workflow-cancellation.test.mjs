@@ -5,7 +5,7 @@ import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 
 // Exercise the real hook and reducers; only React scheduling, timers and native IPC are fake.
-const names = ["chatMessages", "chatCommands", "chatState", "chatTimes", "claudeChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "agentTeam", "integrations"];
+const names = ["chatMessages", "chatCommands", "chatState", "chatTimes", "claudeChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "agentTeam", "integrations", "accessibility"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => ["../" + name, await load(name)])));
 const source = await readFile(new URL("../src/hooks/useClaudeChat.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, {

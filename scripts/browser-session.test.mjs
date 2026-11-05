@@ -1039,3 +1039,61 @@ for (const provider of ["claude", "codex"]) test(`${provider}: planner rejects p
   assert.equal(await send(h),false);
   assert.equal(h.userWrites.length,0);
 });
+
+const A11Y_READ = ["a11y_snapshot", "a11y_find", "a11y_get", "a11y_is", "a11y_list_windows", "a11y_list_apps", "a11y_list_displays", "a11y_list_surfaces", "a11y_wait", "a11y_status", "a11y_skills_get"];
+const A11Y_ACTIONS = ["a11y_click", "a11y_right_click", "a11y_type", "a11y_set_value", "a11y_clear", "a11y_focus", "a11y_select", "a11y_toggle", "a11y_check", "a11y_uncheck", "a11y_expand", "a11y_collapse", "a11y_scroll", "a11y_scroll_to", "a11y_press", "a11y_launch", "a11y_close_app", "a11y_focus_window", "a11y_minimize", "a11y_maximize", "a11y_restore"];
+const a11yInstructions = (provider, h) => provider === "claude"
+  ? (flags => flags[flags.indexOf("--append-system-prompt") + 1])(h.spawns.at(-1).request.flags)
+  : h.writes.filter(write => ["thread/start", "thread/resume"].includes(write.method)).at(-1).params.developerInstructions;
+
+for (const provider of ["claude", "codex"]) test(`${provider}: accessibility gateway binds to the permission mode and restarts for planning`, async t => {
+  const calls = [];
+  const h = harness(t, provider, {
+    browser: { ...browser, enabled: false }, a11yEnabled: true,
+    accessibility: { accessibilityServer: async mode => { calls.push(mode); return { command: "C:\Trex\trex-agent.exe", args: ["a11y-mcp", "--mode", mode === "observe" ? "plan" : "full"] }; } },
+    mcpStatus: { data: [{ name: "trex_a11y", runtimeStatus: "connected", tools: Object.fromEntries([...A11Y_READ, ...A11Y_ACTIONS].map(name => [name, { name }])) }] },
+  });
+  await h.ready();
+  assert.deepEqual(calls, ["qa"]);
+  assert.match(a11yInstructions(provider, h), /Accessibility control \(experimental\)/);
+  if (provider === "claude") {
+    const flags = h.spawns[0].request.flags, config = JSON.parse(flags[flags.indexOf("--mcp-config") + 1]);
+    assert.deepEqual(config.mcpServers.trex_a11y.args, ["a11y-mcp", "--mode", "full"]);
+    assert.equal(config.mcpServers.trex_desktop, undefined, "it does not replace or enable computer control");
+  } else {
+    const config = h.writes.find(write => write.method === "thread/start").params.config;
+    assert.deepEqual(config["mcp_servers.trex_a11y.args"], ["a11y-mcp", "--mode", "full"]);
+    assert.equal(config["mcp_servers.trex_a11y.default_tools_approval_mode"], "prompt");
+    assert.equal(config["mcp_servers.trex_desktop.enabled"], undefined);
+    assert.ok(h.writes.some(write => write.method === "mcpServerStatus/list" && write.params.serverName === "trex_a11y"));
+    for (const name of A11Y_ACTIONS) delete h.options.mcpStatus.data[0].tools[name];
+  }
+  h.session.setMode("plan");
+  assert.equal(await send(h), true);
+  assert.deepEqual(calls, ["qa", "observe"]);
+  assert.equal(h.spawns.length, 2);
+  if (provider === "claude") {
+    const flags = h.spawns[1].request.flags, config = JSON.parse(flags[flags.indexOf("--mcp-config") + 1]);
+    assert.deepEqual(config.mcpServers.trex_a11y.args, ["a11y-mcp", "--mode", "plan"]);
+  } else {
+    const config = h.writes.filter(write => ["thread/start", "thread/resume"].includes(write.method)).at(-1).params.config;
+    assert.deepEqual(config["mcp_servers.trex_a11y.args"], ["a11y-mcp", "--mode", "plan"]);
+  }
+});
+
+for (const provider of ["claude", "codex"]) test(`${provider}: without agent-desktop the chat starts without the gateway and says why`, async t => {
+  const h = harness(t, provider, {
+    browser: { ...browser, enabled: false }, a11yEnabled: true,
+    accessibility: { accessibilityServer: async (_mode, warn) => { warn("El control por accesibilidad (experimental) no se activó en este chat: agent-desktop no está instalado."); return null; } },
+  });
+  await h.ready();
+  assert.equal(await send(h), true);
+  assert.doesNotMatch(a11yInstructions(provider, h) ?? "", /Accessibility control/);
+  if (provider === "claude") {
+    const flags = h.spawns[0].request.flags, index = flags.indexOf("--mcp-config");
+    assert.ok(index < 0 || !JSON.parse(flags[index + 1]).mcpServers.trex_a11y);
+  } else {
+    assert.equal(h.writes.find(write => write.method === "thread/start").params.config["mcp_servers.trex_a11y.enabled"], undefined);
+  }
+  assert.ok(h.state.items.some(item => item.kind === "notice" && /agent-desktop no está instalado/.test(item.text)));
+});

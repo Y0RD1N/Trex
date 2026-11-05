@@ -58,6 +58,10 @@ pub struct Settings {
     pub time_format: String,
     pub integrations: ApplicationIntegrations,
     pub desktop_enabled: bool,
+    /// Control por accesibilidad (experimental, desactivado por defecto).
+    pub a11y_enabled: bool,
+    /// Motor de accesibilidad: "trex" (propio, Windows) o "agent-desktop".
+    pub a11y_engine: String,
     pub browser_enabled: bool,
     pub browser_profile: String,
     pub profiles: Vec<LauncherProfile>,
@@ -98,6 +102,8 @@ impl Default for Settings {
             time_format: "24h".into(),
             integrations: ApplicationIntegrations::default(),
             desktop_enabled: false,
+            a11y_enabled: false,
+            a11y_engine: "trex".into(),
             browser_enabled: true,
             browser_profile: "BROWSER1".into(),
             // Vacío indica al frontend que debe migrar la instalación anterior.
@@ -155,6 +161,17 @@ mod browser_preference_tests {
             assert_eq!(saved["settings"]["browserProfile"],"BROWSER7");
             let restored:AppConfig=serde_json::from_value(saved).unwrap();
             assert_eq!(restored.settings.browser_enabled,enabled);assert_eq!(restored.settings.browser_profile,"BROWSER7");
+        }
+    }
+    #[test]
+    fn accessibility_control_is_opt_in_and_roundtrips() {
+        let old: AppConfig = serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
+        assert!(!old.settings.a11y_enabled);
+        assert_eq!(old.settings.a11y_engine, "trex");
+        for enabled in [false, true] {
+            let config: AppConfig = serde_json::from_value(serde_json::json!({"settings":{"a11yEnabled":enabled}})).unwrap();
+            assert_eq!(config.settings.a11y_enabled, enabled);
+            assert_eq!(serde_json::to_value(config).unwrap()["settings"]["a11yEnabled"], enabled);
         }
     }
     #[test]

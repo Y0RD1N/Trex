@@ -1,3 +1,5 @@
+pub mod a11y;
+pub mod a11y_mcp;
 pub mod artifacts;
 pub mod blender;
 pub mod browser;

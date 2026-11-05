@@ -104,6 +104,11 @@ export type GitHubConnectionStatus = "connected" | "unavailable" | "timeout" | "
 export const githubConnectionStatus = (): Promise<GitHubConnectionStatus> => invoke("github_connection_status");
 export type DesktopStatus = { available: boolean; backend: string; coordinateSpace: string; reason: string | null; monitors: { id: number; name: string; primary: boolean; x: number; y: number; width: number; height: number; scaleFactor: number }[] };
 export const desktopStatus = (): Promise<DesktopStatus> => invoke("trex_desktop_status");
+/** agent-desktop para el control por accesibilidad (experimental). Solo consulta su versión. */
+export type A11yStatus = { available: boolean; path?: string; version?: string; minimumVersion: string; reason: "notInstalled" | "unsupportedVersion" | "failed" | null;
+  /** El motor propio de Trex (solo Windows). */
+  native?: { available: boolean } };
+export const a11yStatus = (): Promise<A11yStatus> => invoke("trex_a11y_status");
 
 export const saveConfig = (config: AppConfig): Promise<AppConfig> =>
   invoke<AppConfig>("save_config", { config });
@@ -229,6 +234,8 @@ export const DEFAULT_SETTINGS: Settings = {
   timeFormat: "24h",
   integrations: { ...DEFAULT_INTEGRATIONS },
   desktopEnabled: false,
+  a11yEnabled: false,
+  a11yEngine: "trex",
   browserEnabled: true,
   browserProfile: "BROWSER1",
   profiles: initialProfiles({ claudeCommand: "claude", claudeArgs: "", launchMode: "arg" }),
@@ -455,6 +462,8 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     timeFormat: settingsRaw.timeFormat === "12h" ? "12h" : "24h",
     integrations: normalizeIntegrations(settingsRaw.integrations),
     desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
+    a11yEnabled: asBool(settingsRaw.a11yEnabled, false),
+    a11yEngine: settingsRaw.a11yEngine === "agent-desktop" ? "agent-desktop" : "trex",
     browserEnabled: asBool(settingsRaw.browserEnabled, DEFAULT_SETTINGS.browserEnabled),
     browserProfile: typeof settingsRaw.browserProfile === "string" && validBrowserProfile(settingsRaw.browserProfile) ? settingsRaw.browserProfile : "BROWSER1",
     profiles: [],
@@ -584,6 +593,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
 
 export const trexBrowserStatus = (): Promise<BrowserStatus> => invoke("trex_browser_status");
 export const trexDesktopMcpConfig = (mode: BrowserMode): Promise<BrowserConfig> => invoke("trex_desktop_mcp_config", { mode });
+export const trexA11yMcpConfig = (mode: BrowserMode): Promise<BrowserConfig> => invoke("trex_a11y_mcp_config", { mode });
 export const trexBrowserMcpConfig = (cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserConfig> => invoke("trex_browser_mcp_config", { cwd, mode, clientId, profile });
 export const trexBrowserCall = (request: BrowserCall): Promise<BrowserResult> => invoke("trex_browser_call", { request });
 export const trexBrowserOpenArtifact = (id: string, cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserResult> => invoke("trex_browser_open_artifact", { id, cwd, mode, clientId, profile });

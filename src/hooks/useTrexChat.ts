@@ -5,6 +5,7 @@ import { initialChatState, record, text, type Json, type OutgoingImage } from ".
 import { deliverInbox, InboxRequests, INBOX_INSTRUCTIONS, INBOX_WAKE, type QueueSnapshot } from "../messageQueue";
 import { taskInstructions } from "../chatTasks";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
+import { accessibilityEngine, accessibilityServer } from "../accessibility";
 import { assertIntegrationRestrictions, detectedIntegrations, integrationContext, integrationInstructions, integrationRestrictions } from "../integrations";
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
@@ -136,30 +137,40 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       assertStartup(procId);
       if (init.protocolVersion !== 1) throw new Error("La versión de Trex CLI no es compatible con esta app.");
       let models = parseTrexModels(init.models);
+      // trexReady replaces the chat with the restored history: startup warnings are shown after it.
+      const startupNotices: string[] = [];
       try { models = parseTrexModels((await rpc(procId, "models/list")).models); }
-      catch (error) { assertStartup(procId); notice("warn", `No se pudo actualizar el catálogo: ${formatError(error)}`); }
+      catch (error) { assertStartup(procId); startupNotices.push(`No se pudo actualizar el catálogo: ${formatError(error)}`); }
       assertStartup(procId);
       const selected = choices.current;
       const team = current.team ? await agentTeamMcpConfig(current.team) : null;
       assertStartup(procId);
       const browser = current.browser?.enabled && current.browser.automatic ? await trexBrowserResolveSpace(current.cwd,current.browser) : current.browser;
       assertStartup(procId);
-      if(current.browser?.enabled && browser?.enabled === false) notice("warn","Trex Browser no está disponible. Revisa su instalación en Ajustes; el asistente continúa sin navegador.");
+      if(current.browser?.enabled && browser?.enabled === false) startupNotices.push("Trex Browser no está disponible. Revisa su instalación en Ajustes; el asistente continúa sin navegador.");
       const detection = detectedIntegrations(current.cwd);
       const available = detection instanceof Promise ? await detection : detection;
       assertStartup(procId);
+      // Experimental: the accessibility gateway is requested only when agent-desktop is ready; otherwise a notice and the chat goes on without it.
+      const a11yConfig = current.a11yEnabled === true ? await accessibilityServer("full", message => startupNotices.push(message)) : null;
+      // Trex CLI starts the gateway itself with the engine the app chose.
+      const accessibility = a11yConfig ? accessibilityEngine(a11yConfig) ?? true : false;
+      assertStartup(procId);
       // Announce only an attached browser and installed applications; restrictions below still follow the preferences.
-      const integrations = integrationContext(current, { browser: browser?.enabled === true, available });
+      const integrations = integrationContext(current, { browser: browser?.enabled === true, available, a11y: !!accessibility });
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
         model: selected.model, effort: selected.effort, conversationId: nativeConversation.current,
         // Como Claude y Codex: cómo adjuntar archivos para que el chat los pinte como tarjeta.
         instructions: [FILE_SHARING_INSTRUCTIONS, INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations)].filter(Boolean).join(" "),
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
-        settings: integrationRestrictions(current.integrations), desktopEnabled: current.desktopEnabled === true, ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
+        settings: integrationRestrictions(current.integrations), desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
       assertIntegrationRestrictions(result, current.integrations);
       if (result.instructionsApplied !== true) throw new Error("Trex CLI no confirmó las instrucciones de las herramientas. Actualiza el CLI antes de iniciar esta conversación.");
       if (current.desktopEnabled && result.desktopEnabled !== true) throw new Error("Este Trex CLI no confirmó el control de computadora. Actualiza el CLI antes de activarlo.");
+      if (accessibility && result.accessibilityEnabled !== true) startupNotices.push(result.accessibilityEnabled === false
+        ? "El control por accesibilidad (experimental) no pudo conectarse; el chat sigue sin él."
+        : "Este Trex CLI no reconoce el control por accesibilidad (experimental). Actualízalo para usarlo.");
       if (planningOnly && result.mode !== "plan") throw new Error("Trex CLI no confirmó el modo de planificación de solo lectura.");
       if (team && result.teamEnabled !== true) throw new Error("Este Trex CLI no confirmó la delegación. Actualiza el CLI antes de usarlo como agente principal.");
       if (current.planningInstruction && result.rolePolicyApplied !== true) throw new Error("Este Trex CLI no confirmó las instrucciones de la función. Actualiza el CLI antes de iniciar el equipo.");
@@ -168,9 +179,12 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       agent.bindTerminals?.(nativeConversation.current);
       recovery.current = result.recoveryRequired === true;
       supportsCompact.current = result.contextManagement !== null && typeof result.contextManagement === "object";
-      if (Array.isArray(result.unavailableMcpServers) && result.unavailableMcpServers.length) notice("warn", `No se pudieron conectar algunos servidores MCP: ${result.unavailableMcpServers.filter(value => typeof value === "string").join(", ")}.`);
+      // The accessibility gateway already has its own notice.
+      const unavailable = Array.isArray(result.unavailableMcpServers) ? result.unavailableMcpServers.filter((value): value is string => typeof value === "string" && value !== "trex_a11y") : [];
+      if (unavailable.length) startupNotices.push(`No se pudieron conectar algunos servidores MCP: ${unavailable.join(", ")}.`);
       if (!models.some(model => model.value === result.model) && typeof result.model === "string") models.unshift({ value: result.model, resolvedModel: result.model, displayName: result.model, description: "Modelo configurado en el perfil", featured: true, efforts: [] });
       dispatch({ type: "trexReady", result, models });
+      for (const message of startupNotices) notice("warn", message);
       if (recovery.current) notice("warn", "La sesión se interrumpió con operaciones pendientes. Revisa los archivos y usa /recover antes de continuar; las herramientas anteriores no se repetirán automáticamente.");
       latest.current.onRunning(latest.current.sessionId);
     })().catch(error => { if (startupGeneration.current === token) { ready.current = null; if (mounted.current) dispatch({ type: "spawnFailed", message: formatError(error) }); } throw error; });

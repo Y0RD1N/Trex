@@ -16,11 +16,12 @@ export function normalizeIntegrations(raw: unknown): ApplicationIntegrations {
  * `available` holds the detected installations (absent or null when unknown).
  * `browser` means a browser really attached to this session, not the preference.
  */
-export type IntegrationContext = { applications?: ApplicationIntegrations; available?: Partial<ApplicationIntegrations> | null; desktop?: boolean; browser?: boolean };
+export type IntegrationContext = { applications?: ApplicationIntegrations; available?: Partial<ApplicationIntegrations> | null; desktop?: boolean; browser?: boolean; a11y?: boolean };
+/** `session.a11y`: la pasarela de accesibilidad realmente conectada a esta sesión, no la preferencia. */
 export function integrationContext(options: { integrations?: ApplicationIntegrations; desktopEnabled?: boolean },
-  session: { browser?: boolean; available?: Partial<ApplicationIntegrations> | null } = {}): IntegrationContext {
+  session: { browser?: boolean; available?: Partial<ApplicationIntegrations> | null; a11y?: boolean } = {}): IntegrationContext {
   return { applications: normalizeIntegrations(options.integrations), available: session.available ?? null,
-    desktop: options.desktopEnabled === true, browser: session.browser === true };
+    desktop: options.desktopEnabled === true, browser: session.browser === true, ...(session.a11y ? { a11y: true } : {}) };
 }
 
 type Detected = Partial<ApplicationIntegrations> | null;
@@ -81,6 +82,7 @@ export function integrationInstructions(provider: AgentProvider, context: Integr
   if (on("hyperframes")) parts.push(`HyperFrames: use ${native ? "the advertised hyperframes_run tool" : "the project-local or global CLI"} to lint, snapshot or render compositions.`);
   if (parts.length) parts.push("Check real results; explain missing dependencies instead of installing them silently; never execute a mutation in read-only planning mode; inspect uncertain operations before retrying.");
   if (context.desktop) parts.push(`Computer control: prefer ${native ? "advertised desktop_* tools" : "connected trex_desktop MCP tools"}. Check desktop_status and desktop_monitors, inspect a desktop_screenshot before input and verify focus; one screenshot covers up to 3 inputs while the screen is unchanged, capture again after changes, prefer region screenshots for details. Never claim access when these tools are unavailable.`);
+  if (context.a11y) parts.push(`Accessibility control (experimental): for desktop apps prefer ${native ? "the advertised mcp_trex_a11y_* tools" : "the connected trex_a11y MCP tools (a11y_*)"}. They work through the accessibility tree without moving the user's mouse or keyboard: list windows, snapshot one app, act on a fresh @ref and verify by reading again. Do not repeat secrets read from the screen.`);
   if (context.browser) parts.push(provider === "codex" || provider === "antigravity" ? BROWSER_INSTRUCTIONS
     : "Websites: prefer the connected Trex Browser tools, starting with browser_navigate and the app's http(s) URL; failures of other computer-use tools say nothing about this browser.");
   return parts.join(" ");

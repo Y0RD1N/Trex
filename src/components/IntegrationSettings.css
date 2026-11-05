@@ -15,3 +15,19 @@
 .integration-app-footer .btn { min-height: 30px; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-xs); }
 .integration-session-note { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.6; }
 @media (prefers-reduced-motion: reduce) { .integration-settings input, .integration-settings input::before { transition: none !important; } }
+/* Control por accesibilidad: etiqueta de función experimental y orden de instalación. */
+.integration-badge { display: inline-flex; align-items: center; margin-left: var(--sp-1-5); padding: 1px var(--sp-1-5); border: 1px solid var(--warn-border); border-radius: var(--radius-pill); background: var(--warn-bg); color: var(--warn-text); font-size: var(--fs-xs); font-weight: var(--fw-medium); letter-spacing: 0.01em; vertical-align: 0.1em; }
+.integration-command { display: inline-block; margin-top: var(--sp-1); padding: var(--sp-0-5) var(--sp-1-5); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); color: var(--text); font-family: var(--font-mono); font-size: var(--fs-xs); user-select: all; }
+.integration-actions { display: flex; flex: 0 0 auto; gap: var(--sp-1-5); }
+/* Elección de motor: dos opciones en tarjeta, la elegida con el acento. */
+.integration-engines { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--sp-2); }
+.integration-engine { display: flex; align-items: flex-start; gap: var(--sp-2-5); padding: var(--sp-3) var(--sp-3-5); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--t), background-color var(--t); }
+.integration-engine:hover:enabled { border-color: var(--border-strong); }
+.integration-engine:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }
+.integration-engine:disabled { cursor: default; opacity: .55; }
+.integration-engine[aria-checked="true"] { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, var(--bg-surface)); }
+.integration-engine > span:last-child { display: grid; gap: 2px; min-width: 0; }
+.integration-engine strong { font-size: var(--fs-sm); font-weight: var(--fw-semibold); }
+.integration-engine small { color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.45; }
+.integration-engine-dot { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 2px; border: 1.5px solid var(--border-strong); border-radius: 50%; transition: border-color var(--t), box-shadow var(--t); }
+.integration-engine[aria-checked="true"] .integration-engine-dot { border-color: var(--accent-strong); box-shadow: inset 0 0 0 3px var(--bg-surface), inset 0 0 0 8px var(--accent-strong); }
