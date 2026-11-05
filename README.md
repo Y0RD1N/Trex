@@ -209,6 +209,25 @@ código, documentos…) con el clip, arrastrándolos o pegándolos. Se citan com
 herramientas; los que llegan sin ruta (arrastrados o pegados) se guardan antes
 en la carpeta de datos de TREX.
 
+En sentido contrario, **los asistentes te envían archivos** por el chat. Claude
+Code, Codex, Trex CLI y Antigravity saben que un enlace a un archivo local en
+una línea propia se muestra como una **tarjeta** con su tipo, tamaño y carpeta.
+Funciona también con rutas de Windows, aunque lleven espacios o carpetas como
+`.github`. La tarjeta tiene botones para abrirlo con la aplicación del sistema,
+mostrarlo en su carpeta o **guardar una copia** donde elijas. Al pulsarla, el
+archivo se abre en el **visor de la app**:
+
+- el Markdown se lee con el formato del chat;
+- el código lleva colores y números de línea;
+- los CSV se ven como tabla;
+- los PDF se ven con el visor de PDF integrado (en Linux se abren con el sistema);
+- el HTML y el SVG se muestran aislados, sin scripts ni conexión.
+
+El Markdown, los CSV, el HTML y el SVG pasan de su vista al **código** con un
+botón. Las imágenes se amplían en el visor de imágenes. Word, Excel y los
+comprimidos se abren con su aplicación. Un enlace dentro de una frase se abre
+igual al pulsarlo.
+
 Pulsa el nombre de la **rama de Git** junto a la caja del chat para buscar entre
 las ramas locales y las remotas conocidas, cambiar de rama o **Crear y cambiar**
 a una nueva desde la actual. La rama activa queda marcada y el indicador se

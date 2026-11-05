@@ -65,6 +65,7 @@ import AgentRoomView from "./components/AgentRoomView";
 import Toast from "./components/Toast";
 import TooltipProvider from "./components/TooltipProvider";
 import ImageViewerProvider from "./components/ImageViewer";
+import FileViewerProvider from "./components/FileViewer";
 import ProjectHome from "./components/ProjectHome";
 import { sessionLabel } from "./sessionTitle";
 import { filterProjects, includeAddedProject, normalizeProjectFilter, type ProjectFilter } from "./projectFilter";
@@ -1692,7 +1693,9 @@ export default function App() {
   return (
     <DialogProvider>
       <ImageViewerProvider>
-        <AppShell />
+        <FileViewerProvider>
+          <AppShell />
+        </FileViewerProvider>
       </ImageViewerProvider>
       <TooltipProvider />
     </DialogProvider>

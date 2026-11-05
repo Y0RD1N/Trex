@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { load } from "./ts-loader.mjs";
-const deps = Object.fromEntries(await Promise.all(["chatState", "chatTimes", "messageQueue", "trexChat", "chatTasks", "integrations"].map(async name => ["../" + name, await load(name)])));
+const deps = Object.fromEntries(await Promise.all(["chatState", "chatTimes", "messageQueue", "trexChat", "chatTasks", "integrations", "sharedFiles"].map(async name => ["../" + name, await load(name)])));
 const source = await readFile(new URL("../src/hooks/useTrexChat.ts", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 const compile = new Function("require", "exports", "crypto", compiled);
@@ -189,6 +189,8 @@ test("Trex sends disabled integration restrictions and hides their announcements
   const start = h.writes.find(w => w.method === "session/start");
   assert.deepEqual(start.params.settings, { tools: { github: false, hyperframes: false } });
   assert.doesNotMatch(start.params.instructions, /GitHub|HyperFrames/); assert.match(start.params.instructions, /Blender/);
+  // Como Claude y Codex, sabe adjuntar archivos para que el chat los pinte como tarjeta.
+  assert.match(start.params.instructions, /absolute local path on a line of its own/);
 });
 test("Trex refuses an older CLI that ignores disabled integrations", async t => {
   const h = harness(t, { integrations: { github: false, blender: false, hyperframes: false }, integrationAck: false });

@@ -89,6 +89,33 @@ pub async fn save_file_copy(from: String, to: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Lo más que cruza la IPC para una vista previa (un PDF grande, por ejemplo).
+const PREVIEW_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Los primeros `limit` bytes de un archivo (todo, si es más pequeño).
+pub(crate) fn read_prefix(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let metadata = std::fs::metadata(path).map_err(|e| format!("No se pudo leer «{}»: {e}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("«{}» no es un archivo.", path.display()));
+    }
+    let limit = limit.min(PREVIEW_MAX_BYTES);
+    let mut bytes = Vec::with_capacity(metadata.len().min(limit) as usize);
+    std::fs::File::open(path)
+        .and_then(|file| file.take(limit).read_to_end(&mut bytes))
+        .map_err(|e| format!("No se pudo leer «{}»: {e}", path.display()))?;
+    Ok(bytes)
+}
+
+/// Contenido de un archivo compartido para verlo en la app (texto, código o PDF).
+/// Viaja en binario, sin base64: la ventana sabe por el tamaño si se cortó.
+#[tauri::command]
+pub async fn read_file_preview(path: String, limit: u64) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || read_prefix(&expand(&path), limit).map(tauri::ipc::Response::new))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Guarda una imagen del chat (por ejemplo, una captura pegada) que no tiene archivo.
 #[tauri::command]
 pub async fn save_file_data(to: String, data: String) -> Result<(), String> {
@@ -123,6 +150,12 @@ mod tests {
         copy_to(&file, &file).unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"%PDF-1.7 hola", "guardar encima de sí mismo no lo vacía");
         assert!(copy_to(&dir, &copy).is_err());
+
+        // La vista previa lee como mucho lo pedido, y nunca una carpeta.
+        assert_eq!(read_prefix(&file, 4).unwrap(), b"%PDF");
+        assert_eq!(read_prefix(&file, 1024).unwrap(), b"%PDF-1.7 hola");
+        assert!(read_prefix(&dir, 10).is_err());
+        assert!(read_prefix(&dir.join("no-existe.txt"), 10).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

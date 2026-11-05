@@ -1,0 +1,276 @@
+/* --- Visor de archivos ---------------------------------------------------------------
+   Una lámina casi a pantalla completa sobre el velo de los diálogos: el documento
+   manda. Va justo debajo del visor de imágenes, que puede abrirse encima desde un
+   Markdown. El fundido anima una propiedad registrada (el fallo de WebKitGTK de
+   los menús) y la lámina sube un poco al entrar. */
+@property --file-viewer-fade { syntax: "<number>"; inherits: true; initial-value: 1; }
+.file-viewer {
+  --file-viewer-fade: 1;
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-viewer) - 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6);
+  border-radius: var(--window-radius);
+  background: var(--scrim);
+  opacity: var(--file-viewer-fade);
+  transition: --file-viewer-fade var(--dur) var(--ease-in-out);
+}
+.file-viewer:is(.entering, .leaving) { --file-viewer-fade: 0; }
+.file-viewer.leaving { pointer-events: none; transition-duration: var(--dur-exit); transition-timing-function: var(--ease-exit); }
+
+.file-viewer-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(1120px, 100%);
+  height: min(940px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-4);
+  transform: translate3d(0, calc((1 - var(--file-viewer-fade)) * 10px), 0) scale(calc(.985 + .015 * var(--file-viewer-fade)));
+  backface-visibility: hidden;
+}
+
+/* Cabecera: icono, nombre y datos, vistas y acciones. */
+.file-viewer-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 60px;
+  padding: var(--sp-2-5) var(--sp-3) var(--sp-2-5) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.file-viewer-title { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.file-viewer-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-viewer-meta {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-viewer-meta.error { color: var(--danger); }
+
+.file-viewer-modes {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+.file-viewer-modes button {
+  height: 26px;
+  padding: 0 var(--sp-2-5);
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  transition: background-color var(--t), color var(--t), box-shadow var(--t);
+}
+.file-viewer-modes button:hover { color: var(--text); }
+.file-viewer-modes button:focus-visible { outline: 1px solid var(--focus-color); outline-offset: 1px; }
+.file-viewer-modes button[aria-pressed="true"] { background: var(--bg-elevated); color: var(--text); box-shadow: var(--shadow-1); }
+
+.file-viewer-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+.file-viewer-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background-color var(--t), color var(--t), transform var(--dur-fast) var(--ease-spring);
+}
+.file-viewer-btn:is(:hover, :focus-visible) { background: var(--hover); color: var(--text); outline: none; }
+.file-viewer-btn:active { transform: scale(.94); }
+.file-viewer-sep { width: 1px; height: 18px; margin: 0 var(--sp-1); background: var(--border); }
+/* Cerrar va aparte para quedarse arriba a la derecha cuando la cabecera se parte. */
+.file-viewer-close { flex: 0 0 auto; margin-left: calc(2px - var(--sp-3)); }
+
+/* Aviso de vista previa recortada. */
+.file-viewer-note {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: var(--fs-sm);
+}
+.file-viewer-note button {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: var(--fw-semibold);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* Contenido: se desplaza en las dos direcciones; el código y las tablas no se parten. */
+.file-viewer-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+  /* Recibe el foco al abrir para desplazarse con el teclado; sin anillo: es la propia lámina. */
+  outline: none;
+  overscroll-behavior: contain;
+}
+.file-viewer-body:is([data-kind="pdf"], [data-kind="html"][data-mode="view"]) { overflow: hidden; }
+
+/* Markdown: la misma tipografía del chat, en una columna de lectura. */
+.file-viewer-doc { max-width: 780px; margin: 0 auto; padding: var(--sp-8) var(--sp-8) var(--sp-12); }
+
+/* Código: números de línea fijos al desplazar en horizontal. */
+.file-viewer-code {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: max-content;
+  min-height: 100%;
+  font: var(--fs-sm)/1.65 var(--font-mono);
+}
+.file-viewer-code pre { margin: 0; padding-block: var(--sp-4) var(--sp-8); font: inherit; white-space: pre; tab-size: 4; }
+.file-viewer-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  padding-inline: var(--sp-4) var(--sp-3);
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+.file-viewer-source { padding-inline: var(--sp-4) var(--sp-10); color: var(--code-text, var(--text)); }
+.file-viewer-text {
+  margin: 0;
+  padding: var(--sp-5) var(--sp-6) var(--sp-10);
+  color: var(--code-text, var(--text));
+  font: var(--fw-regular) var(--fs-sm)/1.65 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+
+/* Tabla (CSV/TSV): cabecera y número de fila fijos. */
+.file-viewer-table-wrap { min-width: max-content; padding-bottom: var(--sp-6); }
+.file-viewer-table { border-collapse: separate; border-spacing: 0; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.file-viewer-table :is(th, td) {
+  max-width: 360px;
+  padding: var(--sp-1-5) var(--sp-3);
+  overflow: hidden;
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-viewer-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-bottom-color: var(--border);
+  background: var(--bg-surface);
+  font-weight: var(--fw-semibold);
+}
+.file-viewer-table .num {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 3.5em;
+  background: var(--bg-surface);
+  color: var(--text-dim);
+  text-align: right;
+}
+.file-viewer-table thead .num { z-index: 3; }
+.file-viewer-table .n { text-align: right; }
+.file-viewer-table tbody tr:hover td:not(.num) { background: var(--hover); }
+.file-viewer-foot { position: sticky; left: 0; width: fit-content; margin: var(--sp-3) var(--sp-4) 0; color: var(--text-dim); font-size: var(--fs-xs); }
+
+/* PDF (visor del navegador) y HTML aislado. */
+.file-viewer-frame { display: block; width: 100%; height: 100%; border: 0; }
+.file-viewer-frame.html { background: #fff; color-scheme: light; }
+
+/* SVG sobre un damero, para ver las transparencias. */
+.file-viewer-picture {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: var(--sp-8);
+  background: repeating-conic-gradient(var(--bg-inset) 0 25%, var(--bg) 0 50%) 0 0 / 22px 22px;
+}
+.file-viewer-picture img { max-width: 100%; max-height: 72vh; }
+
+/* Cargando, vacío o sin vista previa. */
+.file-viewer-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  min-height: 100%;
+  padding: var(--sp-8);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.file-viewer-state p { max-width: 46ch; margin: 0; line-height: var(--lh-normal); }
+.file-viewer-state .btn { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.file-viewer-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: file-viewer-spin .8s linear infinite;
+}
+@keyframes file-viewer-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .file-viewer-spinner { animation-duration: 2.4s; } }
+
+/* Ventanas estrechas: casi todo el espacio para el documento. */
+@media (max-width: 720px) {
+  .file-viewer { padding: var(--sp-2); }
+  .file-viewer-sheet { height: 100%; border-radius: var(--radius-lg); }
+  /* Primera fila: icono, nombre y cerrar. Segunda: vistas y acciones. */
+  .file-viewer-bar { flex-wrap: wrap; gap: var(--sp-2) var(--sp-2-5); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); }
+  .file-viewer-title { flex-basis: calc(100% - 36px - 32px - 2 * var(--sp-2-5) - 1px); }
+  .file-viewer-close { margin-left: 0; }
+  .file-viewer-modes, .file-viewer-tools { order: 1; }
+  .file-viewer-tools { margin-left: auto; }
+  .file-viewer-sep { display: none; }
+  .file-viewer-doc { padding: var(--sp-5) var(--sp-4) var(--sp-8); }
+  .file-viewer-text { padding: var(--sp-4); }
+}

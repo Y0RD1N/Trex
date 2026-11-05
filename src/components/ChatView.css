@@ -437,6 +437,21 @@
   font: 700 var(--fs-xs)/1 var(--font-mono);
   letter-spacing: 0.02em;
 }
+/* Un tinte suave por tipo (el de las apps de oficina), legible en claro y oscuro. */
+.chat-file-badge[data-kind="pdf"] { --badge-hue: #e5484d; }
+.chat-file-badge[data-kind="document"] { --badge-hue: #3e7bfa; }
+.chat-file-badge[data-kind="sheet"] { --badge-hue: #30a46c; }
+.chat-file-badge[data-kind="slides"] { --badge-hue: #f76b15; }
+.chat-file-badge[data-kind="code"] { --badge-hue: #8e4ec6; }
+.chat-file-badge[data-kind="image"], .chat-file-badge[data-kind="video"] { --badge-hue: #0d9b8a; }
+.chat-file-badge[data-kind="audio"] { --badge-hue: #d6409f; }
+.chat-file-badge[data-kind="archive"] { --badge-hue: #c28a12; }
+.chat-file-badge[data-kind="text"] { --badge-hue: #6f8db8; }
+.chat-file-badge:is([data-kind="pdf"], [data-kind="document"], [data-kind="sheet"], [data-kind="slides"], [data-kind="code"],
+  [data-kind="image"], [data-kind="video"], [data-kind="audio"], [data-kind="archive"], [data-kind="text"]) {
+  background: color-mix(in srgb, var(--badge-hue) 15%, var(--bg-inset));
+  color: color-mix(in srgb, var(--badge-hue) 78%, var(--text));
+}
 .chat-file-text { display: grid; gap: var(--sp-0-5); min-width: 0; }
 .chat-file-name {
   overflow: hidden;
@@ -564,45 +579,45 @@
 
 /* Colores de sintaxis (clases de highlight.js): paleta propia del código en
    tokens.css, One Dark en oscuro y GitHub en claro. */
-.chat-code .hljs-comment,
-.chat-code .hljs-quote { color: var(--hl-comment); font-style: italic; }
-.chat-code .hljs-keyword,
-.chat-code .hljs-selector-tag,
-.chat-code .hljs-doctag,
-.chat-code .hljs-meta .hljs-keyword { color: var(--hl-keyword); }
-.chat-code .hljs-string,
-.chat-code .hljs-regexp,
-.chat-code .hljs-meta .hljs-string,
-.chat-code .hljs-template-tag { color: var(--hl-string); }
-.chat-code .hljs-number,
-.chat-code .hljs-literal,
-.chat-code .hljs-symbol,
-.chat-code .hljs-bullet { color: var(--hl-number); }
-.chat-code .hljs-title,
-.chat-code .hljs-title.function_,
-.chat-code .hljs-section { color: var(--hl-title); }
-.chat-code .hljs-title.class_,
-.chat-code .hljs-type,
-.chat-code .hljs-built_in,
-.chat-code .hljs-selector-class { color: var(--hl-type); }
-.chat-code .hljs-attr,
-.chat-code .hljs-attribute,
-.chat-code .hljs-property,
-.chat-code .hljs-variable,
-.chat-code .hljs-template-variable,
-.chat-code .hljs-selector-id,
-.chat-code .hljs-meta { color: var(--hl-attr); }
-.chat-code .hljs-tag,
-.chat-code .hljs-name,
-.chat-code .hljs-selector-attr,
-.chat-code .hljs-selector-pseudo { color: var(--hl-tag); }
-.chat-code .hljs-params { color: var(--code-text); }
-.chat-code .hljs-operator,
-.chat-code .hljs-punctuation { color: var(--hl-punct); }
-.chat-code .hljs-addition { color: var(--diff-add-text); background: var(--diff-add-bg); }
-.chat-code .hljs-deletion { color: var(--diff-del-text); background: var(--diff-del-bg); }
-.chat-code .hljs-emphasis { font-style: italic; }
-.chat-code .hljs-strong { font-weight: 700; }
+:is(.chat-code, .file-viewer-source) .hljs-comment,
+:is(.chat-code, .file-viewer-source) .hljs-quote { color: var(--hl-comment); font-style: italic; }
+:is(.chat-code, .file-viewer-source) .hljs-keyword,
+:is(.chat-code, .file-viewer-source) .hljs-selector-tag,
+:is(.chat-code, .file-viewer-source) .hljs-doctag,
+:is(.chat-code, .file-viewer-source) .hljs-meta .hljs-keyword { color: var(--hl-keyword); }
+:is(.chat-code, .file-viewer-source) .hljs-string,
+:is(.chat-code, .file-viewer-source) .hljs-regexp,
+:is(.chat-code, .file-viewer-source) .hljs-meta .hljs-string,
+:is(.chat-code, .file-viewer-source) .hljs-template-tag { color: var(--hl-string); }
+:is(.chat-code, .file-viewer-source) .hljs-number,
+:is(.chat-code, .file-viewer-source) .hljs-literal,
+:is(.chat-code, .file-viewer-source) .hljs-symbol,
+:is(.chat-code, .file-viewer-source) .hljs-bullet { color: var(--hl-number); }
+:is(.chat-code, .file-viewer-source) .hljs-title,
+:is(.chat-code, .file-viewer-source) .hljs-title.function_,
+:is(.chat-code, .file-viewer-source) .hljs-section { color: var(--hl-title); }
+:is(.chat-code, .file-viewer-source) .hljs-title.class_,
+:is(.chat-code, .file-viewer-source) .hljs-type,
+:is(.chat-code, .file-viewer-source) .hljs-built_in,
+:is(.chat-code, .file-viewer-source) .hljs-selector-class { color: var(--hl-type); }
+:is(.chat-code, .file-viewer-source) .hljs-attr,
+:is(.chat-code, .file-viewer-source) .hljs-attribute,
+:is(.chat-code, .file-viewer-source) .hljs-property,
+:is(.chat-code, .file-viewer-source) .hljs-variable,
+:is(.chat-code, .file-viewer-source) .hljs-template-variable,
+:is(.chat-code, .file-viewer-source) .hljs-selector-id,
+:is(.chat-code, .file-viewer-source) .hljs-meta { color: var(--hl-attr); }
+:is(.chat-code, .file-viewer-source) .hljs-tag,
+:is(.chat-code, .file-viewer-source) .hljs-name,
+:is(.chat-code, .file-viewer-source) .hljs-selector-attr,
+:is(.chat-code, .file-viewer-source) .hljs-selector-pseudo { color: var(--hl-tag); }
+:is(.chat-code, .file-viewer-source) .hljs-params { color: var(--code-text); }
+:is(.chat-code, .file-viewer-source) .hljs-operator,
+:is(.chat-code, .file-viewer-source) .hljs-punctuation { color: var(--hl-punct); }
+:is(.chat-code, .file-viewer-source) .hljs-addition { color: var(--diff-add-text); background: var(--diff-add-bg); }
+:is(.chat-code, .file-viewer-source) .hljs-deletion { color: var(--diff-del-text); background: var(--diff-del-bg); }
+:is(.chat-code, .file-viewer-source) .hljs-emphasis { font-style: italic; }
+:is(.chat-code, .file-viewer-source) .hljs-strong { font-weight: 700; }
 
 /* --- Tablas ---------------------------------------------------------------- */
 /* The markdown body breaks long words "anywhere"; inherited by cells, that let

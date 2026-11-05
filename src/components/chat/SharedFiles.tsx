@@ -3,18 +3,21 @@
  *
  * Un enlace a un archivo local en una línea propia es un adjunto: una tarjeta
  * con su tipo, tamaño y carpeta, y botones para abrirlo, mostrarlo en su
- * carpeta o guardarlo donde se quiera. Las imágenes se ven en la propia
- * tarjeta y se amplían en el visor. Un enlace dentro de una frase es una
- * referencia: queda en el texto y al pulsarlo se abre.
+ * carpeta o guardarlo donde se quiera. Al pulsarla, los documentos, el código,
+ * las tablas y los PDF se leen en el visor de la app (`FileViewer`) y las
+ * imágenes se amplían en el de imágenes; el resto se abre con el sistema. Un
+ * enlace dentro de una frase es una referencia: queda en el texto y se abre igual.
  */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { formatError, getAppInfo } from "../../api";
 import { readImageFile } from "../../chatImages";
+import { previewKind } from "../../filePreview";
 import {
-  KIND_LABELS, baseName, fileInfo, fileKind, folderLabel, formatBytes, openFile, revealFile, saveFileCopy,
+  baseName, fileInfo, fileKind, fileKindLabel, folderLabel, formatBytes, openFile, revealFile, saveFileCopy,
   type Attachment, type FileInfo,
 } from "../../sharedFiles";
+import { useFileViewer } from "../FileViewer";
 import { useImageViewer, type ViewerImage } from "../ImageViewer";
 import { CheckIcon, DownloadIcon, ExternalIcon, FileIcon, FolderIcon } from "../Icons";
 
@@ -24,7 +27,8 @@ export const SharedFilesContext = createContext<{ cwd: string; streaming: boolea
 let homeDir: Promise<string> | null = null;
 const home = (): Promise<string> => homeDir ??= getAppInfo().then(info => info.homeDir).catch(() => "");
 
-function useHome(): string {
+/** Carpeta personal del usuario (vacía mientras llega), para describir dónde está un archivo. */
+export function useHome(): string {
   const [value, setValue] = useState("");
   useEffect(() => { void home().then(setValue); }, []);
   return value;
@@ -110,10 +114,12 @@ function FileCard({ item, gallery }: { item: Attachment; gallery: Attachment[] }
   const homePath = useHome();
   const info = useFileInfo(item.path);
   const viewer = useImageViewer();
+  const files = useFileViewer();
   const [error, setError] = useState<string | null>(null);
   const name = item.label || baseName(item.path);
   const dir = !!info?.isDir;
   const isImage = !dir && fileKind(item.path) === "image";
+  const readable = !dir && !!files && previewKind(item.path) !== null;
   const image = useImage(item.path, isImage && !!info?.exists);
   const missing = info !== null && !info.exists;
   const pending = info === null || (missing && streaming);
@@ -132,11 +138,12 @@ function FileCard({ item, gallery }: { item: Attachment; gallery: Attachment[] }
       return;
     }
     setError(null);
-    void openFile(item.path).catch(reason => setError(formatError(reason)));
+    if (readable && files) files.open({ path: item.path, name, cwd });
+    else void openFile(item.path).catch(reason => setError(formatError(reason)));
   };
 
   const details = missing && !pending ? "No se encuentra el archivo"
-    : [dir ? "Carpeta" : KIND_LABELS[fileKind(item.path)], info && !dir && info.exists ? formatBytes(info.size) : "",
+    : [dir ? "Carpeta" : fileKindLabel(item.path), info && !dir && info.exists ? formatBytes(info.size) : "",
       folderLabel(item.path, cwd, homePath)].filter(Boolean).join(" · ");
 
   return <div className={`chat-file${isImage ? " image" : ""}${missing && !pending ? " missing" : ""}${pending ? " pending" : ""}`}
@@ -146,7 +153,7 @@ function FileCard({ item, gallery }: { item: Attachment; gallery: Attachment[] }
     </button>}
     <div className="chat-file-row">
       <button type="button" className="chat-file-main" onClick={show} disabled={!info?.exists}
-        aria-label={isImage ? `Ver ${name}` : `Abrir ${name}`}>
+        aria-label={isImage || readable ? `Ver ${name}` : `Abrir ${name}`}>
         {!isImage && <FileBadge name={item.path} dir={dir} />}
         <span className="chat-file-text">
           <span className="chat-file-name">{name}</span>
@@ -166,12 +173,20 @@ export function FileCards({ items }: { items: Attachment[] }) {
 /** Enlace a un archivo dentro de una frase: se abre (o se ve, si es una imagen) al pulsarlo. */
 export function FileLink({ path, children }: { path: string; children: ReactNode }) {
   const viewer = useImageViewer();
+  const files = useFileViewer();
+  const { cwd } = useContext(SharedFilesContext);
   const [failed, setFailed] = useState(false);
   const open = (): void => {
     setFailed(false);
     if (fileKind(path) === "image") {
       void loadImage(path).then(src => viewer.open([{ src, name: baseName(path), path }]))
         .catch(() => openFile(path).catch(() => setFailed(true)));
+    } else if (files && previewKind(path)) {
+      // Una carpeta o un archivo que ya no está no tienen vista previa: se intenta con el sistema.
+      void fileInfo(path).then(info => {
+        if (info?.exists && !info.isDir) files.open({ path, name: baseName(path), cwd });
+        else return openFile(path);
+      }).catch(() => setFailed(true));
     } else void openFile(path).catch(() => setFailed(true));
   };
   return <a href={path} className={`chat-file-link${failed ? " failed" : ""}`} title={failed ? `No se pudo abrir ${path}` : path}

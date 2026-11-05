@@ -418,6 +418,7 @@ pub fn run() {
             shared_files::reveal_file,
             shared_files::save_file_copy,
             shared_files::save_file_data,
+            shared_files::read_file_preview,
             project_icon::project_icon,
             cli_updates::claude_update_channel,
             cli_updates::update_cli,

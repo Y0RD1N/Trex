@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { load } from "./ts-loader.mjs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const files = await load("sharedFiles");
 const cwd = "/home/ana/proyecto";
@@ -60,4 +64,81 @@ test("files are described by kind, size and folder", () => {
 test("the agents are told how to attach files in a single shell-safe line", () => {
   assert.ok(!/["\n\r]/.test(files.FILE_SHARING_INSTRUCTIONS));
   assert.match(files.FILE_SHARING_INSTRUCTIONS, /absolute local path on a line of its own/);
+});
+
+/**
+ * El mismo camino que el chat: react-markdown con los plugins y el filtro de
+ * enlaces de `Markdown.tsx`. Devuelve los adjuntos de cada párrafo y los enlaces.
+ */
+function render(markdown, base = "D:\\proyecto") {
+  const paragraphs = [], links = [];
+  const urlTransform = (url) => files.isLocalFileHref(url) ? url : defaultUrlTransform(url);
+  renderToStaticMarkup(createElement(ReactMarkdown, {
+    remarkPlugins: [remarkGfm, files.remarkLocalPaths], urlTransform,
+    components: {
+      p: ({ node, children }) => { paragraphs.push(files.attachmentsOf(node, base)); return createElement("p", null, children); },
+      a: ({ href, children }) => { links.push({ href, path: files.localFilePath(href, base) }); return createElement("a", null, children); },
+    },
+  }, markdown));
+  return { paragraphs, links };
+}
+
+test("Windows paths attached by the agents become cards with their exact path", () => {
+  // La respuesta real de Claude que no mostraba la tarjeta (las barras llegaban como %5C y se descartaban).
+  const reply = "Aquí lo tienes; desde la tarjeta puedes abrirlo o guardarlo:\n\n"
+    + "[agent-desktop-informe-pruebas.md](<C:\\Users\\Mi PC\\Documents\\agent-desktop-informe-pruebas.md>)\n\n"
+    + "Si no te aparece la opción de descargar, el archivo también está en `C:\\Users\\Mi PC\\Documents\\`.";
+  const { paragraphs } = render(reply);
+  assert.equal(paragraphs[0], null);
+  assert.deepEqual(paragraphs[1], [{ path: "C:\\Users\\Mi PC\\Documents\\agent-desktop-informe-pruebas.md", label: "agent-desktop-informe-pruebas.md" }]);
+  assert.equal(paragraphs[2], null);
+  // `\.` y `\_` son escapes de Markdown: la ruta se lee del texto original y no pierde barras.
+  assert.deepEqual(render("[a.md](D:\\proyecto\\.github\\_build\\a.md)").paragraphs[0],
+    [{ path: "D:\\proyecto\\.github\\_build\\a.md", label: "a.md" }]);
+  assert.deepEqual(render("![Captura](<C:\\Users\\Ana\\.trex\\captura (1).png>)").paragraphs[0],
+    [{ path: "C:\\Users\\Ana\\.trex\\captura (1).png", label: "Captura" }]);
+});
+
+test("attachment lines that Markdown does not parse (spaces without <>) are still cards", () => {
+  const { paragraphs } = render("[Informe final.pdf](C:\\Users\\Mi PC\\Documents\\Informe final.pdf)\n"
+    + "[**Datos**](</home/ana/Mis datos/datos.csv>)\n[cv.pdf](file:///C:/Users/Mi%20PC/cv.pdf)");
+  assert.deepEqual(paragraphs[0], [
+    { path: "C:\\Users\\Mi PC\\Documents\\Informe final.pdf", label: "Informe final.pdf" },
+    { path: "/home/ana/Mis datos/datos.csv", label: "Datos" },
+    { path: "C:/Users/Mi PC/cv.pdf", label: "cv.pdf" },
+  ]);
+  // En una frase sigue siendo texto con un enlace, y conserva la ruta exacta.
+  const inline = render("Edité [app.ts](D:\\proyecto\\.github\\app.ts:12) para arreglarlo.");
+  assert.equal(inline.paragraphs[0], null);
+  assert.deepEqual(inline.links.map((link) => link.path), ["D:\\proyecto\\.github\\app.ts"]);
+  // Las webs y los esquemas peligrosos no cambian.
+  const web = render("[web](https://example.com/a.pdf)\n\n[x](javascript:alert(1))");
+  assert.deepEqual(web.links.map((link) => [link.href, link.path]), [["https://example.com/a.pdf", null], ["", null]]);
+  assert.deepEqual(web.paragraphs, [null, null]);
+});
+
+test("a Windows path with spaces inside a sentence is still a file link", () => {
+  const { paragraphs, links } = render("La página está en [landing.html](D:\\proyecto\\out\\landing.html) y el registro "
+    + "en [servidor.log](C:\\Users\\Mi PC\\Documents\\servidor.log) o en ![la captura](C:\\Users\\Mi PC\\captura (1).png).");
+  assert.equal(paragraphs[0], null, "dentro de una frase son referencias, no tarjetas");
+  assert.deepEqual(links.map((link) => link.path), ["D:\\proyecto\\out\\landing.html", "C:\\Users\\Mi PC\\Documents\\servidor.log"]);
+  // Lo que no es una ruta con extensión sigue siendo texto.
+  assert.deepEqual(render("Escribe [nombre](C:\\Mis cosas) y pulsa [Aceptar].").links, []);
+  assert.deepEqual(["informe.md", "landing.HTML", "logo.svg", "datos.json", "servidor.log", "CV.pdf", "ventas.csv", "x.docx"].map(files.fileKindLabel),
+    ["Markdown", "Página web", "Imagen SVG", "JSON", "Registro", "PDF", "Hoja de cálculo", "Documento"]);
+});
+
+test("network paths and Windows folders are described like the rest", () => {
+  assert.equal(files.localFilePath("file://servidor/compartida/Informe.pdf", ""), "\\\\servidor\\compartida\\Informe.pdf");
+  assert.equal(files.localFilePath("file://localhost/home/ana/a.pdf", ""), "/home/ana/a.pdf");
+  assert.equal(files.localFilePath("C:%5CUsers%5CMi%20PC%5Ca.md", ""), "C:\\Users\\Mi PC\\a.md");
+  assert.equal(files.localFilePath("%5C%5Cservidor%5Cdocs%5Ca.md", ""), "\\\\servidor\\docs\\a.md");
+  assert.ok(files.isLocalFileHref("C:%5CUsers") && files.isLocalFileHref("%5C%5Cservidor%5Ca") && !files.isLocalFileHref("https://a.b"));
+  const home = "C:\\Users\\Mi PC";
+  assert.equal(files.folderLabel("C:\\Users\\Mi PC\\Documents\\a.md", "C:\\", home), "~\\Documents");
+  assert.equal(files.folderLabel("c:\\users\\mi pc\\Documents\\a.md", "D:\\proyecto", home), "~\\Documents");
+  assert.equal(files.folderLabel("C:\\Users\\Mi PC\\a.md", "", home), "~");
+  assert.equal(files.folderLabel("D:\\Proyecto\\out\\a.pdf", "d:\\proyecto", home), "out");
+  assert.equal(files.folderLabel("C:\\Users\\Mi PC\\app\\src\\a.ts", "C:\\Users\\Mi PC\\app", home), "src");
+  assert.equal(files.folderLabel("E:\\Copias\\a.zip", "D:\\proyecto", home), "E:\\Copias");
 });

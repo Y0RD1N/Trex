@@ -4,6 +4,7 @@ import { agentWrite, agentTeamMcpConfig, trexBrowserResolveSpace, formatError } 
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
 import { deliverInbox, InboxRequests, INBOX_INSTRUCTIONS, INBOX_WAKE, type QueueSnapshot } from "../messageQueue";
 import { taskInstructions } from "../chatTasks";
+import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { assertIntegrationRestrictions, detectedIntegrations, integrationContext, integrationInstructions, integrationRestrictions } from "../integrations";
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
@@ -151,7 +152,8 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const integrations = integrationContext(current, { browser: browser?.enabled === true, available });
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
         model: selected.model, effort: selected.effort, conversationId: nativeConversation.current,
-        instructions: [INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations)].filter(Boolean).join(" "),
+        // Como Claude y Codex: cómo adjuntar archivos para que el chat los pinte como tarjeta.
+        instructions: [FILE_SHARING_INSTRUCTIONS, INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations)].filter(Boolean).join(" "),
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
         settings: integrationRestrictions(current.integrations), desktopEnabled: current.desktopEnabled === true, ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");

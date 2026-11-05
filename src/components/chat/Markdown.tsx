@@ -19,7 +19,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components, type Options } fro
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { codeLanguage, markdownBlocks, nodeText, rehypeCallouts, type HastNode } from "../../chatMarkdown";
-import { attachmentsOf, localFilePath } from "../../sharedFiles";
+import { attachmentsOf, isLocalFileHref, localFilePath, remarkLocalPaths } from "../../sharedFiles";
 import { FileCards, FileLink, SharedFilesContext } from "./SharedFiles";
 import { AlertIcon, CheckIcon, CopyIcon, InfoIcon, SparkIcon } from "../Icons";
 import { writeClipboard } from "../../api";
@@ -103,6 +103,19 @@ function tokensToReact(nodes: HastNode[]): ReactNode[] {
   });
 }
 
+/**
+ * Código coloreado con el resaltador compartido, para quien lo pinte fuera del
+ * Markdown (el visor de archivos). null mientras carga, sin lenguaje o si no se conoce.
+ */
+export function useHighlightedCode(language: string | null, text: string): ReactNode[] | null {
+  const highlighter = useSyncExternalStore(subscribeHighlighter, currentHighlighter, currentHighlighter);
+  useEffect(() => { if (language) loadHighlighter(); }, [language]);
+  return useMemo(() => {
+    const tokens = highlighter && language ? highlighter(language, text) : null;
+    return tokens && tokens.length ? tokensToReact(tokens) : null;
+  }, [highlighter, language, text]);
+}
+
 function CodeBlock({ node, children }: { node?: HastNode; children?: ReactNode }) {
   const code = node?.children?.find(child => child.tagName === "code");
   const language = codeLanguage(code);
@@ -143,12 +156,13 @@ const CALLOUTS: Record<string, { title: string; icon: ReactNode }> = {
 
 // --- Componentes -------------------------------------------------------------
 
-const REMARK_PLUGINS: Options["remarkPlugins"] = [remarkGfm];
+// `remarkLocalPaths` conserva las rutas de Windows tal como se escribieron (ver `sharedFiles`).
+const REMARK_PLUGINS: Options["remarkPlugins"] = [remarkGfm, remarkLocalPaths];
 // Solo se colorean los bloques con lenguaje (en `CodeBlock`): adivinarlo es lento y a menudo falla.
 const REHYPE_PLUGINS: Options["rehypePlugins"] = [rehypeCallouts];
 
 /** Además de lo que permite react-markdown, los enlaces `file://` y las rutas de Windows (archivos compartidos). */
-const urlTransform = (url: string): string => /^(file:|[a-z]:[\\/])/i.test(url) ? url : defaultUrlTransform(url);
+const urlTransform = (url: string): string => isLocalFileHref(url) ? url : defaultUrlTransform(url);
 
 const components: Components = {
   pre: ({ node, children }) => <CodeBlock node={node as HastNode | undefined}>{children}</CodeBlock>,
