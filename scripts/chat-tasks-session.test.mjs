@@ -187,13 +187,20 @@ for (const [provider, choices] of Object.entries(modes)) for (const mode of choi
       instructions = start.params[provider === "trex" ? "instructions" : "developerInstructions"];
       if (provider === "trex") assert.equal(start.params.mode, mode);
     }
-    assert.match(instructions, /ordinary chats/);
-    assert.match(instructions, provider === "claude" ? /TaskCreate\/TaskUpdate/ : /update_plan/);
-    assert.match(instructions, /completed only after verifying/);
+    if (provider === "trex") {
+      // Trex CLI pide la lista con update_plan, sin marcar lo no verificado y sin mutar al planificar
+      // en su propio prompt de sistema: la app solo añade lo que falta.
+      assert.match(instructions, /Skip task lists for simple questions/);
+      assert.doesNotMatch(instructions, /never execute a mutation in read-only planning mode/);
+    } else {
+      assert.match(instructions, /ordinary chats/);
+      assert.match(instructions, provider === "claude" ? /TaskCreate\/TaskUpdate/ : /update_plan/);
+      assert.match(instructions, /completed only after verifying/);
+      assert.match(instructions, /never execute a mutation in read-only planning mode/);
+    }
     assert.match(instructions, /Blender/);
     assert.match(instructions, /HyperFrames/);
     assert.match(instructions, /GitHub/);
-    assert.match(instructions, /never execute a mutation in read-only planning mode/);
     assert.doesNotMatch(instructions, /desktop_status|desktop_monitors|browser_navigate/);
     assert.equal(h.userWrites.length, 0);
     assert.equal(h.state.modeChoice, mode);

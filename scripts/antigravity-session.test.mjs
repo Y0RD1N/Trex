@@ -39,6 +39,8 @@ function harness(t, extra = {}) {
           entry.rpc.accept(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "Authentication required" } })); return;
         }
         if (extra.holdNew) { entry.held = request; return; }
+        // Al recuperar una sesión, Antigravity repite su historial (los mensajes del usuario incluidos).
+        if (request.method === "session/load" && extra.replayText) callbacks.notification("session/update", { sessionId: "opaque-session", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: extra.replayText } } });
         if (extra.usageReport) {
           callbacks.notification("session/update", { sessionId: "opaque-session", update: { sessionUpdate: "usage_update", used: 0, size: 1048576 } });
           const announce = () => callbacks.notification("session/update", { sessionId: "opaque-session", update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "usage" }] } });
@@ -222,6 +224,19 @@ test("the trex context is sent with the first prompt of each ACP session, not wi
   assert.deepEqual(contextPrompts(h), [true, false]);
   await h.session.start(); await h.session.send("Tras reconectar", [], []); await h.complete();
   assert.deepEqual(contextPrompts(h), [true, false, true], "a reloaded session receives it again");
+});
+test("a reloaded session whose history already carries the same context does not get it again", async t => {
+  const extra = {};
+  const h = harness(t, extra); await h.start();
+  await h.session.send("Primero", [], []); await h.complete();
+  const sent = h.writes.find(w => w.method === "session/prompt").params.prompt[0].text;
+  extra.replayText = `${sent}Primero`;
+  await h.session.start(); await h.session.send("Tras reconectar", [], []); await h.complete();
+  assert.deepEqual(contextPrompts(h), [true, false], "the replayed history already has it");
+  // Si el contexto cambió (otras integraciones), se envía el nuevo.
+  extra.replayText = "<trex_context>\nanterior\n</trex_context>Hola";
+  await h.session.start(); await h.session.send("Con otro contexto", [], []); await h.complete();
+  assert.deepEqual(contextPrompts(h), [true, false, true]);
 });
 test("a failed first prompt carries the context again on the next one", async t => {
   const h = harness(t); await h.start();

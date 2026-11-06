@@ -86,7 +86,8 @@ export function integrationInstructions(provider: AgentProvider, context: Integr
   if (on("github")) parts.push(`GitHub: use ${native ? "the advertised github_* tools" : "the installed gh CLI"} with its existing auth, never revealing credentials; name repositories and PRs explicitly, follow repository rules and verify the merge head.`);
   if (on("blender")) parts.push(`Blender: ${native ? "use the advertised blender_run tool to run" : "run"} workspace bpy scripts in a new background process${native ? "" : " with the installed Blender CLI"}, not an open window.`);
   if (on("hyperframes")) parts.push(`HyperFrames: use ${native ? "the advertised hyperframes_run tool" : "the project-local or global CLI"} to lint, snapshot or render compositions.`);
-  if (parts.length) parts.push("Check real results; explain missing dependencies instead of installing them silently; never execute a mutation in read-only planning mode; inspect uncertain operations before retrying.");
+  // Trex CLI ya lo dice en su prompt de sistema (integraciones, modo plan y operaciones inciertas).
+  if (parts.length && !native) parts.push("Check real results; explain missing dependencies instead of installing them silently; never execute a mutation in read-only planning mode; inspect uncertain operations before retrying.");
   // Claude Code y Trex CLI reciben la guía de cada servidor MCP (sus instructions):
   // aquí basta con anunciarlos. Codex y Antigravity reciben la guía completa.
   // Computer use y accesibilidad son independientes: la persona elige; ninguno se

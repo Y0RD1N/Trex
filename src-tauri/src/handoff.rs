@@ -30,6 +30,9 @@ pub enum GitSnapshot {
     Full,
     /// Rama, HEAD y estado (`status --porcelain`), sin diferencias.
     Status,
+    /// Rama, HEAD, estado y el resumen `diff --stat` (preparado y sin preparar):
+    /// quien revisa lee con sus herramientas solo las diferencias que necesita.
+    Stat,
     /// Sin instantánea: el agente consulta Git con sus herramientas si lo necesita.
     None,
 }
@@ -39,6 +42,7 @@ impl GitSnapshot {
         match value.unwrap_or("full") {
             "full" => Ok(Self::Full),
             "status" => Ok(Self::Status),
+            "stat" => Ok(Self::Stat),
             "none" => Ok(Self::None),
             other => Err(format!("Modo de instantánea Git no válido: {other}")),
         }
@@ -445,12 +449,47 @@ fn capture_git_with(cwd: &str, mode: GitSnapshot) -> (String, bool) {
             12 * 1024,
         ),
     ];
+    // Solo el número de líneas por archivo: el texto de los cambios no viaja.
+    let summaries: &[(&str, &[&str], usize)] = &[
+        (
+            "Resumen de cambios preparados (git diff --cached --stat)",
+            &[
+                "diff",
+                "--cached",
+                "--stat=160",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--ignore-submodules=all",
+                "--",
+            ],
+            4096,
+        ),
+        (
+            "Resumen de cambios sin preparar (git diff --stat)",
+            &[
+                "diff",
+                "--stat=160",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--ignore-submodules=all",
+                "--",
+            ],
+            4096,
+        ),
+    ];
     // Rama, HEAD y estado son las tres primeras secciones; el resto son diffs.
-    let sections = if mode == GitSnapshot::Status {
-        text.push_str("Instantánea reducida: solo rama y estado. Consulta las diferencias con Git si las necesitas.\n");
-        &sections[..3]
-    } else {
-        sections
+    let sections: Vec<&(&str, &[&str], usize)> = match mode {
+        GitSnapshot::Status => {
+            text.push_str("Instantánea reducida: solo rama y estado. Consulta las diferencias con Git si las necesitas.\n");
+            sections[..3].iter().collect()
+        }
+        GitSnapshot::Stat => {
+            text.push_str("Instantánea de revisión: rama, estado y resumen de cambios por archivo, sin el texto de las diferencias. Lee tú mismo las diferencias que necesites con tus herramientas de solo lectura (git diff, git diff --cached).\n");
+            sections[..3].iter().chain(summaries).collect()
+        }
+        _ => sections.iter().collect(),
     };
     for (title, args, limit) in sections {
         text.push_str(&format!("\n### {title}\n"));
@@ -1149,6 +1188,17 @@ mod tests {
         assert!(!status.contains("+staged-marker"));
         assert!(!status.contains("+unstaged-marker"));
         assert!(status.len() < snapshot.len());
+        // Revisión: estado y resumen por archivo, sin el texto de las diferencias.
+        let (stat, truncated) = capture_git_with(dir.cwd(), GitSnapshot::Stat);
+        assert!(!truncated);
+        assert!(stat.contains("?? untracked-private.txt"));
+        assert!(stat.contains("git diff --cached --stat"));
+        assert!(stat.contains("tracked.txt | 2 +-"));
+        assert!(stat.contains("herramientas de solo lectura"));
+        assert!(!stat.contains("staged-marker"));
+        assert!(!stat.contains("unstaged-marker"));
+        assert!(!stat.contains("@@") && snapshot.contains("@@"), "no diff hunks travel");
+        assert_eq!(GitSnapshot::parse(Some("stat")), Ok(GitSnapshot::Stat));
         // Sin instantánea.
         assert_eq!(
             capture_git_with(dir.cwd(), GitSnapshot::None),

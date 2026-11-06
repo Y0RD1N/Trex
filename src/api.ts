@@ -117,7 +117,8 @@ export const saveConfig = (config: AppConfig): Promise<AppConfig> =>
  * - `status`: rama y estado, sin diferencias.
  * - `none`: sin instantánea; el agente consulta Git si lo necesita.
  */
-export type HandoffGitSnapshot = "full" | "status" | "none";
+/** "stat": estado y resumen por archivo (`git diff --stat`), para revisores. */
+export type HandoffGitSnapshot = "full" | "stat" | "status" | "none";
 
 export const prepareHandoff = (context: HandoffContext, options?: { git?: HandoffGitSnapshot }): Promise<PreparedHandoff> =>
   invoke("prepare_handoff", { cwd: context.source.cwd, sourceSessionId: context.source.sessionId,

@@ -1,7 +1,7 @@
 import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { agentTeamClaim, agentTeamFinish, agentTeamOpen, agentTeamPause, agentTeamPoll, agentTeamSnapshot, trexBrowserStatus, trexBrowserSpaces, formatError, loadHandoff, prepareHandoff } from "../api";
-import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, TEAM_REPORT_INSTRUCTIONS, mergeTeamItems, teamCombinedState, teamGitSnapshot, teamMemberUsesBrowser, teamPlanningContext, teamTaskActive, teamTaskRunnable, type AgentTeam, type TaskUsage, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
+import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, mergeTeamItems, teamCombinedState, teamGitSnapshot, teamMemberUsesBrowser, teamPlanningContext, teamReportsPrompt, teamRoleBlock, teamRoleBlockNeeded, teamRoleReminder, teamTaskActive, teamTaskRunnable, type AgentTeam, type TaskUsage, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
 import { budgetNote, budgetRefusal, budgetRemaining } from "../teamBudget";
 import { addToLedger, compactionNeeded, memberQuota, observeUsage, readAccountPlan, requestCompaction, teamUsageReport, teamUsageView, usageSince, type UsageObservation } from "../teamUsage";
 import { agentTeamFinishTask, agentTeamPublishUsage } from "../teamApi";
@@ -16,7 +16,7 @@ import { useCodexChat } from "../hooks/useCodexChat";
 import { useTrexChat } from "../hooks/useTrexChat";
 import { ChatPanel, type ChatViewProps } from "./ChatView";
 import AgentTeamToolbar from "./AgentTeamToolbar";
-import { agentPermissionLabel, defaultAgentPermission } from "../agentPermissions";
+import { defaultAgentPermission } from "../agentPermissions";
 import { chatTasks, teamTasks } from "../chatTasks";
 import { INBOX_WAKE, messageQueueId } from "../messageQueue";
 import "./AgentRoomView.css";
@@ -65,12 +65,14 @@ export default function AgentTeamView(props: Props) {
   const opening = useRef<string | null>(null);
   const observed = useRef(new Map<string, UsageObservation>());
   const compactions = useRef(new Map<string, { at: number; usage: ChatState["usage"]; started: boolean }>());
+  /** Members whose live session already received the full role block in this epoch (and its native conversation). */
+  const briefings = useRef(new Map<string, { sessionId: string | null }>());
   const publishedUsage = useRef({ text: "", at: 0 });
   const [accountPlans, setAccountPlans] = useState<Record<string, PlanUsage | null>>({});
   const plansRef = useRef(accountPlans); plansRef.current = accountPlans;
   if (epoch.current !== team.epoch) {
     epoch.current = team.epoch; sessionsRef.current = {}; attempt.current.clear(); masterCompletion.current = null;feedback.current=null;waitingReports.current=false;
-    observed.current.clear(); compactions.current.clear(); publishedUsage.current = { text: "", at: 0 };
+    observed.current.clear(); compactions.current.clear(); briefings.current.clear(); publishedUsage.current = { text: "", at: 0 };
   }
   const change = useCallback((update:(value:AgentTeam)=>AgentTeam):void => {
     if (!mounted.current) return;
@@ -255,8 +257,7 @@ export default function AgentTeamView(props: Props) {
           const key=finished.map(task=>task.id+":"+task.status).sort().join("|");
           if(feedback.current!==key && current.current.phase!=="completed"){
             feedback.current=key;waitingReports.current=false;
-            const prompt="Han terminado las delegaciones pendientes de este ciclo. Llama una sola vez a trex_task_status sin taskId: devuelve juntos los informes nuevos. Evalúalos antes de cerrar el trabajo. No vuelvas a ejecutar estas tareas. Si hay fallos, decide y publica los pasos correctivos con claves nuevas. Tareas: "+finished.map(task=>task.id+" ("+task.key+", "+task.status+")").join("; ");
-            const accepted=await main.send(prompt,[],[],"Informes del equipo listos para revisión");
+            const accepted=await main.send(teamReportsPrompt(finished),[],[],"Informes del equipo listos para revisión");
             if(!isCurrent())return;
             if(accepted!==true){stop("No se pudo confirmar la entrega de los informes al principal. No se repetirán automáticamente.");return;}
           }
@@ -278,6 +279,8 @@ export default function AgentTeamView(props: Props) {
             if(needed){
               const started=requestCompaction(worker);
               compactions.current.set(queued.id,{at:Date.now(),usage:worker.state.usage,started});
+              // The summary may drop the role block: the next delegation carries it again.
+              if(started)briefings.current.delete(member.id);
               if(started){worker.notice("info","Contexto de "+member.name+(needed.percent!==null?" al "+Math.round(needed.percent)+" %":"")+": se resume la conversación antes de la nueva tarea.");continue;}
             }
           }else if(compaction.started && worker.state.usage===compaction.usage && Date.now()-compaction.at<45_000)continue;
@@ -305,16 +308,20 @@ export default function AgentTeamView(props: Props) {
         const context=planningContext(task.instruction,{sessionId:latest.current.sessionId,provider:current.current.master.agent.provider,
           profileId:current.current.master.agent.profileId,profileName:current.current.master.agent.profileName,title:"Delegación de "+current.current.master.name,
           projectId:latest.current.projectId??"",projectName:latest.current.projectName,cwd:latest.current.cwd});
-        const instructions="Realiza solo la tarea delegada. Tu función es "+TEAM_ROLES[member.role].name+". "+member.instructions
-          +(member.canWrite?" Comprueba el estado actual del proyecto antes de editar. Permisos elegidos: "+agentPermissionLabel(member.agent.provider,member.mode)+".":" No modifiques archivos, ejecutes implementaciones ni solicites permisos de escritura.")
-          +" Si la tarea tiene varios pasos, publica y actualiza tu propia lista con tus herramientas de tareas disponibles; marca cada paso completado solo tras verificarlo. La tarea asignada del equipo se actualiza según el resultado confirmado de tu delegación. No delegues a otros agentes. "
-          +TEAM_REPORT_INSTRUCTIONS+budgetNote(budgetRemaining(current.current,member.id));
-        context.content="# Función e instrucciones de esta delegación\n\n"+instructions+"\n\n"+context.content;
-        // Git context by role: reviewers get the diff, researchers nothing, the rest the status.
+        // The full role block once per live session; later delegations get a one-line reminder.
+        const briefed=!teamRoleBlockNeeded(briefings.current.get(member.id),worker.state.sessionId);
+        const budget=budgetNote(budgetRemaining(current.current,member.id));
+        if(!briefed)context.content="# Función e instrucciones de esta delegación\n\n"+teamRoleBlock(member)+budget+"\n\n"+context.content;
+        // Git context by role: reviewers get the status and a per-file summary, researchers nothing, the rest the status.
         const prepared=await prepareHandoff(context,{git:teamGitSnapshot(member)});
         if(!isCurrent() || attempt.current.get(member.id)!==issued)return;
-        const accepted=await worker.send(buildHandoffPrompt(prepared,"Realiza únicamente la tarea y función recibidas. Respeta sus restricciones y entrega un informe final breve y verificable."),[],[],"Delegación de "+current.current.master.name+"\n\n"+task.instruction);
+        const accepted=await worker.send(buildHandoffPrompt(prepared,briefed?teamRoleReminder(member)+budget
+          :"Realiza únicamente la tarea y función recibidas. Respeta sus restricciones y entrega un informe final breve y verificable."),[],[],"Delegación de "+current.current.master.name+"\n\n"+task.instruction);
         if(!isCurrent() || attempt.current.get(member.id)!==issued)return;
+        if(accepted===true){
+          const sessionId=sessionsRef.current[member.id]?.state.sessionId??worker.state.sessionId??null;
+          briefings.current.set(member.id,{sessionId:sessionId??briefings.current.get(member.id)?.sessionId??null});
+        }
         if(accepted!==true){
           await agentTeamFinish(binding,task.id,"uncertain","No se pudo confirmar la entrega. Revisa el historial; no se repetirá automáticamente.");
           stop("Entrega de una delegación sin confirmar. Revisa y reanuda el equipo.");return;
@@ -424,6 +431,7 @@ export default function AgentTeamView(props: Props) {
       const readOnly=!member.canWrite || historyOnly;
       const space=spaces.find(space=>space.clientId===team.id+"-"+member.id);
       const memberBrowser=space?{enabled:browser.enabled,clientId:space.clientId,profile:space.profile}:{...browser,enabled:false,clientId:team.id+"-"+member.id};
+      // Computer and accessibility control follow the user's settings only for members that can act.
       const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,desktopEnabled: !historyOnly && desktopEnabled, a11yEnabled: !historyOnly && a11yEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
         sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
         conversationId:member.conversationId,mode:readOnly?"plan":member.mode??defaultAgentPermission(member.agent.provider),

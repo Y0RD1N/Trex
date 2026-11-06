@@ -40,6 +40,9 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
   const tools = useRef<{ browser: boolean; available: Partial<Record<"github" | "blender" | "hyperframes", boolean>> | null; a11y?: boolean }>({ browser: false, available: null });
   /** The <trex_context> stays in the session's history: it is sent again only for a new/reloaded session or new content. */
   const contextSent = useRef<{ session: string; text: string } | null>(null);
+  /** Texto de los mensajes del usuario que repite un historial recuperado: si ya
+   *  trae este mismo contexto, no hace falta enviarlo otra vez. */
+  const replayedText = useRef("");
   const notice = (tone: "info" | "warn" | "error", value: string): void => { if (alive.current) dispatch({ type: "notice", id: localId(), tone, text: value }); };
   const isCurrent = (token: number): boolean => alive.current && generation.current === token;
   const cancelApprovals = async (): Promise<void> => {
@@ -68,6 +71,9 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       earlyUpdates.current.push({ sessionId: params.sessionId, update: u }); return;
     }
     if (params.sessionId !== session.current || usageReader.current.observe(params.sessionId, u)) return;
+    const content = record(u.content);
+    if (replay.current && u.sessionUpdate === "user_message_chunk" && content?.type === "text" && typeof content.text === "string" && replayedText.current.length < 4_000_000)
+      replayedText.current += content.text;
     if (u.sessionUpdate === "config_option_update") configs.current = acpConfigs(u.configOptions);
     dispatch({ type: "acpUpdate", sessionId: params.sessionId, update: u, turn: active.current?.id ?? null, replay: replay.current });
   };
@@ -143,6 +149,7 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       if (saved && capabilities?.loadSession !== true) throw new Error("Este componente no permite recuperar el historial. La conversación se conserva.");
       session.current = saved;
       replay.current = !!saved;
+      replayedText.current = "";
       if (saved) dispatch({ type: "acpHistoryStart", sessionId: saved });
       let result: Json;
       try { result = await native.rpc.call(saved ? "session/load" : "session/new", { cwd: current.cwd, mcpServers: servers, ...(saved ? { sessionId: saved } : {}) }); }
@@ -151,7 +158,11 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       const nativeId = saved ?? result.sessionId;
       if (!validAcpSessionId(nativeId)) throw new Error("Antigravity no devolvió un identificador de conversación válido.");
       session.current = nativeId; conversation.current = nativeId;
-      contextSent.current = null; // A new or reloaded session gets the context with its first prompt.
+      // A new session gets the context with its first prompt. A reloaded one only if its history
+      // does not already carry this same context (it is compared again when the first prompt goes out).
+      const replayed = [...replayedText.current.matchAll(/<trex_context>\n[\s\S]*?\n<\/trex_context>/g)].pop()?.[0];
+      contextSent.current = saved && replayed ? { session: nativeId, text: replayed } : null;
+      replayedText.current = "";
       tier.current = antigravityTier(result);
       configs.current = acpConfigs(result.configOptions); const availableModes = acpModes(result.modes); setModes(availableModes);
       dispatch({ type: "acpReady", sessionId: nativeId, result, history: !!saved });

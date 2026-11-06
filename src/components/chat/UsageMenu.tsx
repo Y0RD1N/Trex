@@ -5,7 +5,7 @@ import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { accountUsageWindows, headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
 import DropdownMenu from "../DropdownMenu";
 import { AlertIcon, CloseIcon, RefreshIcon } from "../Icons";
-import { cacheReadTokens, newTokens, type ApiUsage } from "../../tokenUsage";
+import { cacheReadTokens, newTokenParts, newTokens, type ApiUsage } from "../../tokenUsage";
 import { ContextDetails } from "./ContextMeter";
 import { PlanWindows } from "./PlanMeter";
 import "./UsageMenu.css";
@@ -72,7 +72,11 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
   const chatTokens = newTokens(apiUsage);
   const cachedTokens = cacheReadTokens(apiUsage);
   const cacheNote = cachedTokens > 0 ? ` (+ ${cachedTokens.toLocaleString("es")} leídos de caché)` : "";
-  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens nuevos de este chat: ${chatTokens.toLocaleString("es")}${cacheNote}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
+  // Casi todo lo «nuevo» del primer turno es escribir en caché el prompt fijo del agente.
+  const parts = newTokenParts(apiUsage);
+  const partsNote = parts && parts.cacheWrite > 0
+    ? `\n  entrada ${parts.input.toLocaleString("es")} · escritura de caché ${parts.cacheWrite.toLocaleString("es")} · salida ${parts.output.toLocaleString("es")}` : "";
+  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens nuevos de este chat: ${chatTokens.toLocaleString("es")}${cacheNote}${partsNote}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
   const ringPercent = percent ?? (showPlan ? limiting.percent : 0);
   const ringLength = 2 * Math.PI * 5.5;
   const ringFilled = ringPercent > 0 ? Math.max(ringPercent, 4) : 0;

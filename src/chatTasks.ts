@@ -14,7 +14,9 @@ export const TASK_STATES: Record<TaskState, string> = { pending: "Pendiente", in
 
 /** Task tracking is independent of the chat's permissions or planning workflow. */
 export function taskInstructions(provider: AgentProvider): string {
-  const tools = provider === "trex" ? "update_plan" : `${MCP_TASK_TOOL} (plan:[{step,status}]; preferred over native ${provider === "claude" ? "TodoWrite or TaskCreate/TaskUpdate" : "update_plan"}, available even without it)`;
+  // Trex CLI ya pide la lista de tareas con update_plan y no marcar lo no verificado (su prompt de sistema).
+  if (provider === "trex") return "Skip task lists for simple questions or single actions and follow the user's tracking preferences; team workflows use their team-plan tools.";
+  const tools = `${MCP_TASK_TOOL} (plan:[{step,status}]; preferred over native ${provider === "claude" ? "TodoWrite or TaskCreate/TaskUpdate" : "update_plan"}, available even without it)`;
   return `For multi-step work, in ordinary chats too, publish a short task list before starting with ${tools} and keep it updated: in progress when you start a task, completed only after verifying its result, unfinished work pending. Skip lists for simple questions or single actions; follow the user's tracking preferences. Tracking needs no mode change, subagent or planning workflow; respect permissions and any team workflow (its team-plan tools for delegated work). If task tools are unavailable, say so; never claim a list was published.`;
 }
 

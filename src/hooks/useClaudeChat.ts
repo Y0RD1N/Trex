@@ -459,7 +459,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         const detection = detectedIntegrations(cwd);
         const available = detection instanceof Promise ? await whileCurrent(detection, startup.signal) : detection;
         const integrations = integrationContext(callbacks.current, { browser: !!browser, available, a11y: !!a11y });
-        const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations });
+        const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations,
+          rolePolicy: planningOnly ? callbacks.current.planningInstruction : null });
         launchGuidanceRef.current = { integrations, appended: flags.includes("--append-system-prompt") };
         if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
           && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
@@ -620,7 +621,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const available = detection instanceof Promise ? await whileCurrent(detection, request.signal) : detection;
       const integrations = integrationContext(callbacks.current, { browser: !!browser, available, a11y: !!a11y });
       const chatFlags = claudeChatFlags(profileArgs, point ? current.sessionId : null,
-        { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations });
+        { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations, rolePolicy: planningOnly ? callbacks.current.planningInstruction : null });
       launchGuidanceRef.current = { integrations, appended: chatFlags.includes("--append-system-prompt") };
       const flags = planningOnly ? claudePlanningFlags(chatFlags) : chatFlags;
       if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)

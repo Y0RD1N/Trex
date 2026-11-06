@@ -27,6 +27,9 @@ for(const provider of ["claude","codex","trex"]){
     const h=base.harness(t,provider,{planningOnly:true,mode:"plan",team:binding,teamConfig:config,planningInstruction:"Coordinate using the configured collaborators. Never implement directly.",model:"offline-model",effort:"max"});
     assert.equal(await h.session.send("Delegate implementation and review",[],[]),true);h.render();const spawn=h.spawns[0].request;
     if(provider==="claude"){
+      // The role policy travels in the system prompt and ExitPlanMode is withheld; plan mode stays.
+      assert.match(spawn.flags[spawn.flags.indexOf("--append-system-prompt")+1],/Coordinate using the configured collaborators\. Never implement directly\.$/);
+      assert.equal(spawn.flags[spawn.flags.indexOf("--disallowedTools")+1],"ExitPlanMode");assert.equal(spawn.flags[spawn.flags.lastIndexOf("--permission-mode")+1],"plan");
       const mcp=JSON.parse(spawn.flags[spawn.flags.indexOf("--mcp-config")+1]).mcpServers.trex_team;assert.equal(mcp.command,config.command);assert.deepEqual(mcp.args,config.args);assert.equal(mcp.timeout,1900000);assert.equal(spawn.env.CLAUDE_AUTO_BACKGROUND_TASKS,"0");
       assert.deepEqual(spawn.flags[spawn.flags.indexOf("--allowedTools")+1].split(","),["mcp__trex_team__trex_team_members","mcp__trex_team__trex_delegate_task","mcp__trex_team__trex_task_status","mcp__trex_team__trex_team_plan"]);
       const request={type:"control_request",request_id:"delegate-permission",request:{subtype:"can_use_tool",tool_name:"mcp__trex_team__trex_delegate_task",input:{memberId:"worker",taskKey:"key",task:"Implement"}}};h.line(request);h.render();const item=h.state.items.find(item=>item.kind==="permission"&&item.id==="delegate-permission");if(item)h.session.answer(item,true,false);

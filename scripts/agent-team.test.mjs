@@ -29,8 +29,8 @@ test("saved team text is redacted without altering model and account identity",(
   const raw=team();raw.master.instructions="api_key=AUDIT_FAKE_ONLY\nKeep constraints.";raw.error="access_token=AUDIT_FAKE_ONLY";
   const result=normalizeAgentTeam(raw);assert.ok(!JSON.stringify(result).includes("AUDIT_FAKE_ONLY"));assert.match(result.master.instructions,/Keep constraints/);assert.equal(result.master.agent.profileId,"claude");
 });
-test("team instructions name exact configured collaborators and stable task keys",()=>{
-  const value=teamInstruction(team());for(const name of ["implement","review","taskKey","trex_delegate_task","trex_team_plan"])assert.ok(value.includes(name));assert.equal(TEAM_TOOLS.length,4);
+test("team instructions name exact configured collaborators; stable task keys are a tool rule",()=>{
+  const value=teamInstruction(team());for(const name of ["implement","review","trex_team"])assert.ok(value.includes(name));assert.equal(TEAM_TOOLS.length,4);
 });
 test("three providers can share native IDs without crossing permission ownership",()=>{
   const t=team(), members=[t.master,...t.workers];

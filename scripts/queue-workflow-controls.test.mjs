@@ -412,6 +412,7 @@ function roomHarness(t, scenario = {}) {
       notice: forbidden("room notice"), refreshSkills: forbidden("skills refresh") }];
   }));
   const props = { ...baseProps(), provider: "codex", onMessage: message => messages.push(message), onRoomChange: value => { room = value; } };
+  if (scenario.settings) props.settings = { ...props.settings, ...scenario.settings };
   let tree, panelProps;
   const renderRoom = () => { tree = roomHost.render(() => roomModule.default({ ...props, room })); };
   renderRoom();
@@ -424,7 +425,8 @@ function roomHarness(t, scenario = {}) {
   panelProps = find(tree, node => node.type === ChatPanel).props;
   const renderPanel = () => { tree = panelHost.render(() => ChatPanel(panelProps)); return tree; };
   renderPanel();
-  return { calls, messages, sessions, runtimeQueueIds, get panelProps(){return panelProps;}, get room(){return room;}, renderPanel,
+  const runtimeOptions = role => { renderRoom(); const options = find(tree, node => node.props?.role === role && !!node.props?.options).props.options; renderPanel(); return options; };
+  return { calls, messages, sessions, runtimeQueueIds, runtimeOptions, get panelProps(){return panelProps;}, get room(){return room;}, renderPanel,
     publish(role, state) {
       sessions[role] = { ...sessions[role], state };
       renderRoom();
@@ -441,6 +443,14 @@ function roomHarness(t, scenario = {}) {
 test("planning room participants bind distinct queues accepted by the native inbox", t => {
   const h = roomHarness(t);
   assert.deepEqual(h.runtimeQueueIds, ["t-offline-room-planner", "t-offline-room-executor"]);
+});
+
+test("computer and accessibility control follow the user's switches for every room role", t => {
+  // El planificador también puede observar la pantalla: la persona decide con sus interruptores.
+  const on = roomHarness(t, { settings: { desktopEnabled: true, a11yEnabled: true } });
+  for (const role of ["planner", "executor"]) assert.deepEqual([on.runtimeOptions(role).desktopEnabled, on.runtimeOptions(role).a11yEnabled], [true, true], role);
+  const off = roomHarness(t, { settings: { desktopEnabled: false, a11yEnabled: false } });
+  for (const role of ["planner", "executor"]) assert.deepEqual([off.runtimeOptions(role).desktopEnabled, off.runtimeOptions(role).a11yEnabled], [false, false], role);
 });
 
 test("newly configured room stays idle until a normal chat message starts its first planning cycle",async t=>{

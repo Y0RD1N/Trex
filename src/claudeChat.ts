@@ -48,7 +48,7 @@ export const claudeAppendsInstructions = (profileArgs: string | null): boolean =
 
 /** Opciones que convierten el CLI en un proceso de chat por stdin/stdout. */
 export function claudeChatFlags(profileArgs: string | null, conversationId: string | null,
-  choices: { model?: string | null; effort?: string | null; mode?: string | null; integrations?: IntegrationContext } = {}): string[] {
+  choices: { model?: string | null; effort?: string | null; mode?: string | null; integrations?: IntegrationContext; rolePolicy?: string | null } = {}): string[] {
   const flags = [
     "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--include-partial-messages",
@@ -61,8 +61,13 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
   // Instrucciones de la interfaz, salvo que el perfil ya defina las del sistema.
   // Van una sola vez: el servidor MCP de la app solo repite una línea (ver claudeInboxReply).
   if (claudeAppendsInstructions(profileArgs)) {
+    // Read-only team role (planning tab with its own policy): the policy travels in the system prompt and
+    // ExitPlanMode is withheld, so the report is the final message instead of a plan-mode exit the app denies.
+    // Plan mode and its permission checks stay; only the way out of plan mode is removed.
+    const rolePolicy = choices.rolePolicy?.replace(/\s+/g, " ").replace(/"/g, "'").trim() || null;
     flags.push("--append-system-prompt", [FILE_SHARING_INSTRUCTIONS, questionInstructions("claude"), INBOX_INSTRUCTIONS, taskInstructions("claude"),
-      integrationInstructions("claude", choices.integrations)].filter(Boolean).join(" "));
+      integrationInstructions("claude", choices.integrations), rolePolicy].filter(Boolean).join(" "));
+    if (rolePolicy) flags.push("--disallowedTools", "ExitPlanMode");
   }
   const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
   if (conversationId && !choosesConversation) flags.push("--resume", conversationId);

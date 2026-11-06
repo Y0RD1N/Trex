@@ -13,6 +13,8 @@ export const INBOX_SERVER = "trex_inbox";
 export const INBOX_DESCRIPTION = "Read user messages queued during this turn, in arrival order with images. Trex delivers them automatically when the turn ends, so call this only after a major step of long work; never poll. Apply each receipt once.";
 /** Stable text (no per-turn data) so providers can cache the prompt prefix. */
 export const INBOX_INSTRUCTIONS = "User messages sent while you work are queued; trex delivers them automatically as the next user turn when yours ends. In long multi-step work you may read them earlier with trex_read_messages (trex_inbox) after a major step; never poll, re-read an empty inbox or interrupt an operation to check. Treat them as user messages in arrival order; apply each receipt ID only once.";
+/** Trex CLI ya explica trex_read_messages en su propio prompt de sistema: aquí solo lo que añade la app. */
+export const TREX_INBOX_INSTRUCTIONS = "Queued user messages arrive as your next turn; read them earlier only after a major step, never poll, and apply each receipt ID once.";
 /**
  * Sentinel passed to `ChatSession.send` to continue with the queue. Providers
  * replace it with the claimed messages themselves (one request, no tool call);

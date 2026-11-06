@@ -87,6 +87,17 @@ export function newTokens(usage: ApiUsage | null | undefined): number | null {
   const extra = usage.totalTokens !== null && usage.totalTokens > counted ? usage.totalTokens - counted : 0;
   return input + output + write + extra;
 }
+/**
+ * De qué se componen los tokens nuevos: entrada sin caché, escritura de caché
+ * (casi todo el primer turno: el prompt fijo del agente y sus herramientas) y
+ * salida. null si el proveedor no los separa.
+ */
+export function newTokenParts(usage: ApiUsage | null | undefined): { input: number; cacheWrite: number; output: number } | null {
+  if (!usage || usage.inputTokens === null || usage.outputTokens === null) return null;
+  const read = usage.cachedReadTokens ?? 0;
+  const input = cacheReadsInInput(usage) ? Math.max(0, usage.inputTokens - read) : usage.inputTokens;
+  return { input, cacheWrite: usage.cachedWriteTokens ?? 0, output: usage.outputTokens };
+}
 /** Cache reads shown as a secondary detail next to the new tokens. */
 export const cacheReadTokens = (usage: ApiUsage | null | undefined): number => usage?.cachedReadTokens ?? 0;
 

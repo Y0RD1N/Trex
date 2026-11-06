@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { load } from "./ts-loader.mjs";
-const { newTokens, usageTotals, addUsageTotals, subtractUsageTotals, costLabel, claudeApiUsage, codexApiUsage, readApiUsage } = await load("tokenUsage");
+const { newTokens, newTokenParts, usageTotals, addUsageTotals, subtractUsageTotals, costLabel, claudeApiUsage, codexApiUsage, readApiUsage } = await load("tokenUsage");
 const { modelTier, suggestModel, suggestEffort, closestEffort } = await load("modelTiers");
 const { teamBudgetUse, budgetRefusal, budgetRemaining, budgetNote, raisedBudget, budgetExhausted } = await load("teamBudget");
 const { accountQuota, observeUsage, compactionNeeded, requestCompaction, teamUsageReport, teamUsageView, accountGroups } = await load("teamUsage");
@@ -15,6 +15,10 @@ const usage = newTokens => ({ newTokens, cacheReadTokens: 0, outputTokens: 0, co
 test("new tokens exclude cache reads for every provider's counting convention", () => {
   // Anthropic: cache reads/writes are apart from input; writes are new work.
   assert.equal(newTokens(claudeApiUsage({ input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 1000, cache_creation_input_tokens: 300 })), 330);
+  // El desglose de lo nuevo suma lo mismo y separa la escritura de caché.
+  assert.deepEqual(newTokenParts(claudeApiUsage({ input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 1000, cache_creation_input_tokens: 300 })), { input: 10, cacheWrite: 300, output: 20 });
+  assert.deepEqual(newTokenParts(readApiUsage({ inputTokens: 150, outputTokens: 30, totalTokens: 180, cachedReadTokens: 80 })), { input: 70, cacheWrite: 0, output: 30 }, "cache hits counted inside input are left out");
+  assert.equal(newTokenParts(null), null);
   // Codex: the cached part is already removed from input.
   assert.equal(newTokens(codexApiUsage({ inputTokens: 5000, cachedInputTokens: 4000, outputTokens: 300, totalTokens: 5300 })), 1300);
   // OpenAI-compatible (Trex CLI): cache hits are inside input and the total does not add them again.
@@ -131,7 +135,7 @@ test("browser access and Git context follow each role, with explicit overrides",
   assert.equal(teamBrowserDefault("custom", true), true);
   assert.equal(teamMemberUsesBrowser({ role: "research", canWrite: false, browser: false }), false);
   assert.equal(teamMemberUsesBrowser({ role: "coordinator", canWrite: false, browser: true }), true);
-  assert.deepEqual(["research", "review", "implementation", "fix", "custom", "validation"].map(role => teamGitSnapshot({ role })), ["none", "full", "status", "status", "status", "status"]);
+  assert.deepEqual(["research", "review", "implementation", "fix", "custom", "validation"].map(role => teamGitSnapshot({ role })), ["none", "stat", "status", "status", "status", "status"]);
 });
 
 test("saved teams keep budget, usage ledger and browser choices; older teams load unchanged", () => {
@@ -149,12 +153,12 @@ test("saved teams keep budget, usage ledger and browser choices; older teams loa
   assert.equal(normalizeAgentTeam(invalid), null);
 });
 
-test("coordinator guidance forbids polling and points to compact reports", () => {
+test("coordinator guidance points to the trex_team tools, which forbid polling (rules said once)", () => {
   const text = teamInstruction(team());
-  assert.match(text, /No consultes en bucle/);
-  assert.match(text, /una sola vez a trex_task_status sin taskId/);
-  assert.doesNotMatch(text, /waitMs:30000/);
-  assert.match(TEAM_COORDINATOR_POLICY, /Do not poll/);
+  assert.match(text, /descripciones de las herramientas trex_team/);
+  assert.doesNotMatch(text, /No consultes en bucle|waitMs/);
+  assert.doesNotMatch(TEAM_COORDINATOR_POLICY, /poll|dependsOn|wait:false/);
+  assert.match(TEAM_COORDINATOR_POLICY, /following their descriptions/);
 });
 
 test("the usage report for the coordinator tools carries budget, usage, context and quotas", () => {

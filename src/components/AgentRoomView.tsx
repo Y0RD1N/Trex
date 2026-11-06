@@ -553,11 +553,13 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
   return <div className="agent-room" ref={root}>
     {ROLES.map(role => {
       const participant = room[role], launch = participant.agent.launch;
+      const readOnly = (participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner")) === "plan";
       const options: ChatSessionOptions = {
+      // Computer and accessibility control follow the user's settings only for a role that can act.
       browser: browsers[role], desktopEnabled, a11yEnabled, integrations: props.settings.integrations, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort,
         mode: participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner"),
-        planningOnly: (participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner")) === "plan",
+        planningOnly: readOnly,
         ...(role === "executor" && participant.mode === "plan" ? { planningInstruction: TEAM_READER_POLICY } : {}), visible: props.visible,
         onRunning: () => latest.current.onRunning(latest.current.sessionId),
         onExit: (_id, code) => { if (ROLES.every(candidate => candidate === role || ["failed", "exited"].includes(sessionsRef.current[candidate]?.state.process ?? "starting"))) latest.current.onExit(latest.current.sessionId, code); },

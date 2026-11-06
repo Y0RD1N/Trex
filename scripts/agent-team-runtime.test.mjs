@@ -116,9 +116,9 @@ test("browsing members receive their own browser identity, the principal none, w
   h.complete("implement");h.publish();await h.tick();await h.tick();
   assert.deepEqual(h.delivered.map(item=>item.member),["implement","review"]);
   assert.equal(h.snapshot.tasks[0].status,"completed");assert.equal(h.snapshot.tasks[1].status,"running");
-  // Git context by role: the implementer gets branch/status, the reviewer the diff.
+  // Git context by role: the implementer gets branch/status, the reviewer also the per-file summary.
   const prepared=h.calls.filter(call=>call[0]==="prepare");
-  assert.deepEqual(prepared.map(call=>call[2]),[{git:"status"},{git:"full"}]);
+  assert.deepEqual(prepared.map(call=>call[2]),[{git:"status"},{git:"stat"}]);
 });
 test("Stop during context preparation prevents provider delivery and preserves uncertainty",async t=>{
   const wait=deferred(),h=harness(t,{prepareWait:wait});await h.settle();h.queue();await h.tick();h.panel().session.interrupt();wait.resolve();await h.settle();
@@ -172,7 +172,9 @@ test("saving a configured team never sends; first chat message carries roles, or
   assert.equal(await h.panel().session.send("Plan my idea",images,previews),true);h.publish();
   assert.equal(h.delivered.length,1);const sent=h.delivered[0];assert.equal(sent.member,"principal");assert.equal(sent.display,"Plan my idea");assert.deepEqual(sent.images,images);assert.deepEqual(sent.previews,previews);
   assert.match(sent.text,/1\. implement/);assert.match(sent.text,/2\. review/);assert.match(sent.text,/Plan my idea/);assert.equal(h.team.setup,null);
-  assert.deepEqual(h.calls.find(c=>c[0]==="prepare")[2],{git:"status"});assert.match(sent.text,/No consultes en bucle/);
+  assert.deepEqual(h.calls.find(c=>c[0]==="prepare")[2],{git:"status"});
+  // The delegation rules live in the trex_team tool descriptions, not in this message.
+  assert.match(sent.text,/descripciones de las herramientas trex_team/);assert.doesNotMatch(sent.text,/No consultes en bucle|Economía|dependsOn:\[\]/);
   const before=h.calls.filter(c=>c[0]==="prepare").length;await h.panel().session.send("One clarification",[],[]);assert.equal(h.calls.filter(c=>c[0]==="prepare").length,before);
 });
 test("inherited team context waits for an explicit message and is then consumed",async t=>{
@@ -217,7 +219,8 @@ test("a principal that returned early receives one review turn when parallel rep
   h.snapshot.plan=[{taskKey:"key",memberId:"implement",task:"Implement the specific change",dependsOn:[]},{taskKey:"review-key",memberId:"review",task:"Independent review",dependsOn:[]}];
   await h.tick();await h.tick();h.complete("principal","completed","Tasks queued");h.publish();await h.tick();
   assert.equal(h.team.phase,"running");h.complete("implement");h.complete("review","completed","Review verified");h.publish();await h.tick();await h.tick();
-  const feedback=h.delivered.filter(item=>item.member==="principal");assert.equal(feedback.length,1);assert.match(feedback[0].text,/trex_task_status/);assert.match(feedback[0].text,/review-task/);
+  const feedback=h.delivered.filter(item=>item.member==="principal");assert.equal(feedback.length,1);assert.match(feedback[0].text,/trex_task_status sin taskId/);assert.match(feedback[0].text,/review-key \(completed\)/);
+  assert.ok(feedback[0].text.length<200,"the reports prompt stays short: its rules are in trex_task_status");
   await h.tick();assert.equal(h.delivered.filter(item=>item.member==="principal").length,1);
 });
 
@@ -286,4 +289,38 @@ test("researchers receive no Git snapshot",async t=>{
   const h=harness(t,{readerWorkers:true,reviewRole:"research"});await h.settle();
   h.snapshot.tasks.push({id:"research-task",epoch:"epoch-1",key:"research-key",memberId:"review",instruction:"Investigate the API",status:"queued",report:null,createdAt:2,updatedAt:2});
   await h.tick();assert.deepEqual(h.calls.filter(call=>call[0]==="prepare").map(call=>call[2]),[{git:"none"}]);
+});
+
+test("the role block reaches each live member session once; later delegations get a one-line reminder",async t=>{
+  const h=harness(t);await h.settle();const s=h.sessions.implement;s.state={...s.state,sessionId:"conversation-a"};h.publish();
+  h.queue();await h.tick();assert.equal(h.delivered.length,1);
+  const first=h.delivered[0].text;assert.match(first,/# Función e instrucciones de esta delegación/);assert.match(first,/Verify the task/);assert.match(first,/500 palabras/);
+  const issue=(id)=>{s.state={...s.state,pendingTurns:0,items:[...s.state.items,{kind:"text",id:"reply-"+id,messageId:"answer-"+id,text:"Done "+id,final:true}],
+    lastCompletion:{id:"done-before-"+id,status:"completed",messageIds:["message-before-"+id],itemIds:["reply-"+id]}};h.publish();h.snapshot.tasks.push({id,epoch:h.team.epoch,key:id+"-key",memberId:"implement",instruction:"Follow-up "+id,status:"queued",report:null,createdAt:3,updatedAt:3});};
+  const reset=()=>{s.state={...s.state,pendingTurns:0,pendingMessageIds:[],items:[]};h.publish();};
+  issue("second");await h.tick();reset();await h.tick();
+  const second=h.delivered.at(-1);assert.equal(h.delivered.length,2);assert.match(second.text,/Follow-up second/);
+  assert.doesNotMatch(second.text,/# Función e instrucciones|Verify the task|Si la tarea tiene varios pasos/);
+  assert.match(second.text,/misma función \(Implementación\)/);assert.ok(second.text.length<first.length);
+  // A different native conversation (a new session) receives the block again.
+  issue("third");s.state={...s.state,sessionId:"conversation-b"};h.publish();await h.tick();reset();await h.tick();
+  assert.equal(h.delivered.length,3);assert.match(h.delivered[2].text,/# Función e instrucciones de esta delegación/);
+});
+test("a summarized member session and a new epoch receive the role block again",async t=>{
+  const h=harness(t);await h.settle();const s=h.sessions.implement,commands=[];
+  s.supportsCompact=true;s.runCommand=name=>{commands.push(name);return true;};
+  h.queue();await h.tick();assert.equal(h.delivered.length,1);
+  h.complete("implement");s.state={...s.state,pendingTurns:0,pendingMessageIds:[],items:[],historyCount:2,usage:{used:70000,window:100000,parts:[],reserve:null,total:null}};h.publish();
+  h.snapshot.tasks.push({id:"after",epoch:h.team.epoch,key:"after-key",memberId:"implement",instruction:"After compaction",status:"queued",report:null,createdAt:3,updatedAt:3});
+  await h.tick();assert.deepEqual(commands,["compact"]);
+  s.state={...s.state,usage:{used:8000,window:100000,parts:[],reserve:null,total:null}};h.publish();await h.tick();
+  assert.equal(h.delivered.length,2);assert.match(h.delivered[1].text,/After compaction/);assert.match(h.delivered[1].text,/# Función e instrucciones de esta delegación/);
+});
+test("computer and accessibility control follow the user's switches for every team member",async t=>{
+  // Son integraciones que elige la persona: ningún rol las pierde por defecto.
+  const h=harness(t,{settings:{desktopEnabled:true,a11yEnabled:true}});await h.settle();
+  const options=Object.fromEntries(nodes(h.tree).filter(node=>node.props?.options).map(node=>[node.props.id,[node.props.options.desktopEnabled,node.props.options.a11yEnabled]]));
+  assert.deepEqual(options,{principal:[true,true],implement:[true,true],review:[true,true]});
+  const off=harness(t,{settings:{desktopEnabled:false,a11yEnabled:false},masterMode:"acceptEdits"});await off.settle();
+  for(const node of nodes(off.tree).filter(node=>node.props?.options))assert.deepEqual([node.props.options.desktopEnabled,node.props.options.a11yEnabled],[false,false],"the user's switches decide");
 });
