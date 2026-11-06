@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { context, workspaceFile, safePath, Artifacts, sha256, childEnvironment, saveTarget, writeNewFile, safeFileName, updateSaveFolders } from '../worker/security.mjs';
+import { context, workspaceFile, safePath, Artifacts, sha256, childEnvironment, saveTarget, writeNewFile, safeFileName, updateSaveFolders, PORT_FALLBACK_CODES } from '../worker/security.mjs';
 import { tools, validateArguments, modelView } from '../worker/tools.mjs';
 import { BrowserService } from '../worker/browser.mjs';
 
@@ -165,4 +165,10 @@ test('downloads are saved only as new, non-hidden files inside the workspace or 
     assert.equal(fs.readFileSync(first,'utf8'),'1');
     assert.equal(fs.statSync(second).mode&0o111,0);
   }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('the broker takes a new port when its saved one is taken or reserved by Windows', () => {
+  // EACCES: Windows reserves port ranges for Hyper-V/WSL (often after a reboot) and the saved port may fall inside one.
+  for (const code of ['EADDRINUSE', 'EACCES', 'EADDRNOTAVAIL']) assert.ok(PORT_FALLBACK_CODES.has(code), code);
+  assert.ok(!PORT_FALLBACK_CODES.has('ENOENT'), 'other errors still stop the broker');
 });

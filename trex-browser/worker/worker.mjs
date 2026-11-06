@@ -7,7 +7,7 @@ import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { privateHome, privateHomePath, readPrivate, writePrivate, jsonRead, context, MAX_JSON, safePath, sha256, childEnvironment, readSaveFolders, updateSaveFolders } from './security.mjs';
+import { privateHome, privateHomePath, readPrivate, writePrivate, jsonRead, context, MAX_JSON, safePath, sha256, childEnvironment, readSaveFolders, updateSaveFolders, PORT_FALLBACK_CODES } from './security.mjs';
 import { BrowserService, detectBrowser, isObservation } from './browser.mjs';
 import { ensureSpaces, listSpaces } from './spaces.mjs';
 import { ENGINES, readEngine, detectShell } from './shell.mjs';
@@ -166,7 +166,9 @@ async function daemon(){
   // Reuse the previous port when free so agents' MCP URLs survive a broker restart.
   const portFile=file(home,'broker-port');const previous=Number(jsonRead(portFile,{}).port)||0;
   const listen=port=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',()=>{server.off('error',reject);resolve();});});
-  try{await listen(previous);}catch(e){if(!previous||e.code!=='EADDRINUSE')throw e;await listen(0);}
+  // The saved port may be taken (EADDRINUSE) or reserved by Windows since the last run
+  // (EACCES: Hyper-V/WSL excluded port ranges, often after a reboot): take a new one.
+  try{await listen(previous);}catch(e){if(!previous||!PORT_FALLBACK_CODES.has(e.code))throw e;await listen(0);}
   writePrivate(portFile,JSON.stringify({port:server.address().port}));
   writePrivate(file(home,'broker.json'),JSON.stringify({port:server.address().port,pid:process.pid,version:VERSION}));
   let closing=false;async function shutdown(){if(closing)return;closing=true;const killTimer=setTimeout(()=>process.exit(0),15000);killTimer.unref();await service.shutdown();server.close();for(const name of ['broker.json','broker.token','broker.lock']){safePath(file(home,name),{allowMissing:true});fs.rmSync(file(home,name),{force:true});}fs.closeSync(fd);process.exit(0);}

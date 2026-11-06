@@ -21,6 +21,10 @@ export function safePath(target, {allowMissing=false}={}) {
   return absolute;
 }
 /** Where the private home lives, without creating or validating anything. */
+/** Listen errors on the broker's saved port that mean "take another port":
+ * taken by another process, or reserved by Windows (excluded port ranges). */
+export const PORT_FALLBACK_CODES = new Set(['EADDRINUSE', 'EACCES', 'EADDRNOTAVAIL']);
+
 export function privateHomePath() {
   const stateRoot=process.platform==='linux'?(process.env.XDG_STATE_HOME&&path.isAbsolute(process.env.XDG_STATE_HOME)?process.env.XDG_STATE_HOME:path.join(os.homedir(),'.local/state')):null;
   return path.resolve(process.env.TREX_BROWSER_HOME||(stateRoot?path.join(stateRoot,'trex-browser'):path.join(process.env.LOCALAPPDATA||os.homedir(),process.platform==='win32'?'TrexBrowser':'.trex-browser')));
