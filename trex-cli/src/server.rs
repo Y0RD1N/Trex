@@ -1825,8 +1825,10 @@ impl Server {
                         Ok(output) => {
                             let output = if name.starts_with("browser_")
                                 || name.starts_with("mcp_")
-                                || name == "desktop_screenshot"
+                                || name.starts_with("desktop_")
                             {
+                                // Una captura (o lo que cambió tras una entrada) que el modelo no recibió no vale para actuar.
+                                let captured = output.get("content").and_then(Value::as_array).is_some_and(|items| items.iter().any(|item| item["type"] == "image"));
                                 let client_id = session
                                     .data
                                     .lock()
@@ -1839,7 +1841,7 @@ impl Server {
                                     output,
                                     json!({"toolName":name,"toolCallId":provider_id,"operationId":operation_id,"clientId":client_id}),
                                 )?;
-                                if name == "desktop_screenshot"
+                                if (name == "desktop_screenshot" || captured)
                                     && normalized["artifacts"]
                                         .as_array()
                                         .is_none_or(|items| items.is_empty())

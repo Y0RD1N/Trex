@@ -93,7 +93,21 @@ más que ve el modelo (más allá, el modelo la reduciría y las coordenadas ya 
 coincidirían). El resumen que acompaña a la imagen es una línea y el
 identificador de observación es corto (`o7`), porque el modelo lo copia en cada
 entrada. El control de computadora y el de accesibilidad son integraciones
-independientes: las instrucciones no presentan ninguno como preferido. Windows aplica un contexto DPI por hilo, que se restaura al terminar,
+independientes: las instrucciones no presentan ninguno como preferido.
+
+Tras cada entrada se espera a que la pantalla se asiente (`settleMs`, 350 ms
+por defecto) y se vuelve a capturar la misma zona a la misma escala. La
+respuesta trae solo lo que cambió: «No visible change» sin imagen, un recorte
+de la zona cambiada (con su posición en la captura) o, si cambió más de un 35 %,
+la captura entera. Además trae una observación nueva con las mismas
+coordenadas, así que el agente puede seguir sin pedir otra captura;
+`capture:"none"` mantiene el comportamiento anterior y `capture:"full"` pide
+siempre la captura entera. `desktop_actions` envía hasta 10 entradas en orden
+(clic en un campo, escribir, Enter…) en una sola llamada, valida todas antes de
+enviar ninguna, no escribe nunca si la ventana en primer plano cambió respecto
+a la observación (por ejemplo, porque el clic abrió un diálogo) y captura una
+sola vez al final. Las capturas y los resultados dicen el título de la ventana
+en primer plano. Windows aplica un contexto DPI por hilo, que se restaura al terminar,
 y normaliza el movimiento sobre el escritorio virtual; permite pantallas con
 orígenes negativos y evita usar el tamaño lógico de la pantalla principal.
 Se vuelve a comprobar la geometría antes de actuar. La normalización, el contexto

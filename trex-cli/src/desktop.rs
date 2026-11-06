@@ -92,6 +92,9 @@ struct Observation {
     monitor: u32,
     #[cfg(windows)]
     focus: Option<(usize, u32)>,
+    /// Lo que el modelo ha visto de esta zona (la última imagen entregada, con los
+    /// recortes ya aplicados): con qué se compara la pantalla tras una entrada.
+    frame: Option<Arc<image::RgbaImage>>,
 }
 #[derive(Default)]
 pub struct DesktopProvider {
@@ -108,7 +111,7 @@ pub fn guidance(read_only: bool) -> String {
     } else {
         "Input tools are available subject to the host agent's permission policy. Use their schemas for pointer motion, double clicks, gradual drag, vertical or horizontal scroll, typing and shortcuts."
     };
-    format!("Trex desktop controls the real computer with screenshots and real mouse and keyboard input; it is separate from the trex_browser project browser and from accessibility control. Start with desktop_screenshot (primary screen unless monitor is given; it says how many screens there are, desktop_monitors lists them) and check the screen and focus before input. Input coordinates are pixels of the latest screenshot image. For cheaper captures use region (screen pixels) or maxEdge. One observation serves up to 3 inputs within 30 seconds while the screen is unchanged; capture again after focus, layout or display changes. {permissions} Never claim an unadvertised capability; if unavailable, explain the diagnostic rather than silently switching control systems. Never automatically replay uncertain input. A desktop-control failure says nothing about Trex Browser, whose websites go through browser_navigate.")
+    format!("Trex desktop controls the real computer with screenshots and real mouse and keyboard input; it is separate from the trex_browser project browser and from accessibility control. Start with desktop_screenshot (primary screen unless monitor is given; it says how many screens there are, desktop_monitors lists them) and check the screen and focus before input. Input coordinates are pixels of the latest screenshot image. For cheaper captures use region (screen pixels) or maxEdge. After each input the result shows what changed (a crop of the changed area, the whole screenshot when much changed, or \"No visible change\") with a fresh observation, so another desktop_screenshot is rarely needed; capture:\"none\" skips it. desktop_actions sends several inputs in one call (click a field, type, press enter) and captures once at the end; it stops before typing if the foreground window changed. An observation serves up to 3 inputs within 30 seconds while the screen is unchanged. {permissions} Never claim an unadvertised capability; if unavailable, explain the diagnostic rather than silently switching control systems. Never automatically replay uncertain input. A desktop-control failure says nothing about Trex Browser, whose websites go through browser_navigate.")
 }
 
 impl ToolProvider for DesktopProvider {
@@ -138,12 +141,13 @@ impl ToolProvider for DesktopProvider {
             ("desktop_monitors", "List screens with physical-pixel origins, dimensions and IDs. Windows screenshots can select a monitor by ID.", json!({}), vec![]),
             ("desktop_wait", "Wait for the desktop to settle, in milliseconds (0 to 10000). Capture again afterwards before input.", json!({"milliseconds":{"type":"integer","minimum":0,"maximum":10000}}), vec!["milliseconds"]),
             ("desktop_screenshot", "Capture a screen (the primary unless monitor is given; the result says how many there are), downscaled to 1280 px on its long edge. region {x,y,width,height} in screen pixels captures only that area, sharper and cheaper. maxEdge (256-1568) sets the long edge: 768 px costs about 440 tokens, enough to check a change. fullResolution:true keeps up to 1568 px, the most a model sees. The observation serves up to 3 inputs within 30 s while the screen is unchanged.", json!({"monitor":{"type":"integer","minimum":0},"region":{"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":16},"height":{"type":"integer","minimum":16}},"required":["x","y","width","height"],"additionalProperties":false},"maxEdge":{"type":"integer","minimum":256,"maximum":1568},"fullResolution":{"type":"boolean"}}), vec![]),
-            ("desktop_move", "Move the pointer to a point in the latest screenshot without clicking. Coordinates are screenshot pixels.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0}}), vec!["observation","x","y"]),
-            ("desktop_click", "Click a point in the latest desktop screenshot. Coordinates are screenshot pixels. Use clicks:2 for a double click.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"type":"string","enum":["left","right","middle"]},"clicks":{"type":"integer","minimum":1,"maximum":2}}), vec!["observation","x","y"]),
-            ("desktop_scroll", "Scroll at a point in the latest screenshot. Positive amount scrolls down (vertical) or right (horizontal).", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"amount":{"type":"integer","minimum":-20,"maximum":20},"axis":{"type":"string","enum":["vertical","horizontal"]}}), vec!["observation","x","y","amount"]),
-            ("desktop_type", "Type text into the currently focused control. Verify focus from the latest screenshot (a click just made on the field counts).", json!({"observation":{"type":"string"},"text":{"type":"string","maxLength":4000}}), vec!["observation","text"]),
-            ("desktop_key", "Press a key or keyboard shortcut in the focused control. Keys: enter, tab, escape, backspace, delete, arrows, home, end, pageup, pagedown, space, or one character. Modifiers: ctrl, alt, shift, meta.", json!({"observation":{"type":"string"},"key":{"type":"string"},"modifiers":{"type":"array","maxItems":4,"items":{"type":"string","enum":["ctrl","alt","shift","meta"]}}}), vec!["observation","key"]),
-            ("desktop_drag", "Drag between points in the latest desktop screenshot using the left button.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"toX":{"type":"integer","minimum":0},"toY":{"type":"integer","minimum":0}}), vec!["observation","x","y","toX","toY"]),
+            ("desktop_actions", "Send up to 10 inputs in order in one call, with one capture of what changed at the end. Each action is {type: click|move|scroll|drag|type|key, ...the fields of that tool, without observation}, e.g. [{\"type\":\"click\",\"x\":40,\"y\":80},{\"type\":\"type\",\"text\":\"Ana\"},{\"type\":\"key\",\"key\":\"enter\"}]. Coordinates are pixels of the observation. Stops before typing if the foreground window changed.", with_after(json!({"observation":{"type":"string"},"actions":{"type":"array","minItems":1,"maxItems":10,"items":{"type":"object","properties":{"type":{"type":"string","enum":["click","move","scroll","drag","type","key"]}},"required":["type"]}}})), vec!["observation","actions"]),
+            ("desktop_move", "Move the pointer to a point in the latest screenshot without clicking. Coordinates are screenshot pixels.", with_after(json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0}})), vec!["observation","x","y"]),
+            ("desktop_click", "Click a point in the latest desktop screenshot. Coordinates are screenshot pixels. Use clicks:2 for a double click.", with_after(json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"type":"string","enum":["left","right","middle"]},"clicks":{"type":"integer","minimum":1,"maximum":2}})), vec!["observation","x","y"]),
+            ("desktop_scroll", "Scroll at a point in the latest screenshot. Positive amount scrolls down (vertical) or right (horizontal).", with_after(json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"amount":{"type":"integer","minimum":-20,"maximum":20},"axis":{"type":"string","enum":["vertical","horizontal"]}})), vec!["observation","x","y","amount"]),
+            ("desktop_type", "Type text into the currently focused control. Verify focus from the latest screenshot (a click just made on the field counts).", with_after(json!({"observation":{"type":"string"},"text":{"type":"string","maxLength":4000}})), vec!["observation","text"]),
+            ("desktop_key", "Press a key or keyboard shortcut in the focused control. Keys: enter, tab, escape, backspace, delete, arrows, home, end, pageup, pagedown, space, or one character. Modifiers: ctrl, alt, shift, meta.", with_after(json!({"observation":{"type":"string"},"key":{"type":"string"},"modifiers":{"type":"array","maxItems":4,"items":{"type":"string","enum":["ctrl","alt","shift","meta"]}}})), vec!["observation","key"]),
+            ("desktop_drag", "Drag between points in the latest desktop screenshot using the left button.", with_after(json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"toX":{"type":"integer","minimum":0},"toY":{"type":"integer","minimum":0}})), vec!["observation","x","y","toX","toY"]),
         ];
         specs.into_iter().filter(|(name,_,_,_)| mode != "plan" || read_only(name)).map(|(name,description,properties,required)| json!({"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
     }
@@ -196,6 +200,13 @@ impl ToolProvider for DesktopProvider {
     }
 }
 
+/// Opciones comunes de las entradas: qué capturar después y cuánto esperar antes.
+fn with_after(mut properties: Value) -> Value {
+    properties["capture"] = json!({"type":"string","enum":["changed","full","none"]});
+    properties["settleMs"] = json!({"type":"integer","minimum":0,"maximum":3000});
+    properties
+}
+
 fn validate_fields(input: &Value, allowed: &[&str], required: &[&str]) -> Result<()> {
     let obj = input.as_object().context("expected an object")?;
     ensure!(
@@ -238,6 +249,7 @@ pub(crate) const SCREENSHOT_FIELDS: &[&str] = &["monitor", "region", "fullResolu
 /// A capture prepared for a model: cropped to a region, downscaled, PNG.
 pub(crate) struct Framed {
     pub png: Vec<u8>,
+    pub pixels: image::RgbaImage,
     pub width: u32,
     pub height: u32,
     /// x, y, width, height of the captured area in screen pixels.
@@ -280,6 +292,85 @@ impl Framed {
             "scale":self.scale(),"coordinateSpace":"imagePixels","uses":OBSERVATION_USES,"expiresInMs":30000})
     }
 }
+/// Una imagen en PNG.
+fn png(pixels: &image::RgbaImage) -> Result<Vec<u8>> {
+    let mut bytes = Cursor::new(Vec::new());
+    pixels.write_to(&mut bytes, image::ImageFormat::Png)?;
+    Ok(bytes.into_inner())
+}
+
+/// Qué capturar después de una entrada.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum AfterCapture {
+    None,
+    Changed,
+    Full,
+}
+/// Espera por defecto para que la pantalla se asiente antes de capturar.
+const SETTLE_MS: u64 = 350;
+/// Por encima de este porcentaje de la imagen, se entrega la captura entera.
+const LARGE_CHANGE_PERCENT: u64 = 35;
+/// Entradas de una sola llamada a desktop_actions.
+const MAX_ACTIONS: usize = 10;
+const INPUT_TOOLS: [&str; 6] = ["desktop_click", "desktop_move", "desktop_scroll", "desktop_drag", "desktop_type", "desktop_key"];
+
+pub(crate) fn after_options(input: &Value) -> Result<(AfterCapture, u64)> {
+    let capture = match input.get("capture").map(Value::as_str) {
+        None | Some(Some("changed")) => AfterCapture::Changed,
+        Some(Some("full")) => AfterCapture::Full,
+        Some(Some("none")) => AfterCapture::None,
+        _ => bail!("capture must be changed, full or none"),
+    };
+    let settle = match input.get("settleMs") {
+        None => SETTLE_MS,
+        Some(value) => value.as_u64().filter(|ms| *ms <= 3000).context("settleMs must be 0..3000")?,
+    };
+    Ok((capture, settle))
+}
+
+/// Recuadro (x, y, ancho, alto en píxeles de la imagen) de lo que cambió entre
+/// dos fotogramas de la misma zona; None si nada cambió de forma visible.
+pub(crate) fn changed_box(before: &image::RgbaImage, after: &image::RgbaImage) -> Option<[u32; 4]> {
+    if before.dimensions() != after.dimensions() {
+        return Some([0, 0, after.width(), after.height()]);
+    }
+    let (mut left, mut top, mut right, mut bottom, mut count) = (u32::MAX, u32::MAX, 0, 0, 0u32);
+    for (x, y, pixel) in after.enumerate_pixels() {
+        let old = before.get_pixel(x, y);
+        if pixel.0.iter().zip(old.0.iter()).take(3).any(|(a, b)| a.abs_diff(*b) > 32) {
+            (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
+            count += 1;
+        }
+    }
+    (count >= 3).then(|| [left, top, right - left + 1, bottom - top + 1])
+}
+
+/// Un recuadro con margen, al menos de 32×32 y dentro de la imagen.
+pub(crate) fn padded(area: [u32; 4], width: u32, height: u32) -> [u32; 4] {
+    const PAD: u32 = 12;
+    let grow = |start: u32, size: u32, limit: u32| {
+        let wanted = (size + 2 * PAD).max(32).min(limit);
+        let start = start.saturating_sub(PAD + (wanted.saturating_sub(size + 2 * PAD)) / 2);
+        let start = start.min(limit - wanted);
+        (start, wanted)
+    };
+    let (x, w) = grow(area[0], area[2], width);
+    let (y, h) = grow(area[1], area[3], height);
+    [x, y, w, h]
+}
+
+/// La misma zona y escala que una observación, capturada de nuevo.
+fn reframe(image: image::DynamicImage, region: [u32; 4], width: u32, height: u32) -> Result<image::RgbaImage> {
+    let (screen_width, screen_height) = image.dimensions();
+    ensure!(
+        region[0] + region[2] <= screen_width && region[1] + region[3] <= screen_height,
+        "the screen changed size"
+    );
+    let image = if region == [0, 0, screen_width, screen_height] { image } else { image.crop_imm(region[0], region[1], region[2], region[3]) };
+    let image = if image.dimensions() == (width, height) { image } else { image.resize_exact(width, height, image::imageops::FilterType::CatmullRom) };
+    Ok(image.to_rgba8())
+}
+
 pub(crate) fn frame_point(x: u64, y: u64, width: u32, height: u32, region: [u32; 4]) -> Result<(u32, u32)> {
     ensure!(
         x < u64::from(width) && y < u64::from(height),
@@ -359,10 +450,10 @@ pub(crate) fn frame(
         image = image.resize_exact(w, h, image::imageops::FilterType::CatmullRom);
     }
     let (width, height) = image.dimensions();
-    let mut bytes = Cursor::new(Vec::new());
-    image.write_to(&mut bytes, image::ImageFormat::Png)?;
+    let pixels = image.to_rgba8();
     Ok(Framed {
-        png: bytes.into_inner(),
+        png: png(&pixels)?,
+        pixels,
         width,
         height,
         region,
@@ -471,6 +562,7 @@ fn run(
             monitor,
             #[cfg(windows)]
             focus: captured_focus,
+            frame: Some(Arc::new(framed.pixels.clone())),
         });
         // Cuántas pantallas hay: así no hace falta preguntar antes con desktop_monitors.
         let screens = monitors().ok().and_then(|list| list["monitors"].as_array().map(Vec::len)).unwrap_or(1);
@@ -481,31 +573,45 @@ fn run(
         structured["originY"] = json!(y);
         structured["monitor"] = json!(monitor);
         return Ok(
-            json!({"content":[{"type":"text","text":framed.summary(&token, monitor, screens)},{"type":"image","mimeType":"image/png","data":STANDARD.encode(&framed.png)}],"structuredContent":structured}),
+            json!({"content":[{"type":"text","text":format!("{}{}", framed.summary(&token, monitor, screens), foreground_note())},{"type":"image","mimeType":"image/png","data":STANDARD.encode(&framed.png)}],"structuredContent":structured}),
         );
     }
-    let (allowed, required): (&[&str], &[&str]) = match name {
-        "desktop_click" => (
-            &["observation", "x", "y", "button", "clicks"],
-            &["observation", "x", "y"],
-        ),
-        "desktop_scroll" => (
-            &["observation", "x", "y", "amount", "axis"],
-            &["observation", "x", "y", "amount"],
-        ),
-        "desktop_move" => (&["observation", "x", "y"], &["observation", "x", "y"]),
-        "desktop_drag" => (
-            &["observation", "x", "y", "toX", "toY"],
-            &["observation", "x", "y", "toX", "toY"],
-        ),
-        "desktop_type" => (&["observation", "text"], &["observation", "text"]),
-        "desktop_key" => (
-            &["observation", "key", "modifiers"],
-            &["observation", "key"],
-        ),
-        _ => bail!("unknown desktop tool"),
+    // Una entrada suelta o varias (desktop_actions): todas se validan antes de enviar nada.
+    let common = ["observation", "capture", "settleMs"];
+    let steps: Vec<(&str, Value)> = if name == "desktop_actions" {
+        validate_fields(input, &["observation", "actions", "capture", "settleMs"], &["observation", "actions"])?;
+        let list = input["actions"]
+            .as_array()
+            .filter(|list| (1..=MAX_ACTIONS).contains(&list.len()))
+            .with_context(|| format!("actions must list 1 to {MAX_ACTIONS} inputs"))?;
+        list.iter()
+            .map(|action| {
+                let kind = action["type"].as_str().context("each action needs a type")?;
+                let tool = INPUT_TOOLS
+                    .iter()
+                    .copied()
+                    .find(|tool| tool.strip_prefix("desktop_") == Some(kind))
+                    .with_context(|| format!("unknown action type {kind}"))?;
+                let mut fields = action.clone();
+                fields.as_object_mut().context("each action must be an object")?.remove("type");
+                Ok((tool, fields))
+            })
+            .collect::<Result<_>>()?
+    } else {
+        let tool = INPUT_TOOLS.iter().copied().find(|tool| *tool == name).context("unknown desktop tool")?;
+        let mut fields = input.clone();
+        let object = fields.as_object_mut().context("expected an object")?;
+        ensure!(object.contains_key("observation"), "missing desktop argument");
+        for key in common {
+            object.remove(key);
+        }
+        vec![(tool, fields)]
     };
-    validate_fields(input, allowed, required)?;
+    for (tool, fields) in &steps {
+        let (allowed, required) = input_fields(tool);
+        validate_fields(fields, allowed, required)?;
+    }
+    let (after, settle) = after_options(input)?;
     let observation = state
         .as_ref()
         .context("take a fresh screenshot first")?
@@ -527,76 +633,10 @@ fn run(
         "another agent changed the desktop; take a fresh screenshot"
     );
     // Validate every argument before connecting to the desktop or consuming the token.
-    let mut points = None;
-    let mut end = None;
-    let mut button = Button::Left;
-    let mut amount = 0;
-    let mut axis = Axis::Vertical;
-    let mut clicks = 1;
-    let mut typed = "";
-    let mut pressed_key = Key::Return;
-    let mut modifiers = Vec::new();
-    if matches!(
-        name,
-        "desktop_click" | "desktop_scroll" | "desktop_drag" | "desktop_move"
-    ) {
-        points = Some(point(input, "x", "y", &observation)?);
-    }
-    if name == "desktop_drag" {
-        end = Some(point(input, "toX", "toY", &observation)?);
-    }
-    if name == "desktop_click" {
-        button = match input.get("button").map(|v| v.as_str()) {
-            None | Some(Some("left")) => Button::Left,
-            Some(Some("right")) => Button::Right,
-            Some(Some("middle")) => Button::Middle,
-            _ => bail!("invalid button"),
-        };
-        if let Some(value) = input.get("clicks") {
-            clicks = value
-                .as_u64()
-                .filter(|n| (1..=2).contains(n))
-                .context("clicks must be 1 or 2")?;
-        }
-    }
-    if name == "desktop_scroll" {
-        amount = input["amount"].as_i64().context("invalid amount")?;
-        ensure!(
-            (-20..=20).contains(&amount) && amount != 0,
-            "invalid scroll amount"
-        );
-        axis = match input.get("axis").and_then(Value::as_str) {
-            Some("horizontal") => Axis::Horizontal,
-            Some("vertical") => Axis::Vertical,
-            None if !input.as_object().unwrap().contains_key("axis") => Axis::Vertical,
-            _ => bail!("invalid scroll axis"),
-        };
-    }
-    if name == "desktop_type" {
-        typed = input["text"].as_str().context("invalid text")?;
-        ensure!(
-            !typed.is_empty() && typed.len() <= 4000 && !typed.contains('\0'),
-            "invalid text"
-        );
-    }
-    if name == "desktop_key" {
-        pressed_key = key(input["key"].as_str().context("invalid key")?)?;
-        if let Some(raw) = input.get("modifiers") {
-            let list = raw.as_array().context("invalid modifiers")?;
-            ensure!(list.len() <= 4, "too many modifiers");
-            for item in list {
-                let modifier = match item.as_str() {
-                    Some("ctrl") => Key::Control,
-                    Some("alt") => Key::Alt,
-                    Some("shift") => Key::Shift,
-                    Some("meta") => Key::Meta,
-                    _ => bail!("invalid modifier"),
-                };
-                ensure!(!modifiers.contains(&modifier), "duplicate modifier");
-                modifiers.push(modifier);
-            }
-        }
-    }
+    let acts = steps
+        .iter()
+        .map(|(tool, fields)| parse_act(tool, fields, &observation))
+        .collect::<Result<Vec<_>>>()?;
     check_platform()?;
     #[cfg(windows)]
     {
@@ -608,7 +648,7 @@ fn run(
             observation.screen.0,
             observation.screen.1,
         )?;
-        if matches!(name, "desktop_key" | "desktop_type") {
+        if acts[0].keyboard() {
             ensure!(
                 observation.focus.is_some() && windows::focus() == observation.focus,
                 "foreground window changed; take a fresh screenshot before typing"
@@ -622,77 +662,268 @@ fn run(
     *state = None;
     let lease = lease.as_mut().context("desktop lease unavailable")?;
     lease.advance()?;
-    let result = (|| -> Result<()> {
-        if let Some((x, y)) = points {
-            move_pointer(&mut enigo, x, y)?;
+    let mut stopped = None;
+    for (index, act) in acts.iter().enumerate() {
+        // Nunca se escribe en otra ventana que la de la observación (un diálogo
+        // que se abrió por el clic anterior, por ejemplo).
+        #[cfg(windows)]
+        if index > 0 && act.keyboard() && windows::focus() != observation.focus {
+            stopped = Some(index);
+            break;
         }
-        ensure!(!cancel.is_cancelled(), "cancelled after pointer motion");
-        match name {
-            "desktop_move" => (),
-            "desktop_click" => {
-                for _ in 0..clicks {
-                    ensure!(!cancel.is_cancelled(), "cancelled during click");
-                    enigo.button(button, Direction::Click)?;
+        if perform(&mut enigo, act, cancel).is_err() {
+            return Err(DesktopUncertain.into());
+        }
+        if index + 1 < acts.len() {
+            std::thread::sleep(Duration::from_millis(80));
+        }
+    }
+    let sent = stopped.unwrap_or(acts.len());
+    let head = match stopped {
+        Some(index) => format!(
+            "Stopped before input {} ({}): the foreground window changed. Inputs 1-{index} were sent; do not repeat them.",
+            index + 1,
+            steps[index].0.trim_start_matches("desktop_")
+        ),
+        None if acts.len() > 1 => format!("{sent} inputs sent."),
+        None => "Input sent.".to_owned(),
+    };
+    if after == AfterCapture::None {
+        // Our own input advanced the shared generation; another agent's would not match.
+        let remaining = if acts.len() > 1 || stopped.is_some() { 0 } else { observation.uses.saturating_sub(1) };
+        if remaining > 0 {
+            *state = Some(Observation {
+                uses: remaining,
+                generation: lease.generation()?,
+                ..observation
+            });
+        }
+        let mut result = input_result(remaining);
+        if acts.len() > 1 {
+            result["message"] = json!(format!("{head} {}", result["message"].as_str().unwrap_or("")));
+        }
+        return Ok(result);
+    }
+    let (text, image, mut structured) = after_capture(&observation, after, settle, lease, cancel, &mut state)?;
+    structured["sent"] = json!(sent);
+    let mut content = vec![json!({"type":"text","text":format!("{head} {text}")})];
+    if let Some(bytes) = image {
+        content.push(json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(bytes)}));
+    }
+    Ok(json!({"content":content,"structuredContent":structured,"isError":stopped.is_some()}))
+}
+
+/// Campos de cada entrada (sin la observación ni las opciones de captura).
+fn input_fields(tool: &str) -> (&'static [&'static str], &'static [&'static str]) {
+    match tool {
+        "desktop_click" => (&["x", "y", "button", "clicks"], &["x", "y"]),
+        "desktop_scroll" => (&["x", "y", "amount", "axis"], &["x", "y", "amount"]),
+        "desktop_move" => (&["x", "y"], &["x", "y"]),
+        "desktop_drag" => (&["x", "y", "toX", "toY"], &["x", "y", "toX", "toY"]),
+        "desktop_type" => (&["text"], &["text"]),
+        _ => (&["key", "modifiers"], &["key"]),
+    }
+}
+
+/// Una entrada ya validada, en píxeles de pantalla.
+enum Act {
+    Move((i32, i32)),
+    Click((i32, i32), Button, u64),
+    Scroll((i32, i32), i32, Axis),
+    Drag((i32, i32), (i32, i32)),
+    Type(String),
+    Key(Key, Vec<Key>),
+}
+impl Act {
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn keyboard(&self) -> bool {
+        matches!(self, Act::Type(_) | Act::Key(..))
+    }
+}
+
+fn parse_act(tool: &str, input: &Value, observation: &Observation) -> Result<Act> {
+    Ok(match tool {
+        "desktop_move" => Act::Move(point(input, "x", "y", observation)?),
+        "desktop_click" => {
+            let button = match input.get("button").map(|v| v.as_str()) {
+                None | Some(Some("left")) => Button::Left,
+                Some(Some("right")) => Button::Right,
+                Some(Some("middle")) => Button::Middle,
+                _ => bail!("invalid button"),
+            };
+            let clicks = match input.get("clicks") {
+                None => 1,
+                Some(value) => value.as_u64().filter(|n| (1..=2).contains(n)).context("clicks must be 1 or 2")?,
+            };
+            Act::Click(point(input, "x", "y", observation)?, button, clicks)
+        }
+        "desktop_scroll" => {
+            let amount = input["amount"].as_i64().context("invalid amount")?;
+            ensure!((-20..=20).contains(&amount) && amount != 0, "invalid scroll amount");
+            let axis = match input.get("axis").map(|v| v.as_str()) {
+                None | Some(Some("vertical")) => Axis::Vertical,
+                Some(Some("horizontal")) => Axis::Horizontal,
+                _ => bail!("invalid scroll axis"),
+            };
+            Act::Scroll(point(input, "x", "y", observation)?, amount as i32, axis)
+        }
+        "desktop_drag" => Act::Drag(point(input, "x", "y", observation)?, point(input, "toX", "toY", observation)?),
+        "desktop_type" => {
+            let typed = input["text"].as_str().context("invalid text")?;
+            ensure!(!typed.is_empty() && typed.len() <= 4000 && !typed.contains('\0'), "invalid text");
+            Act::Type(typed.to_owned())
+        }
+        _ => {
+            let pressed = key(input["key"].as_str().context("invalid key")?)?;
+            let mut modifiers = Vec::new();
+            if let Some(raw) = input.get("modifiers") {
+                let list = raw.as_array().context("invalid modifiers")?;
+                ensure!(list.len() <= 4, "too many modifiers");
+                for item in list {
+                    let modifier = match item.as_str() {
+                        Some("ctrl") => Key::Control,
+                        Some("alt") => Key::Alt,
+                        Some("shift") => Key::Shift,
+                        Some("meta") => Key::Meta,
+                        _ => bail!("invalid modifier"),
+                    };
+                    ensure!(!modifiers.contains(&modifier), "duplicate modifier");
+                    modifiers.push(modifier);
                 }
             }
-            "desktop_scroll" => enigo.scroll(amount as i32, axis)?,
-            "desktop_type" => enigo.text(typed)?,
-            "desktop_drag" => {
-                enigo.button(Button::Left, Direction::Press)?;
-                let (from_x, from_y) = points.unwrap();
-                let (to_x, to_y) = end.unwrap();
-                let moved = (|| -> Result<()> {
-                    for step in 1..=16 {
-                        ensure!(!cancel.is_cancelled(), "cancelled during drag");
-                        let x =
-                            i64::from(from_x) + (i64::from(to_x) - i64::from(from_x)) * step / 16;
-                        let y =
-                            i64::from(from_y) + (i64::from(to_y) - i64::from(from_y)) * step / 16;
-                        move_pointer(&mut enigo, x as i32, y as i32)?;
-                        std::thread::sleep(Duration::from_millis(6));
-                    }
-                    Ok(())
-                })();
-                let released = enigo.button(Button::Left, Direction::Release);
-                moved?;
-                released?;
+            Act::Key(pressed, modifiers)
+        }
+    })
+}
+
+fn perform(enigo: &mut Enigo, act: &Act, cancel: &CancellationToken) -> Result<()> {
+    match act {
+        Act::Move((x, y)) => move_pointer(enigo, *x, *y)?,
+        Act::Click((x, y), button, clicks) => {
+            move_pointer(enigo, *x, *y)?;
+            ensure!(!cancel.is_cancelled(), "cancelled after pointer motion");
+            for _ in 0..*clicks {
+                ensure!(!cancel.is_cancelled(), "cancelled during click");
+                enigo.button(*button, Direction::Click)?;
             }
-            "desktop_key" => {
-                let mut held = Vec::new();
-                let result = (|| -> Result<()> {
-                    for modifier in &modifiers {
-                        ensure!(!cancel.is_cancelled(), "cancelled during shortcut");
-                        enigo.key(*modifier, Direction::Press)?;
-                        held.push(*modifier);
-                    }
+        }
+        Act::Scroll((x, y), amount, axis) => {
+            move_pointer(enigo, *x, *y)?;
+            ensure!(!cancel.is_cancelled(), "cancelled after pointer motion");
+            enigo.scroll(*amount, *axis)?;
+        }
+        Act::Type(text) => enigo.text(text)?,
+        Act::Drag((from_x, from_y), (to_x, to_y)) => {
+            move_pointer(enigo, *from_x, *from_y)?;
+            ensure!(!cancel.is_cancelled(), "cancelled after pointer motion");
+            enigo.button(Button::Left, Direction::Press)?;
+            let moved = (|| -> Result<()> {
+                for step in 1..=16 {
+                    ensure!(!cancel.is_cancelled(), "cancelled during drag");
+                    let x = i64::from(*from_x) + (i64::from(*to_x) - i64::from(*from_x)) * step / 16;
+                    let y = i64::from(*from_y) + (i64::from(*to_y) - i64::from(*from_y)) * step / 16;
+                    move_pointer(enigo, x as i32, y as i32)?;
+                    std::thread::sleep(Duration::from_millis(6));
+                }
+                Ok(())
+            })();
+            let released = enigo.button(Button::Left, Direction::Release);
+            moved?;
+            released?;
+        }
+        Act::Key(pressed, modifiers) => {
+            let mut held = Vec::new();
+            let result = (|| -> Result<()> {
+                for modifier in modifiers {
                     ensure!(!cancel.is_cancelled(), "cancelled during shortcut");
-                    enigo.key(pressed_key, Direction::Click)?;
-                    Ok(())
-                })();
-                let mut release_ok = true;
-                for modifier in held.into_iter().rev() {
-                    release_ok &= enigo.key(modifier, Direction::Release).is_ok();
+                    enigo.key(*modifier, Direction::Press)?;
+                    held.push(*modifier);
                 }
-                result?;
-                ensure!(release_ok, "modifier release failed");
+                ensure!(!cancel.is_cancelled(), "cancelled during shortcut");
+                enigo.key(*pressed, Direction::Click)?;
+                Ok(())
+            })();
+            let mut release_ok = true;
+            for modifier in held.into_iter().rev() {
+                release_ok &= enigo.key(modifier, Direction::Release).is_ok();
             }
-            _ => unreachable!(),
+            result?;
+            ensure!(release_ok, "modifier release failed");
         }
-        Ok(())
-    })();
-    if result.is_err() {
-        return Err(DesktopUncertain.into());
     }
-    // Our own input advanced the shared generation; another agent's would not match.
-    let remaining = observation.uses.saturating_sub(1);
-    if remaining > 0 {
-        *state = Some(Observation {
-            uses: remaining,
-            generation: lease.generation()?,
-            ..observation
-        });
+    Ok(())
+}
+
+/// Tras una entrada: espera a que la pantalla se asiente, la captura otra vez con
+/// la misma zona y escala que la observación, y entrega solo lo que cambió (o la
+/// imagen entera si cambió mucho). Deja una observación nueva, con las mismas
+/// coordenadas, para seguir sin pedir otra captura.
+fn after_capture(
+    observation: &Observation,
+    mode: AfterCapture,
+    settle: u64,
+    lease: &mut DesktopLease,
+    cancel: &CancellationToken,
+    state: &mut Option<Observation>,
+) -> Result<(String, Option<Vec<u8>>, Value)> {
+    let deadline = Instant::now() + Duration::from_millis(settle);
+    while Instant::now() < deadline {
+        ensure!(!cancel.is_cancelled(), "cancelled before the after-input capture");
+        std::thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
     }
-    Ok(input_result(remaining))
+    #[cfg(windows)]
+    let (image, x, y, _) = capture(Some(observation.monitor))?;
+    #[cfg(not(windows))]
+    let (image, x, y, _) = capture(None)?;
+    if (x, y) != (observation.origin_x, observation.origin_y) || image.dimensions() != observation.screen {
+        return Ok(("The screen layout changed; take a new screenshot.".to_owned(), None, json!({"changed":null})));
+    }
+    let (width, height) = (observation.width, observation.height);
+    let pixels = reframe(image, observation.region, width, height)?;
+    let change = match (mode, observation.frame.as_deref()) {
+        (AfterCapture::Full, _) | (_, None) => Some([0, 0, width, height]),
+        (_, Some(previous)) => changed_box(previous, &pixels),
+    };
+    let large = |area: [u32; 4]| u64::from(area[2]) * u64::from(area[3]) * 100 > u64::from(width) * u64::from(height) * LARGE_CHANGE_PERCENT;
+    let (text, image, area) = match change {
+        None => ("No visible change.".to_owned(), None, None),
+        Some(area) if mode == AfterCapture::Full || large(area) => {
+            (format!("Screenshot {width}x{height} of the same area after the input."), Some(png(&pixels)?), Some([0, 0, width, height]))
+        }
+        Some(area) => {
+            let crop = padded(area, width, height);
+            let part = image::imageops::crop_imm(&pixels, crop[0], crop[1], crop[2], crop[3]).to_image();
+            (
+                format!("Changed area x={} y={} {}x{} of the {width}x{height} screenshot (image below, same scale).", crop[0], crop[1], crop[2], crop[3]),
+                Some(png(&part)?),
+                Some(crop),
+            )
+        }
+    };
+    let token = format!("o{}", NEXT_OBSERVATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    *state = Some(Observation {
+        token: token.clone(),
+        uses: OBSERVATION_USES,
+        captured_at: Instant::now(),
+        generation: lease.generation()?,
+        #[cfg(windows)]
+        focus: windows::focus(),
+        frame: Some(Arc::new(pixels)),
+        ..observation.clone()
+    });
+    let text = format!("{text}{} Observation {token}: coordinates stay pixels of the {width}x{height} screenshot.", foreground_note());
+    let changed = area.map(|area| json!({"x":area[0],"y":area[1],"width":area[2],"height":area[3]}));
+    Ok((text, image, json!({"observation":token,"changed":changed,"width":width,"height":height,"uses":OBSERVATION_USES,"expiresInMs":30000})))
+}
+
+/// La ventana en primer plano, para no tener que deducirla de la imagen.
+fn foreground_note() -> String {
+    #[cfg(windows)]
+    if let Some(title) = windows::foreground_title().filter(|title| !title.trim().is_empty()) {
+        let title: String = title.trim().chars().take(80).collect();
+        return format!(" Foreground: \"{title}\".");
+    }
+    String::new()
 }
 pub(crate) fn input_result(remaining: u8) -> Value {
     json!({"completed":true,"observationUsesLeft":remaining,"message":if remaining > 0 {
@@ -926,7 +1157,44 @@ mod tests {
             monitor: 0,
             #[cfg(windows)]
             focus: None,
+            frame: None,
         }
+    }
+    #[test]
+    fn after_an_input_only_what_changed_is_sent() {
+        let base = image::RgbaImage::from_pixel(200, 100, image::Rgba([20, 20, 20, 255]));
+        assert_eq!(changed_box(&base, &base), None, "nothing moved");
+        let mut caret = base.clone();
+        caret.put_pixel(50, 50, image::Rgba([255, 255, 255, 255]));
+        assert_eq!(changed_box(&base, &caret), None, "a couple of pixels is noise");
+        let mut typed = base.clone();
+        for x in 30..60 {
+            for y in 40..48 {
+                typed.put_pixel(x, y, image::Rgba([230, 230, 230, 255]));
+            }
+        }
+        assert_eq!(changed_box(&base, &typed), Some([30, 40, 30, 8]));
+        // El recorte lleva margen, al menos 32×32 y no sale de la imagen.
+        assert_eq!(padded([30, 40, 30, 8], 200, 100), [18, 28, 54, 32]);
+        assert_eq!(padded([0, 0, 5, 5], 200, 100), [0, 0, 32, 32]);
+        assert_eq!(padded([195, 95, 5, 5], 200, 100), [168, 68, 32, 32]);
+        assert_eq!(after_options(&json!({})).unwrap(), (AfterCapture::Changed, SETTLE_MS));
+        assert_eq!(after_options(&json!({"capture":"none","settleMs":0})).unwrap(), (AfterCapture::None, 0));
+        assert_eq!(after_options(&json!({"capture":"full"})).unwrap().0, AfterCapture::Full);
+        assert!(after_options(&json!({"capture":"some"})).is_err());
+        assert!(after_options(&json!({"settleMs":5000})).is_err());
+    }
+    #[test]
+    fn several_inputs_are_validated_before_any_is_sent() {
+        let state = Mutex::new(Some(observation()));
+        let bad = |actions: Value| run(&state, "desktop_actions", &json!({"observation":"one","actions":actions})).is_err();
+        assert!(bad(json!([])), "at least one action");
+        assert!(bad(json!([{"type":"click","x":1,"y":2},{"type":"fly"}])), "unknown action");
+        assert!(bad(json!([{"type":"click","x":1,"y":2},{"type":"type","text":"x","extra":1}])), "unknown field");
+        assert!(bad(json!([{"type":"click","x":1,"y":2},{"type":"click","x":500,"y":2}])), "a point outside the screenshot");
+        assert!(bad(json!((0..11).map(|_| json!({"type":"move","x":1,"y":1})).collect::<Vec<_>>())), "at most 10");
+        assert!(run(&state, "desktop_actions", &json!({"observation":"one","actions":[{"type":"move","x":1,"y":1}],"capture":"maybe"})).is_err());
+        assert!(state.lock().unwrap().is_some(), "nothing was sent, the observation stays");
     }
     #[test]
     fn screenshots_are_downscaled_and_regions_map_back_to_screen_pixels() {
@@ -969,6 +1237,11 @@ mod tests {
     fn definitions_obey_read_only_and_validation_is_strict() {
         let provider = DesktopProvider::default();
         assert_eq!(provider.definitions("plan").len(), 4);
+        let full = provider.definitions("full");
+        assert_eq!(full.len(), 11);
+        assert!(full.iter().any(|tool| tool["function"]["name"] == "desktop_actions"));
+        assert!(full.iter().filter(|tool| tool["function"]["name"] != "desktop_actions" && !read_only(tool["function"]["name"].as_str().unwrap()))
+            .all(|tool| tool["function"]["parameters"]["properties"]["capture"].is_object()), "every input can capture what changed");
         assert_eq!(
             provider.definitions("plan")[0]["function"]["name"],
             "desktop_status"

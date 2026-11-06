@@ -34,7 +34,7 @@ const base = await declarations("./queue-send-now.test.mjs", ["harness", "flush"
       const config=i>=0?JSON.parse(flags[i+1]).mcpServers.trex_desktop:null;
       const mode=config?.args?.at(-1);
       const read=["desktop_screenshot","desktop_status","desktop_monitors","desktop_wait"];
-      const names=mode==="plan"?read:[...read,"desktop_click","desktop_move","desktop_drag","desktop_scroll","desktop_type","desktop_key"];
+      const names=mode==="plan"?read:[...read,"desktop_click","desktop_move","desktop_drag","desktop_scroll","desktop_type","desktop_key","desktop_actions"];
       return {mcpServers:config?[{name:"trex_desktop",status:"connected",serverInfo:{name:"trex-desktop"},config,tools:names.map(name=>({name}))}]:[]};
     })() : { current_permission_mode:`],
     ['models: [{ id: "offline-model", efforts: ["high", "max"] }]', 'models: extra.models ?? [{ id: "offline-model", efforts: ["high", "max"] }]'],
@@ -959,7 +959,7 @@ for (const provider of ["claude", "codex"]) test(`${provider}: desktop MCP binds
   const h = harness(t, provider, {
     browser: { ...browser, enabled: false }, desktopEnabled: true,
     api: { trexDesktopMcpConfig: async mode => { calls.push(mode); return { command: "C:\\Trex\\trex-agent.exe", args: ["desktop-mcp", "--mode", mode === "observe" ? "plan" : "full"] }; } },
-    mcpStatus: { data: [{ name: "trex_desktop", runtimeStatus: "connected", tools: Object.fromEntries(["desktop_screenshot", "desktop_status", "desktop_monitors", "desktop_wait", "desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"].map(name => [name, { name }])) }] },
+    mcpStatus: { data: [{ name: "trex_desktop", runtimeStatus: "connected", tools: Object.fromEntries(["desktop_screenshot", "desktop_status", "desktop_monitors", "desktop_wait", "desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key", "desktop_actions"].map(name => [name, { name }])) }] },
   });
   await h.ready();
   assert.deepEqual(calls, ["qa"]);
@@ -972,7 +972,7 @@ for (const provider of ["claude", "codex"]) test(`${provider}: desktop MCP binds
     assert.equal(config["mcp_servers.trex_desktop.default_tools_approval_mode"], "prompt");
     assert.ok(h.writes.some(write => write.method === "mcpServerStatus/list" && write.params.serverName === "trex_desktop"));
   }
-  if (provider === "codex") for (const name of ["desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"]) delete h.options.mcpStatus.data[0].tools[name];
+  if (provider === "codex") for (const name of ["desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key", "desktop_actions"]) delete h.options.mcpStatus.data[0].tools[name];
   h.session.setMode("plan");
   assert.equal(await send(h), true);
   assert.deepEqual(calls, ["qa", "observe"]);

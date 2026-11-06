@@ -3,7 +3,7 @@ import type { AgentProvider, ApplicationIntegrations } from "./types";
 import { BROWSER_INSTRUCTIONS } from "./browser";
 
 export const DESKTOP_READ_TOOLS = ["desktop_screenshot", "desktop_status", "desktop_monitors", "desktop_wait"] as const;
-export const DESKTOP_INPUT_TOOLS = ["desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key"] as const;
+export const DESKTOP_INPUT_TOOLS = ["desktop_click", "desktop_move", "desktop_drag", "desktop_scroll", "desktop_type", "desktop_key", "desktop_actions"] as const;
 
 export const DEFAULT_INTEGRATIONS: Readonly<ApplicationIntegrations> = Object.freeze({ github: true, blender: true, hyperframes: true });
 export function normalizeIntegrations(raw: unknown): ApplicationIntegrations {

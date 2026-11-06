@@ -118,7 +118,9 @@ pub async fn serve(mode: &str) -> Result<()> {
                     else { Err(crate::desktop::DesktopUncertain.into()) }
                 }));
                 let response = json!({"jsonrpc":"2.0","id":id,"result":result});
-                let cached = if pending.request["params"]["name"] == "desktop_screenshot" {
+                // Una imagen (captura o lo que cambió tras una entrada) no se vuelve a entregar.
+                let image = response["result"]["content"].as_array().is_some_and(|items| items.iter().any(|item| item["type"] == "image"));
+                let cached = if pending.request["params"]["name"] == "desktop_screenshot" || image {
                     json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"This screenshot response was already delivered; request a fresh screenshot with a new ID."}],"isError":true}})
                 } else { response.clone() };
                 cache_bytes += cached.to_string().len() + pending.request.to_string().len();

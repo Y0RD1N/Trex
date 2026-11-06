@@ -11,7 +11,7 @@ use windows_sys::Win32::UI::{
         MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
     },
     WindowsAndMessaging::{
-        GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId, SM_CXVIRTUALSCREEN,
+        GetForegroundWindow, GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, SM_CXVIRTUALSCREEN,
         SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     },
 };
@@ -86,6 +86,17 @@ pub(super) fn focus() -> Option<(usize, u32)> {
         GetWindowThreadProcessId(window, &mut pid);
     }
     (pid != 0).then_some((window as usize, pid))
+}
+
+/// Título de la ventana en primer plano.
+pub(super) fn foreground_title() -> Option<String> {
+    let window = unsafe { GetForegroundWindow() };
+    if window.is_null() {
+        return None;
+    }
+    let mut buffer = [0u16; 256];
+    let length = unsafe { GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32) };
+    (length > 0).then(|| String::from_utf16_lossy(&buffer[..length as usize]))
 }
 
 pub(super) fn validate_monitor(id: u32, x: i32, y: i32, width: u32, height: u32) -> Result<()> {
