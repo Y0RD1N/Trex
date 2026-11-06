@@ -119,6 +119,16 @@ test("stylesheets use one theme layer: no specificity chains, glass blur or text
   }
 });
 
+test("on Windows the system rounds the window: the app frame is square and borderless", async () => {
+  // Windows 11 redondea la ventana sin bordes (con sombra) y le pone su borde: un
+  // segundo marco redondeado en CSS dejaba huecos transparentes en las esquinas.
+  assert.match(tokensCss, /:root\[data-platform="windows"\]\s*\{\s*--window-radius:\s*0px;/);
+  const styles = (await stylesheets()).find(({ file }) => file.endsWith("/styles.css")).css;
+  assert.match(styles, /:root\[data-platform="windows"\] :is\(\.app, \.splash\)\s*\{\s*border-width:\s*0;/);
+  const main = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
+  assert.match(main, /if \(IS_WINDOWS\) document\.documentElement\.dataset\.platform = "windows";[\s\S]*createRoot/, "set before the first paint");
+});
+
 test("usage levels and permission risks carry state colors, never the accent", async () => {
   const sheets = Object.fromEntries((await stylesheets()).map(({ file, css }) => [file.split("/").pop(), css]));
   assert.match(sheets["UsageMenu.css"], /\.chat-usage-window\.warning\s*\{[^}]*var\(--warn\)/);

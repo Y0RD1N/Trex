@@ -19,7 +19,8 @@
 }
 
 /* La ventana de Tauri es transparente: solo `.app` pinta fondo, así las
-   esquinas redondeadas dejan ver el escritorio y no un rectángulo opaco. */
+   esquinas redondeadas dejan ver el escritorio y no un rectángulo opaco. En
+   Windows el marco es recto y el sistema redondea la ventana. */
 html,
 body,
 #root {
@@ -113,6 +114,9 @@ kbd, code, pre, .mono { font-family: var(--font-mono); }
 .app:has(> .sidebar.collapsed) { clip-path: none; }
 :root[data-window-state="maximized"] :is(.app, .splash),
 :root[data-window-state="fullscreen"] :is(.app, .splash) { border-color: transparent; }
+/* En Windows el borde lo dibuja el sistema: sin el del CSS no hay doble línea, ni
+   una franja transparente de 1px al maximizar. */
+:root[data-platform="windows"] :is(.app, .splash) { border-width: 0; }
 
 .splash {
   height: 100%;

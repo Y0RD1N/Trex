@@ -322,9 +322,13 @@
     --scroll-thumb-hover: var(--text-dim);
   }
 
-  /* Ventana redondeada solo cuando no ocupa la pantalla entera. */
+  /* Ventana redondeada solo cuando no ocupa la pantalla entera. En Windows la
+     redondea el sistema (Windows 11, unos 8px, con su borde y su sombra): un
+     segundo marco redondeado en CSS sobre la ventana transparente dejaba en cada
+     esquina un hueco transparente entre las dos curvas. */
   :root[data-window-state="maximized"],
-  :root[data-window-state="fullscreen"] {
+  :root[data-window-state="fullscreen"],
+  :root[data-platform="windows"] {
     --window-radius: 0px;
   }
 

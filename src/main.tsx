@@ -15,5 +15,11 @@ import "@fontsource-variable/jetbrains-mono";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import App from "./App";
+import { IS_WINDOWS } from "./platform";
+
+// Windows 11 redondea la ventana sin bordes y le pone su borde y su sombra: el
+// CSS no repite el marco (ver `--window-radius` en tokens.css). Antes del primer
+// pintado, para que tampoco la pantalla de carga muestre esquinas de más.
+if (IS_WINDOWS) document.documentElement.dataset.platform = "windows";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<App />);
