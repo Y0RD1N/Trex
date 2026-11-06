@@ -231,8 +231,10 @@ Context settings that bound what is re-sent on every request:
   and `history_search({messageIndex, offset})` pages it back. Within a turn the
   projection never changes, so prompt caches hold during the tool loop.
 - `context.maxHistoryImages` (default 3, max 16): screenshots and attachments
-  re-sent from earlier turns, chosen once per user turn; images produced in the
-  current turn have the same separate cap. Older images become a text note.
+  re-sent from earlier turns, chosen once per user turn. Images produced in the
+  current turn keep between that many and two more: the oldest leave three at a
+  time, so a new screenshot does not rewrite the prompt cache on every request.
+  Older images become a short text note.
 
 Model-facing output caps (journal, UI and `history_search` keep the stored text):
 shell stdout+stderr 32 KiB, `process_output` 32 KiB (tail-biased), `git_diff`

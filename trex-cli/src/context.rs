@@ -49,6 +49,11 @@ fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// Herramientas de pantalla y de página: muchas llamadas pequeñas.
+fn gui_tool(name: &str) -> bool {
+    name.starts_with("desktop_") || name.starts_with("browser_") || name.contains("a11y_")
+}
+
 pub fn estimate(value: &Value) -> u64 {
     fn text(s: &str) -> u64 {
         let ascii = s.bytes().filter(u8::is_ascii).count() as u64;
@@ -393,8 +398,28 @@ pub fn compact(
             }
         }
     }
+    // Screen and page actions (desktop, accessibility, browser) are many and their
+    // arguments (coordinates, refs, observations) mean nothing after compaction:
+    // they are counted per tool instead of listed one by one.
+    let mut gui_calls: Vec<(String, usize)> = Vec::new();
+    let mut gui_ids = std::collections::HashSet::new();
+    for message in &messages[old_cutoff..cutoff] {
+        for call in message["tool_calls"].as_array().into_iter().flatten() {
+            let name = call["function"]["name"].as_str().unwrap_or("");
+            if gui_tool(name) {
+                gui_ids.insert(call["id"].as_str().unwrap_or("").to_owned());
+                match gui_calls.iter_mut().find(|(tool, _)| tool == name) {
+                    Some((_, count)) => *count += 1,
+                    None => gui_calls.push((name.to_owned(), 1)),
+                }
+            }
+        }
+    }
     for message in &messages[old_cutoff..cutoff] {
         let role = message["role"].as_str().unwrap_or("unknown");
+        if role == "tool" && message["tool_call_id"].as_str().is_some_and(|id| gui_ids.contains(id)) {
+            continue;
+        }
         let limit = if role == "user" {
             1600
         } else if role == "assistant" {
@@ -423,7 +448,7 @@ pub fn compact(
             ));
         }
         if let Some(calls) = message["tool_calls"].as_array() {
-            for call in calls {
+            for call in calls.iter().filter(|call| !gui_tool(call["function"]["name"].as_str().unwrap_or(""))) {
                 entries.push(format!(
                     "Completed/recorded tool {} (id {}): {}",
                     call["function"]["name"].as_str().unwrap_or("unknown"),
@@ -432,6 +457,10 @@ pub fn compact(
                 ));
             }
         }
+    }
+    if !gui_calls.is_empty() {
+        let counts: Vec<String> = gui_calls.iter().map(|(tool, count)| format!("{tool} ×{count}")).collect();
+        entries.push(format!("Screen and page actions (results in the full history): {}", counts.join(", ")));
     }
     let joined = entries.join("\n");
     // Keep both original request context and the most recent archived work.

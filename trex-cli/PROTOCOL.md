@@ -246,9 +246,14 @@ restoring history does not fetch them.
 Immediately before a provider request, the CLI rehydrates verified local image
 references only when the selected model is explicitly known to accept images.
 Every tool result remains text in role `tool`; a separate user observation with
-tool IDs and provenance follows the entire consecutive tool-result batch.
+the tool call and artifact IDs (provenance stays in the journal) follows the entire
+consecutive tool-result batch.
 Image replay selects the newest evidence within a shared 16-image/16-MiB
-request budget while retaining original message and tool-result order.
+request budget while retaining original message and tool-result order. Earlier
+turns keep `context.maxHistoryImages` images, fixed for the whole turn. In the
+current turn the oldest images leave three at a time (between `maxHistoryImages`
+and `maxHistoryImages + 2` are kept), so a new screenshot does not change the
+projected prefix and its prompt cache on every request.
 Text-only and unknown models receive artifact metadata and an explicit image
 omission note, so they cannot claim pixel inspection. Model changes reproject
 the original durable history without another tool call. Missing/corrupt/unsafe
