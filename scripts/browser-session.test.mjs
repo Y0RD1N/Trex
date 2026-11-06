@@ -1081,10 +1081,10 @@ for (const provider of ["claude", "codex"]) test(`${provider}: accessibility gat
   }
 });
 
-for (const provider of ["claude", "codex"]) test(`${provider}: without agent-desktop the chat starts without the gateway and says why`, async t => {
+for (const provider of ["claude", "codex"]) test(`${provider}: where the accessibility engine cannot run the chat starts without it and says why`, async t => {
   const h = harness(t, provider, {
     browser: { ...browser, enabled: false }, a11yEnabled: true,
-    accessibility: { accessibilityServer: async (_mode, warn) => { warn("El control por accesibilidad (experimental) no se activó en este chat: agent-desktop no está instalado."); return null; } },
+    accessibility: { accessibilityServer: async (_mode, warn) => { warn("El control por accesibilidad (experimental) no se activó en este chat: El control por accesibilidad solo está disponible en Windows."); return null; } },
   });
   await h.ready();
   assert.equal(await send(h), true);
@@ -1095,5 +1095,5 @@ for (const provider of ["claude", "codex"]) test(`${provider}: without agent-des
   } else {
     assert.equal(h.writes.find(write => write.method === "thread/start").params.config["mcp_servers.trex_a11y.enabled"], undefined);
   }
-  assert.ok(h.state.items.some(item => item.kind === "notice" && /agent-desktop no está instalado/.test(item.text)));
+  assert.ok(h.state.items.some(item => item.kind === "notice" && /solo está disponible en Windows/.test(item.text)));
 });

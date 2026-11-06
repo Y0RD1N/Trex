@@ -2,6 +2,8 @@ import { icons, esc, initial, favicon, fixFavicons, STATE_LABEL } from './icons.
 
 const shell = window.trexShell;
 const $ = id => document.getElementById(id);
+// Before the first state arrives, so the frame never paints rounded corners on Windows.
+document.body.classList.toggle('windows', /Windows/.test(navigator.userAgent));
 let state = null, filter = 'all', query = '';
 const feed = [];          // [{at, label, tool, detail, color}]
 const cards = new Map(), controls = new Map(), activityRows = new Map();
@@ -126,6 +128,7 @@ function render(s) {
   document.body.classList.toggle('paused', a.state === 'paused' || a.state === 'review');
   document.body.classList.toggle('maximized', s.maximized);
   document.body.classList.toggle('native-glass', s.platform === 'darwin' || s.platform === 'win32');
+  document.body.classList.toggle('windows', s.platform === 'win32');
   const key = `${a.tool}|${a.detail}|${a.step}`;
   // Without a worker inventory the shell logs its own agent; once the worker
   // sends spaces (with their own event ids) those local entries are dropped.

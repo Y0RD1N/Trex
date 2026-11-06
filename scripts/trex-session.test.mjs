@@ -198,31 +198,31 @@ test("Trex refuses an older CLI that ignores disabled integrations", async t => 
   await assert.rejects(h.start(), /no confirmó las integraciones/);
   assert.equal(h.writes.some(w => w.method === "turn/start"), false);
 });
-test("Trex asks for the accessibility gateway only when agent-desktop is ready and reports a failed connection", async t => {
+test("Trex asks for the accessibility engine only where it can run and reports a failed connection", async t => {
   const modes = [];
-  const ready = { accessibilityServer: async mode => { modes.push(mode); return { command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--engine", "trex"] }; } };
+  const ready = { accessibilityServer: async mode => { modes.push(mode); return { command: "trex-agent", args: ["a11y-mcp", "--mode", "full"] }; } };
   const h = harness(t, { a11yEnabled: true, accessibility: ready });
   await h.start();
   const start = h.writes.find(w => w.method === "session/start");
-  assert.equal(start.params.accessibility, "trex", "Trex CLI starts the gateway with the engine the app chose");
+  assert.equal(start.params.accessibility, true, "Trex CLI starts the built-in engine itself");
   assert.match(start.params.instructions, /Accessibility control \(experimental\)/);
   assert.deepEqual(modes, ["full"], "Trex CLI applies the session mode itself");
   assert.ok(!h.state.items.some(item => item.kind === "notice"));
-  // Sin agent-desktop: no se pide la pasarela ni se anuncia, y el chat lo avisa.
-  const missing = harness(t, { a11yEnabled: true, accessibility: { accessibilityServer: async (_mode, warn) => { warn("agent-desktop no está instalado."); return null; } } });
+  // Donde no puede funcionar (fuera de Windows): no se pide ni se anuncia, y el chat lo avisa.
+  const missing = harness(t, { a11yEnabled: true, accessibility: { accessibilityServer: async (_mode, warn) => { warn("El control por accesibilidad solo está disponible en Windows."); return null; } } });
   await missing.start();
   const plain = missing.writes.find(w => w.method === "session/start");
   assert.equal(plain.params.accessibility, undefined);
   assert.doesNotMatch(plain.params.instructions, /Accessibility control/);
-  assert.ok(missing.state.items.some(item => item.kind === "notice" && /agent-desktop no está instalado/.test(item.text)));
+  assert.ok(missing.state.items.some(item => item.kind === "notice" && /solo está disponible en Windows/.test(item.text)));
   // Si la pasarela no llega a conectar, la conversación sigue con un aviso.
   const failed = harness(t, { a11yEnabled: true, accessibilityAck: false, accessibility: ready });
   await failed.start();
   assert.ok(failed.state.items.some(item => item.kind === "notice" && /no pudo conectarse/.test(item.text)));
-  // Con el permiso de atajos, Trex CLI lo recibe junto al motor.
-  const keyboard = harness(t, { a11yEnabled: true, accessibility: { accessibilityServer: async () => ({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--engine", "trex", "--keyboard"] }) } });
+  // Con el permiso de atajos, Trex CLI lo recibe.
+  const keyboard = harness(t, { a11yEnabled: true, accessibility: { accessibilityServer: async () => ({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--keyboard"] }) } });
   await keyboard.start();
-  assert.deepEqual(keyboard.writes.find(w => w.method === "session/start").params.accessibility, { engine: "trex", keyboard: true });
+  assert.deepEqual(keyboard.writes.find(w => w.method === "session/start").params.accessibility, { keyboard: true });
   // Sin la preferencia, nada cambia.
   const off = harness(t, { accessibility: ready });
   await off.start();

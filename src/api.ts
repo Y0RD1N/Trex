@@ -104,10 +104,8 @@ export type GitHubConnectionStatus = "connected" | "unavailable" | "timeout" | "
 export const githubConnectionStatus = (): Promise<GitHubConnectionStatus> => invoke("github_connection_status");
 export type DesktopStatus = { available: boolean; backend: string; coordinateSpace: string; reason: string | null; monitors: { id: number; name: string; primary: boolean; x: number; y: number; width: number; height: number; scaleFactor: number }[] };
 export const desktopStatus = (): Promise<DesktopStatus> => invoke("trex_desktop_status");
-/** agent-desktop para el control por accesibilidad (experimental). Solo consulta su versión. */
-export type A11yStatus = { available: boolean; path?: string; version?: string; minimumVersion: string; reason: "notInstalled" | "unsupportedVersion" | "failed" | null;
-  /** El motor propio de Trex (solo Windows). */
-  native?: { available: boolean } };
+/** Motor propio del control por accesibilidad (experimental, Windows). No abre ni lee aplicaciones. */
+export type A11yStatus = { available: boolean; engine: "trex"; reason: "unsupportedPlatform" | null };
 export const a11yStatus = (): Promise<A11yStatus> => invoke("trex_a11y_status");
 
 export const saveConfig = (config: AppConfig): Promise<AppConfig> =>
@@ -235,7 +233,6 @@ export const DEFAULT_SETTINGS: Settings = {
   integrations: { ...DEFAULT_INTEGRATIONS },
   desktopEnabled: false,
   a11yEnabled: false,
-  a11yEngine: "trex",
   a11yKeyboard: false,
   browserEnabled: true,
   browserProfile: "BROWSER1",
@@ -464,7 +461,6 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     integrations: normalizeIntegrations(settingsRaw.integrations),
     desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
     a11yEnabled: asBool(settingsRaw.a11yEnabled, false),
-    a11yEngine: settingsRaw.a11yEngine === "agent-desktop" ? "agent-desktop" : "trex",
     a11yKeyboard: asBool(settingsRaw.a11yKeyboard, false),
     browserEnabled: asBool(settingsRaw.browserEnabled, DEFAULT_SETTINGS.browserEnabled),
     browserProfile: typeof settingsRaw.browserProfile === "string" && validBrowserProfile(settingsRaw.browserProfile) ? settingsRaw.browserProfile : "BROWSER1",

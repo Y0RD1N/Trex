@@ -81,8 +81,19 @@ no captura la pantalla, no envía entrada y no necesita perfil ni credenciales.
 También está disponible para el agente como `desktop_status`.
 
 `desktop_monitors` devuelve los identificadores que acepta el argumento opcional
-`monitor` de `desktop_screenshot`. Las coordenadas de entrada son píxeles de esa
-captura. Windows aplica un contexto DPI por hilo, que se restaura al terminar,
+`monitor` de `desktop_screenshot`. No hace falta llamarlo antes: cada captura
+dice cuántas pantallas hay, así que el agente empieza directamente por
+`desktop_screenshot`. Las coordenadas de entrada son píxeles de esa captura.
+
+Coste de una captura (Claude cobra unos ancho×alto/750 tokens por imagen):
+1280 px en el lado largo por defecto (unos 1 230 tokens en 16:9); `maxEdge`
+(256–1568) la abarata para comprobar un cambio (768 px ≈ 440 tokens), `region`
+recorta una zona de la pantalla y `fullResolution:true` llega hasta 1568 px, lo
+más que ve el modelo (más allá, el modelo la reduciría y las coordenadas ya no
+coincidirían). El resumen que acompaña a la imagen es una línea y el
+identificador de observación es corto (`o7`), porque el modelo lo copia en cada
+entrada. El control de computadora y el de accesibilidad son integraciones
+independientes: las instrucciones no presentan ninguno como preferido. Windows aplica un contexto DPI por hilo, que se restaura al terminar,
 y normaliza el movimiento sobre el escritorio virtual; permite pantallas con
 orígenes negativos y evita usar el tamaño lógico de la pantalla principal.
 Se vuelve a comprobar la geometría antes de actuar. La normalización, el contexto
@@ -122,17 +133,18 @@ listo en vez de simular éxito.
 
 ## Control por accesibilidad (experimental)
 
-Alternativa en desarrollo al control de computadora, que no lo sustituye: los
+Integración independiente del control de computadora: la persona activa la que
+quiera usar (o las dos) y ninguna se presenta al agente como preferida. Los
 agentes manejan las aplicaciones a través del árbol de accesibilidad del sistema
 (UI Automation en Windows), sin mover el ratón ni escribir con el teclado de la
 persona. Se activa en Ajustes → Integraciones para los chats nuevos, los
-equipos y las salas, donde se elige el motor y si se permiten atajos de teclado.
+equipos y las salas, donde también se decide si se permiten atajos de teclado.
 
-Cada chat arranca su propia pasarela, `trex-agent a11y-mcp --mode plan|full
---engine trex|agent-desktop` (servidor MCP `trex_a11y`). Las herramientas se
-llaman `a11y_*` con los dos motores.
+Cada chat arranca su propio servidor, `trex-agent a11y-mcp --mode plan|full`
+(servidor MCP `trex_a11y`), con herramientas `a11y_*`. Solo existe en Windows;
+en otros sistemas el chat arranca sin la integración y lo avisa.
 
-### Motor de Trex (Windows, predeterminado)
+### Motor de Trex (Windows)
 
 Va dentro de `trex-agent` (`trex-cli/src/a11y/`), sin dependencias externas:
 
@@ -207,42 +219,13 @@ ventanas nuevos, y que la ventana en primer plano no cambia. Además se probó a
 mano con una app WinForms (diálogo modal, atajo Enter) y con un formulario en
 Chrome.
 
-### agent-desktop
+### Antes: agent-desktop
 
-Con [agent-desktop](https://github.com/vercel-labs/agent-desktop) 1.2.0 o
-posterior (`npm install -g agent-desktop`), también en macOS y Linux, la
-pasarela lanza `agent-desktop mcp` y:
-
-- publica una selección con el prefijo `a11y_`: 11 herramientas de lectura en
-  `plan` (snapshot, find, get, is, ventanas, apps, pantallas, superficies,
-  wait, status y guías) y además 21 acciones semánticas en `full` (clic,
-  escribir, valor, marcar, desplegar, desplazar, teclas, abrir y cerrar apps,
-  ventanas). Nunca entrada física (`mouse_*`, `hover`, `drag`…), sesiones,
-  trazas, portapapeles, notificaciones ni `batch`, ni pasa `--headed`;
-- reduce el coste: unos 2 300 tokens de esquemas en `plan` y 5 000 en `full`
-  frente a los ~10 000 de las 67 herramientas originales; quita el
-  `structuredContent` duplicado y recorta las respuestas de más de 40 000
-  caracteres. Los snapshots son `interactive_only` y `compact` salvo que el
-  agente pida otra cosa;
-- guarda el estado de agent-desktop (refmaps con el texto leído) en una
-  carpeta temporal privada por proceso (`AGENT_DESKTOP_HOME`) que se borra al
-  cerrar; las abandonadas sin latido durante 15 minutos se eliminan al arrancar
-  otra pasarela.
-
-Claude y Codex reciben el servidor con el modo fijado como `trex_desktop`
-(observar al planificar) y se reinician al cambiar de modo; Codex comprueba el
-inventario antes del primer turno. Antigravity lo recibe en modo completo con
-sus permisos. Trex CLI lo arranca él mismo con `accessibility: true` en
-`session/start` y aplica el modo de la sesión. Si agent-desktop falta o es
-antiguo, el chat arranca sin la integración y lo avisa.
-
-Si se elige el motor de Trex en una plataforma sin él, se usa agent-desktop.
-
-Limitaciones conocidas con agent-desktop 1.2.0 en Windows: algunas acciones
-pueden traer la ventana al frente
-([#567](https://github.com/vercel-labs/agent-desktop/issues/567)), `set-value`
-verifica el valor del control pero no que la aplicación lo conserve, y el texto
-visible de los documentos llega al proveedor del modelo.
+Hasta noviembre de 2026 se podía elegir como motor externo
+[agent-desktop](https://github.com/vercel-labs/agent-desktop). Se retiró: el
+motor propio cubre su uso en Windows sin instalar nada y gasta menos tokens.
+Las configuraciones guardadas que lo pedían (`--engine agent-desktop`,
+`accessibility: "agent-desktop"`) siguen arrancando, con el motor propio.
 
 ## Blender
 

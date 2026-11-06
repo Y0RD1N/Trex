@@ -76,8 +76,6 @@ export type Settings = {
   desktopEnabled: boolean;
   /** Control por accesibilidad (experimental). */
   a11yEnabled: boolean;
-  /** Motor: el propio de Trex (Windows) o agent-desktop. */
-  a11yEngine: "trex" | "agent-desktop";
   /** Atajos de teclado reales (Ctrl+S…): traen la ventana al frente un instante. */
   a11yKeyboard: boolean;
   browserEnabled: boolean;

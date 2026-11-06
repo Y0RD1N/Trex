@@ -1,6 +1,6 @@
 import { connectBrowser } from "../browserConnection";
 import { agentTeamMcpConfig, trexDesktopMcpConfig } from "../api";
-import { A11Y_ACTION_TOOLS, A11Y_CORE_ACTION_TOOLS, A11Y_CORE_READ_TOOLS, A11Y_SERVER, accessibilityServer } from "../accessibility";
+import { A11Y_ACTION_TOOLS, A11Y_KEYBOARD_TOOLS, A11Y_READ_TOOLS, A11Y_SERVER, accessibilityServer } from "../accessibility";
 import { browserConfigForShell, browserEnv, BROWSER_INSTRUCTIONS, BROWSER_TOKEN_ENV, isBrowserHttp } from "../browser";
 import { browserMode, type BrowserMode } from "../browser";
 /**
@@ -389,7 +389,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     const expected = [
       ...(inboxConfigRef.current["mcp_servers.trex_browser.enabled"] === true ? [{ server: "trex_browser", tools: ["browser_navigate", "browser_snapshot", "browser_status"] }] : []),
       ...(inboxConfigRef.current["mcp_servers.trex_desktop.enabled"] === true ? [{ server: "trex_desktop", tools: browserBindingRef.current?.mode === "observe" ? [...DESKTOP_READ_TOOLS] : [...DESKTOP_READ_TOOLS, ...DESKTOP_INPUT_TOOLS] }] : []),
-      ...(a11yAttached() ? [{ server: A11Y_SERVER, tools: browserBindingRef.current?.mode === "observe" ? [...A11Y_CORE_READ_TOOLS] : [...A11Y_CORE_READ_TOOLS, ...A11Y_CORE_ACTION_TOOLS] }] : []),
+      ...(a11yAttached() ? [{ server: A11Y_SERVER, tools: browserBindingRef.current?.mode === "observe" ? [...A11Y_READ_TOOLS] : [...A11Y_READ_TOOLS, ...A11Y_ACTION_TOOLS] }] : []),
     ];
     for (const integration of expected) {
       const label = integration.server === "trex_browser" ? "Trex Browser" : integration.server === A11Y_SERVER ? "el control por accesibilidad" : "el control de computadora";
@@ -402,7 +402,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       if (!server || server.toolsError != null || server.runtimeStatus !== undefined && server.runtimeStatus !== "connected"
         || !tools || !integration.tools.every(name => record(tools[name]))
         || integration.server === "trex_desktop" && browserBindingRef.current?.mode === "observe" && DESKTOP_INPUT_TOOLS.some(name => record(tools[name]))
-        || integration.server === A11Y_SERVER && browserBindingRef.current?.mode === "observe" && A11Y_ACTION_TOOLS.some(name => record(tools[name]))) {
+        || integration.server === A11Y_SERVER && browserBindingRef.current?.mode === "observe" && [...A11Y_ACTION_TOOLS, ...A11Y_KEYBOARD_TOOLS].some(name => record(tools[name]))) {
         throw new CodexBrowserConnectionError(`Codex no recibió las herramientas de ${label}. Reinicia esta conversación.`);
       }
     }
@@ -528,14 +528,14 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         const detection = detectedIntegrations(cwd);
         availableRef.current = detection instanceof Promise ? await detection : detection;
         if (!isCurrent()) return;
-        // A missing agent-desktop is reported once, not on each attempt.
+        // An unavailable accessibility engine is reported once, not on each attempt.
         let a11yUnavailable = false;
         for (let attempt = 0; attempt < 2; attempt++) {
         const browser = callbacks.current.browser?.enabled ? await connectBrowser(callbacks.current.browser, cwd, browserChoice(bindingMode), planningOnly, shell, message => notice("warn", message), true) : null;
         if (!isCurrent()) return;
         const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await trexDesktopMcpConfig(bindingMode), shell) : null;
         if (!isCurrent()) return;
-        // Experimental: without a usable agent-desktop the thread starts without it, with a notice.
+        // Experimental: where the accessibility engine cannot run, the thread starts without it, with a notice.
         const a11yConfig = callbacks.current.a11yEnabled && !a11yUnavailable ? await accessibilityServer(bindingMode, message => notice("warn", message)) : null;
         if (!isCurrent()) return;
         if (callbacks.current.a11yEnabled && !a11yConfig) a11yUnavailable = true;

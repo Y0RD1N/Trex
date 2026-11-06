@@ -90,8 +90,9 @@ fn planning_is_fixed_and_requests_are_deduplicated() {
     assert_eq!(init["result"]["serverInfo"]["name"], "trex-desktop");
     let guidance = init["result"]["instructions"].as_str().unwrap();
     assert!(
-        guidance.contains("desktop_status")
+        guidance.contains("desktop_screenshot")
             && guidance.contains("desktop_monitors")
+            && !guidance.contains("prefer this server")
             && guidance.contains("read-only")
             && guidance.contains("trex_browser")
     );

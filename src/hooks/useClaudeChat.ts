@@ -449,7 +449,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         let desktop = null;
         try { desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await whileCurrent(trexDesktopMcpConfig(browserMode(chosenMode, planningOnly)), startup.signal), shell) : null; }
         finally { if (startupRef.current === startup) browserConnecting.current = false; }
-        // Experimental: without a usable agent-desktop the chat starts without it, with a notice.
+        // Experimental: where the accessibility engine cannot run, the chat starts without it, with a notice.
         const a11yConfig = callbacks.current.a11yEnabled ? await whileCurrent(accessibilityServer(browserMode(chosenMode, planningOnly),
           message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message })), startup.signal) : null;
         const a11y = a11yConfig ? browserConfigForShell(a11yConfig, shell) : null;

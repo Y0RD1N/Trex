@@ -11,7 +11,7 @@ import { privateHome, privateHomePath, readPrivate, writePrivate, jsonRead, cont
 import { BrowserService, detectBrowser, isObservation } from './browser.mjs';
 import { ensureSpaces, listSpaces } from './spaces.mjs';
 import { ENGINES, readEngine, detectShell } from './shell.mjs';
-import { VERSION, PROTOCOL, tools, MODES, mcpInitialization, modelView } from './tools.mjs';
+import { VERSION, PROTOCOL, tools, MODES, mcpInitialization, modelView, agentText, batchFailureText } from './tools.mjs';
 
 const entry=fileURLToPath(import.meta.url);
 function ffmpegRuntime(){
@@ -27,15 +27,18 @@ function ffmpegRuntime(){
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 function encode(value){const body=JSON.stringify(value);if(Buffer.byteLength(body)>MAX_JSON)throw new Error('Result exceeds 8 MiB output limit');return body;}
 function emit(value){process.stdout.write(encode(value)+'\n');}
-function errorResult(error,operationId,ctx){return {content:[{type:'text',text:cleanError(error.message)}],isError:true,structuredContent:{ok:false,operationId,...(ctx?{projectId:ctx.projectId,profile:ctx.profile}:{}),artifacts:error.batchSteps?.flatMap(step=>step.artifacts||[])||[],...(error.batchSteps?{data:{steps:error.batchSteps}}:{}),error:{code:error.code||'BROWSER_ERROR',message:cleanError(error.message)},receipt:{status:error.code==='UNCERTAIN'?'uncertain':error.code==='CANCELLED'?'cancelled':'rejected',manualReview:error.code==='UNCERTAIN',replaySafe:false}}};}
+// A failed batch names its failed, completed and unrun steps in the text, so an
+// agent never replays completed steps; per-step receipts stay in structuredContent.
+function errorResult(error,operationId,ctx){const message=cleanError(error.message);return {content:[{type:'text',text:error.batchSteps?batchFailureText(message,error.batchSteps,error.batchTools):message}],isError:true,structuredContent:{ok:false,operationId,...(ctx?{projectId:ctx.projectId,profile:ctx.profile}:{}),artifacts:error.batchSteps?.flatMap(step=>step.artifacts||[])||[],...(error.batchSteps?{data:{steps:error.batchSteps}}:{}),error:{code:error.code||'BROWSER_ERROR',message:cleanError(error.message)},receipt:{status:error.code==='UNCERTAIN'?'uncertain':error.code==='CANCELLED'?'cancelled':'rejected',manualReview:error.code==='UNCERTAIN',replaySafe:false}}};}
 function cleanError(message){return String(message||'Browser operation failed').replace(/(?:[A-Za-z]:\\|\/)(?:[^\s:'"<>]+[\\/])+[^\s:'"<>]*/g,'[private path]').slice(0,2000);}
 // Agents (MCP over stdio or HTTP) get a lean result: only what they act on.
-// Text stays identical to structuredContent, as MCP recommends. Hosts (call,
+// Text is the JSON of structuredContent, as MCP recommends, except batch steps:
+// their operation IDs and receipts stay only in structuredContent. Hosts (call,
 // the app) keep the full envelope with receipts and ownership metadata.
 function forAgent(result){
   if(!result||result.isError||!result.structuredContent?.ok)return result;
   const sc=result.structuredContent,lean={ok:true,...modelView({data:sc.data,revision:sc.revision,artifacts:sc.artifacts})};
-  return {content:[{type:'text',text:encode(lean)},...result.content.filter(c=>c.type!=='text')],structuredContent:lean};
+  return {content:[{type:'text',text:encode(agentText(lean))},...result.content.filter(c=>c.type!=='text')],structuredContent:lean};
 }
 function toolResult(result,operationId,ctx){const structuredContent={ok:true,operationId,projectId:ctx.projectId,profile:ctx.profile,generation:result.generation,revision:result.revision,data:result.data,artifacts:result.artifacts||[],receipt:{status:'completed',manualReview:false,replaySafe:false}};return {content:[{type:'text',text:encode(structuredContent)},...(result.image?[result.image]:[])],structuredContent};}
 function argMap(argv){const result={_:[]};for(let i=0;i<argv.length;i++){const arg=argv[i];if(arg.startsWith('--')){const key=arg.slice(2);if(['json','stdin-json','version'].includes(key))result[key]=true;else{if(!argv[i+1]||argv[i+1].startsWith('--'))throw new Error(`Missing --${key} value`);result[key]=argv[++i];}}else result._.push(arg);}return result;}

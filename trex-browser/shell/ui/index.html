@@ -19,6 +19,9 @@ body.agent .frame{background:linear-gradient(160deg,rgba(var(--accent-rgb),.38),
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 24px rgba(var(--accent-rgb),.25)}
 body.paused .frame{background:linear-gradient(160deg,rgba(231,195,90,.28),rgba(40,34,18,.75));border-color:rgba(231,195,90,.45)}
 body.maximized .frame{border-radius:0}
+/* Windows 11 rounds the frameless window and draws its border: a second rounded
+   frame here left a see-through gap between the two curves in every corner. */
+body.windows .frame{border-radius:0;border-width:0}
 
 /* Agents center */
 .center{position:fixed;inset:7px;border-radius:12px;overflow:hidden;display:none}

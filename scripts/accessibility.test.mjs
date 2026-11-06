@@ -17,18 +17,13 @@ async function rustList(name, file = "a11y_mcp.rs") {
   return items;
 }
 
-test("the app expects exactly the tools the gateway publishes", async () => {
+test("the app expects exactly the tools the engine publishes", async () => {
   const prefix = /pub const PREFIX: &str = "([a-z0-9_]+)"/.exec(await readFile(new URL("../trex-cli/src/a11y_mcp.rs", import.meta.url), "utf8"))[1];
-  assert.deepEqual([...accessibility.A11Y_READ_TOOLS], (await rustList("READ_TOOLS")).map(name => prefix + name));
-  assert.deepEqual([...accessibility.A11Y_ACTION_TOOLS], (await rustList("ACTION_TOOLS")).map(name => prefix + name));
-  // Lo que se exige al conectar es lo que publica el motor de Trex, que es lo común a los dos.
-  assert.deepEqual([...accessibility.A11Y_CORE_READ_TOOLS], (await rustList("READ_TOOLS", "a11y/mod.rs")).map(name => prefix + name));
-  assert.deepEqual([...accessibility.A11Y_CORE_ACTION_TOOLS], (await rustList("ACTION_TOOLS", "a11y/mod.rs")).map(name => prefix + name));
-  for (const name of [...accessibility.A11Y_CORE_READ_TOOLS, ...accessibility.A11Y_CORE_ACTION_TOOLS]) {
-    assert.ok([...accessibility.A11Y_READ_TOOLS, ...accessibility.A11Y_ACTION_TOOLS].includes(name), name);
-  }
-  // Nunca entrada física ni herramientas que permitan saltarse la selección.
-  for (const hidden of ["a11y_mouse_click", "a11y_hover", "a11y_drag", "a11y_batch", "a11y_clipboard_get", "a11y_screenshot"]) {
+  assert.deepEqual([...accessibility.A11Y_READ_TOOLS], (await rustList("READ_TOOLS", "a11y/mod.rs")).map(name => prefix + name));
+  assert.deepEqual([...accessibility.A11Y_ACTION_TOOLS], (await rustList("ACTION_TOOLS", "a11y/mod.rs")).map(name => prefix + name));
+  assert.deepEqual([...accessibility.A11Y_KEYBOARD_TOOLS], (await rustList("KEYBOARD_TOOLS", "a11y/mod.rs")).map(name => prefix + name));
+  // Nunca entrada física del ratón: eso es el control de computadora, otra integración.
+  for (const hidden of ["a11y_mouse_click", "a11y_hover", "a11y_drag", "a11y_clipboard_get", "a11y_screenshot"]) {
     assert.ok(![...accessibility.A11Y_READ_TOOLS, ...accessibility.A11Y_ACTION_TOOLS].includes(hidden), hidden);
   }
 });
@@ -37,13 +32,12 @@ test("accessibility control is opt-in and announced only when the gateway is att
   assert.equal(normalizeConfig({}).settings.a11yEnabled, false);
   assert.equal(normalizeConfig({ settings: { a11yEnabled: true } }).settings.a11yEnabled, true);
   assert.equal(normalizeConfig({ settings: { a11yEnabled: "yes" } }).settings.a11yEnabled, false);
-  assert.equal(normalizeConfig({}).settings.a11yEngine, "trex", "the built-in engine is the default");
-  assert.equal(normalizeConfig({ settings: { a11yEngine: "agent-desktop" } }).settings.a11yEngine, "agent-desktop");
-  assert.equal(normalizeConfig({ settings: { a11yEngine: "other" } }).settings.a11yEngine, "trex");
-  const gateway = engine => ({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", ...(engine ? ["--engine", engine] : [])] });
-  assert.equal(accessibility.accessibilityEngine(gateway("trex")), "trex");
-  assert.equal(accessibility.accessibilityEngine(gateway("agent-desktop")), "agent-desktop");
-  assert.equal(accessibility.accessibilityEngine(gateway(null)), null);
+  // Solo hay el motor propio: un motor guardado de versiones anteriores se ignora.
+  assert.equal("a11yEngine" in normalizeConfig({ settings: { a11yEngine: "agent-desktop", a11yEnabled: true } }).settings, false);
+  assert.equal(normalizeConfig({ settings: { a11yEngine: "agent-desktop", a11yEnabled: true } }).settings.a11yEnabled, true);
+  const gateway = keyboard => ({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", ...(keyboard ? ["--keyboard"] : [])] });
+  assert.equal(accessibility.accessibilityKeyboard(gateway(true)), true);
+  assert.equal(accessibility.accessibilityKeyboard(gateway(false)), false);
   const preference = { a11yEnabled: true, desktopEnabled: false };
   assert.doesNotMatch(integrations.integrationInstructions("claude", integrations.integrationContext(preference)), /Accessibility control/);
   const claude = integrations.integrationInstructions("claude", integrations.integrationContext(preference, { a11y: true }));
@@ -51,12 +45,23 @@ test("accessibility control is opt-in and announced only when the gateway is att
   assert.doesNotMatch(claude, /Computer control/, "it does not enable computer control");
   assert.match(claude, /single ToolSearch call \(select:mcp__trex_a11y__a11y_list_windows,[\w,]*mcp__trex_a11y__a11y_scroll,/, "deferred tools load together");
   assert.doesNotMatch(integrations.integrationInstructions("codex", integrations.integrationContext(preference, { a11y: true })), /ToolSearch/);
+  // Computer use y accesibilidad son independientes: ninguno se presenta como preferido.
+  for (const provider of ["claude", "codex", "antigravity", "trex"]) {
+    const both = integrations.integrationInstructions(provider, integrations.integrationContext({ a11yEnabled: true, desktopEnabled: true }, { a11y: true }));
+    assert.match(both, /separate integrations: use the one the user asks for/, provider);
+    assert.doesNotMatch(both, /prefer (advertised|connected|the advertised|the connected) (desktop|trex_desktop|trex_a11y|mcp_trex_a11y)/, provider);
+    assert.doesNotMatch(both, /desktop_status/, `${provider}: no startup round trips`);
+  }
+  // Claude y Trex CLI ya reciben la guía del servidor: el texto de la app es corto.
+  const short = integrations.integrationInstructions("claude", integrations.integrationContext({ a11yEnabled: true, desktopEnabled: true, integrations: { github: false, blender: false, hyperframes: false } }, { a11y: true }));
+  const long = integrations.integrationInstructions("codex", integrations.integrationContext({ a11yEnabled: true, desktopEnabled: true, integrations: { github: false, blender: false, hyperframes: false } }, { a11y: true }));
+  assert.ok(short.replace(/ If these tools are deferred[^.]*\./, "").length < long.length * 0.6, `${short.length} vs ${long.length}`);
   assert.match(integrations.integrationInstructions("trex", integrations.integrationContext(preference, { a11y: true })), /mcp_trex_a11y_\* tools/);
 });
 
-test("an unavailable agent-desktop becomes a chat notice instead of a failed start", async () => {
+test("an unavailable accessibility engine becomes a chat notice instead of a failed start", async () => {
   const warnings = [];
-  // Sin Tauri, la consulta falla como fallaría sin agent-desktop: el chat recibe un aviso y sigue.
+  // Sin Tauri, la consulta falla como fallaría fuera de Windows: el chat recibe un aviso y sigue.
   assert.equal(await accessibility.accessibilityServer("full", message => warnings.push(message)), null);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /^El control por accesibilidad \(experimental\) no se activó en este chat: /);
@@ -92,6 +97,6 @@ test("the working row names the app the agent is driving, only while it is", asy
 test("keyboard shortcuts travel with the gateway only when allowed", async () => {
   assert.equal(normalizeConfig({}).settings.a11yKeyboard, false);
   assert.equal(normalizeConfig({ settings: { a11yKeyboard: true } }).settings.a11yKeyboard, true);
-  assert.equal(accessibility.accessibilityKeyboard({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--engine", "trex", "--keyboard"] }), true);
-  assert.equal(accessibility.accessibilityKeyboard({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--engine", "trex"] }), false);
+  assert.equal(accessibility.accessibilityKeyboard({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full", "--keyboard"] }), true);
+  assert.equal(accessibility.accessibilityKeyboard({ command: "trex-agent", args: ["a11y-mcp", "--mode", "full"] }), false);
 });

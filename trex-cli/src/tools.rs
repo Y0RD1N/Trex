@@ -65,6 +65,10 @@ pub trait ToolProvider: Send + Sync {
         Box::pin(async { Ok(json!({})) })
     }
     fn invalidate_observation(&self) {}
+    /// Guía de uso para el prompt de sistema (estable durante la sesión).
+    fn guidance(&self, _mode: &str) -> Option<String> {
+        None
+    }
     fn definitions(&self, mode: &str) -> Vec<Value>;
     fn is_mutating(&self, name: &str, input: &Value) -> bool;
     fn execute<'a>(
@@ -292,6 +296,11 @@ impl ToolRegistry {
     }
     pub fn session_instructions(&self) -> &Option<String> {
         &self.session_instructions
+    }
+    /// Guía de las integraciones conectadas: el escritorio nativo y las
+    /// `instructions` de cada servidor MCP (como las recibe Claude Code).
+    pub fn guidance(&self, mode: &str) -> Vec<String> {
+        self.providers.iter().filter_map(|provider| provider.guidance(mode)).collect()
     }
     pub fn invalidate_observation(&self) {
         for provider in &self.providers {

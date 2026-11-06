@@ -130,7 +130,7 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       const native = connection.current;
       const browser = await connectBrowser(current.browser, current.cwd, null, false, "", message => notice("warn", message));
       const detection = detectedIntegrations(current.cwd);
-      // Experimental: without a usable agent-desktop the session starts without it, with a notice.
+      // Experimental: where the accessibility engine cannot run, the session starts without it, with a notice.
       const a11y = current.a11yEnabled ? await accessibilityServer("full", message => notice("warn", message)) : null;
       tools.current = { browser: !!browser, available: detection instanceof Promise ? await detection : detection, a11y: !!a11y };
       const tasks = await messageQueueMcpConfig(messageQueueId(current.queueId ?? current.sessionId), true);

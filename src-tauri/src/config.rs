@@ -60,8 +60,6 @@ pub struct Settings {
     pub desktop_enabled: bool,
     /// Control por accesibilidad (experimental, desactivado por defecto).
     pub a11y_enabled: bool,
-    /// Motor de accesibilidad: "trex" (propio, Windows) o "agent-desktop".
-    pub a11y_engine: String,
     /// Atajos de teclado reales en el control por accesibilidad (desactivado por defecto).
     pub a11y_keyboard: bool,
     pub browser_enabled: bool,
@@ -105,7 +103,6 @@ impl Default for Settings {
             integrations: ApplicationIntegrations::default(),
             desktop_enabled: false,
             a11y_enabled: false,
-            a11y_engine: "trex".into(),
             a11y_keyboard: false,
             browser_enabled: true,
             browser_profile: "BROWSER1".into(),
@@ -170,7 +167,10 @@ mod browser_preference_tests {
     fn accessibility_control_is_opt_in_and_roundtrips() {
         let old: AppConfig = serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
         assert!(!old.settings.a11y_enabled);
-        assert_eq!(old.settings.a11y_engine, "trex");
+        // Un motor guardado de versiones anteriores ("agent-desktop") se ignora: solo hay el propio.
+        let legacy: AppConfig = serde_json::from_value(serde_json::json!({"settings":{"a11yEngine":"agent-desktop","a11yEnabled":true}})).unwrap();
+        assert!(legacy.settings.a11y_enabled);
+        assert!(serde_json::to_value(legacy).unwrap()["settings"].get("a11yEngine").is_none());
         assert!(!old.settings.a11y_keyboard, "keyboard shortcuts need explicit permission");
         for enabled in [false, true] {
             let config: AppConfig = serde_json::from_value(serde_json::json!({"settings":{"a11yEnabled":enabled}})).unwrap();

@@ -474,34 +474,18 @@ pub(super) fn mcp_binary() -> &'static Path {
         .1
 }
 
-fn agent_desktop_binary() -> &'static Path {
-    static BINARY: std::sync::OnceLock<(TempDir, PathBuf)> = std::sync::OnceLock::new();
-    &BINARY
-        .get_or_init(|| {
-            let directory = tempfile::tempdir().unwrap();
-            let binary = directory
-                .path()
-                .join(format!("fake-agent-desktop{}", std::env::consts::EXE_SUFFIX));
-            let output = Command::new("rustc")
-                .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_agent_desktop.rs"))
-                .arg("-o")
-                .arg(&binary)
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-            (directory, binary)
-        })
-        .1
-}
-
 #[test]
-fn accessibility_gateway_publishes_only_selected_agent_desktop_tools() {
+fn accessibility_sessions_publish_reads_in_plan_and_accept_old_settings() {
     for mode in ["plan", "ask"] {
         let f = Fixture::new();
-        let mut command = command(f.home.path());
-        command.env("TREX_AGENT_DESKTOP", agent_desktop_binary());
-        let mut agent = Agent::spawn_command(command, "TREX1");
+        let mut agent = Agent::spawn_command(command(f.home.path()), "TREX1");
+        // Configuraciones guardadas que pedían agent-desktop: arrancan con el motor propio.
         let started = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":mode,"accessibility":"agent-desktop"}));
+        if !cfg!(windows) {
+            assert_eq!(started["accessibilityEnabled"], false, "only Windows has the built-in engine");
+            assert!(started["unavailableMcpServers"].as_array().unwrap().contains(&json!("trex_a11y")));
+            continue;
+        }
         assert_eq!(started["accessibilityEnabled"], true, "{mode}");
         let session = started["sessionId"].as_str().unwrap().to_owned();
         agent.turn(&session, "a11y", "Read the open window");
@@ -512,30 +496,15 @@ fn accessibility_gateway_publishes_only_selected_agent_desktop_tools() {
             .iter()
             .map(|tool| tool["function"]["name"].as_str().unwrap().to_owned())
             .collect();
-        let snapshot = names.iter().find(|name| name.contains("a11y_snapshot")).expect("read tool").clone();
+        assert!(names.iter().any(|name| name.contains("a11y_snapshot")), "{names:?}");
         // Plan solo observa; las acciones semánticas piden permiso fuera de plan.
         assert_eq!(names.iter().any(|name| name.contains("a11y_click")), mode == "ask", "{mode}");
-        assert!(!names.iter().any(|name| name.contains("mouse_click") || name.contains("session_end") || name.contains("desktop_snapshot")));
-        request.completion(calls(vec![tool("a11y-read", &snapshot, json!({"app":"notepad.exe"}))]), "tool_calls");
-        let next = f.api.chat();
-        let output = tool_output(&next, "a11y-read").to_string();
-        assert!(output.contains("desktop_snapshot") && output.contains("interactive_only"), "{output}");
-        assert!(!output.contains("structuredContent") && !output.contains("echo"), "{output}");
-        next.final_text("Read through accessibility");
+        request.final_text("Read through accessibility");
         agent.completed("a11y", "completed");
-        // agent-desktop guardó su estado en la carpeta privada de la pasarela, no en ~/.agent-desktop.
-        let home = fs::read_to_string(f.workspace.path().join("agent-desktop-home.marker")).unwrap();
-        assert!(home.contains("trex-a11y-"), "{home}");
         f.api.assert_quiet();
     }
-    // Sin agent-desktop la sesión arranca igual y lo informa.
     let f = Fixture::new();
-    let mut command = command(f.home.path());
-    command.env("TREX_AGENT_DESKTOP", f.home.path().join("missing-agent-desktop"));
-    let mut agent = Agent::spawn_command(command, "TREX1");
-    let started = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":"plan","accessibility":"agent-desktop"}));
-    assert_eq!(started["accessibilityEnabled"], false);
-    assert!(started["unavailableMcpServers"].as_array().unwrap().contains(&json!("trex_a11y")));
+    let mut agent = Agent::spawn_command(command(f.home.path()), "TREX1");
     let plain = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":"plan"}));
     assert!(plain.get("accessibilityEnabled").is_none());
     let unknown = agent.request("session/start", json!({"cwd":f.workspace.path(),"mode":"plan","accessibility":"other"}));
@@ -545,11 +514,8 @@ fn accessibility_gateway_publishes_only_selected_agent_desktop_tools() {
 #[test]
 fn the_builtin_accessibility_engine_needs_no_external_tool() {
     let f = Fixture::new();
-    let mut command = command(f.home.path());
-    // Sin agent-desktop: el motor propio no lo necesita.
-    command.env("TREX_AGENT_DESKTOP", f.home.path().join("missing-agent-desktop"));
-    let mut agent = Agent::spawn_command(command, "TREX1");
-    let started = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":"ask","accessibility":{"engine":"trex","keyboard":true}}));
+    let mut agent = Agent::spawn_command(command(f.home.path()), "TREX1");
+    let started = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":"ask","accessibility":{"keyboard":true}}));
     if !cfg!(windows) {
         assert_eq!(started["accessibilityEnabled"], false, "only Windows has the built-in engine");
         return;
@@ -565,6 +531,9 @@ fn the_builtin_accessibility_engine_needs_no_external_tool() {
         .map(|tool| tool["function"]["name"].as_str().unwrap().to_owned())
         .collect();
     let status = names.iter().find(|name| name.contains("a11y_status")).expect("status tool").clone();
+    // La guía del servidor (sus instructions) llega al prompt de sistema, como en Claude Code.
+    let system = request.body["messages"][0]["content"].as_str().unwrap();
+    assert!(system.contains("Integration guidance") && system.contains("trex_a11y (MCP server): Trex accessibility engine"), "{system}");
     assert!(names.iter().any(|name| name.contains("a11y_set_value")));
     assert!(names.iter().any(|name| name.contains("a11y_press")), "shortcuts were allowed for this session");
     assert!(!names.iter().any(|name| name.contains("a11y_focus_window")), "the built-in engine has no plain focus tool");

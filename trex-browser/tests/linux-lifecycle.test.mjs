@@ -92,7 +92,7 @@ test('Linux native broker survives adapter process-group death and reaps only it
       const fresh = await identity(JSON.parse(await fs.readFile(path.join(home, 'broker.json'), 'utf8')).pid);
       assert.equal(same(broker, fresh), false);
       const screenshot = await call('browser_take_screenshot');
-      assert.equal(screenshot.artifacts[0].mimeType, 'image/png');
+      assert.equal(screenshot.artifacts[0].mimeType, 'image/jpeg');
       assert.ok(screenshot.artifacts[0].bytes > 100);
     } finally {
       if (adapter && adapter.exitCode === null) { try { process.kill(-adapter.pid, 'SIGKILL'); } catch {} }

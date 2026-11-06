@@ -2,6 +2,53 @@
 use crate::settings::ContextSettings;
 use serde_json::{json, Value};
 
+/// Tokens de una imagen como los cuenta Claude: ancho×alto/750 tras reducirla a
+/// 1568 px en el lado largo (y a ~1,15 MP). Sin dimensiones legibles, lo de una
+/// captura típica de 1280×800.
+fn image_tokens(value: &Value) -> u64 {
+    const FALLBACK: u64 = 1_400;
+    let url = value.get("url").and_then(Value::as_str).or_else(|| value.as_str()).unwrap_or("");
+    let Some((_, data)) = url.split_once(";base64,") else { return FALLBACK };
+    let head = &data[..data.len().min(8_192) / 4 * 4];
+    let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, head) else { return FALLBACK };
+    let Some((width, height)) = image_size(&bytes) else { return FALLBACK };
+    let (mut w, mut h) = (f64::from(width), f64::from(height));
+    let scale = (1568.0 / w.max(h)).min(1.0);
+    (w, h) = (w * scale, h * scale);
+    if w * h > 1_150_000.0 {
+        let shrink = (1_150_000.0 / (w * h)).sqrt();
+        (w, h) = (w * shrink, h * shrink);
+    }
+    ((w * h) / 750.0).ceil().max(1.0) as u64
+}
+
+/// Ancho y alto de un PNG o un JPEG a partir de su cabecera.
+fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 24 {
+        let read = |at: usize| u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        return Some((read(16), read(20)));
+    }
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut at = 2;
+    while at + 9 < bytes.len() {
+        if bytes[at] != 0xFF {
+            at += 1;
+            continue;
+        }
+        let marker = bytes[at + 1];
+        if matches!(marker, 0xC0 | 0xC1 | 0xC2) {
+            let height = u16::from_be_bytes([bytes[at + 5], bytes[at + 6]]);
+            let width = u16::from_be_bytes([bytes[at + 7], bytes[at + 8]]);
+            return Some((u32::from(width), u32::from(height)));
+        }
+        let length = usize::from(u16::from_be_bytes([bytes[at + 2], bytes[at + 3]]));
+        at += 2 + length;
+    }
+    None
+}
+
 pub fn estimate(value: &Value) -> u64 {
     fn text(s: &str) -> u64 {
         let ascii = s.bytes().filter(u8::is_ascii).count() as u64;
@@ -18,7 +65,7 @@ pub fn estimate(value: &Value) -> u64 {
             .iter()
             .map(|(k, v)| {
                 if k == "image_url" {
-                    4096
+                    image_tokens(v)
                 } else {
                     text(k).saturating_add(estimate(v))
                 }
@@ -402,6 +449,34 @@ pub fn compact(
         joined
     };
     Some((cutoff, summary))
+}
+
+#[cfg(test)]
+mod image_estimate_tests {
+    use super::*;
+
+    fn png(width: u32, height: u32) -> String {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        bytes.extend(width.to_be_bytes());
+        bytes.extend(height.to_be_bytes());
+        bytes.extend([8, 6, 0, 0, 0]);
+        format!("data:image/png;base64,{}", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes))
+    }
+
+    #[test]
+    fn images_count_what_they_cost() {
+        let screenshot = json!({"type":"image_url","image_url":{"url":png(1280, 720)}});
+        let tokens = estimate(&screenshot);
+        assert!((1_220..1_300).contains(&tokens), "{tokens}");
+        let zoom = estimate(&json!({"image_url":{"url":png(400, 300)}}));
+        assert!(zoom < 200, "{zoom}");
+        // Lo que pasa de 1568 px se cuenta reducido, como lo ve el modelo.
+        let huge = estimate(&json!({"image_url":{"url":png(3840, 2160)}}));
+        assert!(huge < 1_700, "{huge}");
+        assert!((1_390..1_420).contains(&estimate(&json!({"image_url":{"url":"https://example.com/a.png"}}))));
+        let jpeg = include_bytes!("../tests/fixtures/jpeg-baseline.jpg");
+        assert!(image_size(jpeg).is_some(), "JPEG headers are read too");
+    }
 }
 
 #[cfg(test)]

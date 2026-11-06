@@ -5,7 +5,7 @@ import { initialChatState, record, text, type Json, type OutgoingImage } from ".
 import { deliverInbox, InboxRequests, INBOX_INSTRUCTIONS, INBOX_WAKE, type QueueSnapshot } from "../messageQueue";
 import { taskInstructions } from "../chatTasks";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
-import { accessibilityEngine, accessibilityKeyboard, accessibilityServer } from "../accessibility";
+import { accessibilityKeyboard, accessibilityServer } from "../accessibility";
 import { assertIntegrationRestrictions, detectedIntegrations, integrationContext, integrationInstructions, integrationRestrictions } from "../integrations";
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
@@ -151,11 +151,10 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const detection = detectedIntegrations(current.cwd);
       const available = detection instanceof Promise ? await detection : detection;
       assertStartup(procId);
-      // Experimental: the accessibility gateway is requested only when agent-desktop is ready; otherwise a notice and the chat goes on without it.
+      // Experimental: the accessibility engine is requested only where it can run; otherwise a notice and the chat goes on without it.
       const a11yConfig = current.a11yEnabled === true ? await accessibilityServer("full", message => startupNotices.push(message)) : null;
-      // Trex CLI starts the gateway itself with the engine the app chose.
-      const engine = a11yConfig ? accessibilityEngine(a11yConfig) ?? "auto" : null;
-      const accessibility = !a11yConfig ? false : accessibilityKeyboard(a11yConfig) ? { engine, keyboard: true } : engine === "auto" ? true : engine;
+      // Trex CLI starts the engine itself; the app only says whether shortcuts are allowed.
+      const accessibility = !a11yConfig ? false : accessibilityKeyboard(a11yConfig) ? { keyboard: true } : true;
       assertStartup(procId);
       // Announce only an attached browser and installed applications; restrictions below still follow the preferences.
       const integrations = integrationContext(current, { browser: browser?.enabled === true, available, a11y: !!accessibility });

@@ -93,6 +93,9 @@ impl Connection {
     }
 }
 pub struct McpProvider {
+    /// Nombre del servidor y su guía (`initialize.instructions`), recortada.
+    name: String,
+    instructions: Option<String>,
     connection: Arc<Mutex<Option<Connection>>>,
     tools: Vec<Value>,
     mapping: HashMap<String, (String, bool)>,
@@ -169,6 +172,7 @@ impl McpProvider {
             connection
                 .frame(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
                 .await?;
+            let instructions = init["instructions"].as_str().map(|text| crate::context::clip(text.trim(), 2_000).to_owned()).filter(|text| !text.is_empty());
             let mut listed = Vec::new();
             let mut cursor = None;
             for _ in 0..8 {
@@ -199,9 +203,9 @@ impl McpProvider {
                 }
             }
             ensure!(cursor.is_none(), "MCP catalog pagination limit reached");
-            Ok::<_, anyhow::Error>(listed)
+            Ok::<_, anyhow::Error>((listed, instructions))
         };
-        let listed = match tokio::time::timeout(Duration::from_secs(10), startup).await {
+        let (listed, instructions) = match tokio::time::timeout(Duration::from_secs(10), startup).await {
             Ok(Ok(v)) => v,
             _ => {
                 connection.stop().await;
@@ -254,7 +258,11 @@ impl McpProvider {
             tools.push(json!({"type":"function","function":{"name":name,"description":description,"parameters":tool["inputSchema"]}}));
             mapping.insert(name, (original.into(), read_only));
         }
+        // Una guía con credenciales no llega al modelo.
+        let instructions = instructions.filter(|text| !secrets.iter().any(|secret| text.contains(secret)));
         Ok(Self {
+            name: config.name.clone(),
+            instructions,
             connection: Arc::new(Mutex::new(Some(connection))),
             tools,
             mapping,
@@ -263,6 +271,9 @@ impl McpProvider {
     }
 }
 impl ToolProvider for McpProvider {
+    fn guidance(&self, _mode: &str) -> Option<String> {
+        self.instructions.as_ref().map(|text| format!("{} (MCP server): {text}", self.name))
+    }
     fn shutdown<'a>(&'a self) -> ToolFuture<'a> {
         Box::pin(async move {
             if let Some(mut connection) = self.connection.lock().await.take() {

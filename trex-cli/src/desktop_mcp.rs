@@ -80,12 +80,7 @@ fn result(value: Result<Value>) -> Value {
     }
 }
 fn instructions(mode: &str) -> String {
-    let permissions = if mode == "plan" {
-        "This process is read-only: status, monitors, screenshots and waits only. Input is unavailable."
-    } else {
-        "Input tools are available subject to the host agent's permission policy. Use their schemas for pointer motion, double clicks, gradual drag, vertical or horizontal scroll, typing and shortcuts."
-    };
-    format!("Trex desktop controls the real computer and Windows applications; it is separate from the trex_browser project browser. When the user requests computer control, prefer this server's desktop_* tools. Start with desktop_status and desktop_monitors, then take desktop_screenshot for the selected monitor and inspect screen and focus before input. Screenshots are downscaled to 1280 px; input coordinates are pixels of the latest screenshot image. Use region (screen pixels) to zoom into an area cheaply. One observation serves up to 3 inputs within 30 seconds while the screen is unchanged; capture again after focus, layout or display changes. {permissions} Never claim an unadvertised capability. If unavailable, explain the diagnostic rather than silently switching control systems. Never automatically replay uncertain input. For websites requested in Trex Browser, use its connected browser_navigate tool instead of treating a desktop-control failure as a browser failure.")
+    crate::desktop::guidance(mode == "plan")
 }
 pub async fn serve(mode: &str) -> Result<()> {
     ensure!(

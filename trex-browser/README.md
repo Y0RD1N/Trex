@@ -95,9 +95,9 @@ The exact schemas are generated in [docs/tools.json](docs/tools.json) and [docs/
 }
 ```
 
-This full envelope is what hosts get from `call` (the text is the JSON of `structuredContent`). MCP agents (stdio and HTTP) receive only the lean agent view `{ok:true,...data,revision?,artifacts?}` that `modelView` builds; receipts and ownership metadata stay with the host. Hosts that forward results to a model should send that view once, not both the text and `structuredContent` (trex-agent does this and keeps the envelope in its journal).
+This full envelope is what hosts get from `call` (the text is the JSON of `structuredContent`). MCP agents (stdio and HTTP) receive only the lean agent view `{ok:true,...data,revision?,artifacts?}` that `modelView` builds; receipts and ownership metadata stay with the host. In an agent's text, batch steps also drop their operation IDs and receipts (`agentText`); its `structuredContent` keeps them. Hosts that forward results to a model should send that view once, not both the text and `structuredContent` (trex-agent does this and keeps the envelope in its journal).
 
-Screenshots add transient MCP image content. Artifacts contain `{artifactId,mimeType,bytes,sha256,kind,projectId,profile,createdAt,width?,height?,durationMs?}`. They never contain capability tokens or host paths. Binary screenshots are limited to 4 MiB; larger images return an actionable crop/JPEG error. Video remains a private artifact reference. Artifact integrity is rechecked on access.
+Screenshots default to JPEG quality 70 in CSS pixels, with a wide viewport scaled to 1024 px at its scroll position; `type:"png"`, `scale:"device"` and `fullResolution:true` (native width) keep full detail. Artifact `width`/`height` are read from the encoded image. Screenshots add transient MCP image content. Artifacts contain `{artifactId,mimeType,bytes,sha256,kind,projectId,profile,createdAt,width?,height?,durationMs?}`. They never contain capability tokens or host paths. Binary screenshots are limited to 4 MiB; larger images return an actionable crop/JPEG error. Video remains a private artifact reference. Artifact integrity is rechecked on access.
 
 ## Policy and lifetime
 
@@ -160,9 +160,14 @@ queues work and returns its durable task ID; status with `waitMs` up to 30000
 waits for results. Uncertain work is never automatically retried. See
 [the team spaces guide](../docs/agent-browser-spaces.md).
 
-Snapshots return `tabId` and a **page-specific revision**. Refs and frame maps
-belong to that page; snapshots or actions on another tab do not invalidate them.
-Navigation, input, ownership changes and pauses invalidate the affected refs.
+Snapshots return `tabId` and a **page-specific revision**. By default they list
+only actionable elements as `ref kind name` lines; `full:true` (or `compact:false`)
+adds the accessibility tree, cut at 16,000 characters (scope it with `selector`).
+Refs and frame maps belong to that page; snapshots or actions on another tab do
+not invalidate them. Main-frame navigation, input, ownership changes and pauses
+invalidate the affected refs. A child frame (ad, embed) navigating invalidates
+them only when they came from that frame, and `browser_evaluate` never does; an
+element that changed meanwhile is still rejected by its fingerprint.
 Pass the snapshot's `tabId`, `revision` and `ref` together. The visible selected
 tab remains a profile-level convenience, not a separate agent identity.
 
@@ -173,7 +178,9 @@ is accepted. Inputs remain serialized within the profile. It returns per-step
 receipts and artifact refs, with only the latest screenshot image inline.
 Text results have a combined 1 MiB budget. Each issued step has a durable receipt
 without arguments, page content or image data. A failure stops subsequent steps;
-completed actions are not rolled back. Cancellation targets the parent operation
+completed actions are not rolled back. The error text names the step that stopped
+the batch (`steps[i] tool`), the completed steps (never replay them) and the
+steps that never ran. Cancellation targets the parent operation
 and interrupts its current step. Never replay a partial batch automatically.
 
 These are web-page/browser controls, not native desktop or Chrome-settings UI

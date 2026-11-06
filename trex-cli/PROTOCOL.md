@@ -498,17 +498,21 @@ they do not revoke the agent's general shell permissions.
   `notProviderBill:true`. Reservations persist even when a provider omits usage.
   It is not a guaranteed financial limit or a provider bill.
 - `unavailableMcpServers`: optional startup diagnostics for configured servers.
-- `session/start.accessibility: true | "trex" | "agent-desktop" | {engine, keyboard}`
-  (experimental, immutable for a live session): the CLI starts its own `a11y-mcp`
-  gateway with the built-in Windows engine (`trex`; `true` picks it when
-  available) or an installed agent-desktop, and exposes its `a11y_*` tools as
-  the `trex_a11y` MCP server. `keyboard:true` adds `--keyboard`, which publishes
-  `a11y_press` (real shortcuts) in full mode; without it no tool uses the keyboard.
-  Plan mode keeps only the read-only tools; actions need approval outside
-  full mode. The result includes `accessibilityEnabled` (false and
-  `trex_a11y` in `unavailableMcpServers` when agent-desktop is missing).
-  `a11y-doctor --json` reports agent-desktop as `{available,path?,version?,minimumVersion,reason}`
-  plus `native:{available,engine:"trex"}`, without opening applications.
+- `session/start.accessibility: true | {keyboard}` (experimental, immutable for a
+  live session): the CLI starts its own `a11y-mcp` server with the built-in
+  Windows engine and exposes its `a11y_*` tools as the `trex_a11y` MCP server.
+  Older values (`"trex"`, `"agent-desktop"`, `{engine, keyboard}`) are still
+  accepted and use the same engine. `keyboard:true` adds `--keyboard`, which
+  publishes `a11y_press` (real shortcuts) in full mode; without it no tool uses
+  the keyboard. Plan mode keeps only the read-only tools; actions need approval
+  outside full mode. The result includes `accessibilityEnabled` (false and
+  `trex_a11y` in `unavailableMcpServers` outside Windows).
+  `a11y-doctor --json` reports `{available, engine:"trex", reason}` without
+  opening applications.
+- The system prompt carries the guidance of each connected integration once per
+  session: the native desktop provider's and each MCP server's
+  `initialize.instructions` (clipped to 2,000 characters; dropped if it contains
+  credential material). The session's tool permission policy still applies.
 
 Native tools also include `edit_file`, `make_directory`, `rename_file`,
 `remove_file`, `checkpoint_list`, `checkpoint_diff`, `checkpoint_restore`,

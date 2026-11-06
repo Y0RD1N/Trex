@@ -192,7 +192,7 @@
     },
     {
       "name": "browser_snapshot",
-      "description": "Accessibility tree plus actionable elements as \"ref kind name\" lines. compact:true omits the tree (cheapest; use it to act). selector scopes both to one region. Pass tabId+revision+ref to act.",
+      "description": "Actionable elements as \"ref kind name\" lines; act with tabId+revision+ref. full:true adds the accessibility tree to read content; selector scopes to a region.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -204,6 +204,9 @@
           },
           "selector": {
             "type": "string"
+          },
+          "full": {
+            "type": "boolean"
           },
           "compact": {
             "type": "boolean"
@@ -926,7 +929,7 @@
     },
     {
       "name": "browser_take_screenshot",
-      "description": "Capture the viewport (1024 px wide; fullResolution:true for native), full page or a clip as PNG/JPEG. Works while paused, to inspect an uncertain action. Prefer browser_snapshot: images cost far more tokens.",
+      "description": "Capture the viewport (1024 px wide; fullResolution:true for native), full page or a clip. JPEG 70 in CSS pixels by default; type:png and scale:device for exact or HiDPI pixels. Works while paused. Prefer browser_snapshot: images cost far more tokens.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -938,12 +941,18 @@
           },
           "type": {
             "enum": [
-              "png",
-              "jpeg"
+              "jpeg",
+              "png"
             ]
           },
           "quality": {
             "type": "number"
+          },
+          "scale": {
+            "enum": [
+              "css",
+              "device"
+            ]
           },
           "fullPage": {
             "type": "boolean"

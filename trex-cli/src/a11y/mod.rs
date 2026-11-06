@@ -2,8 +2,8 @@
 //!
 //! Lee y maneja las aplicaciones a través del árbol de accesibilidad del sistema
 //! (UI Automation en Windows), sin mover el ratón ni escribir con el teclado de
-//! la persona. Diferencias con agent-desktop, que sigue disponible como motor
-//! externo:
+//! la persona. Es independiente del control de computadora (capturas y
+//! entrada real): la persona elige cuál usar.
 //!
 //! - va dentro de `trex-agent`: nada que instalar, ni Node ni npm;
 //! - las acciones nunca traen la ventana al frente (`AutoSetFocus` desactivado)
@@ -198,6 +198,20 @@ the clipboard, shell commands or files as a workaround to put text into an app; 
 
 // --- Formato -----------------------------------------------------------------------
 
+/// Unos 10 000 tokens: lo que pase se recorta con un aviso para acotar la consulta.
+const MAX_RESULT_CHARS: usize = 40_000;
+
+/// Una respuesta enorme (un snapshot sin límites de una app gigante) se recorta.
+pub fn clip_result(text: String) -> String {
+    let total = text.chars().count();
+    if total <= MAX_RESULT_CHARS {
+        return text;
+    }
+    let kept: String = text.chars().take(MAX_RESULT_CHARS).collect();
+    format!("{kept}
+[Trex: result truncated from {total} to {MAX_RESULT_CHARS} characters. Narrow it with root, max_depth, max_elements or a11y_find.]")
+}
+
 /// Saltos de línea de cualquier sistema (`\r\n`, `\r` del Bloc de notas, `\n`) como `\n`.
 pub fn lines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
@@ -313,11 +327,10 @@ where
                 if cancelled {
                     continue;
                 }
-                let mut result = match result {
-                    Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
-                    Err(error) => json!({"content": [{"type": "text", "text": format!("{}: {}", error.code, error.message)}], "isError": true}),
+                let result = match result {
+                    Ok(text) => json!({"content": [{"type": "text", "text": clip_result(text)}], "isError": false}),
+                    Err(error) => json!({"content": [{"type": "text", "text": clip_result(format!("{}: {}", error.code, error.message))}], "isError": true}),
                 };
-                crate::a11y_mcp::rewrite_result(&mut result);
                 let _ = respond(&mut *output.lock().unwrap(), &json!({"jsonrpc": "2.0", "id": id, "result": result}));
             }
         })
@@ -393,7 +406,7 @@ pub fn serve(mode: &str, keyboard: bool) -> Result<()> {
         serve_with(move || uia::UiaEngine::new(keyboard), mode, keyboard, stdin.lock(), std::io::stdout())
     }
     #[cfg(not(windows))]
-    anyhow::bail!("the Trex accessibility engine is only available on Windows; use the agent-desktop engine")
+    anyhow::bail!("the Trex accessibility engine is only available on Windows")
 }
 
 #[cfg(test)]
@@ -448,24 +461,22 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_is_a_subset_of_the_gateway_selection() {
-        for tool in READ_TOOLS {
-            assert!(crate::a11y_mcp::READ_TOOLS.contains(&tool), "{tool}");
-        }
-        for tool in ACTION_TOOLS {
-            assert!(crate::a11y_mcp::ACTION_TOOLS.contains(&tool), "{tool}");
-        }
+    fn plan_publishes_only_reads_and_shortcuts_need_the_setting() {
+        assert!(READ_TOOLS.iter().all(|tool| !ACTION_TOOLS.contains(tool)));
+        let huge = clip_result("é".repeat(MAX_RESULT_CHARS + 10));
+        assert!(huge.starts_with(&"é".repeat(MAX_RESULT_CHARS)) && huge.contains("truncated"), "huge results are clipped");
+        assert_eq!(clip_result("ok".into()), "ok");
         let plan: Vec<_> = tools("plan", true).iter().map(|tool| tool["name"].as_str().unwrap().to_owned()).collect();
         assert_eq!(plan.len(), READ_TOOLS.len(), "plan never gets actions, not even the keyboard");
         assert!(plan.iter().all(|name| name.starts_with("a11y_")));
-        assert!(KEYBOARD_TOOLS.iter().all(|tool| crate::a11y_mcp::ACTION_TOOLS.contains(tool)));
+        assert!(KEYBOARD_TOOLS.iter().all(|tool| !ACTION_TOOLS.contains(tool) && !READ_TOOLS.contains(tool)));
         assert!(!tools("full", false).iter().any(|tool| tool["name"] == "a11y_press"), "shortcuts need the setting");
         assert!(tools("full", true).iter().any(|tool| tool["name"] == "a11y_press"));
         let full = tools("full", false);
         assert_eq!(full.len(), READ_TOOLS.len() + ACTION_TOOLS.len());
         assert!(full.iter().all(|tool| !tool["description"].as_str().unwrap().is_empty()));
         assert!(full.iter().any(|tool| tool["name"] == "a11y_set_value" && tool["inputSchema"]["required"] == json!(["ref_id", "value"])));
-        // Bastante menos que los ~20 KB (5 000 tokens) de la selección de agent-desktop.
+        // Unos 3 500 tokens de esquemas en modo completo.
         let size = serde_json::to_string(&full).unwrap().len();
         assert!(size < 14_000, "catalog is {size} bytes");
     }

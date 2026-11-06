@@ -148,7 +148,9 @@ export class BrowserService {
   attachPage(s,p){if(s.shell?.isUi(p)||[...s.tabs.values()].includes(p))return;const id=`tab-${++s.revision}`;s.tabs.set(id,p);this.pageState(s,p);s.selected||=id;
     p.on('close',()=>{this.invalidate(s,p);s.tabs.delete(id);s.pageStates.delete(p);s.cdps?.delete(p);s.revision++;if(s.selected===id)s.selected=s.tabs.keys().next().value;});
     p.on('domcontentloaded',()=>this.invalidate(s,p));
-    p.on('framenavigated',()=>this.invalidate(s,p));
+    // Ads and embeds navigate on their own: only the main frame, or a frame the
+    // current refs came from (a frameId snapshot), makes this page's refs stale.
+    p.on('framenavigated',frame=>{if(frame===p.mainFrame()||[...(s.pageStates?.get(p)?.refs.values()||[])].some(ref=>ref.frame===frame))this.invalidate(s,p);});
     p.on('dialog',dialog=>{s.dialog={dialog,tabId:id,type:dialog.type(),message:text(dialog.message())};});
     p.on('console',m=>{s.events.push({kind:'console',type:m.type(),text:text(m.text()),tabId:id,at:Date.now()});if(s.events.length>300)s.events.shift();});
     p.on('pageerror',e=>{s.events.push({kind:'pageerror',text:text(e.message),tabId:id,at:Date.now()});if(s.events.length>300)s.events.shift();});
@@ -319,7 +321,7 @@ export class BrowserService {
     const recoveryTakeover=name==='browser_takeover'&&s.paused&&s.active?.controller.signal.aborted;
     if(recoveryClose)for(const pending of this.operations.values())if(!pending.observation&&!pending.finishedAt&&pending.ctx.projectId===ctx.projectId&&pending.ctx.profile===ctx.profile&&pending.ctx.clientId===ctx.clientId)pending.controller.abort();
     const controller=new AbortController();const op={id:operationId,ctx,controller,name,args,observation};this.operations.set(operationId,op);
-    const cancelled=()=>Object.assign(new Error(!op.started?'Queued operation cancelled before execution':observation?'Observation cancelled or timed out; browser remains available. Retry this read with a new operationId.':'Operation cancelled or timed out; inspect with browser_snapshot or browser_take_screenshot, then browser_resume before a new action. Never replay the uncertain action.'),{code:!op.started?'CANCELLED':observation?(op.timedOut?'READ_TIMEOUT':'CANCELLED'):'UNCERTAIN',...(op.batchSteps?{batchSteps:op.batchSteps.map(step=>({...step}))}:{})});
+    const cancelled=()=>Object.assign(new Error(!op.started?'Queued operation cancelled before execution':observation?'Observation cancelled or timed out; browser remains available. Retry this read with a new operationId.':'Operation cancelled or timed out; inspect with browser_snapshot or browser_take_screenshot, then browser_resume before a new action. Never replay the uncertain action.'),{code:!op.started?'CANCELLED':observation?(op.timedOut?'READ_TIMEOUT':'CANCELLED'):'UNCERTAIN',...(op.batchSteps?{batchSteps:op.batchSteps.map(step=>({...step})),batchTools:args.steps.map(step=>step.tool)}:{})});
     const timer=setTimeout(()=>{op.timedOut=true;controller.abort();},timeoutMs);timer.unref();
     const execute=async()=>{
       if(controller.signal.aborted)throw Object.assign(new Error('Operation cancelled before execution'),{code:'CANCELLED'});
@@ -332,7 +334,7 @@ export class BrowserService {
       try{const before=EFFECT_TOOLS.has(name)&&s.browser?await this.pageFacts(s,args).catch(()=>null):null;
         const pending=this.execute(s,ctx,name,args,controller.signal,operationId);const result=observation?await abortableRead(pending,controller.signal):await pending;
         if(before&&result?.data&&typeof result.data==='object'&&!controller.signal.aborted){const effect=await this.effectOf(s,args,before).catch(()=>null);if(effect&&Object.keys(effect).length)result.data={...result.data,effect};}if(controller.signal.aborted)throw cancelled();if(observation&&name!=='browser_artifact'&&s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Browser ownership changed during observation'),{code:'OWNERSHIP'});return {...result,generation:s.generation,revision:this.resultRevision(s,args,result)};}
-      catch(e){if(observation&&(controller.signal.aborted||e.name==='TimeoutError'))throw controller.signal.aborted?cancelled():Object.assign(new Error('Observation timed out; browser remains available. Retry the read with a new operationId.'),{code:'READ_TIMEOUT'});if(e.name==='TimeoutError'){this.pause(s,'uncertain',op);await this.interrupt(s);throw Object.assign(new Error('Browser action timed out and may have affected the page; inspect before resuming, do not replay'),{code:'UNCERTAIN',...(e.batchSteps?{batchSteps:e.batchSteps}:{})});}throw e;}
+      catch(e){if(observation&&(controller.signal.aborted||e.name==='TimeoutError'))throw controller.signal.aborted?cancelled():Object.assign(new Error('Observation timed out; browser remains available. Retry the read with a new operationId.'),{code:'READ_TIMEOUT'});if(e.name==='TimeoutError'){this.pause(s,'uncertain',op);await this.interrupt(s);throw Object.assign(new Error('Browser action timed out and may have affected the page; inspect before resuming, do not replay'),{code:'UNCERTAIN',...(e.batchSteps?{batchSteps:e.batchSteps,batchTools:e.batchTools}:{})});}throw e;}
       finally{controller.signal.removeEventListener('abort',abort);if(s.active===op)s.active=null;s.refLeases--;this.drainRefs(s);this.notifyShell(s);}
     };
     // Page actions stay serialized; a hung action must not hide the page from
@@ -343,13 +345,13 @@ export class BrowserService {
     finally{clearTimeout(timer);controller.signal.removeEventListener('abort',rejectOnAbort);op.finishedAt=Date.now();if(this.operations.size>1000){for(const [id,old] of this.operations)if(old.finishedAt){this.operations.delete(id);if(this.operations.size<800)break;}}}
   }
   async executeBatch(s,ctx,args,signal,operationId){
-    const op=this.operations.get(operationId),steps=[],artifacts=[];if(op)op.batchSteps=steps;
+    const op=this.operations.get(operationId),steps=[],artifacts=[],batchTools=args.steps.map(step=>step.tool);if(op)op.batchSteps=steps;
     let image,bytes=0;
     for(const [index,step] of args.steps.entries()){
       signal.throwIfAborted();
       const id=`batch:${sha256(operationId)}:${index}`,receipt={index,tool:step.tool,operationId:id,receipt:{status:'uncertain',manualReview:true,replaySafe:false}};
       const persist=()=>writePrivate(path.join(this.home,'receipts',`${sha256(id)}.json`),JSON.stringify({operationId:id,parentOperationId:operationId,name:step.tool,projectId:ctx.projectId,profile:ctx.profile,clientHash:sha256(ctx.clientId),at:new Date().toISOString(),receipt:receipt.receipt}));
-      const prior=jsonRead(path.join(this.home,'receipts',`${sha256(id)}.json`),null);if(prior)throw Object.assign(new Error('Duplicate batch step; never replay automatically'),{code:'DUPLICATE_OPERATION',batchSteps:steps});
+      const prior=jsonRead(path.join(this.home,'receipts',`${sha256(id)}.json`),null);if(prior)throw Object.assign(new Error('Duplicate batch step; never replay automatically'),{code:'DUPLICATE_OPERATION',batchSteps:steps,batchTools});
       steps.push(receipt);persist();if(op){op.activeTool=step.tool;op.activeArgs=step.arguments;}
       try{
         const result=await this.execute(s,ctx,step.tool,step.arguments,signal,id);signal.throwIfAborted();
@@ -361,7 +363,7 @@ export class BrowserService {
         bytes+=size;receipt.data=result.data;
       }catch(error){
         if(receipt.receipt.status!=='completed'){const uncertain=!isObservation(step.tool,step.arguments)&&(signal.aborted||error.name==='TimeoutError'||error.code==='UNCERTAIN');receipt.receipt={status:uncertain?'uncertain':'rejected',manualReview:uncertain,replaySafe:false};persist();}
-        error.batchSteps=steps;throw error;
+        error.batchSteps=steps;error.batchTools=batchTools;throw error;
       }
     }
     return {data:{steps,completed:steps.length},artifacts,...(image?{image}:{})};
@@ -403,6 +405,8 @@ export class BrowserService {
       case 'browser_frames':{const state=this.pageState(s,p);state.frames.clear();const frames=p.frames().map((frame,i)=>{const frameId=`${[...s.tabs].find(([,v])=>v===p)[0]}-frame-${i}-${s.revision}`;state.frames.set(frameId,frame);return {frameId,url:frame.url(),name:frame.name(),main:frame===p.mainFrame()};});return out({frames});}
       case 'browser_handle_dialog':{if(!s.dialog)throw new Error('No pending dialog');const d=s.dialog;s.dialog=null;if(a.accept)await d.dialog.accept(a.promptText);else await d.dialog.dismiss();actionDone();return out({handled:true});}
       case 'browser_snapshot':{
+        // The element list by default; full:true (or compact:false) adds the aria tree for reading.
+        const full=a.full===true||a.full===undefined&&a.compact===false;
         const state=this.pageState(s,p),f=this.frame(s,a),generation=s.generation,refs=new Map(),elements=[];let revision=state.revision;const selector='a,button,input,textarea,select,[role],[tabindex],summary';
         // Pages that navigate right after load (SPA redirects) destroy the context mid-read: retry briefly.
         const root=a.selector?f.locator(a.selector).first():f.locator('body');
@@ -419,7 +423,7 @@ export class BrowserService {
               return {tag,role,name:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||e.getAttribute('title')||e.getAttribute('name')||e.getAttribute('value')||'').slice(0,500),type,visible,actionable,fingerprint:e.outerHTML.slice(0,8192)};
             }).catch(()=>null);if(info){refs.set(ref,{handle,frame:f,fingerprint:info.fingerprint,name:text(info.name||'').trim().slice(0,80)});delete info.fingerprint;elements.push({ref,...info});}}
           const flags=new Map(elements.map(e=>[e.ref,{visible:e.visible,actionable:e.actionable}]));for(const e of elements){delete e.visible;delete e.actionable;}
-          const accessibility=a.compact?'':await root.ariaSnapshot({timeout:2500}).catch(()=>'');signal.throwIfAborted();if(state.revision!==revision||s.generation!==generation||s.owner!==ctx.clientId)throw Object.assign(new Error('Page or browser ownership changed while reading; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});
+          const accessibility=full?await root.ariaSnapshot({timeout:2500}).catch(()=>''):'';signal.throwIfAborted();if(state.revision!==revision||s.generation!==generation||s.owner!==ctx.clientId)throw Object.assign(new Error('Page or browser ownership changed while reading; take a new browser_snapshot'),{code:'STALE_SNAPSHOT'});
           this.retireRefs(s,state.refs);state.revision++;state.refs=refs;published=true;let listed=elements,omitted=0;
           {
             // Keep only visible, actionable elements; named ones, or unnamed fields (inputs need no label to be typed into).
@@ -433,7 +437,7 @@ export class BrowserService {
             }
             listed=out;
           }
-          return out({tabId:[...s.tabs].find(([,page])=>page===p)[0],url:f.url(),revision:state.revision,...(a.compact?{compact:true,title:text(await p.title().catch(()=>'')).slice(0,200)}:{accessibility:text(accessibility).slice(0,16000),...(accessibility.length>16000?{truncated:'tree cut at 16000 chars: use selector to scope'}:{})}),omitted,elements:listed,untrustedContent:true});
+          return out({tabId:[...s.tabs].find(([,page])=>page===p)[0],url:f.url(),revision:state.revision,title:text(await Promise.resolve().then(()=>p.title()).catch(()=>'')).slice(0,200),...(full?{accessibility:text(accessibility).slice(0,16000),...(accessibility.length>16000?{truncated:'tree cut at 16000 chars: use selector to scope'}:{})}:{}),omitted,elements:listed,untrustedContent:true});
         }finally{if(!published)for(const handle of handles)handle.dispose?.().catch(()=>{});}
       }
       case 'browser_click':await (await this.locator(s,a)).click({button:a.button||'left',clickCount:bounded(a.clickCount,1,3,1),timeout:10000,noWaitAfter:true});actionDone();return out({clicked:true});
@@ -444,7 +448,7 @@ export class BrowserService {
       case 'browser_type':{const loc=await this.locator(s,a);await loc.fill(a.text,{timeout:10000});if(a.submit)await loc.press('Enter',{timeout:10000});actionDone();return out({typed:true});}
       case 'browser_fill_form':{if(a.fields.length>50)throw new Error('Maximum 50 fields');for(const field of a.fields){if(signal.aborted)throw new Error('Cancelled');const loc=await this.locator(s,{...a,...field});if(typeof field.value==='boolean')await loc.setChecked(field.value,{timeout:10000});else await loc.fill(String(field.value??''),{timeout:10000});}actionDone();return out({filled:a.fields.length});}
       case 'browser_select_option':await (await this.locator(s,a)).selectOption(a.values,{timeout:10000});actionDone();return out({selected:true});
-      case 'browser_evaluate':{if(a.function.length>32768)throw new Error('JavaScript limit 32 KiB');const data=await this.frame(s,a).evaluate(({source,arg})=>{const fn=(0,eval)(`(${source})`);if(typeof fn!=='function')throw new Error('function must be a JavaScript function expression');return fn(arg);},{source:a.function,arg:a.arg});actionDone();if(JSON.stringify(data)?.length>65536)throw new Error('Evaluation result exceeds 64 KiB');return out({value:data,untrustedContent:true});}
+      case 'browser_evaluate':{if(a.function.length>32768)throw new Error('JavaScript limit 32 KiB');const data=await this.frame(s,a).evaluate(({source,arg})=>{const fn=(0,eval)(`(${source})`);if(typeof fn!=='function')throw new Error('function must be a JavaScript function expression');return fn(arg);},{source:a.function,arg:a.arg});if(JSON.stringify(data)?.length>65536)throw new Error('Evaluation result exceeds 64 KiB');return out({value:data,untrustedContent:true});}
       case 'browser_resize':await p.setViewportSize({width:bounded(a.width,200,3840,1280),height:bounded(a.height,200,2160,800)});return out({viewport:p.viewportSize()});
       case 'browser_emulate':{
         if(a.colorScheme)await p.emulateMedia({colorScheme:a.colorScheme});
@@ -472,10 +476,19 @@ export class BrowserService {
       case 'browser_network_body':{const entry=s.network.get(a.requestId);if(!entry)throw new Error('Request ID expired');let body;if(a.kind==='request'){body=entry.request.postDataBuffer()||Buffer.alloc(0);}else{if(!entry.response)throw new Error('Response unavailable');const headers=entry.response.headers();const len=Number(headers['content-length']);if(!Number.isFinite(len)||len<0||len>1024*1024||headers['content-encoding']&&headers['content-encoding']!=='identity')throw new Error('Response body requires uncompressed Content-Length <= 1 MiB');await abortableRead(entry.response.finished(),signal);if(signal.aborted)throw new Error('Read cancelled');body=await abortableRead(entry.response.body(),signal);}if(body.length>1024*1024)throw new Error('Body exceeds 1 MiB');return out({body:body.toString('utf8'),bytes:body.length,untrustedContent:true});}
       case 'browser_route':if(a.action==='clear')await s.browser.unrouteAll({behavior:'wait'});else {if(!a.url||a.url.length>2048||(a.body||'').length>1024*1024)throw new Error('Bounded URL and body required');await s.browser.route(a.url,route=>route.fulfill({status:bounded(a.status,100,599,200),body:a.body||'',contentType:a.contentType||'text/plain'}));}return out({mocked:a.action});
       case 'browser_file_upload':{if(a.paths.length>20)throw new Error('Maximum 20 upload files');const files=[];let total=0;for(const name of a.paths){const file=uploadSnapshot(ctx.cwd,name);total+=file.buffer.length;if(total>MAX_ARTIFACT)throw new Error('Combined uploads exceed 64 MiB');files.push(file);}await (await this.locator(s,a)).setInputFiles(files,{timeout:10000});actionDone();return out({uploaded:files.length});}
-      case 'browser_take_screenshot':{const type=a.type||'png';let bytes;
-        const vp=!a.fullPage&&!a.clip&&!a.fullResolution&&typeof p.evaluate==='function'?await p.evaluate(()=>({w:innerWidth,h:innerHeight})).catch(()=>null):null;
-        if(vp&&vp.w>1024){const c=await this.cdp(s,p);const shot=await c.send('Page.captureScreenshot',{format:type,...(type==='jpeg'?{quality:bounded(a.quality,1,100,80)}:{}),clip:{x:0,y:0,width:vp.w,height:vp.h,scale:1024/vp.w},captureBeyondViewport:false});bytes=Buffer.from(shot.data,'base64');}
-        else bytes=await p.screenshot({type,quality:type==='jpeg'?bounded(a.quality,1,100,80):undefined,fullPage:!!a.fullPage,clip:a.clip,timeout:10000});signal.throwIfAborted();if(bytes.length>MAX_IMAGE)throw new Error('Screenshot exceeds 4 MiB; choose JPEG, lower quality, viewport, or a smaller clip');const meta=await this.artifacts.add(bytes,`image/${type}`,'screenshot',ctx,imageDimensions(bytes,type));return {...out({captured:true},[meta]),image:{type:'image',mimeType:meta.mimeType,data:bytes.toString('base64')}};}
+      case 'browser_take_screenshot':{
+        // JPEG 70 in CSS pixels by default; PNG, device pixels and native width are arguments.
+        const type=a.type||'jpeg',quality=type==='jpeg'?bounded(a.quality,1,100,70):undefined,scale=a.scale||'css';let bytes;
+        const vp=!a.fullPage&&!a.clip&&!a.fullResolution&&typeof p.evaluate==='function'?await p.evaluate(()=>({w:innerWidth,h:innerHeight,x:visualViewport?.pageLeft??scrollX,y:visualViewport?.pageTop??scrollY,dpr:devicePixelRatio||1})).catch(()=>null):null;
+        if(vp&&vp.w>1024){
+          // A wide viewport is captured where it is scrolled, 1024 CSS px wide. The output is
+          // clip x scale x this session's device ratio (1 under viewport emulation), divided out here.
+          const c=await this.cdp(s,p),metrics=await c.send('Page.getLayoutMetrics'),ratio=metrics?.contentSize?.width/metrics?.cssContentSize?.width||1;
+          const shot=await c.send('Page.captureScreenshot',{format:type,...(quality?{quality}:{}),clip:{x:vp.x,y:vp.y,width:vp.w,height:vp.h,scale:1024/vp.w*(scale==='device'?vp.dpr:1)/ratio},captureBeyondViewport:false});bytes=Buffer.from(shot.data,'base64');}
+        else bytes=await p.screenshot({type,quality,scale,fullPage:!!a.fullPage,clip:a.clip,timeout:10000});
+        signal.throwIfAborted();if(bytes.length>MAX_IMAGE)throw new Error('Screenshot exceeds 4 MiB; choose JPEG, lower quality, viewport, or a smaller clip');
+        // Width and height are read from the encoded image, so they are the real pixel size.
+        const meta=await this.artifacts.add(bytes,`image/${type}`,'screenshot',ctx,imageDimensions(bytes,type));return {...out({captured:true},[meta]),image:{type:'image',mimeType:meta.mimeType,data:bytes.toString('base64')}};}
       case 'browser_start_video':return this.startCapture(s,ctx,'video',p,a);
       case 'browser_start_trace':return this.startCapture(s,ctx,'trace',p,a);
       case 'browser_perf_start':return this.startCapture(s,ctx,'perf',p,a);

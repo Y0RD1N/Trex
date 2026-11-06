@@ -14,7 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
 mod wayland;
@@ -101,7 +100,21 @@ pub struct DesktopProvider {
     portal: Arc<tokio::sync::Mutex<wayland::PortalState>>,
 }
 
+/// Cómo usar el control de computadora: la misma guía para el servidor MCP
+/// (Claude, Codex) y para las sesiones de Trex CLI.
+pub fn guidance(read_only: bool) -> String {
+    let permissions = if read_only {
+        "This process is read-only: status, monitors, screenshots and waits only. Input is unavailable."
+    } else {
+        "Input tools are available subject to the host agent's permission policy. Use their schemas for pointer motion, double clicks, gradual drag, vertical or horizontal scroll, typing and shortcuts."
+    };
+    format!("Trex desktop controls the real computer with screenshots and real mouse and keyboard input; it is separate from the trex_browser project browser and from accessibility control. Start with desktop_screenshot (primary screen unless monitor is given; it says how many screens there are, desktop_monitors lists them) and check the screen and focus before input. Input coordinates are pixels of the latest screenshot image. For cheaper captures use region (screen pixels) or maxEdge. One observation serves up to 3 inputs within 30 seconds while the screen is unchanged; capture again after focus, layout or display changes. {permissions} Never claim an unadvertised capability; if unavailable, explain the diagnostic rather than silently switching control systems. Never automatically replay uncertain input. A desktop-control failure says nothing about Trex Browser, whose websites go through browser_navigate.")
+}
+
 impl ToolProvider for DesktopProvider {
+    fn guidance(&self, mode: &str) -> Option<String> {
+        Some(guidance(mode == "plan"))
+    }
     fn invalidate_observation(&self) {
         #[cfg(target_os = "linux")]
         if let Ok(mut portal) = self.portal.try_lock() {
@@ -124,7 +137,7 @@ impl ToolProvider for DesktopProvider {
             ("desktop_status", "Check desktop backend and availability without taking a screenshot or sending input.", json!({}), vec![]),
             ("desktop_monitors", "List screens with physical-pixel origins, dimensions and IDs. Windows screenshots can select a monitor by ID.", json!({}), vec![]),
             ("desktop_wait", "Wait for the desktop to settle, in milliseconds (0 to 10000). Capture again afterwards before input.", json!({"milliseconds":{"type":"integer","minimum":0,"maximum":10000}}), vec!["milliseconds"]),
-            ("desktop_screenshot", "Capture a screen (primary by default; monitor ID from desktop_monitors), downscaled to 1280 px on its long edge. region {x,y,width,height} in screen pixels captures only that area, sharper and cheaper. fullResolution:true skips downscaling. The observation serves up to 3 inputs within 30 s while the screen is unchanged. Inspect screen and focus before acting.", json!({"monitor":{"type":"integer","minimum":0},"region":{"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":16},"height":{"type":"integer","minimum":16}},"required":["x","y","width","height"],"additionalProperties":false},"fullResolution":{"type":"boolean"}}), vec![]),
+            ("desktop_screenshot", "Capture a screen (the primary unless monitor is given; the result says how many there are), downscaled to 1280 px on its long edge. region {x,y,width,height} in screen pixels captures only that area, sharper and cheaper. maxEdge (256-1568) sets the long edge: 768 px costs about 440 tokens, enough to check a change. fullResolution:true keeps up to 1568 px, the most a model sees. The observation serves up to 3 inputs within 30 s while the screen is unchanged.", json!({"monitor":{"type":"integer","minimum":0},"region":{"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":16},"height":{"type":"integer","minimum":16}},"required":["x","y","width","height"],"additionalProperties":false},"maxEdge":{"type":"integer","minimum":256,"maximum":1568},"fullResolution":{"type":"boolean"}}), vec![]),
             ("desktop_move", "Move the pointer to a point in the latest screenshot without clicking. Coordinates are screenshot pixels.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0}}), vec!["observation","x","y"]),
             ("desktop_click", "Click a point in the latest desktop screenshot. Coordinates are screenshot pixels. Use clicks:2 for a double click.", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"button":{"type":"string","enum":["left","right","middle"]},"clicks":{"type":"integer","minimum":1,"maximum":2}}), vec!["observation","x","y"]),
             ("desktop_scroll", "Scroll at a point in the latest screenshot. Positive amount scrolls down (vertical) or right (horizontal).", json!({"observation":{"type":"string"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"amount":{"type":"integer","minimum":-20,"maximum":20},"axis":{"type":"string","enum":["vertical","horizontal"]}}), vec!["observation","x","y","amount"]),
@@ -211,10 +224,16 @@ fn point(input: &Value, x: &str, y: &str, o: &Observation) -> Result<(i32, i32)>
 /// Long edge of a default screenshot. 1280 px costs a model about 1.1k image
 /// tokens; a 1920x1080 capture about 1.8k (and 4K is downscaled anyway).
 const SCREENSHOT_EDGE: u32 = 1280;
+/// Lo más que ve un modelo: Claude reduce lo que pase de aquí, y entonces los
+/// píxeles de la imagen ya no coincidirían con los de la pantalla.
+pub(crate) const MODEL_EDGE: u32 = 1568;
+const MIN_EDGE: u32 = 256;
+/// Identificadores cortos de observación (el modelo los copia en cada entrada).
+static NEXT_OBSERVATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 /// Inputs one screenshot may drive while the screen is unchanged, e.g. click
 /// a field, type, press Enter. Each extra screenshot stays in the context.
 pub(crate) const OBSERVATION_USES: u8 = 3;
-pub(crate) const SCREENSHOT_FIELDS: &[&str] = &["monitor", "region", "fullResolution"];
+pub(crate) const SCREENSHOT_FIELDS: &[&str] = &["monitor", "region", "fullResolution", "maxEdge"];
 
 /// A capture prepared for a model: cropped to a region, downscaled, PNG.
 pub(crate) struct Framed {
@@ -234,7 +253,9 @@ impl Framed {
     fn to_screen(&self, x: u64, y: u64) -> Result<(u32, u32)> {
         frame_point(x, y, self.width, self.height, self.region)
     }
-    pub(crate) fn summary(&self, token: &str) -> String {
+    /// Lo que el modelo necesita para actuar, sin repetir la descripción de la
+    /// herramienta. `monitors` es cuántas pantallas hay (se nombra solo si hay varias).
+    pub(crate) fn summary(&self, token: &str, monitor: u32, monitors: usize) -> String {
         let area = if self.region == [0, 0, self.screen.0, self.screen.1] {
             String::new()
         } else {
@@ -243,8 +264,9 @@ impl Framed {
                 self.region[0], self.region[1], self.region[2], self.region[3]
             )
         };
+        let screens = if monitors > 1 { format!(", monitor {monitor} of {monitors}") } else { String::new() };
         format!(
-            "Screenshot {}x{} of screen {}x{}{area} (scale {:.3}); observation {token}. Input coordinates are pixels of this image. It serves up to {OBSERVATION_USES} inputs within 30 s while the screen stays the same; capture again after anything moves. region (screen pixels) zooms into an area; fullResolution:true skips downscaling.",
+            "Screenshot {}x{} of screen {}x{}{area}{screens}, scale {:.3}, observation {token}. Coordinates are pixels of this image; valid for {OBSERVATION_USES} inputs within 30 s while nothing moves.",
             self.width,
             self.height,
             self.screen.0,
@@ -272,12 +294,22 @@ pub(crate) fn frame_point(x: u64, y: u64, width: u32, height: u32, region: [u32;
         map(y, height, region[1], region[3]),
     ))
 }
-/// Reads desktop_screenshot's region / fullResolution arguments.
-pub(crate) fn screenshot_options(input: &Value) -> Result<(Option<[u32; 4]>, bool)> {
+/// Reads desktop_screenshot's region / maxEdge / fullResolution arguments: the
+/// region in screen pixels and the long edge of the image.
+pub(crate) fn screenshot_options(input: &Value) -> Result<(Option<[u32; 4]>, u32)> {
     validate_fields(input, SCREENSHOT_FIELDS, &[])?;
     let full = match input.get("fullResolution") {
         None => false,
         Some(v) => v.as_bool().context("fullResolution must be a boolean")?,
+    };
+    let edge = match input.get("maxEdge") {
+        None => if full { MODEL_EDGE } else { SCREENSHOT_EDGE },
+        Some(_) if full => bail!("use maxEdge or fullResolution, not both"),
+        Some(v) => {
+            let edge = v.as_u64().and_then(|n| u32::try_from(n).ok()).context("maxEdge must be an integer")?;
+            ensure!((MIN_EDGE..=MODEL_EDGE).contains(&edge), "maxEdge must be between {MIN_EDGE} and {MODEL_EDGE}");
+            edge
+        }
     };
     let region = match input.get("region") {
         None => None,
@@ -296,12 +328,12 @@ pub(crate) fn screenshot_options(input: &Value) -> Result<(Option<[u32; 4]>, boo
             Some(region)
         }
     };
-    Ok((region, full))
+    Ok((region, edge))
 }
 pub(crate) fn frame(
     image: image::DynamicImage,
     region: Option<[u32; 4]>,
-    full: bool,
+    max_edge: u32,
 ) -> Result<Framed> {
     let screen = image.dimensions();
     let whole = [0, 0, screen.0, screen.1];
@@ -319,11 +351,12 @@ pub(crate) fn frame(
         image.crop_imm(region[0], region[1], region[2], region[3])
     };
     let edge = region[2].max(region[3]);
-    if !full && edge > SCREENSHOT_EDGE {
-        let scale = f64::from(SCREENSHOT_EDGE) / f64::from(edge);
+    if edge > max_edge {
+        let scale = f64::from(max_edge) / f64::from(edge);
         let w = ((f64::from(region[2]) * scale).round() as u32).max(1);
         let h = ((f64::from(region[3]) * scale).round() as u32).max(1);
-        image = image.resize_exact(w, h, image::imageops::FilterType::Triangle);
+        // Catmull-Rom conserva mejor el texto pequeño que el filtro triangular.
+        image = image.resize_exact(w, h, image::imageops::FilterType::CatmullRom);
     }
     let (width, height) = image.dimensions();
     let mut bytes = Cursor::new(Vec::new());
@@ -390,7 +423,7 @@ fn run(
         };
     }
     if name == "desktop_screenshot" {
-        let (region, full) = screenshot_options(input)?;
+        let (region, edge) = screenshot_options(input)?;
         let monitor = input
             .get("monitor")
             .map(|value| {
@@ -404,7 +437,7 @@ fn run(
         #[cfg(windows)]
         let captured_focus = windows::focus();
         let (image, x, y, monitor) = capture(monitor)?;
-        let framed = frame(image, region, full)?;
+        let framed = frame(image, region, edge)?;
         let (width, height) = (framed.width, framed.height);
         ensure!(
             !cancel.is_cancelled(),
@@ -419,7 +452,7 @@ fn run(
             framed.png.len() <= 4 * 1024 * 1024,
             "screenshot exceeds artifact size limit"
         );
-        let token = Uuid::new_v4().to_string();
+        let token = format!("o{}", NEXT_OBSERVATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         *state = Some(Observation {
             token: token.clone(),
             width,
@@ -439,13 +472,16 @@ fn run(
             #[cfg(windows)]
             focus: captured_focus,
         });
+        // Cuántas pantallas hay: así no hace falta preguntar antes con desktop_monitors.
+        let screens = monitors().ok().and_then(|list| list["monitors"].as_array().map(Vec::len)).unwrap_or(1);
         let mut structured = framed.structured();
         structured["observation"] = json!(token);
+        structured["monitors"] = json!(screens);
         structured["originX"] = json!(x);
         structured["originY"] = json!(y);
         structured["monitor"] = json!(monitor);
         return Ok(
-            json!({"content":[{"type":"text","text":framed.summary(&token)},{"type":"image","mimeType":"image/png","data":STANDARD.encode(&framed.png)}],"structuredContent":structured}),
+            json!({"content":[{"type":"text","text":framed.summary(&token, monitor, screens)},{"type":"image","mimeType":"image/png","data":STANDARD.encode(&framed.png)}],"structuredContent":structured}),
         );
     }
     let (allowed, required): (&[&str], &[&str]) = match name {
@@ -895,20 +931,31 @@ mod tests {
     #[test]
     fn screenshots_are_downscaled_and_regions_map_back_to_screen_pixels() {
         let shot = image::DynamicImage::new_rgba8(1920, 1080);
-        let framed = frame(shot.clone(), None, false).unwrap();
+        let framed = frame(shot.clone(), None, SCREENSHOT_EDGE).unwrap();
         assert_eq!((framed.width, framed.height), (1280, 720));
         assert_eq!(framed.to_screen(0, 0).unwrap(), (0, 0));
         assert_eq!(framed.to_screen(640, 360).unwrap(), (960, 540));
         assert_eq!(framed.to_screen(1279, 719).unwrap(), (1919, 1079));
         assert!(framed.to_screen(1280, 0).is_err());
-        let full = frame(shot.clone(), None, true).unwrap();
-        assert_eq!((full.width, full.height), (1920, 1080));
+        // Resolución completa: hasta lo que ve el modelo, para que las coordenadas sigan valiendo.
+        let full = frame(shot.clone(), None, MODEL_EDGE).unwrap();
+        assert_eq!((full.width, full.height), (1568, 882));
+        assert_eq!(full.to_screen(1567, 881).unwrap(), (1919, 1079));
+        let cheap = frame(shot.clone(), None, 768).unwrap();
+        assert_eq!((cheap.width, cheap.height), (768, 432));
         // A small region is sent at native size and offset by its origin.
-        let zoom = frame(shot.clone(), Some([1500, 40, 300, 200]), false).unwrap();
+        let zoom = frame(shot.clone(), Some([1500, 40, 300, 200]), SCREENSHOT_EDGE).unwrap();
         assert_eq!((zoom.width, zoom.height), (300, 200));
         assert_eq!(zoom.to_screen(10, 20).unwrap(), (1510, 60));
-        assert!(frame(shot, Some([1800, 0, 300, 200]), false).is_err());
-        assert_eq!(screenshot_options(&json!({"region":{"x":1,"y":2,"width":16,"height":16}})).unwrap(), (Some([1, 2, 16, 16]), false));
+        assert!(frame(shot, Some([1800, 0, 300, 200]), SCREENSHOT_EDGE).is_err());
+        assert_eq!(screenshot_options(&json!({"region":{"x":1,"y":2,"width":16,"height":16}})).unwrap(), (Some([1, 2, 16, 16]), SCREENSHOT_EDGE));
+        assert_eq!(screenshot_options(&json!({"fullResolution":true})).unwrap(), (None, MODEL_EDGE));
+        assert_eq!(screenshot_options(&json!({"maxEdge":768})).unwrap(), (None, 768));
+        assert!(screenshot_options(&json!({"maxEdge":100})).is_err());
+        assert!(screenshot_options(&json!({"maxEdge":768,"fullResolution":true})).is_err());
+        let summary = framed.summary("o7", 0, 1);
+        assert!(summary.starts_with("Screenshot 1280x720 of screen 1920x1080, scale 0.667, observation o7.") && summary.len() < 170, "{summary}");
+        assert!(framed.summary("o8", 1, 2).contains(", monitor 1 of 2,"));
         assert!(screenshot_options(&json!({"region":{"x":1,"y":2,"width":8,"height":16}})).is_err());
         assert!(screenshot_options(&json!({"scale":2})).is_err());
         let mut o = observation();

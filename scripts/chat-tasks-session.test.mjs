@@ -210,7 +210,7 @@ test("Claude with a custom system prompt still gets capability guidance through 
   assert.equal(claudeChatFlags('--append-system-prompt "My workflow"',null).includes("--append-system-prompt"),false);
   const reply=await claudeInboxReply("init-tools",{subtype:"mcp_message",server_name:"trex_inbox",message:{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18"}}},()=>assert.fail("initialization must not read queued messages"), { desktop: true, browser: true });
   const result=JSON.parse(reply.line).response.response.mcp_response.result;
-  for (const term of ["GitHub","Blender","HyperFrames","trex_desktop","desktop_status","desktop_screenshot","browser_navigate"]) assert.ok(result.instructions.includes(term),term);
+  for (const term of ["GitHub","Blender","HyperFrames","trex_desktop","desktop_screenshot","browser_navigate"]) assert.ok(result.instructions.includes(term),term);
 });
 
 test("normal Claude history restores incremental tasks without a live turn or fabricated completion", () => {

@@ -81,9 +81,9 @@ describe('Trex Browser shell', { skip: !available && 'Trex shell or display unav
 
   it('returns compact snapshots and a summary of what an action changed', async () => {
     await call(A, 'browser_navigate', { url: `${base}/` });
-    const full = (await call(A, 'browser_snapshot')).data, compact = (await call(A, 'browser_snapshot', { compact: true })).data;
-    assert.equal(compact.compact, true);
-    assert.equal('accessibility' in compact, false);
+    const full = (await call(A, 'browser_snapshot', { full: true })).data, compact = (await call(A, 'browser_snapshot')).data;
+    assert.ok(full.accessibility, 'full:true adds the accessibility tree');
+    assert.equal('accessibility' in compact, false, 'the default snapshot is compact');
     assert.ok(JSON.stringify(compact).length < JSON.stringify(full).length, 'compact snapshot must be smaller');
     const parsed = elementsOf(compact), names = parsed.map(e => e.name);
     for (const hidden of ['Solo texto', 'Oculto', 'Deshabilitado', 'Grupo']) assert.equal(names.includes(hidden), false, `${hidden} must not be listed`);

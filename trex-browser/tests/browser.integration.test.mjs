@@ -443,13 +443,19 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
 
   it('navigates, snapshots refs and rejects stale revisions before page mutation', async () => {
     await navigate();
+    // The default snapshot is the compact element list; full:true (or compact:false) adds the tree.
+    for (const args of [{ full: true }, { compact: false }]) assert.match((await ok('browser_snapshot', args)).data.accessibility, /Trex local integration fixture/);
     const snapshot = await ok('browser_snapshot');
     assert.equal(snapshot.data.url, `${fixture.url}/`);
     assert.equal(snapshot.data.untrustedContent, true);
     assert.equal(snapshot.data.revision, snapshot.revision);
-    assert.match(snapshot.data.accessibility, /Trex local integration fixture/);
+    assert.equal(snapshot.data.title, 'Trex loopback fixture');
+    assert.equal('accessibility' in snapshot.data, false);
     const button = elementsOf(snapshot.data).find(element => element.name === 'Increment counter');
     assert.ok(button?.ref, 'Snapshot must expose a real button reference');
+    // A read-only evaluate and a child frame (ad, embed) navigating keep the page's refs.
+    assert.equal(await evaluate(() => document.title), 'Trex loopback fixture');
+    assert.equal(await evaluate(() => new Promise(resolve => { const frame = document.querySelector('iframe'); frame.addEventListener('load', () => resolve(frame.contentWindow.location.search), { once: true }); frame.src = '/frame?reloaded=1'; })), '?reloaded=1');
     const clicked = await ok('browser_click', { ref: button.ref, revision: snapshot.revision });
     assert.ok(clicked.revision > snapshot.revision);
     failure(await call('browser_click', { ref: button.ref, revision: snapshot.revision }), 'STALE_SNAPSHOT');
@@ -658,7 +664,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     assert.deepEqual(await evaluate(() => [document.querySelector('#name').value, document.querySelector('#notes').value]), ['', '']);
   });
 
-  it('returns PNG/JPEG image bytes and checksum-verified private screenshot artifacts', async () => {
+  it('returns JPEG by default, PNG on request, real dimensions and checksum-verified private screenshot artifacts', async () => {
     await navigate();
     await ok('browser_resize', { width: 640, height: 480 });
     try {
@@ -678,8 +684,18 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       success(read);
       assert.deepEqual(Buffer.from(read.content.find(item => item.type === 'image').data, 'base64'), bytes);
       const cropped = await ok('browser_take_screenshot', { clip: { x: 0, y: 0, width: 160, height: 120 } });
+      assert.equal(cropped.artifacts[0].mimeType, 'image/jpeg');
       assert.equal(cropped.artifacts[0].width, 160);
       assert.equal(cropped.artifacts[0].height, 120);
+      // Default: JPEG quality 70 in CSS pixels; device pixels stay available (1x in headless runs).
+      const defaultResult = await call('browser_take_screenshot');
+      const defaultMeta = success(defaultResult).artifacts[0];
+      const defaultBytes = await checkArtifact(defaultMeta, 'screenshot', 'image/jpeg');
+      assert.deepEqual([defaultMeta.width, defaultMeta.height], [640, 480]);
+      assert.deepEqual(Buffer.from(defaultResult.content.find(item => item.type === 'image').data, 'base64'), defaultBytes);
+      const device = (await ok('browser_take_screenshot', { type: 'png', scale: 'device' })).artifacts[0];
+      assert.equal(device.mimeType, 'image/png');
+      assert.equal(device.width % 640, 0);
       const jpegResult = await call('browser_take_screenshot', { type: 'jpeg', quality: 60 });
       const jpegMeta = success(jpegResult).artifacts[0];
       const jpeg = await checkArtifact(jpegMeta, 'screenshot', 'image/jpeg');
@@ -689,6 +705,12 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       failure(await call('browser_artifact', { artifactId: meta.artifactId }, { profile: 'BROWSER2' }), 'BROWSER_ERROR', /not found/);
       failure(await call('browser_artifact', { artifactId: '../broker.token', read: true }), 'BROWSER_ERROR', /Invalid artifact ID/);
     } finally { await ok('browser_resize', { width: 1280, height: 800 }); }
+    // A wide viewport, even scrolled, is scaled to 1024 CSS px unless fullResolution is set.
+    assert.equal(await evaluate(() => { document.body.style.minHeight = '3000px'; scrollTo(0, 600); return scrollY; }), 600);
+    const wide = (await ok('browser_take_screenshot')).artifacts[0];
+    assert.deepEqual([wide.mimeType, wide.width, wide.height], ['image/jpeg', 1024, 640]);
+    const native = (await ok('browser_take_screenshot', { fullResolution: true })).artifacts[0];
+    assert.deepEqual([native.width, native.height], [1280, 800]);
   });
 
   it('detects private artifact tampering instead of returning modified bytes', async () => {
@@ -950,7 +972,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       const page=await agentSuccess(await mcpTool(session,5,'browser_evaluate',{function:'() => ({count:document.querySelector("#count").textContent,storage:localStorage.getItem("parallel-isolation")})'}));
       assert.equal(page.data.value.count,'1');assert.equal(page.data.value.storage,null);
       const screenshot=await agentSuccess(await mcpTool(session,6,'browser_take_screenshot'));
-      await checkArtifact(screenshot.artifacts[0],'screenshot','image/png',{profile:peerProfile});
+      await checkArtifact(screenshot.artifacts[0],'screenshot','image/jpeg',{profile:peerProfile});
       const workMs=performance.now()-started;
       const owner=await ok('browser_status');
       assert.equal(owner.data.pendingAction.operationId,action.operationId);
@@ -1047,6 +1069,19 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     }
     failure(await call('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}}]},{operationId}),'DUPLICATE_OPERATION');
     assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'1');
+    // A failed batch says which step failed, which completed (never replay them) and which never ran.
+    const stopped=await call('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}},{tool:'browser_click',arguments:{selector:'#missing-button'}},{tool:'browser_press_key',arguments:{key:'Tab'}}]});
+    failure(stopped,'BROWSER_ERROR');assert.equal(stopped.structuredContent.data.steps[0].receipt.status,'completed');
+    assert.match(stopped.content[0].text,/^Batch stopped at steps\[1\] browser_click \(rejected\): .+\nCompleted, do not replay: steps\[0\] browser_click\nNot run: steps\[2\] browser_press_key$/);
+    assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'2');
+    // Agents read batch steps without operation IDs or receipts; structuredContent keeps them.
+    const session=mcpSession('full');
+    try{
+      await initializeMcp(session);
+      const reply=await mcpTool(session,2,'browser_batch',{steps:[{tool:'browser_snapshot',arguments:{}}]});
+      assert.equal(reply.isError,undefined);const text=JSON.parse(reply.content.find(item=>item.type==='text').text);
+      assert.deepEqual(Object.keys(text.steps[0]).sort(),['data','revision','tool']);assert.equal(reply.structuredContent.steps[0].receipt.status,'completed');assert.ok(reply.structuredContent.steps[0].operationId);
+    }finally{session.child.stdin.end();assert.equal((await session.closed).code,0);}
   });
   it('cancelling a partial batch preserves completed receipts and never dispatches later steps',{timeout:90000},async()=>{
     await navigate();const gate=randomUUID(),operationId=randomUUID();
@@ -1163,7 +1198,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     }
     await ok('browser_click', { selector: '#increment' }, { profile: 'BROWSER2' });
     assert.equal(await evaluate(() => document.querySelector('#count').textContent, undefined, { profile: 'BROWSER2' }), '1');
-    const secondaryImage = await ok('browser_take_screenshot', {}, { profile: 'BROWSER2' });
+    const secondaryImage = await ok('browser_take_screenshot', { type: 'png' }, { profile: 'BROWSER2' });
     assert.deepEqual((await checkArtifact(secondaryImage.artifacts[0], 'screenshot', 'image/png', { profile: 'BROWSER2' })).subarray(0, 8), pngSignature);
     if (owned) await assertProcessesAlive([owned.browsers.get('BROWSER2'), owned.guards.get('BROWSER2')], 'BROWSER2 capture must use the same surviving Chrome and guard');
     await navigate();
@@ -1229,7 +1264,7 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       await assertProcessesAlive([outside.broker, outside.browsers.get('BROWSER2'), outside.guards.get('BROWSER2')], 'Crashing one broker must preserve the other broker/profile');
       assert.equal(await evaluate(() => document.querySelector('#count').textContent, undefined, { profile: 'BROWSER2' }), 'other broker survives');
       const sentinelImage = await ok('browser_take_screenshot', {}, { profile: 'BROWSER2' });
-      await checkArtifact(sentinelImage.artifacts[0], 'screenshot', 'image/png', { profile: 'BROWSER2' });
+      await checkArtifact(sentinelImage.artifacts[0], 'screenshot', 'image/jpeg', { profile: 'BROWSER2' });
       await assertProcessesAlive([outside.broker, outside.browsers.get('BROWSER2'), outside.guards.get('BROWSER2')], 'Sentinel capture must not replace the untouched browser');
 
       await crashCall('browser_navigate', { url: `${fixture.url}/` });
@@ -1239,9 +1274,9 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       await crashCall('browser_navigate', { url: `${fixture.url}/` }, { profile: 'BROWSER2' });
       assert.equal((await crashCall('browser_evaluate', { function: '() => localStorage.getItem("crash-persist")' }, { profile: 'BROWSER2' })).data.value, 'BROWSER2');
       const image = await crashCall('browser_take_screenshot');
-      await checkArtifact(image.artifacts[0], 'screenshot', 'image/png', { artifactHome: crashHome });
+      await checkArtifact(image.artifacts[0], 'screenshot', 'image/jpeg', { artifactHome: crashHome });
       const secondaryImage = await crashCall('browser_take_screenshot', {}, { profile: 'BROWSER2' });
-      await checkArtifact(secondaryImage.artifacts[0], 'screenshot', 'image/png', { artifactHome: crashHome, profile: 'BROWSER2' });
+      await checkArtifact(secondaryImage.artifacts[0], 'screenshot', 'image/jpeg', { artifactHome: crashHome, profile: 'BROWSER2' });
       const profiles = await cli(['profiles', 'list', '--cwd', crashWorkspace, '--mode', 'full', '--client', 'test', '--json'], undefined, { env: crashEnv });
       assert.deepEqual(profiles.profiles.map(item => item.id).sort(), ['BROWSER1', 'BROWSER2']);
       credentials.push(await fs.readFile(path.join(crashHome, 'broker.token'), 'utf8'));

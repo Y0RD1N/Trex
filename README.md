@@ -48,11 +48,9 @@ carpeta, con el asistente y el perfil que elijas.
   Antigravity manejan las aplicaciones a través del árbol de accesibilidad del
   sistema, sin mover tu ratón, sin escribir con tu teclado y sin traer ventanas
   al frente; un marco naranja muestra dónde actúa y puedes detenerlo desde el
-  chat. En Windows usa el motor propio de Trex, que no requiere instalar nada,
-  también con Chrome y Electron; también puede usar
-  [agent-desktop](https://github.com/vercel-labs/agent-desktop).
-  Es una integración aparte que no sustituye al control de computadora y se
-  activa en Ajustes → Integraciones. Detalles en
+  chat. Usa el motor propio de Trex (Windows), que no requiere instalar nada,
+  también con Chrome y Electron. Es una integración independiente del control
+  de computadora: tú eliges cuál activar en Ajustes → Integraciones. Detalles en
   [integraciones de escritorio](docs/integraciones-escritorio.md#control-por-accesibilidad-experimental).
 - **Avisos del escritorio**: notificaciones cuando un asistente termina,
   necesita atención o encuentra un error; por defecto, con TREX en segundo plano.

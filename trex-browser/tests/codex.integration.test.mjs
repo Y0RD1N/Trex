@@ -61,7 +61,7 @@ test('actual Codex discovers and opens Trex Browser autonomously without a model
     assert.notEqual(navigation.isError,true,navigation.structuredContent?.error?.message);assert.equal(navigation.structuredContent.ok,true);
     assert.equal((await tool('browser_click',{role:'button',name:'Test automatic opening'})).structuredContent.ok,true);
     const snapshot=await tool('browser_snapshot');assert.match(JSON.stringify(snapshot.structuredContent.data),/Verified click/);
-    const screenshot=await tool('browser_take_screenshot');assert.equal(screenshot.structuredContent.artifacts[0].mimeType,'image/png');assert.ok(screenshot.structuredContent.artifacts[0].bytes>0);
+    const screenshot=await tool('browser_take_screenshot');assert.equal(screenshot.structuredContent.artifacts[0].mimeType,'image/jpeg');assert.ok(screenshot.structuredContent.artifacts[0].bytes>0);
     assert.equal((await tool('browser_close')).structuredContent.ok,true);
     assert.ok(!methods.includes('turn/start'));t.diagnostic('Real Codex connection, first navigation, mouse click, DOM snapshot and screenshot succeeded without manual opening or model calls.');
   }finally{
