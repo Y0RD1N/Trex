@@ -76,6 +76,16 @@ test("accessibility tools read as plain Spanish in the chat, with the verified m
   assert.deepEqual(row("type", { ref_id: "@s1:e1", text: "x".repeat(1043) }, true), { icon: "edit", verb: "Escribiendo", target: "1043 caracteres" });
   assert.equal(row("select", { value: "Verde" }).target, "«Verde»");
   assert.equal(row("press", { keys: "ctrl+s" }).target, "ctrl+s");
+  // Las variantes llegan como argumento: cada una con su verbo.
+  assert.deepEqual(row("set_value", { ref_id: "@s1:e1", value: "x".repeat(5), append: true }), { icon: "edit", verb: "Escribió", target: "5 caracteres" });
+  assert.deepEqual(row("set_value", { ref_id: "@s1:e1", value: "" }), { icon: "edit", verb: "Vació", target: "un campo" });
+  assert.equal(row("toggle", { state: "on" }).verb, "Marcó");
+  assert.equal(row("toggle", { state: "off" }).verb, "Desmarcó");
+  assert.equal(row("toggle", {}).verb, "Cambió");
+  assert.deepEqual(row("click", { button: "right" }), { icon: "tool", verb: "Abrió", target: "un menú contextual" });
+  assert.equal(row("expand", { collapse: true }).verb, "Plegó");
+  assert.deepEqual(row("window", { app: "notepad", action: "close" }), { icon: "tool", verb: "Cerró", target: "notepad" });
+  assert.deepEqual(row("batch", { steps: [{}, {}, {}] }, true), { icon: "tool", verb: "Haciendo", target: "3 pasos" });
   assert.equal(chat.a11yVerified("mcp__trex_a11y__a11y_type", "Value verified: \"hola\"."), true);
   assert.equal(chat.a11yVerified("mcp__trex_a11y__a11y_check", "Now checked (verified)."), true);
   assert.equal(chat.a11yVerified("mcp__trex_a11y__a11y_click", "Clicked (invoked)."), false, "a click has no state to verify");

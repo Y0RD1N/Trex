@@ -149,10 +149,22 @@ en otros sistemas el chat arranca sin la integración y lo avisa.
 Va dentro de `trex-agent` (`trex-cli/src/a11y/`), sin dependencias externas:
 
 - 6 herramientas de lectura (`list_windows`, `snapshot`, `find`, `get`, `wait`,
-  `status`), 18 acciones semánticas y `press` con permiso (clic, menú contextual, valor, escribir,
-  vaciar, casillas, desplegar, elegir, desplazar, abrir, cerrar, minimizar,
-  maximizar y restaurar); unos 3 000 tokens de esquemas en modo completo;
-- el árbol se devuelve como texto compacto (`- @s1:e3 edit "Nombre" [set_value,type]`),
+  `status`) y 10 acciones semánticas, más `press` con permiso: `click` (con
+  `button:"right"` abre el menú contextual), `set_value` (reemplaza, añade con
+  `append` o vacía con un valor vacío), `toggle` (con `state` on/off),
+  `expand` (con `collapse`), `select`, `scroll`, `scroll_to`, `launch`, `window`
+  (minimizar, maximizar, restaurar o cerrar) y `batch`. Las variantes van como
+  argumento para que el catálogo pese poco: unos 11 200 caracteres (unos 2 800
+  tokens) en modo completo, frente a los 13 700 de las 24 herramientas anteriores;
+- `batch` hace hasta 12 pasos seguidos (por ejemplo rellenar varios campos y
+  pulsar Enviar) en una sola llamada, con un único informe de cambios al final;
+  cada paso pasa el mismo filtro de modo y permisos que una llamada suelta, y si
+  uno falla se para y dice qué pasos se completaron para no repetirlos;
+- `snapshot` con `format:"text"` devuelve solo el texto visible, sin
+  referencias y por páginas (`offset`): lo más barato para leer una página o un
+  documento, incluido lo que queda fuera de la ventana. Los enlaces ya no repiten
+  su dirección en cada línea (se lee con `get`);
+- el árbol se devuelve como texto compacto (`- @s1:e3 edit "Nombre" [set_value]`),
   con los saltos de línea del texto como `⏎`,
   en una sola llamada entre procesos por ventana, y las ventanas se listan con
   la API clásica de Windows (milisegundos);
@@ -165,7 +177,8 @@ Va dentro de `trex-agent` (`trex-cli/src/a11y/`), sin dependencias externas:
   vuelve a la ventana que estaba usando;
 - cada acción dice qué cambió: el título de la ventana, elementos nuevos (con
   referencia, sin otro snapshot), elementos que cambiaron de valor o de estado
-  (incluido cuál recibió el foco), los que entraron en pantalla y ventanas
+  (incluido cuál recibió el foco), los que entraron en pantalla, los textos
+  nuevos de la app (hasta 8, como «Guardado» o «Campo obligatorio») y ventanas
   nuevas con sus elementos, sin los avisos del shell de Windows ni el propio
   marco de Trex. Los elementos se reconocen por su ruta de rol y nombre sin los
   nombres de contenedores y documentos, que suelen llevar el título de la

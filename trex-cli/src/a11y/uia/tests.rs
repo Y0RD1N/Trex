@@ -188,23 +188,53 @@ fn reads_and_operates_a_real_window_without_taking_its_focus() {
     assert!(listed.contains(&id) && listed.contains("\"Trex a11y test\""), "{listed}");
     let snapshot = engine.run("snapshot", &json!({"window_id": id})).unwrap();
     assert!(snapshot.starts_with(&format!("window {id} \"Trex a11y test\"")), "{snapshot}");
-    let button = reference(&snapshot, "button", "\"Aceptar\"");
     let check = reference(&snapshot, "checkbox", "\"Recordar\"");
     let edit = reference(&snapshot, "edit", "[");
-    let combo = reference(&snapshot, "combobox", "[");
+    assert!(snapshot.contains("button \"Aceptar\"") && snapshot.contains("combobox"), "{snapshot}");
     assert!(snapshot.contains("checkbox \"Recordar\" unchecked [") && snapshot.contains("toggle]"), "{snapshot}");
 
     // Valores: escritos y comprobados releyendo el control.
     assert!(engine.run("set_value", &json!({"ref_id": edit, "value": "hola"})).unwrap().starts_with("Value verified: \"hola\""));
-    assert!(engine.run("type", &json!({"ref_id": edit, "text": " mundo"})).unwrap().contains("\"hola mundo\""));
+    assert!(engine.run("set_value", &json!({"ref_id": edit, "value": " mundo", "append": true})).unwrap().contains("\"hola mundo\""));
     assert_eq!(engine.run("get", &json!({"ref_id": edit, "property": "value"})).unwrap(), "hola mundo");
-    assert!(engine.run("clear", &json!({"ref_id": edit})).unwrap().starts_with("Value verified: \"\""));
+    assert!(engine.run("set_value", &json!({"ref_id": edit, "value": ""})).unwrap().starts_with("Value verified: \"\""), "an empty value clears it");
 
     // Casillas: idempotentes y verificadas.
-    assert!(engine.run("check", &json!({"ref_id": check})).unwrap().starts_with("Now checked"));
-    assert!(engine.run("check", &json!({"ref_id": check})).unwrap().starts_with("Already checked"));
-    assert!(engine.run("uncheck", &json!({"ref_id": check})).unwrap().starts_with("Now unchecked"));
+    assert!(engine.run("toggle", &json!({"ref_id": check, "state": "on"})).unwrap().starts_with("Now checked"));
+    assert!(engine.run("toggle", &json!({"ref_id": check, "state": "on"})).unwrap().starts_with("Already checked"));
+    assert!(engine.run("toggle", &json!({"ref_id": check, "state": "off"})).unwrap().starts_with("Now unchecked"));
     assert!(engine.run("toggle", &json!({"ref_id": check})).unwrap().starts_with("Now checked"));
+    assert_eq!(engine.run("toggle", &json!({"ref_id": check, "state": "maybe"})).unwrap_err().code, "INVALID_ARGS");
+
+    // Un lote: varios pasos en una llamada, un solo informe al final.
+    let batch = engine.run("batch", &json!({"steps": [
+        {"tool": "set_value", "ref_id": edit, "value": "lote"},
+        {"tool": "toggle", "ref_id": check, "state": "off"},
+        {"tool": "wait", "ms": 50},
+    ]})).unwrap();
+    assert!(batch.starts_with("Batch completed (3 steps):\n1. set_value: Value verified: \"lote\".\n2. toggle: Now unchecked (verified).\n3. wait: Waited 50 ms."), "{batch}");
+    assert_eq!(batch.matches("No visible change").count() + batch.matches("Changed (snapshot").count(), 1, "one report for the whole batch: {batch}");
+    // Si un paso falla, se para y dice qué se completó (para no repetirlo).
+    let failed = engine.run("batch", &json!({"steps": [
+        {"tool": "set_value", "ref_id": edit, "value": "uno"},
+        {"tool": "click", "ref_id": "@s999:e1"},
+        {"tool": "set_value", "ref_id": edit, "value": "nunca"},
+    ]})).unwrap_err();
+    assert_eq!(failed.code, "STALE_REF");
+    assert!(failed.message.starts_with("step 2 (click) failed:") && failed.message.contains("Completed, do not repeat: \n1. set_value"), "{}", failed.message);
+    assert_eq!(engine.run("get", &json!({"ref_id": edit, "property": "value"})).unwrap(), "uno", "the third step never ran");
+    engine.run("set_value", &json!({"ref_id": edit, "value": ""})).unwrap();
+
+    // Leer solo el texto, sin referencias, por páginas.
+    let text = engine.run("snapshot", &json!({"window_id": id, "format": "text", "max_elements": 3})).unwrap();
+    assert!(text.starts_with(&format!("window {id} \"Trex a11y test\" (")) && text.contains(" · text · lines 1-3 of ") && text.contains("more with offset=3"), "{text}");
+    assert!(!text.contains('@'), "no refs in text mode: {text}");
+    assert!(text.contains("Aceptar"), "{text}");
+    let next = engine.run("snapshot", &json!({"window_id": id, "format": "text", "offset": 3, "max_elements": 3})).unwrap();
+    assert!(next.contains(" · text · lines 4-6 of "), "{next}");
+    // Referencias nuevas para lo que sigue: los informes de arriba ya crearon varias lecturas.
+    let snapshot = engine.run("snapshot", &json!({"window_id": id})).unwrap();
+    let (button, combo) = (reference(&snapshot, "button", "\"Aceptar\""), reference(&snapshot, "combobox", "["));
 
     // Botón: la aplicación recibe el clic sin ratón.
     assert!(engine.run("click", &json!({"ref_id": button})).unwrap().starts_with("Clicked (button message)"), "classic buttons get a posted click");
@@ -264,7 +294,8 @@ fn reads_and_operates_a_real_window_without_taking_its_focus() {
     assert_eq!(engine.run("snapshot", &json!({"app": "no-such-window-xyz"})).unwrap_err().code, "NOT_FOUND");
     assert_eq!(engine.run("snapshot", &json!({})).unwrap_err().code, "INVALID_ARGS");
 
-    let closed = engine.run("close_app", &json!({"window_id": id})).unwrap();
+    assert_eq!(engine.run("window", &json!({"window_id": id, "action": "explode"})).unwrap_err().code, "INVALID_ARGS");
+    let closed = engine.run("window", &json!({"window_id": id, "action": "close"})).unwrap();
     assert!(closed.starts_with(&format!("Closed {id}")), "{closed}");
     drop(window);
 }

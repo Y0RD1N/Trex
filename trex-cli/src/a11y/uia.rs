@@ -54,6 +54,8 @@ const USER_ACTIVE_MS: u32 = 2_000;
 const PAUSE_WAIT: Duration = Duration::from_millis(4_000);
 /// Elementos que cambiaron de valor o de estado que se listan tras una acción.
 const CHANGED_LINES: usize = 12;
+/// Textos nuevos (mensajes de la app) que se listan tras una acción.
+const NEW_TEXT_LINES: usize = 8;
 /// Una muesca de la rueda del ratón, y cuántas forman una «página».
 const WHEEL_NOTCH: i32 = 120;
 const NOTCHES_PER_PAGE: i32 = 5;
@@ -245,18 +247,18 @@ fn describe(element: &IUIAutomationElement) -> Described {
     if toggle {
         actions.push("toggle");
     }
+    // Las acciones son nombres de herramientas: plegar es expand con collapse:true
+    // (el estado expanded/collapsed ya va en la línea).
     if expand && expanded != Some(3) {
-        actions.push(if expanded == Some(0) { "expand" } else { "collapse" });
+        actions.push("expand");
     }
     if select {
         actions.push("select");
     }
     let writable = value && !read_only && !password && takes_text(role);
+    // Añadir texto es set_value con append:true.
     if writable || range {
         actions.push("set_value");
-    }
-    if writable {
-        actions.push("type");
     }
     if scroll {
         actions.push("scroll");
@@ -264,7 +266,7 @@ fn describe(element: &IUIAutomationElement) -> Described {
     if scroll_item && offscreen {
         actions.push("scroll_to");
     }
-    let value_text = if password {
+    let value_text = if password || role == "hyperlink" {
         None
     } else if value {
         cached_text(element, UIA_ValueValuePropertyId).filter(|text| !text.is_empty() && text != &name)
@@ -465,6 +467,11 @@ pub(super) fn moved(before: &HashMap<String, (i32, i32)>, after: &HashMap<String
     counts.into_iter().filter(|(_, count)| few || *count >= 2).max_by_key(|(_, count)| *count).map_or((0, 0), |(shift, _)| shift)
 }
 
+/// El texto de un elemento de texto estático (no de un control), si tiene.
+fn static_text(node: &Node) -> Option<String> {
+    (node.role == "text").then(|| node.name.trim().to_owned()).filter(|name| !name.is_empty())
+}
+
 /// Nombre de archivo sin carpeta ni extensión, en minúsculas: «notepad», «poema».
 pub(super) fn stem(text: &str) -> String {
     let file = text.trim().rsplit(['\\', '/']).next().unwrap_or("");
@@ -512,6 +519,9 @@ struct Before {
     title: Option<String>,
     /// Por clave (ruta de rol y nombre), el valor y los estados de cada elemento.
     entries: HashMap<String, VecDeque<Signature>>,
+    /// Textos estáticos visibles (cuántas veces aparece cada uno): un mensaje
+    /// nuevo tras una acción («Guardado», «Campo obligatorio») se informa.
+    texts: HashMap<String, usize>,
     windows: HashSet<isize>,
 }
 
@@ -609,6 +619,8 @@ pub struct UiaEngine {
     woken: HashSet<isize>,
     /// Último atajo enviado por Trex (ticks de inicio y fin), para no tomarlo por la persona.
     own_input: Option<(u32, u32)>,
+    /// Dentro de un lote: cada paso no informa cambios (lo hace el lote al final).
+    quiet: bool,
 }
 
 impl UiaEngine {
@@ -638,7 +650,7 @@ impl UiaEngine {
             tree.SetTreeScope(TreeScope_Subtree)?;
             tree.SetTreeFilter(&view)?;
             Ok(Self { automation, view, walker, tree, single, places, keeps_focus, refs: HashMap::new(), kept: VecDeque::new(), next: 0, process_names: HashMap::new(),
-                keyboard, locks: Locks::default(), highlighter: None, highlight_started: false, woken: HashSet::new(), own_input: None })
+                keyboard, locks: Locks::default(), highlighter: None, highlight_started: false, woken: HashSet::new(), own_input: None, quiet: false })
         }
     }
 
@@ -832,18 +844,20 @@ impl UiaEngine {
     }
 
     fn before(&mut self, window: isize) -> Before {
-        let entries = unsafe { self.automation.ElementFromHandle(HWND(window as _)) }
-            .ok()
-            .and_then(|root| self.walk(&root, window, true, 25, 600).ok())
-            .map(|walk| {
-                let mut entries: HashMap<String, VecDeque<Signature>> = HashMap::new();
-                for entry in walk.entries {
-                    entries.entry(entry.key).or_default().push_back(Signature::of(&entry.node));
-                }
-                entries
-            })
-            .unwrap_or_default();
-        Before { window, title: window_facts(window).map(|facts| facts.1), entries, windows: top_windows().into_iter().map(|facts| facts.0).collect() }
+        if self.quiet {
+            return Before { window, title: None, entries: HashMap::new(), texts: HashMap::new(), windows: HashSet::new() };
+        }
+        let mut entries: HashMap<String, VecDeque<Signature>> = HashMap::new();
+        let mut texts: HashMap<String, usize> = HashMap::new();
+        let walk = unsafe { self.automation.ElementFromHandle(HWND(window as _)) }.ok().and_then(|root| self.walk(&root, window, false, 25, 1_500).ok());
+        for entry in walk.map(|walk| walk.entries).unwrap_or_default() {
+            if entry.referenced {
+                entries.entry(entry.key).or_default().push_back(Signature::of(&entry.node));
+            } else if let Some(name) = static_text(&entry.node) {
+                *texts.entry(name).or_insert(0) += 1;
+            }
+        }
+        Before { window, title: window_facts(window).map(|facts| facts.1), entries, texts, windows: top_windows().into_iter().map(|facts| facts.0).collect() }
     }
 
     /// Ventanas que no estaban, con sus elementos (y referencias). Tras una
@@ -880,6 +894,14 @@ impl UiaEngine {
     /// cambiaron (valor, estado, foco) o entraron en pantalla, y ventanas nuevas.
     /// `acted` es el elemento sobre el que se actuó: su resultado ya está en la respuesta.
     fn changes(&mut self, before: Before, acted: Option<&IUIAutomationElement>) -> String {
+        self.changes_except(before, acted.map(std::slice::from_ref).unwrap_or_default())
+    }
+
+    /// Como `changes`, sin los elementos sobre los que se actuó (un lote actúa sobre varios).
+    fn changes_except(&mut self, before: Before, acted: &[IUIAutomationElement]) -> String {
+        if self.quiet {
+            return String::new();
+        }
         sleep(Duration::from_millis(250));
         let mut slot = None;
         let mut counter = 0;
@@ -891,11 +913,23 @@ impl UiaEngine {
             }
             let walk = unsafe { self.automation.ElementFromHandle(HWND(before.window as _)) }
                 .ok()
-                .and_then(|root| self.walk(&root, before.window, true, 25, 600).ok());
+                .and_then(|root| self.walk(&root, before.window, false, 25, 1_500).ok());
             if let Some(walk) = walk {
                 let mut remaining = before.entries;
+                let mut texts = before.texts;
                 let (mut fresh, mut changed, mut shown) = (Vec::new(), Vec::new(), Vec::new());
+                let mut new_texts: Vec<String> = Vec::new();
                 for entry in walk.entries {
+                    if !entry.referenced {
+                        if let Some(name) = static_text(&entry.node) {
+                            match texts.get_mut(&name) {
+                                Some(count) if *count > 0 => *count -= 1,
+                                _ if !new_texts.contains(&name) => new_texts.push(name),
+                                _ => {}
+                            }
+                        }
+                        continue;
+                    }
                     match remaining.get_mut(&entry.key).and_then(VecDeque::pop_front) {
                         None => fresh.push(entry),
                         Some(old) => match change(&old, &Signature::of(&entry.node)) {
@@ -905,15 +939,24 @@ impl UiaEngine {
                         },
                     }
                 }
-                if let Some(acted) = acted {
-                    changed.retain(|entry| !unsafe { self.automation.CompareElements(&entry.element, acted) }.is_ok_and(|same| same.as_bool()));
+                if !acted.is_empty() {
+                    changed.retain(|entry| !acted.iter().any(|acted| unsafe { self.automation.CompareElements(&entry.element, acted) }.is_ok_and(|same| same.as_bool())));
                 }
                 let gone: usize = remaining.values().map(VecDeque::len).sum();
-                let quiet = fresh.is_empty() && changed.is_empty() && shown.is_empty() && gone == 0 && !retitled;
+                let quiet = fresh.is_empty() && changed.is_empty() && shown.is_empty() && new_texts.is_empty() && gone == 0 && !retitled;
                 let window = before.window;
                 self.section(&mut text, "New in the window", fresh, CHANGE_LINES, true, window, &mut slot, &mut counter);
                 self.section(&mut text, "Changed", changed, CHANGED_LINES, false, window, &mut slot, &mut counter);
                 self.section(&mut text, "Now visible", shown, CHANGE_LINES, true, window, &mut slot, &mut counter);
+                if !new_texts.is_empty() {
+                    text.push_str("\nNew text:");
+                    for line in new_texts.iter().take(NEW_TEXT_LINES) {
+                        text.push_str(&format!("\n- {}", quote(line, 160)));
+                    }
+                    if new_texts.len() > NEW_TEXT_LINES {
+                        text.push_str(&format!("\n…and {} more (read them with a11y_snapshot format:\"text\").", new_texts.len() - NEW_TEXT_LINES));
+                    }
+                }
                 if quiet {
                     text.push_str("\nNo visible change in the window.");
                 }
@@ -1079,6 +1122,9 @@ impl UiaEngine {
             let header = format!("window w{:X} {} ({})", info.hwnd, quote(&info.title, 100), info.app);
             (self.element(&info)?, info.hwnd, header)
         };
+        if args["format"].as_str() == Some("text") {
+            return self.read_text(&root, window, &header, args, max_depth);
+        }
         let started = Instant::now();
         let mut walk = self.walk(&root, window, interactive_only, max_depth, max_elements)?;
         // Chromium/Electron recién despertado tarda un momento en construir su árbol.
@@ -1104,6 +1150,87 @@ impl UiaEngine {
             text.push_str(&lines.join("\n"));
         }
         Ok(text)
+    }
+
+    /// El texto visible de una ventana o de una parte, sin referencias, por
+    /// páginas de líneas: lo más barato para leer una página o un documento.
+    fn read_text(&mut self, root: &IUIAutomationElement, window: isize, header: &str, args: &Value, max_depth: usize) -> ToolResult {
+        let limit = args["max_elements"].as_u64().unwrap_or(300).clamp(1, 1000) as usize;
+        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+        let walk = self.walk(root, window, false, max_depth, 5_000)?;
+        let mut text: Vec<String> = Vec::new();
+        for entry in &walk.entries {
+            let node = &entry.node;
+            let name = node.name.trim();
+            // El valor de un documento o un enlace suele ser su dirección: no es texto que leer.
+            let value = node.value.as_deref().map(str::trim).filter(|value| !value.is_empty() && *value != name && !value.contains("://"));
+            let piece = match (name.is_empty(), value) {
+                (false, Some(value)) => format!("{name}: {value}"),
+                (false, None) => name.to_owned(),
+                (true, Some(value)) => value.to_owned(),
+                (true, None) => continue,
+            };
+            for line in lines(&piece).lines().map(str::trim).filter(|line| !line.is_empty()) {
+                if text.last().is_none_or(|last| last != line) {
+                    text.push(line.to_owned());
+                }
+            }
+        }
+        let total = text.len();
+        let from = offset.min(total);
+        let to = (from + limit).min(total);
+        let mut result = format!("{header} · text · lines {}-{to} of {total}", from + usize::from(to > from));
+        if walk.truncated {
+            result.push_str(" · the window has more elements than were read: narrow it with root");
+        }
+        if to < total {
+            result.push_str(&format!(" · more with offset={to}"));
+        }
+        result.push('\n');
+        result.push_str(&text[from..to].join("\n"));
+        Ok(result)
+    }
+
+    /// Varias acciones seguidas en una llamada, con un solo informe de cambios
+    /// al final. Para en el primer fallo y dice qué pasos se completaron.
+    fn batch(&mut self, args: &Value, cancel: &AtomicBool) -> ToolResult {
+        let steps = args["steps"].as_array().filter(|steps| (1..=super::MAX_BATCH).contains(&steps.len()))
+            .ok_or_else(|| ToolError::new("INVALID_ARGS", format!("steps must list 1 to {} steps.", super::MAX_BATCH)))?
+            .clone();
+        // El informe es de la ventana del primer paso que nombra una.
+        let window = steps.iter().find_map(|step| match step["ref_id"].as_str() {
+            Some(reference) => self.refs.get(reference).map(|target| target.window),
+            None if step["window_id"].is_string() || step["app"].is_string() => self.resolve_window(step).ok().map(|info| info.hwnd),
+            None => None,
+        });
+        let seen = window.map(|window| self.before(window));
+        // Lo que tocan los pasos ya lo dice su resultado: el informe final no lo repite.
+        let acted: Vec<IUIAutomationElement> = steps.iter().filter_map(|step| step["ref_id"].as_str()).filter_map(|reference| self.refs.get(reference)).map(|target| target.element.clone()).collect();
+        self.quiet = true;
+        let mut done = Vec::new();
+        let mut failure = None;
+        for (index, step) in steps.iter().enumerate() {
+            let tool = step["tool"].as_str().unwrap_or("").to_owned();
+            if cancel.load(Ordering::SeqCst) {
+                failure = Some((index, tool, ToolError::new("CANCELLED", "Cancelled.")));
+                break;
+            }
+            match self.call(&tool, step, cancel) {
+                Ok(text) => done.push(format!("{}. {tool}: {}", index + 1, text.trim())),
+                Err(error) => {
+                    failure = Some((index, tool, error));
+                    break;
+                }
+            }
+        }
+        self.quiet = false;
+        let report = seen.map(|seen| self.changes_except(seen, &acted)).unwrap_or_default();
+        let completed = if done.is_empty() { "none".to_owned() } else { format!("\n{}", done.join("\n")) };
+        match failure {
+            None => Ok(format!("Batch completed ({} steps):{completed}{report}", steps.len())),
+            Some((index, tool, error)) => Err(ToolError::new(error.code, format!(
+                "step {} ({tool}) failed: {}\nCompleted, do not repeat: {completed}{report}", index + 1, error.message))),
+        }
     }
 
     /// Elementos de una ventana que coinciden con un rol y/o un nombre.
@@ -1370,7 +1497,7 @@ Bring it into view with a11y_scroll_to (or a11y_scroll) and click it again.");
         let expected = match operation {
             "clear" => String::new(),
             "type" => {
-                let text = args["text"].as_str().ok_or_else(|| ToolError::new("INVALID_ARGS", "text is required."))?;
+                let text = args["text"].as_str().or_else(|| args["value"].as_str()).ok_or_else(|| ToolError::new("INVALID_ARGS", "value is required."))?;
                 let current = unsafe { pattern.CurrentValue() }.map_err(failure)?.to_string();
                 current + text
             }
@@ -1870,18 +1997,27 @@ impl Engine for UiaEngine {
             "get" => self.get(args),
             "wait" => self.wait(args, cancel),
             "status" => self.status(),
+            "click" if args["button"].as_str() == Some("right") => self.right_click(args),
             "click" => self.click(args),
-            "right_click" => self.right_click(args),
-            "set_value" | "type" | "clear" => self.write_value(args, tool),
-            "toggle" | "check" | "uncheck" => self.toggle(args, tool),
-            "expand" => self.expand(args, true),
-            "collapse" => self.expand(args, false),
+            "set_value" => self.write_value(args, if args["append"].as_bool() == Some(true) { "type" } else { "set_value" }),
+            "toggle" => self.toggle(args, match args["state"].as_str() {
+                Some("on") => "check",
+                Some("off") => "uncheck",
+                None => "toggle",
+                Some(_) => return Err(ToolError::new("INVALID_ARGS", "state must be on or off.")),
+            }),
+            "expand" => self.expand(args, args["collapse"].as_bool() != Some(true)),
             "select" => self.select(args),
             "scroll" => self.scroll(args),
             "scroll_to" => self.scroll_to(args),
             "launch" => self.launch(args, cancel),
             "press" => self.press(args),
-            "close_app" | "minimize" | "maximize" | "restore" => self.window_action(args, tool),
+            "window" => match args["action"].as_str() {
+                Some("close") => self.window_action(args, "close_app"),
+                Some(action @ ("minimize" | "maximize" | "restore")) => self.window_action(args, action),
+                _ => Err(ToolError::new("INVALID_ARGS", "action must be minimize, maximize, restore or close.")),
+            },
+            "batch" => self.batch(args, cancel),
             other => Err(ToolError::new("INVALID_ARGS", format!("Unknown tool {other}."))),
         }
     }

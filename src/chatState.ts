@@ -547,6 +547,11 @@ function describeA11y(tool: string, input: Json, running: boolean): ToolSummary 
     const count = text(value).length;
     return count === 1 ? "1 carácter" : `${count.toLocaleString("es")} caracteres`;
   };
+  const steps = Array.isArray(input.steps) ? input.steps.length : 0;
+  const windowActions: Record<string, [string, string]> = { minimize: ["Minimizando", "Minimizó"], maximize: ["Maximizando", "Maximizó"],
+    restore: ["Restaurando", "Restauró"], close: ["Cerrando", "Cerró"] };
+  const [windowLive, windowDone] = windowActions[text(input.action)] ?? ["Cambiando", "Cambió"];
+  // Las variantes de una acción llegan como argumento (toggle con state, click con button…).
   const labels: Record<string, [ToolSummary["icon"], string, string, string]> = {
     list_windows: ["search", "Revisando", "Revisó", "las ventanas abiertas"],
     snapshot: ["read", "Leyendo", "Leyó", text(input.app) || "la ventana"],
@@ -554,15 +559,16 @@ function describeA11y(tool: string, input: Json, running: boolean): ToolSummary 
     get: ["read", "Leyendo", "Leyó", "un elemento"],
     wait: ["tool", "Esperando", "Esperó", typeof input.ms === "number" ? `${input.ms} ms` : "a que cambie la ventana"],
     status: ["tool", "Comprobando", "Comprobó", "el control por accesibilidad"],
-    click: ["tool", "Pulsando", "Pulsó", "un elemento"],
+    click: input.button === "right" ? ["tool", "Abriendo", "Abrió", "un menú contextual"] : ["tool", "Pulsando", "Pulsó", "un elemento"],
     right_click: ["tool", "Abriendo", "Abrió", "un menú contextual"],
-    set_value: ["edit", "Escribiendo", "Escribió", characters(input.value)],
+    set_value: input.append !== true && text(input.value) === "" ? ["edit", "Vaciando", "Vació", "un campo"] : ["edit", "Escribiendo", "Escribió", characters(input.value)],
     type: ["edit", "Escribiendo", "Escribió", characters(input.text)],
     clear: ["edit", "Vaciando", "Vació", "un campo"],
-    toggle: ["tool", "Cambiando", "Cambió", "una casilla"],
+    toggle: input.state === "on" ? ["tool", "Marcando", "Marcó", "una casilla"] : input.state === "off" ? ["tool", "Desmarcando", "Desmarcó", "una casilla"]
+      : ["tool", "Cambiando", "Cambió", "una casilla"],
     check: ["tool", "Marcando", "Marcó", "una casilla"],
     uncheck: ["tool", "Desmarcando", "Desmarcó", "una casilla"],
-    expand: ["tool", "Desplegando", "Desplegó", "un menú"],
+    expand: input.collapse === true ? ["tool", "Plegando", "Plegó", "un menú"] : ["tool", "Desplegando", "Desplegó", "un menú"],
     collapse: ["tool", "Plegando", "Plegó", "un menú"],
     select: ["tool", "Eligiendo", "Eligió", quoted(input.value) || "una opción"],
     scroll: ["tool", "Desplazando", "Desplazó", text(input.direction) === "up" ? "hacia arriba" : text(input.direction) === "down" ? "hacia abajo" : "la vista"],
@@ -573,6 +579,8 @@ function describeA11y(tool: string, input: Json, running: boolean): ToolSummary 
     maximize: ["tool", "Maximizando", "Maximizó", window],
     restore: ["tool", "Restaurando", "Restauró", window],
     press: ["run", "Pulsando", "Pulsó", text(input.keys) || "un atajo"],
+    window: ["tool", windowLive, windowDone, window],
+    batch: ["tool", "Haciendo", "Hizo", steps === 1 ? "1 paso" : `${steps} pasos`],
     focus: ["tool", "Enfocando", "Enfocó", "un elemento"],
     focus_window: ["tool", "Trayendo al frente", "Trajo al frente", window],
   };

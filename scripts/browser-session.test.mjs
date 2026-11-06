@@ -1041,7 +1041,7 @@ for (const provider of ["claude", "codex"]) test(`${provider}: planner rejects p
 });
 
 const A11Y_READ = ["a11y_snapshot", "a11y_find", "a11y_get", "a11y_is", "a11y_list_windows", "a11y_list_apps", "a11y_list_displays", "a11y_list_surfaces", "a11y_wait", "a11y_status", "a11y_skills_get"];
-const A11Y_ACTIONS = ["a11y_click", "a11y_right_click", "a11y_type", "a11y_set_value", "a11y_clear", "a11y_focus", "a11y_select", "a11y_toggle", "a11y_check", "a11y_uncheck", "a11y_expand", "a11y_collapse", "a11y_scroll", "a11y_scroll_to", "a11y_press", "a11y_launch", "a11y_close_app", "a11y_focus_window", "a11y_minimize", "a11y_maximize", "a11y_restore"];
+const A11Y_ACTIONS = ["a11y_click", "a11y_set_value", "a11y_toggle", "a11y_expand", "a11y_select", "a11y_scroll", "a11y_scroll_to", "a11y_launch", "a11y_window", "a11y_batch", "a11y_press"];
 const a11yInstructions = (provider, h) => provider === "claude"
   ? (flags => flags[flags.indexOf("--append-system-prompt") + 1])(h.spawns.at(-1).request.flags)
   : h.writes.filter(write => ["thread/start", "thread/resume"].includes(write.method)).at(-1).params.developerInstructions;

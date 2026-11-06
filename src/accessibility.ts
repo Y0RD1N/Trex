@@ -15,9 +15,8 @@ import type { BrowserConfig, BrowserMode } from "./browser";
 
 export const A11Y_SERVER = "trex_a11y";
 export const A11Y_READ_TOOLS = ["a11y_snapshot", "a11y_find", "a11y_get", "a11y_list_windows", "a11y_wait", "a11y_status"] as const;
-export const A11Y_ACTION_TOOLS = ["a11y_click", "a11y_right_click", "a11y_set_value", "a11y_type", "a11y_clear", "a11y_toggle",
-  "a11y_check", "a11y_uncheck", "a11y_expand", "a11y_collapse", "a11y_select", "a11y_scroll", "a11y_scroll_to", "a11y_launch",
-  "a11y_close_app", "a11y_minimize", "a11y_maximize", "a11y_restore"] as const;
+export const A11Y_ACTION_TOOLS = ["a11y_click", "a11y_set_value", "a11y_toggle", "a11y_expand", "a11y_select", "a11y_scroll",
+  "a11y_scroll_to", "a11y_launch", "a11y_window", "a11y_batch"] as const;
 /** Atajos de teclado reales: solo con el permiso de Ajustes. */
 export const A11Y_KEYBOARD_TOOLS = ["a11y_press"] as const;
 

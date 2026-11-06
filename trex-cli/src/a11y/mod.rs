@@ -38,11 +38,14 @@ mod uia;
 
 /// Herramientas de lectura (todas, también al planificar).
 pub const READ_TOOLS: [&str; 6] = ["snapshot", "find", "get", "list_windows", "wait", "status"];
-/// Acciones semánticas, sin ratón ni teclado físicos.
-pub const ACTION_TOOLS: [&str; 18] = [
-    "click", "right_click", "set_value", "type", "clear", "toggle", "check", "uncheck", "expand", "collapse", "select",
-    "scroll", "scroll_to", "launch", "close_app", "minimize", "maximize", "restore",
-];
+/// Acciones semánticas, sin ratón ni teclado físicos. Las variantes de una
+/// misma acción van como argumento (`toggle` con `state`, `click` con `button`…):
+/// menos herramientas que describir al modelo en cada sesión.
+pub const ACTION_TOOLS: [&str; 10] = ["click", "set_value", "toggle", "expand", "select", "scroll", "scroll_to", "launch", "window", "batch"];
+
+/// Lo que puede ir dentro de `a11y_batch` (además de `press` si el teclado está permitido).
+pub const BATCH_STEPS: [&str; 10] = ["click", "set_value", "toggle", "expand", "select", "scroll", "scroll_to", "window", "wait", "find"];
+pub const MAX_BATCH: usize = 12;
 
 /// Teclado real: solo con el permiso de Ajustes y en modo completo.
 pub const KEYBOARD_TOOLS: [&str; 1] = ["press"];
@@ -71,6 +74,21 @@ fn allowed(tool: &str, mode: &str, keyboard: bool) -> bool {
         || (mode == "full" && (ACTION_TOOLS.contains(&tool) || (keyboard && KEYBOARD_TOOLS.contains(&tool))))
 }
 
+/// Por qué no se puede correr un lote en esta sesión, o None si se puede.
+pub fn batch_problem(args: &Value, mode: &str, keyboard: bool) -> Option<String> {
+    let Some(steps) = args["steps"].as_array().filter(|steps| (1..=MAX_BATCH).contains(&steps.len())) else {
+        return Some(format!("steps must list 1 to {MAX_BATCH} steps, each {{tool, ...its arguments}}."));
+    };
+    for (index, step) in steps.iter().enumerate() {
+        let tool = step["tool"].as_str().unwrap_or("");
+        let usable = (BATCH_STEPS.contains(&tool) || KEYBOARD_TOOLS.contains(&tool)) && allowed(tool, mode, keyboard);
+        if !usable {
+            return Some(format!("steps[{index}]: {tool:?} cannot run in a batch here. Use {}.", BATCH_STEPS.join(", ")));
+        }
+    }
+    None
+}
+
 // --- Catálogo ----------------------------------------------------------------------
 
 fn window_target() -> Value {
@@ -97,12 +115,14 @@ fn definition(tool: &str) -> (&'static str, Value, Vec<&'static str>) {
     let ref_only = (reference(), vec!["ref_id"]);
     let (description, properties, required): (&'static str, Value, Vec<&'static str>) = match tool {
         "list_windows" => ("List visible top-level windows: id, process, title and state. Start here.", json!({"app": {"type": "string", "description": "Filter by process name or title text."}}), vec![]),
-        "snapshot" => ("Accessibility tree of one window as compact text. Each actionable element has a @ref and its actions in brackets. Values are clipped; read a full one with a11y_get.",
+        "snapshot" => ("Accessibility tree of one window as compact text. Each actionable element has a @ref and its actions in brackets. Values are clipped; read a full one with a11y_get. format:\"text\" returns only the visible text, without refs: the cheapest way to read a page or document, including what is beyond the window.",
             with(window_target(), json!({
                 "root": {"type": "string", "description": "Ref of a container to read only that part."},
                 "interactive_only": {"type": "boolean", "description": "Only actionable or editable elements (default true). False also lists labels and text."},
+                "format": {"type": "string", "enum": ["tree", "text"], "description": "tree (default) or text."},
+                "offset": {"type": "integer", "description": "With format text: lines to skip, to read the next part."},
                 "max_depth": {"type": "integer", "description": "Tree depth limit (default 25)."},
-                "max_elements": {"type": "integer", "description": "Element limit (default 300, max 1000)."}
+                "max_elements": {"type": "integer", "description": "Element limit, or line limit with format text (default 300, max 1000)."}
             })), vec![]),
         "find" => ("Find elements in one window by role and/or name (case-insensitive substring). Returns refs.",
             with(window_target(), json!({
@@ -120,18 +140,14 @@ fn definition(tool: &str) -> (&'static str, Value, Vec<&'static str>) {
                 "timeout_ms": {"type": "integer", "description": "Default 5000, at most 15000."}
             })), vec![]),
         "status" => ("Engine state: platform, whether actions keep focus, and how long ago the user last used mouse or keyboard.", json!({}), vec![]),
-        "click" => ("Activate an element semantically (invoke, toggle, select or expand) without moving the mouse.", ref_only.0, ref_only.1),
-        "right_click" => ("Open the element's context menu semantically; then snapshot the menu.", ref_only.0, ref_only.1),
-        "set_value" => ("Replace the value of an editable element and verify the application kept it.",
-            with(reference(), json!({"value": {"type": "string"}})), vec!["ref_id", "value"]),
-        "type" => ("Append text to the value of an editable element and verify it was kept. Fields that only accept real keystrokes are refused.",
-            with(reference(), json!({"text": {"type": "string"}})), vec!["ref_id", "text"]),
-        "clear" => ("Empty an editable element and verify it.", ref_only.0, ref_only.1),
-        "toggle" => ("Flip a checkbox or switch and verify the new state.", ref_only.0, ref_only.1),
-        "check" => ("Ensure a checkbox or switch is on (no change if it already is).", ref_only.0, ref_only.1),
-        "uncheck" => ("Ensure a checkbox or switch is off (no change if it already is).", ref_only.0, ref_only.1),
-        "expand" => ("Expand a menu, tree item, combobox or disclosure and verify it.", ref_only.0, ref_only.1),
-        "collapse" => ("Collapse a menu, tree item, combobox or disclosure and verify it.", ref_only.0, ref_only.1),
+        "click" => ("Activate an element semantically (invoke, toggle, select or expand) without moving the mouse. button:\"right\" opens its context menu instead.",
+            with(reference(), json!({"button": {"type": "string", "enum": ["left", "right"]}})), vec!["ref_id"]),
+        "set_value" => ("Write into an editable element and verify the application kept it: replaces the value, or appends with append:true; an empty value clears it. Fields that only accept real keystrokes are refused.",
+            with(reference(), json!({"value": {"type": "string"}, "append": {"type": "boolean"}})), vec!["ref_id", "value"]),
+        "toggle" => ("Flip a checkbox or switch, or set it with state (no change if it already is), and verify.",
+            with(reference(), json!({"state": {"type": "string", "enum": ["on", "off"]}})), vec!["ref_id"]),
+        "expand" => ("Expand a menu, tree item, combobox or disclosure (collapse:true collapses it) and verify.",
+            with(reference(), json!({"collapse": {"type": "boolean"}})), vec!["ref_id"]),
         "select" => ("Select a list, tab or tree item ref, or pass value to choose an option of a list or combobox by its name.",
             with(reference(), json!({"value": {"type": "string", "description": "Option name inside the referenced list or combobox."}})), vec!["ref_id"]),
         "scroll" => ("Scroll to read or reach more: pass ref_id to scroll its nearest scrollable container, or a window (window_id/app) to scroll its \
@@ -147,10 +163,12 @@ response lists what came into view, with refs.",
 what came into view.", ref_only.0, ref_only.1),
         "launch" => ("Open an application (notepad, calc, a path or a document) without activating it when the app allows, and report its new windows.",
             json!({"app": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}), vec!["app"]),
-        "close_app" => ("Ask a window to close, as its close button would (it may show a save dialog).", window_target(), vec![]),
-        "minimize" => ("Minimize a window.", window_target(), vec![]),
-        "maximize" => ("Maximize a window.", window_target(), vec![]),
-        "restore" => ("Restore a minimized or maximized window.", window_target(), vec![]),
+        "window" => ("Minimize, maximize or restore a window, or close it as its close button would (it may show a save dialog).",
+            with(window_target(), json!({"action": {"type": "string", "enum": ["minimize", "maximize", "restore", "close"]}})), vec!["action"]),
+        "batch" => ("Run up to 12 steps in order in one call, with a single change report at the end: for example several set_value and a click to fill and \
+send a form. Each step is {tool, ...that tool's arguments}, e.g. {\"tool\":\"set_value\",\"ref_id\":\"@s2:e4\",\"value\":\"Ana\"}. Steps: click, set_value, \
+toggle, expand, select, scroll, scroll_to, window, wait, find (and press when allowed). Stops at the first failure and lists the steps that completed.",
+            json!({"steps": {"type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "object", "properties": {"tool": {"type": "string"}}, "required": ["tool"]}}}), vec!["steps"]),
         "press" => ("Send a real key combination (ctrl+s, alt+f, enter) to a window or element. It briefly brings the window to the front and uses the keyboard, only while the user is not typing, then returns the focus. Use it only when no semantic action exists.",
             with(with(window_target(), reference()), json!({"keys": {"type": "string", "description": "For example ctrl+s, ctrl+shift+n, alt+f4, enter, f5. No Windows-key shortcuts."}})), vec!["keys"]),
         _ => ("", json!({}), vec![]),
@@ -188,8 +206,9 @@ pub fn instructions(mode: &str, keyboard: bool) -> String {
 mouse, never types on their keyboard and never brings windows to the front, so the user can keep working. Loop: a11y_list_windows, then \
 a11y_snapshot of one window (compact text; each line is `@ref role \"name\" states [actions]`; line breaks inside text appear as ⏎), act on a \
 fresh @ref, and read the result in the tool response: state changes are verified, and it lists what changed (new elements with refs, new \
-windows, changed values or focus), so use those refs directly instead of taking another snapshot. To read or reach content beyond the window \
-(long pages and lists, hidden bars), use a11y_scroll or a11y_scroll_to: they report what came into view. Refs expire after a few snapshots. \
+windows, changed values or focus), so use those refs directly instead of taking another snapshot. Several actions in a row (filling a form) \
+go in one a11y_batch call. To read a page or document use a11y_snapshot with format:\"text\" (no refs, much shorter); to reach content beyond \
+the window (long lists, hidden bars) use a11y_scroll or a11y_scroll_to: they report what came into view. Refs expire after a few snapshots. \
 USER_ACTIVE means the user kept working in that window: wait (a11y_wait) and retry. WINDOW_BUSY means another Trex agent is using that window. NOT_KEPT means the app did not keep \
 a value: do not claim success. Never repeat an uncertain action automatically. Snapshots include visible text: never repeat secrets. Never use \
 the clipboard, shell commands or files as a workaround to put text into an app; if a field refuses text, explain it. {permissions}"
@@ -243,7 +262,7 @@ pub struct Node {
     pub actions: Vec<&'static str>,
 }
 
-/// `  - @s3:e5 edit "Texto" value="hola" focused [set_value,type]`
+/// `  - @s3:e5 edit "Texto" value="hola" focused [set_value]`
 pub fn format_node(node: &Node) -> String {
     let mut line = format!("{}- ", "  ".repeat(node.depth));
     if let Some(reference) = &node.reference {
@@ -374,8 +393,13 @@ where
                     None => fail(-32602, format!("Tool {name} is not available in this accessibility session.")),
                     Some(tool) => {
                         let args = message["params"].get("arguments").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({}));
-                        let _ = jobs.send((id.clone(), tool.to_owned(), args));
-                        continue;
+                        // Cada paso de un lote pasa el mismo filtro que una llamada suelta.
+                        if let Some(problem) = (tool == "batch").then(|| batch_problem(&args, mode, keyboard)).flatten() {
+                            reply(json!({"content": [{"type": "text", "text": format!("INVALID_ARGS: {problem}")}], "isError": true}))
+                        } else {
+                            let _ = jobs.send((id.clone(), tool.to_owned(), args));
+                            continue;
+                        }
                     }
                 }
             }
@@ -523,10 +547,10 @@ mod tests {
     #[test]
     fn nodes_are_compact_lines() {
         let node = Node { depth: 2, reference: Some("@s3:e5".into()), role: "edit", name: "Texto\nlargo".into(),
-            value: Some("x".repeat(130)), states: vec!["focused"], actions: vec!["set_value", "type"] };
+            value: Some("x".repeat(130)), states: vec!["focused"], actions: vec!["set_value"] };
         let line = format_node(&node);
         assert!(line.starts_with("    - @s3:e5 edit \"Texto⏎largo\" value=\""), "{line}");
-        assert!(line.ends_with("…(130 chars)\" focused [set_value,type]"), "{line}");
+        assert!(line.ends_with("…(130 chars)\" focused [set_value]"), "{line}");
         // Los saltos del Bloc de notas (\r) se ven, no desaparecen.
         assert_eq!(quote("Título\r\rVerso\r\nOtro\nFin", 80), "\"Título⏎⏎Verso⏎Otro⏎Fin\"");
         assert_eq!(lines("a\r\rb\r\nc"), "a\n\nb\nc");

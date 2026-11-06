@@ -74,7 +74,7 @@ export function assertIntegrationRestrictions(result: unknown, raw?: Application
  * detected as missing, the desktop when enabled, and an attached browser.
  */
 /** Claude Code difiere las herramientas MCP: cargarlas de una vez ahorra una vuelta por herramienta. */
-const A11Y_DEFERRED_QUERY = `select:${["list_windows", "snapshot", "find", "get", "click", "set_value", "type", "scroll", "scroll_to", "wait", "launch", "expand", "select"]
+const A11Y_DEFERRED_QUERY = `select:${["list_windows", "snapshot", "find", "get", "click", "set_value", "toggle", "batch", "scroll", "scroll_to", "wait", "launch", "expand", "select"]
   .map(tool => `mcp__trex_a11y__a11y_${tool}`).join(",")}`;
 
 export function integrationInstructions(provider: AgentProvider, context: IntegrationContext = {}): string {
