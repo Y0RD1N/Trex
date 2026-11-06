@@ -17,8 +17,8 @@ const { BrowserService, detectBrowser } = await import('../worker/browser.mjs');
 const { context } = await import('../worker/security.mjs');
 
 const available = detectBrowser().channel === 'trex-shell' && !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY || process.platform !== 'linux');
-// Snapshot elements are "ref kind name" lines (token-efficient); parse them for assertions.
-const parseElement = line => { const [ref, kind, ...rest] = line.split(' '); const m = /^([^\[]+)(?:\[(.+)\])?$/.exec(kind); return { ref, kind: m[1], type: m[2] ?? null, name: rest.join(' ') }; };
+// Snapshot elements are "ref kind name = \"value\" [states]" lines; parse them for assertions.
+const parseElement = line => { const m = /^(\S+) (\S+)(?: (.*?))?(?: = ("(?:[^"\\]|\\.)*"))?(?: \[([^\]]*)\])?$/.exec(line); return { ref: m[1], kind: m[2], name: m[3] ?? '', value: m[4] ? JSON.parse(m[4]) : null, states: m[5] ? m[5].split(',') : [] }; };
 const elementsOf = data => data.elements.map(parseElement);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let server, base, service, home, workspace, A, B;
@@ -86,9 +86,10 @@ describe('Trex Browser shell', { skip: !available && 'Trex shell or display unav
     assert.equal('accessibility' in compact, false, 'the default snapshot is compact');
     assert.ok(JSON.stringify(compact).length < JSON.stringify(full).length, 'compact snapshot must be smaller');
     const parsed = elementsOf(compact), names = parsed.map(e => e.name);
-    for (const hidden of ['Solo texto', 'Oculto', 'Deshabilitado', 'Grupo']) assert.equal(names.includes(hidden), false, `${hidden} must not be listed`);
+    for (const hidden of ['Solo texto', 'Oculto', 'Grupo']) assert.equal(names.includes(hidden), false, `${hidden} must not be listed`);
+    assert.deepEqual(parsed.find(e => e.name === 'Deshabilitado')?.states, ['disabled'], 'disabled controls stay listed');
     assert.equal(names.filter(n => n === 'Ver más').length, 1, 'adjacent duplicates collapse');
-    assert.ok(parsed.some(e => e.kind === 'input' && !e.name), 'unnamed fields stay actionable');
+    assert.ok(parsed.some(e => e.kind === 'textbox' && !e.name), 'unnamed fields stay actionable');
     assert.ok(compact.omitted > 0);
     const button = parsed.find(e => e.name === 'Guardar cambios');
     assert.ok(button?.ref, JSON.stringify(compact.elements));

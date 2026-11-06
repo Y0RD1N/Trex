@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from'node:fs';import os from'node:os';import path from'node:path';
-import{BrowserService,isObservation}from'../worker/browser.mjs';import{context}from'../worker/security.mjs';
+import{BrowserService,isObservation}from'../worker/browser.mjs';import{context}from'../worker/security.mjs';import{fakePage}from'./fixtures/fake-page.mjs';
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
 function fixture(t){
  // Production's HTTP server keeps the broker alive while its unref'ed operation
@@ -46,8 +46,8 @@ test('manual pause reason survives cancellation of the previously active action'
  const rejected=assert.rejects(pending,{code:'UNCERTAIN'});await service.call(ctx,'browser_pause',{},'human-pause',1000);await rejected;assert.equal(state.pauseReason,'manual');assert.equal(state.paused,true);action.resolve({data:{},artifacts:[]});await state.queue;
 });
 test('late cancelled snapshot never clears newer refs or publishes a stale revision',async t=>{
- const{service,ctx,state}=fixture(t),handles=deferred();state.browser={};state.tabs.set('tab',{});state.selected='tab';service.frame=()=>({locator:selector=>selector==='body'?{ariaSnapshot:async()=>''}:{elementHandles:()=>handles.promise},url:()=> 'http://localhost/'});
- await assert.rejects(service.call(ctx,'browser_snapshot',{},'cancelled-snapshot',100),{code:'READ_TIMEOUT'});state.refs.set('newer',{value:true});const revision=state.revision;handles.resolve([]);await new Promise(r=>setTimeout(r,20));assert.equal(state.refs.has('newer'),true);assert.equal(state.revision,revision);assert.equal(state.paused,false);
+ const{service,ctx,state}=fixture(t),read=deferred(),page=fakePage();page.read=read.promise;state.browser={};state.tabs.set('tab',page);state.selected='tab';const refs=service.pageState(state,page);
+ await assert.rejects(service.call(ctx,'browser_snapshot',{},'cancelled-snapshot',100),{code:'READ_TIMEOUT'});refs.refs.set('newer',{value:true});const revision=refs.revision;read.resolve([{role:'button',name:'Late',ref:'e1'}]);await new Promise(r=>setTimeout(r,20));assert.deepEqual([...refs.refs.keys()],['newer']);assert.equal(refs.revision,revision);assert.equal(state.paused,false);
 });
 test('late cancelled screenshot does not publish an artifact',async t=>{
  const{service,ctx,state}=fixture(t),shot=deferred();state.browser={};state.tabs.set('tab',{screenshot:()=>shot.promise});state.selected='tab';let published=0;service.artifacts.add=async()=>{published++;return{}};
@@ -60,8 +60,8 @@ test('ownership change cannot deliver an old clients pending observation',async 
  const{service,ctx,state}=fixture(t),read=deferred();service.execute=()=>read.promise;const pending=service.call(ctx,'browser_take_screenshot',{},'old-owner-read',2000);state.owner='new-owner';state.generation++;read.resolve({data:{private:'not delivered'},artifacts:[]});await assert.rejects(pending,{code:'OWNERSHIP'});assert.equal(state.owner,'new-owner');assert.equal(state.paused,false);
 });
 test('a snapshot racing takeover cannot replace the new owners refs',async t=>{
- const{service,ctx,state}=fixture(t),handles=deferred();state.browser={};state.tabs.set('tab',{});state.selected='tab';service.frame=()=>({locator:selector=>selector==='body'?{ariaSnapshot:async()=>''}:{elementHandles:()=>handles.promise},url:()=> 'http://localhost/'});
- const pending=service.call(ctx,'browser_snapshot',{},'old-snapshot',2000);await Promise.resolve();await Promise.resolve();state.generation++;state.owner='new-owner';state.refs.set('new-owner-ref',{value:true});handles.resolve([]);await assert.rejects(pending,{code:'STALE_SNAPSHOT'});assert.equal(state.refs.has('new-owner-ref'),true);
+ const{service,ctx,state}=fixture(t),read=deferred(),page=fakePage();page.read=read.promise;state.browser={};state.tabs.set('tab',page);state.selected='tab';const refs=service.pageState(state,page);
+ const pending=service.call(ctx,'browser_snapshot',{},'old-snapshot',2000);await new Promise(r=>setTimeout(r,10));state.generation++;state.owner='new-owner';refs.refs.set('new-owner-ref',{value:true});read.resolve([{role:'button',name:'Old',ref:'e1'}]);await assert.rejects(pending,{code:'STALE_SNAPSHOT'});assert.deepEqual([...refs.refs.keys()],['new-owner-ref']);
 });
 test('explicit recovery close bypasses a stuck action and cancels queued intents without replay',async t=>{
  const{service,ctx,state}=fixture(t),action=deferred(),execute=service.execute.bind(service);let clicks=0;service.closeProfile=async()=>{state.browser=null;state.tabs.clear();action.resolve({data:{stopped:true},artifacts:[]})};

@@ -160,16 +160,34 @@ queues work and returns its durable task ID; status with `waitMs` up to 30000
 waits for results. Uncertain work is never automatically retried. See
 [the team spaces guide](../docs/agent-browser-spaces.md).
 
-Snapshots return `tabId` and a **page-specific revision**. By default they list
-only actionable elements as `ref kind name` lines; `full:true` (or `compact:false`)
-adds the accessibility tree, cut at 16,000 characters (scope it with `selector`).
-Refs and frame maps belong to that page; snapshots or actions on another tab do
-not invalidate them. Main-frame navigation, input, ownership changes and pauses
-invalidate the affected refs. A child frame (ad, embed) navigating invalidates
-them only when they came from that frame, and `browser_evaluate` never does; an
-element that changed meanwhile is still rejected by its fingerprint.
-Pass the snapshot's `tabId`, `revision` and `ref` together. The visible selected
-tab remains a profile-level convenience, not a separate agent identity.
+Snapshots read Playwright's AI aria snapshot once (`worker/observe.mjs`) and return
+`tabId` and a **page-specific revision**. By default they list elements as
+`ref kind name = "value" [states]` lines (states: checked, selected, expanded,
+pressed, disabled, required, invalid), plus headings (`h1`…), alerts and status
+text; disabled controls stay listed, child-frame content needs `frameId`, and
+`more` says when the list was cut. `full:true` (or `compact:false`) adds the
+accessibility tree, cut at 16,000 characters (scope it with `selector`).
+
+Refs are aria refs bound to their element: they stay valid across actions,
+same-document navigation and `browser_evaluate`. Only a new document in the
+main frame (detected by its time origin), a pause, a takeover or a closed tab
+bumps the revision and drops them; a child frame navigating drops only its own
+refs. A ref whose element was re-rendered is re-resolved by role, name and
+position while as many look-alikes exist as before (a deleted row never
+redirects to the next one); otherwise the error lists candidates. Pass the
+snapshot's `tabId`, `revision` and `ref` together. The visible selected tab
+remains a profile-level convenience, not a separate agent identity.
+
+Page actions (click, type, fill_form, select_option, press_key, hover, drag,
+mouse, file_upload, handle_dialog, and the same steps in a batch) wait up to
+about 1 s for a navigation they started or for the DOM to go quiet, then return
+`effect`: `added` lines with refs, a `removed` count, `changed` lines with their
+previous value or state, new `text`, and `url`/`title` when they change. A new
+document reports `navigated:true` and lists the new page. No `effect` means
+nothing visible changed. Typed, filled and selected values are read back
+(`mismatch`, `mismatches`, `selected` labels). A role/name or selector that
+matches zero or several elements reports the count and up to five candidates
+with fresh refs, after a case-insensitive name match.
 
 QA/full expose 42 browser tools; observe exposes 15. `browser_batch` accepts
 1..16 ordered `{tool,arguments}` steps and validates every schema and bound mode
@@ -199,7 +217,7 @@ Status and an owner's dialog response operate outside the action queue, so a syn
 
 One capture manager prevents simultaneous video, action trace, performance trace, CPU sampling and heap snapshot sessions. Video stop finalizes a real silent page screencast WebM without closing the page/profile. Encoding dimensions are fixed at capture start and remain accurate if the viewport changes later. Captures auto-finalize after at most 120 seconds (default 60). A video uses Playwright's official packaged ffmpeg, checked by `doctor`; a missing encoder sets `runtime.ffmpeg` and `capabilities.video` false with a diagnostic. Raw CDP is not exposed as a model tool. Performance outputs are Chromium trace JSON, CPU profile JSON and heap snapshot JSON; action traces are Playwright ZIPs with DOM snapshots, without source files or screencast screenshots. HAR is not currently exported; bounded network metadata and selected bodies are available instead.
 
-Finalized artifacts are limited to 64 MiB each, 200 retained, 512 MiB total and seven days. Network metadata retains at most 300 requests; response-body reads require an uncompressed declared Content-Length of at most 1 MiB. Uploads must be regular non-linked files under the authorized workspace, at most 64 MiB combined per call. Native upload snapshots hold verified ancestor and file handles while copying bounded bytes; Playwright receives immutable payloads before any asynchronous locator work. Downloads stay in the private artifacts directory and are exposed only by ID. Temporary downloads and capture output can exceed the finalized artifact size limit before rejection; the recording duration is bounded, but the encoder does not provide a hard live byte cap.
+Finalized artifacts are limited to 64 MiB each, 200 retained, 512 MiB total and seven days. Network metadata retains at most 300 requests (failures included via `requestfailed`); listings default to document, xhr and fetch requests plus failures (`types`, `all`, `url`, `status`, `failed` filter them). Body reads return 16 KB from `offset` by default (`maxBytes` up to 1 MiB, bodies up to 64 MiB). Console reads default to the newest 20 events with text cut to 300 characters and repeats merged; `level`, a `since` cursor and `full:true` (raw events) are arguments. Uploads must be regular non-linked files under the authorized workspace, at most 64 MiB combined per call. Native upload snapshots hold verified ancestor and file handles while copying bounded bytes; Playwright receives immutable payloads before any asynchronous locator work. Downloads stay in the private artifacts directory and are exposed only by ID. Temporary downloads and capture output can exceed the finalized artifact size limit before rejection; the recording duration is bounded, but the encoder does not provide a hard live byte cap.
 
 The native helper requests Windows `CREATE_BREAKAWAY_FROM_JOB` and never retries without it if Windows rejects creation. A permitted breakaway can leave the broker in a shared ancestor job; membership in any job is therefore not treated as a launch failure. Native tests verify survival after the launcher's kill job is terminated, rejection when that job prohibits breakaway, and real Chrome operation after an MCP adapter process-tree kill. Browser guards still clean up only owned browsers when their broker stops.
 

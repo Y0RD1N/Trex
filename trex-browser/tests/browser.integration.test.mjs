@@ -26,8 +26,8 @@ const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const ebmlSignature = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const runFile = promisify(execFile);
-// Snapshot elements are "ref kind name" lines (token-efficient); parse them for assertions.
-const parseElement = line => { const [ref, kind, ...rest] = line.split(' '); const m = /^([^\[]+)(?:\[(.+)\])?$/.exec(kind); return { ref, kind: m[1], type: m[2] ?? null, name: rest.join(' ') }; };
+// Snapshot elements are "ref kind name = \"value\" [states]" lines; parse them for assertions.
+const parseElement = line => { const m = /^(\S+) (\S+)(?: (.*?))?(?: = ("(?:[^"\\]|\\.)*"))?(?: \[([^\]]*)\])?$/.exec(line); return { ref: m[1], kind: m[2], name: m[3] ?? '', value: m[4] ? JSON.parse(m[4]) : null, states: m[5] ? m[5].split(',') : [] }; };
 const elementsOf = data => data.elements.map(parseElement);
 
 let root, home, workspace, otherWorkspace, env, fixture;
@@ -456,19 +456,46 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
     // A read-only evaluate and a child frame (ad, embed) navigating keep the page's refs.
     assert.equal(await evaluate(() => document.title), 'Trex loopback fixture');
     assert.equal(await evaluate(() => new Promise(resolve => { const frame = document.querySelector('iframe'); frame.addEventListener('load', () => resolve(frame.contentWindow.location.search), { once: true }); frame.src = '/frame?reloaded=1'; })), '?reloaded=1');
+    // The click reports what changed; the revision and every ref stay valid on this document.
+    const counter = elementsOf(snapshot.data).find(element => element.kind === 'status' && element.name === '0');
+    assert.ok(counter?.ref, 'The counter output is listed with its value');
     const clicked = await ok('browser_click', { ref: button.ref, revision: snapshot.revision });
-    assert.ok(clicked.revision > snapshot.revision);
-    failure(await call('browser_click', { ref: button.ref, revision: snapshot.revision }), 'STALE_SNAPSHOT');
-    assert.equal(await evaluate(() => document.querySelector('#count').textContent), '1');
+    assert.equal(clicked.revision, snapshot.revision);
+    assert.deepEqual(clicked.data.effect, { changed: [`${counter.ref} status 1 (was "0")`] });
+    assert.deepEqual((await ok('browser_click', { ref: button.ref, revision: snapshot.revision })).data.effect, { changed: [`${counter.ref} status 2 (was "1")`] });
+    // A new document makes them stale.
+    await navigate();
+    failure(await call('browser_click', { ref: button.ref, revision: snapshot.revision }), 'STALE_SNAPSHOT', /new page/);
+    assert.equal(await evaluate(() => document.querySelector('#count').textContent), '0');
     const fresh = await ok('browser_snapshot');
     assert.equal(Number.isInteger(fresh.revision), true);
+    // A click that loads a new document lists the new page, so no extra snapshot is needed.
+    const next = elementsOf(fresh.data).find(element => element.kind === 'link' && element.name === 'Next fixture page');
+    const moved = await ok('browser_click', { ref: next.ref, revision: fresh.revision });
+    assert.equal(moved.data.effect.navigated, true);
+    assert.equal(moved.data.effect.url, `${fixture.url}/next`);
+    assert.ok(moved.revision > fresh.revision);
+    const home = moved.data.effect.added.map(parseElement).find(element => element.kind === 'link' && element.name === 'Home');
+    assert.ok(home, JSON.stringify(moved.data.effect));
+    assert.equal((await ok('browser_click', { ref: home.ref, revision: moved.revision })).data.effect.url, `${fixture.url}/`);
   });
 
   it('fills forms, presses keys, selects options and uploads only workspace files', async () => {
     await navigate();
-    await ok('browser_type', { selector: '#name', text: 'Ada local' });
-    await ok('browser_fill_form', { fields: [{ selector: '#notes', value: 'Fixture notes' }, { selector: '#agree', value: true }] });
-    await ok('browser_select_option', { selector: '#color', values: ['blue'] });
+    const typed = await ok('browser_type', { selector: '#name', text: 'Ada local' });
+    assert.equal(typed.data.mismatch, undefined);
+    assert.match(typed.data.effect.changed[0], / textbox Name = "Ada local" \(was empty\)$/);
+    const filled = await ok('browser_fill_form', { fields: [{ selector: '#notes', value: 'Fixture notes' }, { selector: '#agree', value: true }] });
+    assert.equal(filled.data.mismatches, undefined);
+    assert.deepEqual((await ok('browser_select_option', { selector: '#color', values: ['blue'] })).data.selected, ['Blue']);
+    // A field that keeps less than was typed is reported, not silently accepted.
+    await evaluate(() => { document.querySelector('#notes').maxLength = 4; return true; });
+    assert.deepEqual((await ok('browser_type', { selector: '#notes', text: 'Truncated' })).data.mismatch, { expected: 'Truncated', actual: 'Trun' });
+    await evaluate(() => { document.querySelector('#notes').removeAttribute('maxlength'); document.querySelector('#notes').value = 'Fixture notes'; return true; });
+    // A role whose name differs only in case still resolves; a miss lists candidates with fresh refs.
+    assert.equal((await ok('browser_click', { role: 'checkbox', name: 'agree' })).data.note, 'matched name "agree" ignoring case');
+    await ok('browser_click', { role: 'checkbox', name: 'Agree' });
+    failure(await call('browser_click', { role: 'button', name: 'Submit fixtures' }), 'BROWSER_ERROR', /matched 0 elements; exactly one is required\. Candidates \(revision \d+\):\ntab-\d+-(?:f\d+)?e\d+ button Submit fixture/);
     await ok('browser_file_upload', { selector: '#upload', paths: ['upload.txt'] });
     assert.deepEqual(await evaluate(async () => ({ name: document.querySelector('#name').value, notes: document.querySelector('#notes').value, agree: document.querySelector('#agree').checked, color: document.querySelector('#color').value, filename: document.querySelector('#upload').files[0].name, contents: await document.querySelector('#upload').files[0].text() })), {
       name: 'Ada local', notes: 'Fixture notes', agree: true, color: 'blue', filename: 'upload.txt', contents: 'workspace upload fixture\n',

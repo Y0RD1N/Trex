@@ -45,7 +45,7 @@ test('observe tools are a fixed narrow subset; outer policy cannot be overridden
 test('tool definitions stay compact and agents read only the lean view',()=>{
   // Sent with every model request: keep descriptions short (bytes as OpenAI function tools).
   const bytes=mode=>Buffer.byteLength(JSON.stringify(tools(mode).map(t=>({type:'function',function:{name:t.name,description:t.description,parameters:t.inputSchema}}))));
-  assert.ok(bytes('full')<17200,`full ${bytes('full')}`);assert.ok(bytes('observe')<6400,`observe ${bytes('observe')}`);
+  assert.ok(bytes('full')<17800,`full ${bytes('full')}`);assert.ok(bytes('observe')<7050,`observe ${bytes('observe')}`);
   for(const t of tools('full'))assert.ok(t.description.length<=400,t.name);
   // Recovery guidance survives the shorter wording.
   const text=name=>tools('full').find(t=>t.name===name).description;

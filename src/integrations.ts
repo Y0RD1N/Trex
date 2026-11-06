@@ -76,6 +76,8 @@ export function assertIntegrationRestrictions(result: unknown, raw?: Application
 /** Claude Code difiere las herramientas MCP: cargarlas de una vez ahorra una vuelta por herramienta. */
 const A11Y_DEFERRED_QUERY = `select:${["list_windows", "snapshot", "find", "get", "click", "set_value", "toggle", "batch", "scroll", "scroll_to", "wait", "launch", "expand", "select"]
   .map(tool => `mcp__trex_a11y__a11y_${tool}`).join(",")}`;
+const BROWSER_DEFERRED_QUERY = `select:${["navigate", "snapshot", "click", "type", "fill_form", "select_option", "press_key", "batch", "wait_for", "take_screenshot", "tabs"]
+  .map(tool => `mcp__trex_browser__browser_${tool}`).join(",")}`;
 
 export function integrationInstructions(provider: AgentProvider, context: IntegrationContext = {}): string {
   const flags = normalizeIntegrations(context.applications), available = context.available ?? {}, parts: string[] = [];
@@ -98,6 +100,6 @@ export function integrationInstructions(provider: AgentProvider, context: Integr
     : "Accessibility control (experimental): the connected trex_a11y MCP tools (a11y_*) operate apps through the accessibility tree without moving the user's mouse or keyboard: list windows, snapshot one app, act on a fresh @ref; each action reports what changed (new elements with refs, changed values), and a11y_scroll reaches content beyond the window. Line breaks show as ⏎. Never use the clipboard, shell commands or files as a workaround to put text into an app, and do not repeat secrets read from the screen.");
   if (context.desktop && context.a11y) parts.push("Computer control and accessibility control are separate integrations: use the one the user asks for; if they do not say, pick the one that fits the task and say which you used.");
   if (context.browser) parts.push(provider === "codex" || provider === "antigravity" ? BROWSER_INSTRUCTIONS
-    : "Websites: prefer the connected Trex Browser tools, starting with browser_navigate and the app's http(s) URL; failures of other computer-use tools say nothing about this browser.");
+    : `Websites: prefer the connected Trex Browser tools, starting with browser_navigate and the app's http(s) URL; failures of other computer-use tools say nothing about this browser.${provider === "claude" ? ` If these tools are deferred, load the ones you need in a single ToolSearch call (${BROWSER_DEFERRED_QUERY}).` : ""}`);
   return parts.join(" ");
 }

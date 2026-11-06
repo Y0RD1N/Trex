@@ -192,7 +192,7 @@
     },
     {
       "name": "browser_snapshot",
-      "description": "Actionable elements as \"ref kind name\" lines; act with tabId+revision+ref. full:true adds the accessibility tree to read content; selector scopes to a region.",
+      "description": "Elements as \"ref kind name = value [states]\" lines, with headings and alerts; act with tabId+revision+ref. full:true adds the accessibility tree to read content; selector scopes to a region.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -742,7 +742,7 @@
     },
     {
       "name": "browser_console_messages",
-      "description": "Read bounded console and page error events.",
+      "description": "Console messages and page errors, newest last (20, text cut to 300 chars, repeats merged). level: minimum severity; since: cursor of an earlier read; full:true for raw events.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -753,6 +753,20 @@
             "type": "number"
           },
           "clear": {
+            "type": "boolean"
+          },
+          "level": {
+            "enum": [
+              "error",
+              "warning",
+              "info",
+              "debug"
+            ]
+          },
+          "since": {
+            "type": "integer"
+          },
+          "full": {
             "type": "boolean"
           }
         },
@@ -765,7 +779,7 @@
     },
     {
       "name": "browser_network_requests",
-      "description": "Recent request metadata, newest last. Static assets (images, fonts, styles, media) are skipped unless all:true.",
+      "description": "Recent document, xhr and fetch requests plus failures, newest last. Filter by url substring, status or failed:true; types or all:true for other requests.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -776,6 +790,21 @@
             "type": "number"
           },
           "all": {
+            "type": "boolean"
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "failed": {
             "type": "boolean"
           }
         },
@@ -788,7 +817,7 @@
     },
     {
       "name": "browser_network_body",
-      "description": "Read a bounded captured response body or request body.",
+      "description": "Read a captured response or request body: 16 KB from offset; maxBytes up to 1 MiB.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -803,6 +832,15 @@
               "request",
               "response"
             ]
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1048576
           }
         },
         "required": [

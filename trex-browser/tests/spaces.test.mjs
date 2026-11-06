@@ -8,6 +8,7 @@ import { ensureSpaces, listSpaces } from '../worker/spaces.mjs';
 import { context } from '../worker/security.mjs';
 import { tools, validateArguments } from '../worker/tools.mjs';
 import { randomUUID } from 'node:crypto';
+import { fakePage } from './fixtures/fake-page.mjs';
 
 function fixture(t){
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-spaces-'));
@@ -98,16 +99,13 @@ test('batch output limit stops later actions and returns bounded completed-step 
   assert.ok(error);assert.equal(dispatched,1);assert.equal(error.batchSteps[0].receipt.status,'completed');assert.equal(error.batchSteps[0].data.omitted,true);assert.ok(JSON.stringify(error.batchSteps).length<2048);
   assert.equal(service.state(ctx).paused,false);
 });
-test('a concurrent snapshot cannot dispose a ref while its issued click is still using it',async t=>{
-  const {service,ctx}=fixture(t),state=service.state(ctx);let finish,started,disposed=false;
+test('a snapshot taken while a click is in flight keeps that click and its ref valid',async t=>{
+  const {service,ctx}=fixture(t),state=service.state(ctx),page=fakePage({tree:[{role:'button',name:'Fixture',ref:'e1'}]});let finish,started;
   const waiting=new Promise(resolve=>{finish=resolve;}),issued=new Promise(resolve=>{started=resolve;});
-  const element={isConnected:true,outerHTML:'<button>Fixture</button>',tagName:'BUTTON',innerText:'Fixture',getAttribute:()=>null};
-  const previous={evaluate:async fn=>fn(element),click:async()=>{started();await waiting;assert.equal(disposed,false);},dispose:async()=>{disposed=true;}};
-  const fresh={evaluate:async fn=>fn(element),dispose:async()=>{}};
-  const frame={url:()=> 'http://localhost/fixture',locator:()=>({elementHandles:async()=>[fresh],ariaSnapshot:async()=> 'button Fixture'})};
-  const page={mainFrame:()=>frame};state.browser={};state.owner=ctx.clientId;state.tabs.set('fixture',page);state.selected='fixture';
-  service.pageState(state,page).refs.set('previous',{handle:previous,frame,fingerprint:element.outerHTML});
-  const pending=service.call(ctx,'browser_click',{ref:'previous',revision:0},'leased-click',5000);await issued;
-  const snapshot=await service.call(ctx,'browser_snapshot',{},'concurrent-snapshot',5000);assert.ok(snapshot.data.elements.length);assert.equal(disposed,false);
-  finish();await pending;assert.equal(disposed,true);
+  state.browser={};state.owner=ctx.clientId;state.tabs.set('fixture',page);state.selected='fixture';
+  const first=await service.call(ctx,'browser_snapshot',{},'first-snapshot',5000);
+  page.onAction=async()=>{started();await waiting;};
+  const pending=service.call(ctx,'browser_click',{ref:'fixture-e1',revision:first.data.revision},'leased-click',5000);await issued;
+  const snapshot=await service.call(ctx,'browser_snapshot',{},'concurrent-snapshot',5000);assert.deepEqual(snapshot.data.elements,['fixture-e1 button Fixture']);
+  finish();assert.equal((await pending).data.clicked,true);assert.ok(service.pageState(state,page).refs.has('fixture-e1'));
 });

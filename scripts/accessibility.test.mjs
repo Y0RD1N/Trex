@@ -52,6 +52,10 @@ test("accessibility control is opt-in and announced only when the gateway is att
     assert.doesNotMatch(both, /prefer (advertised|connected|the advertised|the connected) (desktop|trex_desktop|trex_a11y|mcp_trex_a11y)/, provider);
     assert.doesNotMatch(both, /desktop_status/, `${provider}: no startup round trips`);
   }
+  // El navegador también: Claude carga sus herramientas habituales de una vez.
+  const web = integrations.integrationInstructions("claude", integrations.integrationContext({}, { browser: true }));
+  assert.match(web, /single ToolSearch call \(select:mcp__trex_browser__browser_navigate,[\w,]*mcp__trex_browser__browser_batch,/);
+  assert.doesNotMatch(integrations.integrationInstructions("trex", integrations.integrationContext({}, { browser: true })), /ToolSearch/);
   // Claude y Trex CLI ya reciben la guía del servidor: el texto de la app es corto.
   const short = integrations.integrationInstructions("claude", integrations.integrationContext({ a11yEnabled: true, desktopEnabled: true, integrations: { github: false, blender: false, hyperframes: false } }, { a11y: true }));
   const long = integrations.integrationInstructions("codex", integrations.integrationContext({ a11yEnabled: true, desktopEnabled: true, integrations: { github: false, blender: false, hyperframes: false } }, { a11y: true }));

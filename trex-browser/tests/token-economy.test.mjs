@@ -5,10 +5,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { EventEmitter } from 'node:events';
 import { BrowserService } from '../worker/browser.mjs';
 import { context } from '../worker/security.mjs';
 import { BROWSER_INSTRUCTIONS, agentText, batchFailureText, modelView } from '../worker/tools.mjs';
+import { fakePage } from './fixtures/fake-page.mjs';
 
 function fixture(t){
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-tokens-'));
@@ -18,30 +18,28 @@ function fixture(t){
   state.owner=ctx.clientId;state.browser={};
   return {service,ctx,state};
 }
-const handle=()=>({dispose:async()=>{}});
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
-test('child-frame navigation and a read-only evaluate keep refs; the main frame and actions do not',async t=>{
-  const {service,ctx,state}=fixture(t),main={},embed={},page=new EventEmitter();page.mainFrame=()=>main;
-  service.attachPage(state,page);const refs=service.pageState(state,page),start=refs.revision;
-  refs.refs.set('tab-1-e1',{handle:handle(),frame:main});
-  page.emit('framenavigated',embed); // an ad or embed navigating on its own
-  assert.equal(refs.revision,start);assert.equal(refs.refs.size,1);
-  service.frame=()=>({evaluate:async()=>'read'});
+test('a child frame navigating or a read-only evaluate keeps the page refs; only a new document drops them',async t=>{
+  const {service,ctx,state}=fixture(t),page=fakePage({tree:[{role:'button',name:'Save',ref:'e1'}]});
+  service.attachPage(state,page);const tab=service.tabIdOf(state,page),refs=service.pageState(state,page);
+  const snap=(await service.call(ctx,'browser_snapshot',{},'first-snapshot',1000)).data,start=refs.revision;
+  assert.deepEqual(snap.elements,[`${tab}-e1 button Save`]);
+  refs.refs.set(`${tab}-f1e2`,{pw:'f1e2',role:'button',name:'Ad',n:0,of:1});
+  page.emit('framenavigated',{}); // an ad or embed navigating on its own restarts only its refs
+  assert.equal(refs.revision,start);assert.ok(refs.refs.has(`${tab}-e1`));assert.equal(refs.refs.has(`${tab}-f1e2`),false);
+  page.evaluate=async()=>'read';
   assert.equal((await service.call(ctx,'browser_evaluate',{function:'() => document.title'},'read-only-evaluate',1000)).data.value,'read');
-  assert.equal(refs.revision,start);assert.equal(refs.refs.size,1);
-  refs.refs.set('tab-1-e2',{handle:handle(),frame:embed}); // refs from a frame snapshot go stale with their frame
-  page.emit('framenavigated',embed);assert.equal(refs.revision,start+1);assert.equal(refs.refs.size,0);
-  refs.refs.set('tab-1-e1',{handle:handle(),frame:main});
-  page.emit('framenavigated',main);assert.equal(refs.revision,start+2);assert.equal(refs.refs.size,0);
-  service.locator=async()=>({click:async()=>{}});
-  await service.call(ctx,'browser_click',{selector:'button'},'real-action',1000);assert.equal(refs.revision,start+3);
+  page.emit('framenavigated',page.mainFrame());await tick(); // same document (pushState)
+  assert.equal(refs.revision,start);assert.ok(refs.refs.has(`${tab}-e1`));
+  page.doc=2;page.emit('domcontentloaded');await tick();
+  assert.equal(refs.revision,start+1);assert.equal(refs.refs.size,0);
 });
 
 test('snapshot lists compact elements by default; full:true or compact:false adds the tree',async t=>{
-  const {service,ctx,state}=fixture(t);let trees=0;
-  const element={outerHTML:'<button>Save</button>',tagName:'BUTTON',innerText:'Save',getAttribute:()=>null};
-  const frame={url:()=> 'http://localhost/',locator:()=>({elementHandles:async()=>[{evaluate:async fn=>fn(element),dispose:async()=>{}}],ariaSnapshot:async()=>{trees++;return '- button "Save"';}})};
-  state.tabs.set('tab-1',{mainFrame:()=>frame,title:async()=>'Fixture'});state.selected='tab-1';
+  const {service,ctx,state}=fixture(t),page=fakePage({tree:[{role:'button',name:'Save',ref:'e1'}]});let trees=0;
+  const frame=page.mainFrame(),locator=frame.locator;frame.locator=selector=>({...locator(selector),first(){return this;},ariaSnapshot:async()=>{trees++;return '- button "Save"';}});
+  state.tabs.set('tab-1',page);state.selected='tab-1';
   const snapshot=args=>service.call(ctx,'browser_snapshot',args,`snapshot-${JSON.stringify(args)}`,1000).then(r=>r.data);
   const compact=await snapshot({});
   assert.equal(trees,0);assert.equal('accessibility' in compact,false);assert.equal('compact' in compact,false);
@@ -100,7 +98,7 @@ test('a failed batch names the failed, completed and unrun steps; agent text dro
 });
 
 test('server instructions stay short and keep every rule',()=>{
-  assert.ok(BROWSER_INSTRUCTIONS.length<=960,`${BROWSER_INSTRUCTIONS.length} chars`);
-  for(const rule of [/visible browser/,/browser_tabs lists only yours/,/never take over a peer/,/dev server/,/automatically/,/tabId\+revision\+ref/,/full:true/,/selector/,/visuals matter/,/browser_batch/,/never replay/i,/uncertain action/,/untrusted/,/project, profile or mode/,/browser_pause only if the user asks/,/observation works while paused/,/pauseReason/,/browser_resume/,/RECOVERY_PENDING/,/browser_close/,/Report errors accurately/,/desktop tools/])
+  assert.ok(BROWSER_INSTRUCTIONS.length<=1050,`${BROWSER_INSTRUCTIONS.length} chars`);
+  for(const rule of [/visible browser/,/browser_tabs lists only yours/,/never take over a peer/,/dev server/,/automatically/,/tabId\+revision/,/full:true/,/selector/,/what changed \(effect\)/,/new page loads/,/visuals matter/,/browser_batch/,/never replay/i,/uncertain action/,/untrusted/,/project, profile or mode/,/browser_pause only if the user asks/,/observation works while paused/,/pauseReason/,/browser_resume/,/RECOVERY_PENDING/,/browser_close/,/Report errors accurately/,/desktop tools/])
     assert.match(BROWSER_INSTRUCTIONS,rule);
 });
