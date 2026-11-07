@@ -35,6 +35,9 @@
     --active: rgb(255 255 255 / .075);
     --border-subtle: rgb(255 255 255 / .06);
     --scrim: rgb(0 0 0 / .5);
+    /* Capa del área de trabajo sobre el material de Windows 11 (glass.css):
+       apenas la distingue de la barra lateral. */
+    --material-layer: rgb(255 255 255 / .025);
 
     /* Estados: apagados y legibles sobre las superficies oscuras. */
     --ok: #6fbf8b;
@@ -118,6 +121,7 @@
     --active: rgb(0 0 0 / .07);
     --border-subtle: rgb(0 0 0 / .06);
     --scrim: rgb(0 0 0 / .28);
+    --material-layer: rgb(255 255 255 / .5);
 
     --ok: #2f8150;
     --ok-text: #24693f;

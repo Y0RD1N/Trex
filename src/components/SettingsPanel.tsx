@@ -12,6 +12,7 @@ import LauncherProfiles from "./LauncherProfiles";
 import CursorSettings from "./CursorSettings";
 import WorkspaceAppearance from "./WorkspaceAppearance";
 import { applyDesign, normalizeDesign } from "../visualDesign";
+import { syncWindowMaterial } from "../windowMaterial";
 import { profilesError } from "../profiles";
 import { parseShortcut } from "../paste";
 import { bindingError } from "../shortcuts";
@@ -92,11 +93,13 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   }, [leaving]);
 
   useEffect(() => { applyTheme(draft.appearance, draft.theme, draft.colorScheme); }, [draft.appearance, draft.theme, draft.colorScheme]);
-  useEffect(() => { applyDesign(draft); }, [draft.terminalRadius, draft.terminalMargin, draft.terminalBorder, draft.motion]);
+  useEffect(() => { applyDesign(draft); }, [draft.terminalRadius, draft.terminalMargin, draft.terminalBorder, draft.motion, draft.glass, draft.materialTint]);
+  useEffect(() => { syncWindowMaterial(draft.glass, draft.windowBackdrop); }, [draft.glass, draft.windowBackdrop]);
   useEffect(() => () => {
     const saved = savedThemeRef.current;
     applyTheme(saved.appearance, saved.theme, saved.colorScheme);
     applyDesign(saved);
+    syncWindowMaterial(saved.glass, saved.windowBackdrop);
     window.clearTimeout(copyTimer.current);
   }, []);
 

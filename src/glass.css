@@ -1,0 +1,69 @@
+/* ============================================================================
+   Transparencias (Ajustes › Apariencia › Efecto cristal)
+   ----------------------------------------------------------------------------
+   Dos capas que se encienden juntas con el mismo interruptor:
+
+   - Material de Windows 11 (`data-material`: "mica", "mica-alt" o "acrylic"):
+     el sistema lo pinta detrás de la ventana. Toda la ventana lo deja ver bajo
+     un gris grafito cuya opacidad elige el usuario (`--material-tint`, 20–90 %):
+     sobrio por defecto, con un toque del color del fondo de escritorio. El área
+     de trabajo suma una capa muy ligera, como las apps de Windows 11. El
+     frontend solo pone el atributo cuando Tauri confirma el material: sin él
+     nunca asoma el escritorio sin difuminar.
+
+   - Cristal en lo que flota (`data-glass="on"`, en cualquier sistema): las
+     píldoras de la cabecera, la caja de mensaje, los menús y los avisos
+     difuminan el hilo que pasa por debajo.
+
+   El desenfoque de CSS se queda en superficies pequeñas y flotantes (20 px)
+   y siempre en el propio elemento: en WebView2 no se pinta sobre
+   pseudoelementos (::before). El hilo, los terminales y los paneles no se
+   componen de más, y la franja bajo la cabecera sigue siendo un degradado
+   opaco: difuminarla costaba un desenfoque a todo lo ancho en cada scroll.
+   Con «Reducir transparencias» del sistema el JS no enciende ninguna.
+   ========================================================================== */
+
+:root[data-glass="on"] {
+  /* Sin saturar (más color hacía brillar el texto difuminado) y casi opaco:
+     detrás solo se adivinan formas, nunca se lee el texto. */
+  --glass-blur: blur(20px);
+  --glass-bar: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+  --glass-float: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+}
+
+/* --- Material de Windows 11: toda la ventana lo deja ver -------------------- */
+:root[data-material]:not([data-material="none"]) .app {
+  background: color-mix(in srgb, var(--bg-app) var(--material-tint, 60%), transparent);
+}
+:root[data-material]:not([data-material="none"]) :is(.sidebar, .sidebar-inner, .terminals, .terminal-host.chat-host, .chat, .welcome, .project-home) {
+  background: transparent;
+}
+:root[data-material]:not([data-material="none"]) .main {
+  background: var(--material-layer);
+  box-shadow: inset 1px 0 0 var(--border-subtle);
+}
+/* La fila activa y las elegidas son un tinte, no un gris opaco sobre el material. */
+:root[data-material]:not([data-material="none"]) .sidebar { --selected: color-mix(in srgb, var(--text) 9%, transparent); }
+/* Plegada, la barra se asoma por encima del hilo: ahí vuelve a ser opaca. */
+:root[data-material]:not([data-material="none"]) .sidebar.collapsed.peek .sidebar-inner { background: var(--bg-sidebar); }
+
+/* --- Cristal en lo que flota ----------------------------------------------- */
+/* Píldoras de la cabecera y botones que flotan sobre el hilo. */
+:root[data-glass="on"] :is(.tabs-bar > :is(.workspace-title, .session-create, .window-controls, button), .sidebar-reopen:not(:hover), .chat-to-bottom) {
+  background: var(--glass-bar);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* La caja de mensaje. Lo que se abre dentro de ella (las sugerencias de /, $
+   y @) sigue opaco: su desenfoque solo vería el interior de la caja. Los
+   selectores y paneles se abren fuera, en su propia capa. */
+:root[data-glass="on"] .chat-dock {
+  background: var(--glass-bar);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* Menús, paneles y avisos. */
+:root[data-glass="on"] :is(.context-menu, .composer-panel, .dialog-card.floating-surface, .toast) {
+  background: var(--glass-float);
+  backdrop-filter: var(--glass-blur);
+}

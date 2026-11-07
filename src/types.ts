@@ -2,7 +2,7 @@
  * Tipos del contrato entre el frontend (React) y el backend (Rust/Tauri).
  * Los nombres de campo viajan tal cual en camelCase a través de `invoke`.
  */
-import type { ColorScheme, MotionPreference } from "./visualDesign";
+import type { ColorScheme, MotionPreference, WindowMaterial } from "./visualDesign";
 import type { ShortcutBindings } from "./shortcuts";
 import type { SplitLayout } from "./splitLayout";
 import type { HandoffReference } from "./handoff";
@@ -111,6 +111,12 @@ export type Settings = {
   terminalMargin: number;
   terminalBorder: boolean;
   motion: MotionPreference;
+  /** Transparencias: Mica en Windows 11 y cristal en lo que flota sobre el chat. */
+  glass: boolean;
+  /** Fondo de la ventana: sólido o un material de Windows 11. */
+  windowBackdrop: WindowMaterial;
+  /** Opacidad del gris grafito sobre el material (20–90). */
+  materialTint: number;
 };
 
 export type UiState = {

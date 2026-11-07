@@ -1,9 +1,10 @@
 import { useId, type CSSProperties } from "react";
 import type { Settings } from "../types";
-import { FRAME_PRESETS, matchingFrame } from "../visualDesign";
+import { FRAME_PRESETS, WINDOW_MATERIALS, matchingFrame } from "../visualDesign";
 import { PALETTES, paletteFor } from "../palettes";
 import { resolveThemeMode } from "../theme";
 import { CheckIcon } from "./Icons";
+import { IS_WINDOWS } from "../platform";
 
 type Props = { settings: Settings; onChange: (patch: Partial<Settings>) => void };
 
@@ -84,6 +85,31 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
         <input type="checkbox" role="switch" className="settings-switch" checked={settings.terminalBorder} aria-labelledby={`${id}-border-label`} aria-describedby={`${id}-border-hint`} onChange={event => onChange({ terminalBorder: event.currentTarget.checked })} />
       </label>
       <p className="settings-note">En ventanas pequeñas, el margen y el redondeado se ajustan para aprovechar el espacio.</p>
+    </div>
+
+    <div className="settings-block">
+      <h4>Transparencias</h4>
+      <label className="settings-toggle">
+        <span className="setting-field-info"><span id={`${id}-glass-label`}>Efecto cristal</span><span id={`${id}-glass-hint`}>{IS_WINDOWS ? "Mica de Windows 11 detrás de la ventana y un desenfoque suave" : "Un desenfoque suave"} en la cabecera del chat, la caja de mensaje y los menús. Si tu equipo pide reducir las transparencias, se respeta.</span></span>
+        <input type="checkbox" role="switch" className="settings-switch" checked={settings.glass} aria-labelledby={`${id}-glass-label`} aria-describedby={`${id}-glass-hint`} onChange={event => onChange({ glass: event.currentTarget.checked })} />
+      </label>
+      {IS_WINDOWS && <>
+        <h4 id={`${id}-material`}>Fondo de la ventana</h4>
+        <div className="design-palette-grid design-material-grid" role="group" aria-labelledby={`${id}-material`}>
+          {WINDOW_MATERIALS.map(material => <button key={material.id} type="button" disabled={!settings.glass && material.id !== "solid"}
+            className={`design-frame${settings.windowBackdrop === material.id ? " selected" : ""}`}
+            aria-pressed={settings.windowBackdrop === material.id} onClick={() => onChange({ windowBackdrop: material.id })}>
+            <span className="design-choice-title">{material.name}{settings.windowBackdrop === material.id && <CheckIcon size={13} />}</span>
+            <span className="design-choice-description">{material.description}</span>
+          </button>)}
+        </div>
+        <label className="design-slider" htmlFor={`${id}-tint`}>
+          <span>Gris sobre el material <output>{settings.materialTint} %</output></span>
+          <input id={`${id}-tint`} type="range" min="20" max="90" step="5" value={settings.materialTint} disabled={!settings.glass || settings.windowBackdrop === "solid"}
+            onChange={event => onChange({ materialTint: Number(event.currentTarget.value) })} />
+        </label>
+        <p className="settings-note">Mica y Acrílico los pinta Windows 11 detrás de la ventana. Más gris lo vuelve más sobrio; menos deja ver más el color de tu fondo de escritorio. En Windows 10 la ventana sigue opaca y solo se difumina lo que flota.</p>
+      </>}
     </div>
 
     <div className="settings-block">

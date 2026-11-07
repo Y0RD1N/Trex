@@ -8,14 +8,17 @@ const pureModule = async path => {
   const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 };
-const { normalizeDesign, matchingFrame, reducedMotion } = await pureModule("../src/visualDesign.ts");
+const { normalizeDesign, matchingFrame, reducedMotion, glassActive } = await pureModule("../src/visualDesign.ts");
 const { PALETTES, paletteFor, paletteTokens } = await pureModule("../src/palettes.ts");
 const { projectSections } = await pureModule("../src/sidebarGroups.ts");
 
 test("old and malformed preferences preserve a usable terminal frame", () => {
-  assert.deepEqual(normalizeDesign({}), { colorScheme:"trex",terminalRadius:22,terminalMargin:12,terminalBorder:true,motion:"system" });
+  assert.deepEqual(normalizeDesign({}), { colorScheme:"trex",terminalRadius:22,terminalMargin:12,terminalBorder:true,motion:"system",glass:true,windowBackdrop:"solid",materialTint:60 });
   for (const value of [null, "12", NaN, Infinity]) {
-    const settings = normalizeDesign({ terminalRadius:value,terminalMargin:value,colorScheme:value,terminalBorder:value,motion:value });
+    const settings = normalizeDesign({ terminalRadius:value,terminalMargin:value,colorScheme:value,terminalBorder:value,motion:value,glass:value,windowBackdrop:value,materialTint:value });
+    assert.equal(settings.glass,true);
+    assert.equal(settings.windowBackdrop,"solid");
+    assert.equal(settings.materialTint,60);
     assert.equal(settings.terminalRadius,22);
     assert.equal(settings.terminalMargin,12);
     assert.equal(settings.colorScheme,"trex");
@@ -26,6 +29,18 @@ test("old and malformed preferences preserve a usable terminal frame", () => {
   assert.equal(normalizeDesign({terminalRadius:100}).terminalRadius,36);
   assert.equal(matchingFrame(normalizeDesign({})),"comfortable");
   assert.equal(matchingFrame(normalizeDesign({terminalRadius:0})),null);
+  assert.equal(normalizeDesign({glass:false}).glass,false);
+  for (const backdrop of ["solid","mica","mica-alt","acrylic"]) assert.equal(normalizeDesign({windowBackdrop:backdrop}).windowBackdrop,backdrop);
+  assert.equal(normalizeDesign({windowMaterial:"mica-alt"}).windowBackdrop,"solid","the old key never brings back the material");
+  assert.equal(normalizeDesign({materialTint:5}).materialTint,20,"never fully see-through");
+  assert.equal(normalizeDesign({materialTint:100}).materialTint,90);
+});
+
+test("transparencies follow the setting and the system's reduce-transparency preference", () => {
+  assert.equal(glassActive(true,false),true);
+  assert.equal(glassActive(undefined,false),true,"on by default");
+  assert.equal(glassActive(false,false),false);
+  assert.equal(glassActive(true,true),false,"the system can always turn it off");
 });
 
 const luminance = hex => {
@@ -109,14 +124,70 @@ test("design tokens define readable semantic states in both themes, distinct fro
   for (const alias of ["--r-control", "--radius-control", "--surface-panel", "--shadow-pop", "--accent-ink"]) assert.match(tokensCss, new RegExp(`${alias}:`), alias);
 });
 
-test("stylesheets use one theme layer: no specificity chains, glass blur or text below 11px", async () => {
+test("stylesheets use one theme layer: no specificity chains, stray blur or text below 11px", async () => {
   for (const { file, css } of await stylesheets()) {
     if (!file.endsWith("tokens.css")) assert.doesNotMatch(css, /:root\[data-theme\]/, `${file}: theme values belong in tokens.css`);
-    assert.doesNotMatch(css, /backdrop-filter\s*:\s*(?!none)/, `${file}: backdrop blur creates extra compositing layers`);
+    // The blur lives in glass.css only, behind its switch (see the next test).
+    if (!file.endsWith("/glass.css")) assert.doesNotMatch(css, /backdrop-filter\s*:\s*(?!none)/, `${file}: backdrop blur creates extra compositing layers`);
     for (const match of css.matchAll(/font(?:-size)?\s*:[^;{}]*?(\d+(?:\.\d+)?)px/g)) {
       assert.ok(Number(match[1]) >= 11, `${file}: ${match[0].trim()} is below the 11px minimum`);
     }
   }
+});
+
+test("glass stays behind its switch, on small floating surfaces, and readable", async () => {
+  const glass = (await readFile(new URL("../src/glass.css", import.meta.url), "utf8")).replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [...glass.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selector, body]) => ({ selector: selector.trim(), body }));
+  assert.ok(rules.length > 0);
+  for (const { selector, body } of rules) {
+    assert.match(selector, /^:root\[data-(glass="on"\]|material)/, `${selector}: every rule waits for its attribute`);
+    if (/backdrop-filter/.test(body)) assert.match(selector, /^:root\[data-glass="on"\]/, `${selector}: blur only with the glass switch`);
+    if (/data-material/.test(selector)) assert.doesNotMatch(body, /backdrop-filter/, "the material is drawn by the system, not by CSS");
+    // Any material counts, but "none" (or no answer from Tauri yet) never clears the frame.
+    if (/^:root\[data-material\]/.test(selector)) assert.match(selector, /^:root\[data-material\]:not\(\[data-material="none"\]\)/, selector);
+  }
+  const blurred = rules.filter(rule => /backdrop-filter/.test(rule.body));
+  assert.ok(blurred.length <= 5, "a handful of blurred layers, not the whole interface");
+  for (const { selector } of blurred) assert.doesNotMatch(selector, /\.(chat-thread|chat-scroll|terminal-host|terminals|sidebar)\b(?!-)/, `${selector}: large or scrolling areas stay opaque`);
+  // WebView2 does not paint the blur on pseudo-elements: always on the element.
+  for (const { selector } of blurred) assert.doesNotMatch(selector, /::?(before|after)/, `${selector}: blur on the element itself`);
+  assert.ok(blurred.some(rule => /\.chat-dock\s*$/.test(rule.selector)), "the composer is glass");
+  // Suggestions open inside the composer: a blur there would only see the composer.
+  for (const { selector } of blurred) assert.doesNotMatch(selector, /\.chat-suggest\b/);
+  // The band under the chat header stays an opaque gradient (no full-width blur on scroll).
+  assert.doesNotMatch(glass, /\.chat::before/);
+  // Glass surfaces keep most of their opaque color so text stays readable.
+  const glassTokens = [...glass.matchAll(/--glass-[a-z]+:\s*color-mix\(in srgb, var\(--bg-[a-z]+\) (\d+)%, transparent\)/g)];
+  assert.equal(glassTokens.length, 2);
+  for (const [, percent] of glassTokens) assert.ok(Number(percent) >= 72, `${percent}% is too see-through`);
+  // The window always keeps a graphite tint over the material, set by the user.
+  assert.match(glass, /\.app \{\s*background: color-mix\(in srgb, var\(--bg-app\) var\(--material-tint, \d+%\), transparent\);/);
+  // Each theme defines the layers that sit on the Windows material.
+  for (const theme of ["dark", "light"]) for (const token of ["--material-layer"]) {
+    assert.match(themeBlock(theme), new RegExp(`${token}:`), `${theme}: ${token}`);
+  }
+  const main = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
+  assert.match(main, /import "\.\/glass\.css";/);
+});
+
+test("the window material is only marked once Tauri confirms it, and the frame turns opaque first", async () => {
+  const source = await readFile(new URL("../src/windowMaterial.ts", import.meta.url), "utf8");
+  assert.match(source, /invoke<string>\("set_window_material"/);
+  assert.match(source, /if \(!on\) root\.dataset\.material = "none";[\s\S]*await invoke/, "opaque before the system removes the material");
+  assert.match(source, /root\.dataset\.material = MATERIALS\.has\(material\) \? material : "none"/, "only Tauri's answer turns the frame see-through");
+  assert.match(source, /new Set\(\["mica", "mica-alt", "acrylic"\]\)/);
+  assert.match(source, /onThemeChange/, "light and dark materials follow the interface");
+});
+
+test("scrollbars are compact and arrowless everywhere", async () => {
+  // Setting scrollbar-width or scrollbar-color makes Chromium (WebView2) ignore
+  // ::-webkit-scrollbar and draw the wide system bar with arrows.
+  for (const { file, css } of await stylesheets()) assert.doesNotMatch(css, /scrollbar-(width|color)\s*:/, `${file}: use ::-webkit-scrollbar`);
+  const styles = (await readFile(new URL("../src/styles.css", import.meta.url), "utf8")).replace(/\/\*[\s\S]*?\*\//g, "");
+  const size = styles.match(/(?:^|\n)::-webkit-scrollbar \{ width: (\d+)px; height: (\d+)px; \}/);
+  assert.ok(size && Number(size[1]) <= 8 && Number(size[2]) <= 8, "a thin bar");
+  assert.match(styles, /::-webkit-scrollbar-button \{ display: none;/, "no arrows");
+  assert.match(styles, /::-webkit-scrollbar-track \{ margin: 8px; \}/, "the ends stay clear of rounded corners");
 });
 
 test("on Windows the system rounds the window: the app frame is square and borderless", async () => {

@@ -7,7 +7,7 @@
 .chat-composer-settings-trigger[data-risk="edit"] .chat-tray-icon { color: var(--warn); }
 .chat-tray .chat-tray-chip.chat-composer-settings-trigger[data-risk="full"],
 .chat-composer-settings-trigger[data-risk="full"] .chat-tray-icon { color: var(--danger-text); }
-.chat-tray .chat-tray-chip.chat-composer-settings-trigger[data-risk="full"] { background: var(--danger-bg); }
+.chat-tray .chat-tray-chip.chat-composer-settings-trigger[data-risk="full"] { border-color: var(--danger-border); background: var(--danger-bg); }
 .chat-tray .chat-tray-chip.chat-composer-settings-trigger[data-risk="full"]:hover { background: color-mix(in srgb, var(--danger) 16%, transparent); }
 
 /* Insignia de riesgo reutilizable. */

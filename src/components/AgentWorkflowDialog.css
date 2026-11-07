@@ -25,7 +25,7 @@
 .workflow-team-choice-icon { flex: 0 0 36px; height: 36px; border-radius: var(--radius-lg); display: grid; place-items: center; background: var(--bg-inset); color: var(--text-muted); }
 .workflow-team-choice > svg { flex-shrink: 0; color: var(--text-dim); }
 .workflow-team-choice:disabled { opacity: .5; cursor: default; }
-.context-menu.select-menu.workflow-select-menu { width: max(240px, var(--select-width)); max-width: min(420px, var(--floating-max-width, calc(100vw - 24px))); max-height: min(300px, var(--floating-max-height, calc(100dvh - 24px))); padding: var(--sp-1-5); border-radius: var(--radius-xl); scrollbar-width: thin; overscroll-behavior: contain; }
+.context-menu.select-menu.workflow-select-menu { width: max(240px, var(--select-width)); max-width: min(420px, var(--floating-max-width, calc(100vw - 24px))); max-height: min(300px, var(--floating-max-height, calc(100dvh - 24px))); padding: var(--sp-1-5); border-radius: var(--radius-xl); overscroll-behavior: contain; }
 .workflow-select-menu .select-option { min-height: 43px; padding: var(--sp-2-5) var(--sp-2-5); border-radius: var(--radius-md); align-items: center; }
 .workflow-select-menu .select-option-text { gap: var(--sp-1); font-size: var(--fs-sm); line-height: 1.5; }
 .workflow-select-menu .select-option-text small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: var(--fs-xs); line-height: 1.5; }

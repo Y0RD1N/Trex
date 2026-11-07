@@ -27,6 +27,7 @@ mod shared_files;
 mod terminal_env;
 mod trex_cli;
 mod trex_browser;
+mod window_material;
 
 use agent::{AgentSpawnRequest, AgentSpawnResponse, AgentState};
 use config::AppConfig;
@@ -351,6 +352,7 @@ pub fn run() {
             agent_team::agent_team_finish,
             agent_team::agent_team_pause,
             agent_team::agent_team_mcp_config,
+            window_material::set_window_material,
             pty_spawn,
             pty_write,
             pty_ack,

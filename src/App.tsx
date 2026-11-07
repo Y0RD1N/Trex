@@ -72,6 +72,7 @@ import { filterProjects, includeAddedProject, normalizeProjectFilter, type Proje
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, profilesForInstallation, restoreLaunch } from "./profiles";
 import { applyDesign } from "./visualDesign";
+import { syncWindowMaterial } from "./windowMaterial";
 import { applyTimeFormat } from "./timeFormat";
 import { defaultAgentPermission, validAgentPermission } from "./agentPermissions";
 import type { ClipboardContent } from "./paste";
@@ -409,7 +410,11 @@ function AppShell() {
   }, [config?.settings.appearance, config?.settings.theme, config?.settings.colorScheme]);
   useEffect(() => {
     if (config) applyDesign(config.settings);
-  }, [config?.settings.terminalRadius, config?.settings.terminalMargin, config?.settings.terminalBorder, config?.settings.motion]);
+  }, [config?.settings.terminalRadius, config?.settings.terminalMargin, config?.settings.terminalBorder, config?.settings.motion, config?.settings.glass, config?.settings.materialTint]);
+  // Mica (Windows 11) sigue al ajuste guardado; el tema claro/oscuro lo sigue solo.
+  useEffect(() => {
+    if (config) syncWindowMaterial(config.settings.glass, config.settings.windowBackdrop);
+  }, [config?.settings.glass, config?.settings.windowBackdrop]);
 
   // El icono sol/luna del pie de la sidebar refleja el modo realmente pintado.
   useEffect(() => onThemeChange(setThemeMode), []);

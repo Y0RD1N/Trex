@@ -54,6 +54,8 @@
   scroll-padding-bottom: calc(var(--composer-space, 120px) + 16px);
   transition: opacity var(--dur) var(--ease-out);
 }
+/* La barra empieza bajo la cabecera flotante: no pasa por debajo de sus botones. */
+.chat-scroll::-webkit-scrollbar-track { margin: calc(var(--chat-header-space, 0px) + 4px) 0 4px; }
 
 .chat-thread {
   display: flex;
@@ -630,8 +632,6 @@
   overscroll-behavior-x: contain;
   border: 1px solid var(--md-rule);
   border-radius: var(--radius-lg);
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent;
 }
 .chat-table table {
   width: 100%;
@@ -1810,7 +1810,8 @@ pre.chat-ask-preview-body {
 .chat-icon-btn:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .chat-icon-btn:active:not(:disabled) { transform: scale(0.92); }
 .chat-icon-btn:disabled { opacity: .4; cursor: default; }
-/* Enviar: el único control sólido de la caja (tinta del tema, no el acento). */
+/* Enviar: el único control sólido de la caja, con el acento. Parar conserva
+   la tinta del tema para que no se confunda con enviar. */
 .chat-send {
   display: grid;
   place-items: center;
@@ -1819,27 +1820,29 @@ pre.chat-ask-preview-body {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: var(--strong-fill);
-  color: var(--strong-ink);
+  background: var(--accent);
+  color: var(--accent-contrast);
   cursor: pointer;
   transition: opacity var(--t), transform var(--dur) var(--ease-spring), background-color var(--t);
 }
-.chat-send:hover:not(:disabled) { background: color-mix(in srgb, var(--strong-fill) 86%, var(--strong-ink)); }
+.chat-send:hover:not(:disabled) { background: var(--accent-hover); }
+.chat-send.stop:hover:not(:disabled) { background: color-mix(in srgb, var(--strong-fill) 86%, var(--strong-ink)); }
 .chat-send:active:not(:disabled) { transform: scale(0.92); transition-duration: var(--dur-fast); }
-.chat-send:disabled { background: var(--bg-inset); color: var(--text-dim); cursor: default; }
+/* Vacía: el mismo naranja, más tenue, para que la caja no pierda su acento. */
+.chat-send:disabled { background: var(--accent); color: var(--accent-contrast); opacity: .5; cursor: default; }
 .chat-send.stop { background: var(--strong-fill); color: var(--strong-ink); }
 
 /* Repisa de controles: sin caja propia, separada solo por el ritmo. */
 .chat-controls {
   display: grid;
-  gap: var(--sp-0-5);
+  gap: var(--sp-2);
   padding: 0 var(--sp-2) var(--sp-1-5);
 }
 .chat-tray {
   position: relative;
   display: flex;
   align-items: center;
-  gap: var(--sp-0-5);
+  gap: var(--sp-1-5);
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -1852,10 +1855,10 @@ pre.chat-ask-preview-body {
   width: auto;
   min-width: 0;
   height: var(--hit-min);
-  padding: 0 var(--sp-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
+  padding: 0 var(--sp-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
   box-shadow: none;
   color: var(--text-muted);
   font: inherit;
@@ -1865,7 +1868,8 @@ pre.chat-ask-preview-body {
 }
 .chat-tray .chat-tray-chip:hover,
 .chat-tray .chat-tray-chip[aria-expanded="true"] {
-  background: var(--hover);
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
 }
 .chat-tray .chat-tray-chip:focus-visible { outline: 2px solid var(--focus-color); outline-offset: -2px; }
@@ -1887,7 +1891,8 @@ pre.chat-ask-preview-body {
 }
 .chat-tray .chat-composer-model .chat-tray-icon { color: var(--text-muted); }
 /* «⋯»: acciones secundarias del chat. */
-.chat-tray .chat-tray-chip.chat-more-trigger { justify-content: center; width: var(--hit-min); padding: 0; }
+.chat-tray .chat-tray-chip.chat-more-trigger { justify-content: center; width: var(--hit-min); padding: 0; border-color: transparent; background: transparent; }
+.chat-tray .chat-tray-chip.chat-more-trigger:is(:hover, [aria-expanded="true"]) { background: var(--hover); }
 .chat-tray .chat-tray-chip.chat-more-trigger > svg { width: 16px; height: 16px; color: inherit; }
 .context-menu.chat-more-menu { width: 300px; }
 .chat-more-item { align-items: flex-start; min-height: 44px; padding-block: var(--sp-2); }
@@ -1932,7 +1937,7 @@ pre.chat-ask-preview-body {
   flex-wrap: wrap;
   gap: var(--sp-0-5) var(--sp-2-5);
   min-width: 0;
-  padding: var(--sp-0-5) 0 0;
+  padding: var(--sp-1-5) 0 0;
   border-top: 1px solid var(--border-subtle);
 }
 .chat-composer-meta:empty { display: none; }

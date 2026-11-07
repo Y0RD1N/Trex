@@ -14,6 +14,8 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+// Transparencias (Mica y cristal): reglas aparte, activas solo con su atributo.
+import "./glass.css";
 import App from "./App";
 import { IS_WINDOWS } from "./platform";
 

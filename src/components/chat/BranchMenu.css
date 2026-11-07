@@ -29,7 +29,7 @@
 .chat-branch-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-sm); }
 .chat-branch-search input::placeholder { color: var(--text-dim); }
 /* La carga, la búsqueda y la actualización conservan la misma superficie. */
-.chat-branch-list { flex: 1 1 285px; height: 285px; min-height: 0; max-height: 285px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.chat-branch-list { flex: 1 1 285px; height: 285px; min-height: 0; max-height: 285px; overflow-y: auto; overscroll-behavior: contain; }
 .chat-branch-menu > :not(.chat-branch-list) { flex-shrink: 0; }
 .chat-branch-list > .chat-branch-empty:only-child { height: 100%; }
 .chat-branch-section { padding: var(--sp-2) var(--sp-2-5) var(--sp-1); color: var(--text-dim); font-size: var(--fs-xs); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }

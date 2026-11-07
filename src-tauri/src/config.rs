@@ -94,6 +94,12 @@ pub struct Settings {
     pub terminal_margin: u32,
     pub terminal_border: bool,
     pub motion: String,
+    /// Transparencias: Mica en Windows 11 y cristal en lo que flota sobre el chat.
+    pub glass: bool,
+    /// Fondo de la ventana: "solid" | "mica" | "mica-alt" | "acrylic" (Windows 11).
+    pub window_backdrop: String,
+    /// Opacidad (20–90 %) del gris grafito sobre el material.
+    pub material_tint: u32,
 }
 
 impl Default for Settings {
@@ -135,6 +141,9 @@ impl Default for Settings {
             terminal_margin: 12,
             terminal_border: true,
             motion: "system".into(),
+            glass: true,
+            window_backdrop: "solid".into(),
+            material_tint: 60,
         }
     }
 }
@@ -304,6 +313,9 @@ mod tests {
         assert_eq!(config.settings.terminal_margin, 12);
         assert!(config.settings.terminal_border);
         assert_eq!(config.settings.motion, "system");
+        assert!(config.settings.glass, "transparencies are on until the user turns them off");
+        assert_eq!(config.settings.window_backdrop, "solid");
+        assert_eq!(config.settings.material_tint, 60);
         assert!(config.settings.shortcuts.is_empty());
         assert!(config.settings.image_paste_preview);
         assert!(config.settings.desktop_notifications);
@@ -313,7 +325,7 @@ mod tests {
     fn visual_preferences_and_favorites_survive_saving_without_changing_launchers() {
         let raw = serde_json::json!({
             "projects": [{ "id": "p", "name": "Proyecto", "path": "/work/project", "favorite": true }],
-            "settings": { "colorScheme": "forest", "terminalRadius": 0, "terminalMargin": 6, "terminalBorder": false, "motion": "reduced", "claudeCommand": "claude-work", "shortcuts":{"commandPalette":"Ctrl+Y"}, "imagePastePreview":false,"desktopNotifications":false,"notifyWhenFocused":true }
+            "settings": { "colorScheme": "forest", "terminalRadius": 0, "terminalMargin": 6, "terminalBorder": false, "motion": "reduced", "glass": false, "windowBackdrop": "acrylic", "materialTint": 35, "claudeCommand": "claude-work", "shortcuts":{"commandPalette":"Ctrl+Y"}, "imagePastePreview":false,"desktopNotifications":false,"notifyWhenFocused":true }
         });
         let config: AppConfig = serde_json::from_value(raw).unwrap();
         let saved = serde_json::to_value(&config).unwrap();
@@ -323,6 +335,9 @@ mod tests {
         assert_eq!(saved["settings"]["terminalMargin"], 6);
         assert_eq!(saved["settings"]["terminalBorder"], false);
         assert_eq!(saved["settings"]["motion"], "reduced");
+        assert_eq!(saved["settings"]["glass"], false);
+        assert_eq!(saved["settings"]["windowBackdrop"], "acrylic");
+        assert_eq!(saved["settings"]["materialTint"], 35);
         assert_eq!(saved["settings"]["claudeCommand"], "claude-work");
         assert_eq!(saved["settings"]["shortcuts"]["commandPalette"],"Ctrl+Y");
         assert_eq!(saved["settings"]["imagePastePreview"],false);
