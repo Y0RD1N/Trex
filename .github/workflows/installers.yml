@@ -37,8 +37,11 @@ jobs:
             src-tauri -> target
       - name: Install frontend dependencies
         run: npm ci
+      # Electron downloads its binary on first use, not on install.
       - name: Download the pinned Electron for the Trex Browser shell
-        run: npm ci --prefix trex-browser/shell --no-audit --no-fund
+        run: |
+          npm ci --prefix trex-browser/shell --no-audit --no-fund
+          node trex-browser/shell/node_modules/electron/install.js
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - name: Build the NSIS installer
@@ -138,6 +141,7 @@ jobs:
         run: |
           npm ci
           npm ci --prefix trex-browser/shell --no-audit --no-fund
+          node trex-browser/shell/node_modules/electron/install.js
           npm run tauri -- build --bundles rpm
       - name: Install the RPM and check the installed app
         working-directory: /tmp/trex-fedora
