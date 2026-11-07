@@ -1,0 +1,171 @@
+name: Installers
+
+# Builds the Windows, macOS and Fedora installers and checks each one installs
+# and starts. Run it by hand from the Actions tab, or push a tag such as v0.2.0
+# to also attach the installers to a draft GitHub release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+    branches: [ci/installers]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Rust toolchain
+        run: rustup update stable --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            trex-cli -> target
+            trex-browser -> target
+            src-tauri -> target
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build the NSIS installer
+        run: npm run tauri build
+      - name: Install silently and check the installed app
+        shell: pwsh
+        run: |
+          $setup = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if ($setup.Count -ne 1) { throw "Expected one installer, found $($setup.Count)" }
+          $dir = Join-Path $env:RUNNER_TEMP 'trex-install'
+          $p = Start-Process -FilePath $setup[0].FullName -ArgumentList "/S /TREXCLI=1 /TREXBROWSER=1 /D=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installer exited with $($p.ExitCode)" }
+          foreach ($file in 'trex.exe', 'trex-agent.exe', 'trex-browser.exe', 'trex-browser-runtime\runtime-manifest.json') {
+            if (!(Test-Path (Join-Path $dir $file))) { throw "Missing after install: $file" }
+          }
+          & (Join-Path $dir 'trex-agent.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'Installed trex-agent did not run' }
+          $app = Start-Process -FilePath (Join-Path $dir 'trex.exe') -PassThru
+          Start-Sleep -Seconds 15
+          if ($app.HasExited) { throw "The installed app exited at startup with code $($app.ExitCode)" }
+          Stop-Process -Id $app.Id -Force
+          Write-Output "Installed and started: $($setup[0].Name)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trex-windows
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS installer (Apple Silicon)
+    runs-on: macos-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Rust toolchain
+        run: rustup update stable --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            trex-cli -> target
+            src-tauri -> target
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build the app and DMG
+        run: npm run tauri build
+      - name: Check the app bundle and DMG
+        run: |
+          set -euo pipefail
+          app=$(ls -d src-tauri/target/release/bundle/macos/*.app)
+          dmg=$(ls src-tauri/target/release/bundle/dmg/*.dmg)
+          "$app/Contents/MacOS/trex-agent" --version
+          codesign --verify --deep --strict --verbose=2 "$app"
+          hdiutil verify "$dmg"
+          mount=$(mktemp -d)
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount"
+          test -x "$mount/$(basename "$app")/Contents/MacOS/trex-agent"
+          hdiutil detach "$mount"
+          binary=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          "$app/Contents/MacOS/$binary" & pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2>/dev/null; then wait "$pid" || true; echo "The app exited at startup"; exit 1; fi
+          kill "$pid"
+          echo "Built, verified and started: $(basename "$dmg")"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trex-macos
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  fedora:
+    name: Fedora RPM
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 75
+    env:
+      CARGO_BUILD_JOBS: 3
+    steps:
+      - name: Fedora prerequisites
+        run: |
+          dnf install -y git rust cargo gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel gtk3-devel librsvg2-devel libappindicator-gtk3-devel libxdo-devel dbus-devel rpm-build patchelf file tar xz unzip findutils
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare an ordinary private build tree
+        run: |
+          mkdir -m 700 /tmp/trex-fedora
+          tar --exclude=.git -cf - . | tar -xf - -C /tmp/trex-fedora
+      - name: Build the RPM with the private Browser runtime
+        working-directory: /tmp/trex-fedora
+        run: |
+          npm ci
+          npm run tauri -- build --bundles rpm
+      - name: Install the RPM and check the installed app
+        working-directory: /tmp/trex-fedora
+        run: |
+          set -euo pipefail
+          # Required dependencies only: the recommended Chromium is not needed here.
+          dnf install -y --setopt=install_weak_deps=False src-tauri/target/release/bundle/rpm/*.rpm
+          /usr/bin/trex-agent --version
+          /usr/bin/trex-browser doctor --json
+          for binary in /usr/bin/trex /usr/bin/trex-agent /usr/bin/trex-browser; do
+            if ldd "$binary" | grep -q 'not found'; then ldd "$binary"; exit 1; fi
+          done
+          mkdir -p "$GITHUB_WORKSPACE/rpm"
+          cp src-tauri/target/release/bundle/rpm/*.rpm "$GITHUB_WORKSPACE/rpm/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trex-fedora
+          path: rpm/*.rpm
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos, fedora]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      - name: Attach the installers to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l installers
+          gh release create "$GITHUB_REF_NAME" installers/* --repo "$GITHUB_REPOSITORY" --draft --generate-notes --title "Trex $GITHUB_REF_NAME"

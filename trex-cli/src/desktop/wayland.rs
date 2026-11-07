@@ -291,7 +291,7 @@ impl PortalState {
             structured["observation"] = json!(token);
             structured["monitor"] = json!(stream.pipe_wire_node_id());
             return Ok(
-                json!({"content":[{"type":"text","text":format!("{} Only the screens selected in the system portal are accessible.",framed.summary(&token))},{"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(&framed.png)}],"structuredContent":structured}),
+                json!({"content":[{"type":"text","text":format!("{} Only the screens selected in the system portal are accessible.",framed.summary(&token, stream.pipe_wire_node_id(), 1))},{"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(&framed.png)}],"structuredContent":structured}),
             );
         }
         let fields: &[&str] = match name {
