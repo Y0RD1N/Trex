@@ -559,8 +559,21 @@ El proceso compila el crate independiente `trex-cli` y prepara su payload antes
 de empaquetar. `npm run cli:build -- --debug` permite preparar el CLI de desarrollo.
 El contrato de integración está en `trex-cli/PROTOCOL.md`; los detalles de instalación
 opcional y las pruebas aisladas están en `src-tauri/installer/README.md`.
-- **Linux**: genera `.deb` y `.AppImage`, pero hay que compilar **en Linux**
-  (nativo, contenedor o CI con GitHub Actions).
+- **Fedora**: genera un RPM con la app, Trex CLI y Trex Browser; hay que compilar
+  **en Linux** (ver [Fedora](#fedora)).
+- **macOS**: genera la app y un `.dmg` para Apple Silicon, con Trex CLI dentro de
+  la app. Lleva firma ad hoc, sin certificado de Apple: la primera vez hay que
+  abrirla con clic derecho → Abrir. Trex Browser aún no se incluye en macOS.
+
+### Instalables con GitHub Actions
+
+El workflow **Installers** (`.github/workflows/installers.yml`) compila los tres
+instalables, los instala o monta en la máquina de CI, comprueba que la app arranca
+y los deja como artefactos de la ejecución:
+
+- A mano: pestaña **Actions → Installers → Run workflow**.
+- Con una etiqueta: `git tag v0.2.0 && git push origin v0.2.0` además adjunta los
+  instalables a un borrador de release en GitHub.
 
 ## ⌨️ Atajos
 
