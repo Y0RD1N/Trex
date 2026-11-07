@@ -888,9 +888,8 @@ fn private_acl(file: &File, directory: bool, restrict: bool) -> Result<()> {
             &mut descriptor.0,
         )
     } != 0
-        || unsafe { EqualSid(owner, sid) } == 0
+        || !crate::profile::trusted_owner(owner, sid)
     {
-        // A different owner could restore write access after we repair the DACL.
         return Err(failure());
     }
     if !restrict {

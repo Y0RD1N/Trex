@@ -745,6 +745,29 @@ fn private_options(options: &mut OpenOptions) {
     let _ = options;
 }
 
+/// Whether `owner` may own private storage of the token user `user`.
+///
+/// The owner keeps READ_CONTROL and WRITE_DAC whatever the DACL says, so any
+/// other owner could restore access after the DACL is repaired. BUILTIN\Administrators
+/// is accepted as well: it is the default owner of everything an elevated
+/// process creates, so without it Trex refuses to run elevated (and a later
+/// unelevated run could not open what an elevated run created). Only elevated
+/// administrators can use that ownership, since UAC-filtered tokens carry
+/// Administrators as deny-only, and they can take ownership of any file anyway.
+/// The existing-ACL check already trusts Administrators ACEs, so this lets in
+/// no principal that check does not.
+#[cfg(windows)]
+pub(crate) fn trusted_owner(
+    owner: windows_sys::Win32::Security::PSID,
+    user: windows_sys::Win32::Security::PSID,
+) -> bool {
+    use windows_sys::Win32::Security::{EqualSid, IsWellKnownSid, WinBuiltinAdministratorsSid};
+    !owner.is_null()
+        && unsafe {
+            EqualSid(owner, user) != 0 || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0
+        }
+}
+
 #[cfg(windows)]
 fn private_acl(file: &File, directory: bool, restrict: bool) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
@@ -804,9 +827,8 @@ fn private_acl(file: &File, directory: bool, restrict: bool) -> Result<()> {
             &mut descriptor.0,
         )
     } != 0
-        || unsafe { EqualSid(owner, sid) } == 0
+        || !trusted_owner(owner, sid)
     {
-        // A different owner could restore write access after we repair the DACL.
         return Err(failure());
     }
     if !restrict {
