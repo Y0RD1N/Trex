@@ -57,6 +57,25 @@ const NEW_PAGE='Stale revision: this tab loaded a new page; take a new browser_s
 const escapeRegExp=v=>v.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 // A target resolved differently than asked (re-rendered ref, case-insensitive name) says so.
 const noted=(target,data)=>target?.trexNote?{...data,note:target.trexNote}:data;
+// Playwright's trial run performs the actionability checks without any input.
+// A target that never becomes usable (behind a modal dialog or an overlay,
+// hidden, disabled) then fails with certainty instead of as a timed-out action
+// whose outcome is uncertain: nothing happened, so the page is not paused.
+// Only fixed phrases leave this function: the call log quotes page markup.
+async function ensureActionable(target,action,options){
+  try{await target[action]({...options,trial:true,timeout:10000});}
+  catch(e){
+    if(e?.name!=='TimeoutError')throw e;
+    const log=String(e.message||'');
+    const reason=/intercepts pointer events/.test(log)?'another element covers it (an open dialog, menu or overlay)'
+      :/element is not visible/.test(log)?'it is not visible'
+      :/element is not enabled/.test(log)?'it is disabled'
+      :/element is not stable/.test(log)?'it kept moving'
+      :'it never became usable within 10 s';
+    const verb=action==='hover'?'hovered':'clicked';
+    throw Object.assign(new Error(`Nothing was ${verb}: ${reason}. Close or finish what is in the way (for example an open dialog), or act inside it, then retry.`),{code:'NOT_ACTIONABLE'});
+  }
+}
 const PAUSE_CONTROL=new Set(['browser_resume','browser_takeover','browser_artifact','browser_pause','browser_close','browser_stop_video','browser_stop_trace','browser_perf_stop','browser_cpu_profile_stop']);
 function pausedError(s){return Object.assign(new Error(s.pauseReason==='manual'?'Page controls were paused explicitly. Observation, screenshots and logs remain available; resume only when the user is ready.':'A previous page action has an uncertain outcome. Observation remains available: inspect browser_snapshot/browser_take_screenshot, then the owner may call browser_resume. Do not replay the previous action.'),{code:'PAUSED'});}
 export class BrowserService {
@@ -542,8 +561,8 @@ export class BrowserService {
         const {lines,omitted,more}=compact(model.entries,tabId,{extra:await this.fieldStates(p,model.entries)});
         return out({tabId,url:model.url,title:model.title,revision:this.pageState(s,p).revision,...(full?{accessibility:text(accessibility).slice(0,16000),...(accessibility.length>16000?{truncated:'tree cut at 16000 chars: use selector to scope'}:{})}:{}),...(omitted?{omitted}:{}),elements:lines,...(more?{more:`${more} more elements: scope with selector`}:{}),untrustedContent:true});
       }
-      case 'browser_click':{const target=await this.locator(s,a,signal);await target.click({button:a.button||'left',clickCount:bounded(a.clickCount,1,3,1),timeout:10000,noWaitAfter:true});return out(noted(target,{clicked:true}));}
-      case 'browser_hover':{const target=await this.locator(s,a,signal);await target.hover({timeout:10000});return out(noted(target,{hovered:true}));}
+      case 'browser_click':{const target=await this.locator(s,a,signal),options={button:a.button||'left',clickCount:bounded(a.clickCount,1,3,1)};await ensureActionable(target,'click',options);signal.throwIfAborted();await target.click({...options,timeout:10000,noWaitAfter:true});return out(noted(target,{clicked:true}));}
+      case 'browser_hover':{const target=await this.locator(s,a,signal);await ensureActionable(target,'hover',{});signal.throwIfAborted();await target.hover({timeout:10000});return out(noted(target,{hovered:true}));}
       case 'browser_drag':{const src=await this.locator(s,{...a,...a.source},signal),dst=await this.locator(s,{...a,...a.destination},signal);const from=await src.boundingBox(),to=await dst.boundingBox();if(!from||!to)throw new Error('Drag elements must be visible');await p.mouse.move(from.x+from.width/2,from.y+from.height/2);await p.mouse.down();try{await p.mouse.move(to.x+to.width/2,to.y+to.height/2,{steps:12});}finally{await p.mouse.up();}return out({dragged:true});}
       case 'browser_mouse':{const button=a.button||'left';if(a.action==='move'||a.action==='click'){if(!Number.isFinite(a.x)||!Number.isFinite(a.y))throw new Error('x and y required');if(a.action==='move')await p.mouse.move(a.x,a.y,{steps:bounded(a.steps,1,100,1)});else await p.mouse.click(a.x,a.y,{button});}else if(a.action==='wheel')await p.mouse.wheel(a.deltaX||0,a.deltaY||0);else await p.mouse[a.action]({button});return out({mouse:a.action});}
       case 'browser_press_key':await p.keyboard.press(a.key);return out({pressed:a.key});

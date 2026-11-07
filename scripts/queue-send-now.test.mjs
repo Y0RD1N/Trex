@@ -552,6 +552,19 @@ test("Trex a settling terminal that requires recovery blocks the reserved sendNo
   assertQueueUntouched(h);
 });
 
+test("Trex a turn that ends requiring recovery says at once how to continue, and only once", async t => {
+  const h = harness(t, "trex"); await h.ready();
+  await h.session.send("uncertain browser action", [], []); h.render();
+  h.complete(h.userWrites[0].params.messageId, "failed", { recoveryRequired: true }); await h.pump(); h.render();
+  const advice = () => h.state.items.filter(item => item.kind === "notice" && item.text.includes("/recover"));
+  assert.equal(advice().length, 1, "the advice appears when the turn ends, before anything is typed");
+  assert.equal(advice()[0].tone, "warn");
+  assert.equal(await h.session.send("puedes continuar", [], []), false);
+  assert.equal(h.userWrites.length, 1, "nothing reaches Trex CLI before /recover");
+  assert.equal(h.writes.some(write => write.method === "session/recover"), false, "never acknowledged automatically");
+  assert.ok(h.state.items.some(item => JSON.stringify(item).includes("Escribe /recover")), "the blocked message says what to type");
+});
+
 test("Trex a rejected interrupt cancels its settlement timer and never sends after a later terminal", async t => {
   const h = harness(t, "trex"); await h.ready();
   await h.session.send("old request", [], []); h.render(); h.hold("turn/interrupt");

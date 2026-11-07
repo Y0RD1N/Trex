@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { context, workspaceFile, safePath, Artifacts, sha256, childEnvironment, saveTarget, writeNewFile, safeFileName, updateSaveFolders, PORT_FALLBACK_CODES } from '../worker/security.mjs';
+import { context, workspaceFile, safePath, Artifacts, sha256, childEnvironment, saveTarget, writeNewFile, safeFileName, updateSaveFolders, PORT_FALLBACK_CODES, pruneReceipts, RECEIPTS_KEPT, RECEIPTS_PRUNE_AT } from '../worker/security.mjs';
 import { tools, validateArguments, modelView } from '../worker/tools.mjs';
 import { BrowserService } from '../worker/browser.mjs';
 
@@ -171,4 +171,21 @@ test('the broker takes a new port when its saved one is taken or reserved by Win
   // EACCES: Windows reserves port ranges for Hyper-V/WSL (often after a reboot) and the saved port may fall inside one.
   for (const code of ['EADDRINUSE', 'EACCES', 'EADDRNOTAVAIL']) assert.ok(PORT_FALLBACK_CODES.has(code), code);
   assert.ok(!PORT_FALLBACK_CODES.has('ENOENT'), 'other errors still stop the broker');
+});
+
+test('receipt pruning keeps the newest receipts, never the alphabetically last ones',()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'trex-browser-receipts-'));
+  try{
+    const dir=path.join(home,'receipts');fs.mkdirSync(dir);
+    // Hash names, as the broker writes them: name order is unrelated to age.
+    const write=(index)=>{const name=`${sha256(`op-${index}`)}.json`,file=path.join(dir,name);fs.writeFileSync(file,'{}');const at=new Date(Date.UTC(2026,0,1)+index*1000);fs.utimesSync(file,at,at);return name;};
+    const names=[];for(let index=0;index<RECEIPTS_PRUNE_AT;index++)names.push(write(index));
+    assert.equal(pruneReceipts(home),0,'no pruning until the directory passes the threshold');
+    names.push(write(RECEIPTS_PRUNE_AT));
+    assert.equal(pruneReceipts(home),RECEIPTS_PRUNE_AT+1-RECEIPTS_KEPT);
+    const kept=new Set(fs.readdirSync(dir));
+    assert.equal(kept.size,RECEIPTS_KEPT);
+    assert.deepEqual([...kept].sort(),names.slice(-RECEIPTS_KEPT).sort(),'exactly the newest receipts survive');
+    assert.ok(kept.has(names.at(-1)),'the receipt just written survives');
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
 });

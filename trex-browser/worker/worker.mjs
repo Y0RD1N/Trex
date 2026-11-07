@@ -7,7 +7,7 @@ import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { privateHome, privateHomePath, readPrivate, writePrivate, jsonRead, context, MAX_JSON, safePath, sha256, childEnvironment, readSaveFolders, updateSaveFolders, PORT_FALLBACK_CODES } from './security.mjs';
+import { privateHome, privateHomePath, readPrivate, writePrivate, jsonRead, context, MAX_JSON, safePath, sha256, childEnvironment, readSaveFolders, updateSaveFolders, PORT_FALLBACK_CODES, pruneReceipts } from './security.mjs';
 import { BrowserService, detectBrowser, isObservation } from './browser.mjs';
 import { ensureSpaces, listSpaces } from './spaces.mjs';
 import { ENGINES, readEngine, detectShell } from './shell.mjs';
@@ -128,6 +128,7 @@ async function daemon(){
     catch(e){result=errorResult(e,operationId,ctx);}
     finally{httpPending.delete(key(msg.id));res.off('close',disconnected);}
     writePrivate(reservation,JSON.stringify({operationId,name,projectId:ctx.projectId,clientHash:sha256(ctx.clientId),profile:ctx.profile,at:new Date().toISOString(),receipt:result.structuredContent.receipt}));
+    try{pruneReceipts(home);}catch{}
     ok(forAgent(result));
   }
   const server=http.createServer(async(req,res)=>{
@@ -158,7 +159,8 @@ async function daemon(){
       }catch(e){result=errorResult(e,body.operationId,ctx);}
       // Never persist arguments, site content, images, credentials, or base64.
       const receipt={operationId:body.operationId,name:body.name,projectId:ctx.projectId,clientHash:sha256(ctx.clientId),profile:ctx.profile,at:new Date().toISOString(),receipt:result.structuredContent.receipt};if(reservation&&result.structuredContent.error?.code!=='DUPLICATE_OPERATION')writePrivate(reservation,JSON.stringify(receipt));
-      const receipts=fs.readdirSync(file(home,'receipts'));if(receipts.length>1000)for(const name of receipts.slice(0,receipts.length-1000))fs.rmSync(file(home,`receipts/${name}`));
+      // A pruning failure must not turn a finished action into an error reply.
+      try{pruneReceipts(home);}catch{}
       send(200,result);
     }catch(e){send(400,{error:cleanError(e.message)});}
   });

@@ -1081,6 +1081,24 @@ describe('real Trex browser worker on isolated loopback fixtures', { concurrency
       a.child.stdin.end();b.child.stdin.end();assert.equal((await a.closed).code,0);assert.equal((await b.closed).code,0);
     }
   });
+  it('a click an open modal dialog blocks is rejected with certainty and never pauses the page',async()=>{
+    await navigate();
+    // As a shop's cart drawer: a modal <dialog> makes the rest of the page inert.
+    await evaluate(()=>{const dialog=document.createElement('dialog');dialog.innerHTML='<p>Cart</p><button id="close-modal">Close</button>';dialog.querySelector('button').addEventListener('click',()=>dialog.close());document.body.append(dialog);dialog.showModal();return true;});
+    const single=failure(await call('browser_click',{selector:'#increment'}),'NOT_ACTIONABLE',/^Nothing was clicked: another element covers it \(an open dialog, menu or overlay\)\./);
+    assert.deepEqual(single.receipt,{status:'rejected',manualReview:false,replaySafe:false});
+    const stopped=await call('browser_batch',{steps:[{tool:'browser_snapshot',arguments:{}},{tool:'browser_click',arguments:{selector:'#increment'}},{tool:'browser_press_key',arguments:{key:'Tab'}}]});
+    const batch=failure(stopped,'NOT_ACTIONABLE');
+    assert.equal(batch.receipt.manualReview,false);assert.equal(batch.data.steps[1].receipt.status,'rejected');
+    assert.match(stopped.content[0].text,/^Batch stopped at steps\[1\] browser_click \(rejected\): Nothing was clicked: /);
+    assert.doesNotMatch(stopped.content[0].text,/<dialog|close-modal/,'page markup from the call log never reaches the agent');
+    assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'0');
+    assert.equal((await ok('browser_status')).data.paused,false);
+    // Acting inside the dialog works, then the page does, with no browser_resume.
+    await ok('browser_click',{selector:'#close-modal'});
+    await ok('browser_click',{selector:'#increment'});
+    assert.equal(await evaluate(()=>document.querySelector('#count').textContent),'1');
+  });
   it('typed batches return ordered durable receipts and reject invalid later steps before any input',async()=>{
     await navigate();
     failure(await call('browser_batch',{steps:[{tool:'browser_click',arguments:{selector:'#increment'}},{tool:'browser_fill_form',arguments:{fields:[null]}}]}),'BROWSER_ERROR');

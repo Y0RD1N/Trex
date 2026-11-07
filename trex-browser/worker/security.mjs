@@ -55,6 +55,17 @@ export function writePrivate(file,data) {
   try{safePath(file,{allowMissing:true});fs.renameSync(temp,file);}catch(e){fs.rmSync(temp,{force:true});throw e;}
 }
 export function jsonRead(file,fallback) {try{return JSON.parse(readPrivate(file));}catch(e){if(e.code==='ENOENT')return fallback;throw e;}}
+// Keep the newest RECEIPTS_KEPT receipts. Names are hashes, so name order is
+// random: pruning by name could delete a fresh receipt, and with it the
+// duplicate protection of an operation that just ran. Pruning starts only past
+// RECEIPTS_PRUNE_AT so most calls never stat the whole directory.
+export const RECEIPTS_KEPT=1000,RECEIPTS_PRUNE_AT=1100;
+export function pruneReceipts(home) {
+  const dir=path.join(home,'receipts');safePath(dir);const names=fs.readdirSync(dir);if(names.length<=RECEIPTS_PRUNE_AT)return 0;
+  const aged=names.map(name=>{try{return {name,at:fs.statSync(path.join(dir,name)).mtimeMs};}catch{return null;}}).filter(Boolean).sort((a,b)=>a.at-b.at||(a.name<b.name?-1:1));
+  const old=aged.slice(0,Math.max(0,aged.length-RECEIPTS_KEPT));for(const {name} of old)fs.rmSync(path.join(dir,name),{force:true});
+  return old.length;
+}
 export function project(cwd) {
   if(typeof cwd!=='string'||!path.isAbsolute(cwd))throw new Error('cwd must be absolute');
   const resolved=fs.realpathSync(cwd);if(!fs.statSync(resolved).isDirectory())throw new Error('cwd must be a directory');

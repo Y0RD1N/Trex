@@ -13,6 +13,10 @@ import { useMessageQueue } from "./useMessageQueue";
 import { withChatTimes } from "../chatTimes";
 const timedTrexReducer = withChatTimes(trexReducer);
 
+/** Una herramienta se cortó sin saber si llegó a actuar: Trex CLI no la repite
+ * ni continúa hasta que la persona confirma que revisó su efecto. */
+export const RECOVERY_NOTICE = "Una acción se cortó sin confirmar si llegó a hacerse (archivos, navegador o un servicio externo), así que no se repetirá sola. Revisa su efecto y escribe /recover para continuar.";
+export const RECOVERY_BLOCKED = "Escribe /recover para confirmar que revisaste la acción interrumpida; después podrás continuar.";
 type Pending = { process: string; resolve: (value: Json) => void; reject: (reason: Error) => void; timer: ReturnType<typeof setTimeout> };
 type ActiveTurn = { id: string; process: string; session: string; settled: Promise<void>; settle: () => void };
 async function cancellable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -93,8 +97,11 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
         notice("info", `La API está temporalmente ocupada. Próximo intento en ${Math.ceil(Number(params.delayMs ?? 0) / 1000)} s.`);
       const terminal = turn !== null && method === "turn/completed" && turn.id === params.messageId
         && turn.process === procId && turn.session === params.sessionId;
+      const needsRecovery = terminal && params.recoveryRequired === true && !recovery.current;
       if (terminal && params.recoveryRequired === true) recovery.current = true;
       dispatch({ type: "trexEvent", method, params, now: Date.now() });
+      // Dicho al momento: si no, solo se descubre al escribir y fallar el envío.
+      if (needsRecovery) notice("warn", RECOVERY_NOTICE);
       if (terminal) { activeTurn.current = null; turn.settle(); }
     },
     onStderr(line) { dispatch({ type: "stderr", line }); },
@@ -185,7 +192,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       if (!models.some(model => model.value === result.model) && typeof result.model === "string") models.unshift({ value: result.model, resolvedModel: result.model, displayName: result.model, description: "Modelo configurado en el perfil", featured: true, efforts: [] });
       dispatch({ type: "trexReady", result, models });
       for (const message of startupNotices) notice("warn", message);
-      if (recovery.current) notice("warn", "La sesión se interrumpió con operaciones pendientes. Revisa los archivos y usa /recover antes de continuar; las herramientas anteriores no se repetirán automáticamente.");
+      if (recovery.current) notice("warn", RECOVERY_NOTICE);
       latest.current.onRunning(latest.current.sessionId);
     })().catch(error => { if (startupGeneration.current === token) { ready.current = null; if (mounted.current) dispatch({ type: "spawnFailed", message: formatError(error) }); } throw error; });
     return ready.current;
@@ -224,7 +231,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const assertCurrent = (): void => {
         attempt.controller.signal.throwIfAborted();
         if (!mounted.current || startupGeneration.current !== generation || !procId || processId.current !== procId || !agent.isCurrent(procId)) throw new Error("La sesión de Trex CLI se sustituyó durante el envío.");
-        if (recovery.current) throw new Error("Revisa los archivos y confirma /recover antes de continuar esta conversación.");
+        if (recovery.current) throw new Error(RECOVERY_BLOCKED);
       };
       assertCurrent();
       if (!procId) throw new Error("Trex CLI no está activo.");
