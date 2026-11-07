@@ -259,6 +259,12 @@ enum Sessions {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Prompt-cache hits per request (hit rate and prefix continuity); works while the conversation is open.
+    Cache {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     Fork {
         id: String,
     },
@@ -274,6 +280,51 @@ enum Sessions {
 fn print_json(value: &impl serde::Serialize) -> Result<()> {
     println!("{}", serde_json::to_string(value)?);
     Ok(())
+}
+
+/// Plain-text view of `server::cache_report`. A dash means the provider did
+/// not report that counter (never a measured zero).
+fn cache_table(report: &serde_json::Value) -> String {
+    let pct = |v: &serde_json::Value| v.as_f64().map_or("-".to_string(), |r| format!("{:.1}%", r * 100.0));
+    let num = |v: &serde_json::Value| v.as_u64().map_or("-".to_string(), |n| n.to_string());
+    let mut out = format!(
+        "{:<5} {:<5} {:<5} {:>9} {:>9} {:>9} {:>9} {:>7} {:>10}  {}\n",
+        "turn", "step", "start", "prompt", "hit", "miss", "write", "hit%", "continuity", "model"
+    );
+    let (mut turn, mut last) = (0, "");
+    for row in report["requests"].as_array().into_iter().flatten() {
+        let id = row["turn"].as_str().unwrap_or("");
+        if id != last {
+            turn += 1;
+            last = id;
+        }
+        out.push_str(&format!(
+            "{:<5} {:<5} {:<5} {:>9} {:>9} {:>9} {:>9} {:>7} {:>10}  {}\n",
+            turn,
+            num(&row["step"]),
+            if row["boundary"] == true { "yes" } else { "" },
+            num(&row["promptTokens"]),
+            num(&row["hitTokens"]),
+            num(&row["missTokens"]),
+            num(&row["writeTokens"]),
+            pct(&row["hitRate"]),
+            pct(&row["continuity"]),
+            row["model"].as_str().unwrap_or("")
+        ));
+    }
+    out.push('\n');
+    for (label, key) in [("all requests", "all"), ("first of each user turn", "turnBoundary"), ("inside tool loops", "insideTurn")] {
+        let s = &report["summary"][key];
+        out.push_str(&format!(
+            "{label:<24} {} requests ({} with cache counters) · hit rate {} · mean continuity {}\n",
+            num(&s["requests"]),
+            num(&s["measuredRequests"]),
+            pct(&s["hitRate"]),
+            pct(&s["meanContinuity"])
+        ));
+    }
+    out.push_str("continuity = share of the previous request's prompt that this request read from cache.\n");
+    out
 }
 
 fn main() {
@@ -419,6 +470,16 @@ async fn run() -> Result<()> {
                 file.sync_all()?;
             } else {
                 println!("{text}");
+            }
+        }
+        Command::Sessions {
+            command: Sessions::Cache { id, json: as_json },
+        } => {
+            let report = server::cache_report(&id)?;
+            if as_json {
+                print_json(&report)?;
+            } else {
+                print!("{}", cache_table(&report));
             }
         }
         Command::Sessions {

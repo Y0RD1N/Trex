@@ -317,6 +317,12 @@ impl HttpRequest {
         );
     }
 
+    fn completion_with_usage(self, message: Value, reason: &str, usage: Value) {
+        self.json(
+            json!({"choices":[{"index":0,"message":message,"finish_reason":reason}],"usage":usage}),
+        );
+    }
+
     fn final_text(self, text: &str) {
         self.completion(json!({"role":"assistant","content":text}), "stop");
     }
@@ -1179,6 +1185,80 @@ fn length_finish_fails_without_executing_even_complete_looking_tool_calls() {
 }
 
 #[test]
+fn cache_series_is_recorded_per_request_and_read_back_by_sessions_cache() {
+    let f = Fixture::new();
+    fs::write(f.workspace.path().join("a.txt"), "cache me").unwrap();
+    let mut agent = f.agent();
+    let started = agent.start(f.workspace.path(), "full", None);
+    let session = started["sessionId"].as_str().unwrap().to_owned();
+    // DeepSeek-style counters: hits and misses add up to the prompt.
+    let usage = |prompt: u64, completion: u64, hit: u64| {
+        json!({"prompt_tokens":prompt,"completion_tokens":completion,
+            "prompt_cache_hit_tokens":hit,"prompt_cache_miss_tokens":prompt - hit})
+    };
+    agent.turn(&session, "t1", "Read a.txt.");
+    f.api.chat().completion_with_usage(
+        calls(vec![tool("read-a", "read_file", json!({"path":"a.txt"}))]),
+        "tool_calls",
+        usage(1000, 20, 0),
+    );
+    f.api.chat().completion_with_usage(
+        json!({"role":"assistant","content":"Done."}),
+        "stop",
+        usage(1060, 30, 1000),
+    );
+    agent.completed("t1", "completed");
+    agent.turn(&session, "t2", "Thanks.");
+    f.api.chat().completion_with_usage(
+        json!({"role":"assistant","content":"Welcome."}),
+        "stop",
+        usage(1200, 25, 600),
+    );
+    agent.completed("t2", "completed");
+
+    let journal = f.journal(&session);
+    // The protocol's usage payload keeps its shape; the series lives beside it.
+    assert!(journal["turns"]["t1"]["usage"].get("cacheSteps").is_none());
+    let first = journal["turns"]["t1"]["cache_steps"].as_array().unwrap();
+    assert_eq!(first.len(), 2);
+    assert_eq!(first[0]["boundary"], true);
+    assert_eq!(first[0]["hitRate"], 0.0);
+    assert!(first[0].get("continuity").is_none(), "no earlier request in this conversation");
+    assert_eq!(first[1]["boundary"], false);
+    assert_eq!(first[1]["hitRate"], 0.9434);
+    assert_eq!(first[1]["continuity"], 1.0);
+    // The next user turn reads back only part of the previous prompt: the
+    // history projection changed, and the series must show it.
+    let second = journal["turns"]["t2"]["cache_steps"].as_array().unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0]["boundary"], true);
+    assert_eq!(second[0]["prevPromptTokens"], 1060);
+    assert_eq!(second[0]["continuity"], 0.566);
+    assert_eq!(journal["turns"]["t2"]["usage"]["apiUsage"]["cacheMeasuredInputTokens"], 1200);
+
+    // Readable while the conversation is still open in the app.
+    let output = command(f.home.path())
+        .args(["sessions", "cache", &session, "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["requests"].as_array().unwrap().len(), 3);
+    assert_eq!(report["summary"]["all"]["hitRate"], 0.4908);
+    assert_eq!(report["summary"]["turnBoundary"]["requests"], 2);
+    assert_eq!(report["summary"]["turnBoundary"]["hitRate"], 0.2727);
+    assert_eq!(report["summary"]["insideTurn"]["hitRate"], 0.9434);
+    let text = command(f.home.path())
+        .args(["sessions", "cache", &session])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("first of each user turn") && text.contains("56.6%"), "{text}");
+    f.api.assert_quiet();
+}
+
+#[test]
 fn restart_restores_stable_items_and_duplicate_turns_but_rejects_other_connections() {
     let f = Fixture::new();
     let mut agent = f.agent();
@@ -1515,6 +1595,108 @@ fn inbox_delivers_images_and_attached_file_references_as_user_content_once() {
 
 #[path = "background_cases/mod.rs"]
 mod background_cases;
+/// Requests of a session in which each turn reads one file larger than the
+/// 1 KiB archiving threshold. `context` overrides the profile's context settings.
+fn session_requests(context: Option<Value>, turns: usize) -> Vec<Value> {
+    let f = Fixture::new();
+    if let Some(context) = context {
+        let home = f.home.path().join("private-home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("settings.json"),
+            json!({"profiles":{"TREX1":{"context":context}}}).to_string(),
+        )
+        .unwrap();
+    }
+    let mut agent = f.agent();
+    let session = agent.start(f.workspace.path(), "full", None)["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut bodies = Vec::new();
+    for turn in 1..=turns {
+        let file = format!("f{turn}.txt");
+        fs::write(f.workspace.path().join(&file), format!("turno {turn}\n").repeat(400)).unwrap();
+        agent.turn(&session, &format!("t{turn}"), &format!("Read {file}."));
+        let request = f.api.chat();
+        bodies.push(request.body.clone());
+        request.completion(calls(vec![tool(&format!("read-{turn}"), "read_file", json!({"path":file}))]), "tool_calls");
+        let request = f.api.chat();
+        bodies.push(request.body.clone());
+        request.final_text(&format!("Done with {file}."));
+        agent.completed(&format!("t{turn}"), "completed");
+    }
+    f.api.assert_quiet();
+    bodies
+}
+
+fn first_difference(earlier: &[Value], later: &[Value]) -> Option<usize> {
+    earlier.iter().zip(later).position(|(a, b)| a != b)
+}
+
+fn messages_of(body: &Value) -> &[Value] {
+    body["messages"].as_array().unwrap()
+}
+
+fn is_archived(message: &Value) -> bool {
+    message["role"] == "tool"
+        && message["content"].as_str().is_some_and(|c| c.starts_with("[Archived read_file result ("))
+}
+
+/// Checks the invariants every session must keep and returns the indexes of
+/// the request pairs whose prefix changed (each one is a cache break).
+fn prefix_breaks(bodies: &[Value]) -> Vec<usize> {
+    for body in bodies {
+        assert_eq!(body["tools"], bodies[0]["tools"], "tool list stays byte-identical");
+        assert_eq!(body["messages"][0], bodies[0]["messages"][0], "system prompt stays byte-identical");
+    }
+    let mut breaks = Vec::new();
+    for (index, pair) in bodies.windows(2).enumerate() {
+        let (earlier, later) = (messages_of(&pair[0]), messages_of(&pair[1]));
+        let Some(at) = first_difference(earlier, later) else { continue };
+        // The only deliberate change: a tool result becomes a placeholder,
+        // at the start of a user turn, with everything before it reused.
+        assert!(index % 2 == 1, "pair {index}: the prefix only changes when a user turn starts");
+        assert!(!is_archived(&earlier[at]) && is_archived(&later[at]), "pair {index}: only archiving rewrites");
+        // Archived results stay archived (no flip-flop that would break again).
+        for (old, new) in earlier.iter().zip(later) {
+            assert!(!is_archived(old) || old == new, "pair {index}: an archived result came back");
+        }
+        breaks.push(index);
+    }
+    breaks
+}
+
+/// Provider prompt caches reuse only an identical prefix. Every request must
+/// start with the bytes of the previous one; the one deliberate exception is
+/// archiving old tool results, which happens at the start of a user turn and
+/// only in batches (`archiveAboveTokens`), so most turns only append.
+#[test]
+fn the_prompt_prefix_only_changes_where_old_tool_results_are_archived_in_batches() {
+    // Default: a small session stays under the threshold and never breaks.
+    assert_eq!(prefix_breaks(&session_requests(None, 3)), Vec::<usize>::new());
+    // Never archiving: never breaks either.
+    assert_eq!(prefix_breaks(&session_requests(Some(json!({"clearToolResultsAfterTurns":null})), 3)), Vec::<usize>::new());
+
+    // Archiving at every turn (no threshold): from turn 3 on, each new turn
+    // archives the result of two turns before, exactly that one message.
+    let every_turn = session_requests(Some(json!({"archiveAboveTokens":null})), 6);
+    let per_turn_breaks = prefix_breaks(&every_turn);
+    assert_eq!(per_turn_breaks, vec![3, 5, 7, 9]);
+    let (earlier, later) = (messages_of(&every_turn[3]), messages_of(&every_turn[4]));
+    let at = first_difference(earlier, later).unwrap();
+    assert_eq!(earlier[at]["tool_call_id"], "read-1");
+    assert_eq!(&earlier[..at], &later[..at], "everything before the archived result is reused");
+
+    // A low threshold archives in batches: fewer breaks, several results each.
+    let batched = session_requests(Some(json!({"archiveAboveTokens":3000})), 6);
+    let batch_breaks = prefix_breaks(&batched);
+    assert!(!batch_breaks.is_empty(), "the history did cross the threshold");
+    assert!(batch_breaks.len() < per_turn_breaks.len(), "batches break less often: {batch_breaks:?}");
+    let archived = messages_of(batched.last().unwrap()).iter().filter(|m| is_archived(m)).count();
+    assert!(archived > batch_breaks.len(), "each break archives several results at once: {batch_breaks:?}, {archived}");
+}
+
 #[path = "browser_cases/mod.rs"]
 mod browser_cases;
 #[path = "team_cases/mod.rs"]

@@ -142,6 +142,23 @@ pub fn archive_boundary(messages: &[Value], turns: Option<usize>) -> usize {
     }
 }
 
+/// Archive boundary for a new user turn, moved in batches. `current` is the
+/// conversation's persisted boundary and `candidate` the one that archives
+/// every result older than `clearToolResultsAfterTurns` (see
+/// `archive_boundary`). While the history projected with `current` stays at or
+/// under `threshold` tokens the boundary does not move, so the turn only
+/// appends and the provider's prompt cache survives it. Over the threshold it
+/// jumps to `candidate`: one cache break frees many turns at once instead of
+/// one break per turn. It never moves back, so a later turn under the
+/// threshold does not un-archive (and break the prefix again). Without a
+/// threshold it follows the candidate at every turn.
+pub fn next_archive_boundary(current: usize, candidate: usize, estimate: u64, threshold: Option<u64>) -> usize {
+    match threshold {
+        Some(threshold) if estimate <= threshold => current,
+        _ => current.max(candidate),
+    }
+}
+
 pub fn projection(messages: &[Value], cutoff: usize, summary: &str) -> Vec<Value> {
     projection_with(messages, cutoff, summary, 0)
 }
@@ -511,6 +528,19 @@ mod image_estimate_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn archiving_moves_in_batches_and_never_back() {
+        // Under the threshold the boundary stays, even as results age.
+        assert_eq!(next_archive_boundary(0, 9, 40_000, Some(64_000)), 0);
+        assert_eq!(next_archive_boundary(12, 30, 64_000, Some(64_000)), 12);
+        // Over it, everything older than the recent turns goes at once.
+        assert_eq!(next_archive_boundary(12, 30, 64_001, Some(64_000)), 30);
+        // Never back: a smaller candidate keeps what is already archived.
+        assert_eq!(next_archive_boundary(30, 8, 90_000, Some(64_000)), 30);
+        // No threshold: follow the candidate at every turn.
+        assert_eq!(next_archive_boundary(4, 9, 10, None), 9);
+        assert_eq!(next_archive_boundary(9, 4, 10, None), 9);
+    }
     #[test]
     fn compaction_keeps_tool_batches_and_original_history() {
         let messages = vec![

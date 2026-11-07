@@ -5,11 +5,15 @@ export type ApiUsage = {
   reasoningTokens: number | null;
   cachedReadTokens: number | null;
   cachedWriteTokens: number | null;
+  /** Prompt tokens of the requests that reported a cache counter: the denominator of the hit rate (Trex CLI). */
+  cacheMeasuredInputTokens?: number | null;
   totalTokens: number | null;
   requests: number | null;
   costUsd: number | null;
   partial: boolean;
   costPartial: boolean;
+  /** The cost was computed from configured prices, not reported by the provider (Trex CLI). */
+  costEstimated?: boolean;
 };
 const object = (v: unknown): Record<string, unknown> | null => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : null;
 export const tokenCount = (v: unknown): number | null => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
@@ -22,6 +26,8 @@ export function readApiUsage(raw: unknown): ApiUsage | null {
     cachedReadTokens: tokenCount(v.cachedReadTokens), cachedWriteTokens: tokenCount(v.cachedWriteTokens),
     totalTokens: tokenCount(v.totalTokens), requests: tokenCount(v.requests), costUsd: reportedCost(v.costUsd),
     partial: v.partial === true || tokenCount(v.inputTokens) === null || tokenCount(v.outputTokens) === null, costPartial: v.costPartial === true,
+    ...(tokenCount(v.cacheMeasuredInputTokens) !== null ? { cacheMeasuredInputTokens: tokenCount(v.cacheMeasuredInputTokens) } : {}),
+    ...(v.costEstimated === true ? { costEstimated: true } : {}),
   };
   return Object.entries(result).some(([key, value]) => key !== "partial" && key !== "costPartial" && value !== null) ? result : null;
 }
@@ -32,9 +38,12 @@ export function addApiUsage(previous: ApiUsage | null, next: ApiUsage | null): A
     inputTokens: sum(previous.inputTokens, next.inputTokens), outputTokens: sum(previous.outputTokens, next.outputTokens),
     reasoningTokens: sum(previous.reasoningTokens, next.reasoningTokens), cachedReadTokens: sum(previous.cachedReadTokens, next.cachedReadTokens),
     cachedWriteTokens: sum(previous.cachedWriteTokens, next.cachedWriteTokens), totalTokens: sum(previous.totalTokens, next.totalTokens),
+    ...(previous.cacheMeasuredInputTokens != null || next.cacheMeasuredInputTokens != null
+      ? { cacheMeasuredInputTokens: sum(previous.cacheMeasuredInputTokens ?? null, next.cacheMeasuredInputTokens ?? null) } : {}),
     requests: previous.requests === null || next.requests === null ? null : sum(previous.requests, next.requests),
     costUsd: previous.costUsd === null && next.costUsd === null ? null : reportedCost((previous.costUsd ?? 0) + (next.costUsd ?? 0)), partial: previous.partial || next.partial || previous.totalTokens === null || next.totalTokens === null,
     costPartial: previous.costPartial || next.costPartial || previous.costUsd === null || next.costUsd === null,
+    ...(previous.costEstimated || next.costEstimated ? { costEstimated: true } : {}),
   };
 }
 
@@ -47,9 +56,11 @@ export function subtractApiUsage(after: ApiUsage | null, before: ApiUsage | null
     inputTokens: minus(after.inputTokens, before.inputTokens), outputTokens: minus(after.outputTokens, before.outputTokens),
     reasoningTokens: minus(after.reasoningTokens, before.reasoningTokens), cachedReadTokens: minus(after.cachedReadTokens, before.cachedReadTokens),
     cachedWriteTokens: minus(after.cachedWriteTokens, before.cachedWriteTokens), totalTokens: minus(after.totalTokens, before.totalTokens),
+    ...(after.cacheMeasuredInputTokens != null ? { cacheMeasuredInputTokens: minus(after.cacheMeasuredInputTokens, before.cacheMeasuredInputTokens ?? null) } : {}),
     requests: minus(after.requests, before.requests),
     costUsd: after.costUsd === null ? null : Math.max(0, after.costUsd - (before.costUsd ?? 0)),
     partial: after.partial, costPartial: after.costPartial,
+    ...(after.costEstimated ? { costEstimated: true } : {}),
   };
   return result.totalTokens || result.inputTokens || result.outputTokens ? result : null;
 }
@@ -100,6 +111,19 @@ export function newTokenParts(usage: ApiUsage | null | undefined): { input: numb
 }
 /** Cache reads shown as a secondary detail next to the new tokens. */
 export const cacheReadTokens = (usage: ApiUsage | null | undefined): number => usage?.cachedReadTokens ?? 0;
+/**
+ * Share of the prompt served from the provider's cache (0..1), counted only over
+ * the requests that reported a cache counter, so a provider without one never
+ * reads as 0 %. null until some request reported it.
+ */
+export function cacheHitRate(usage: ApiUsage | null | undefined): number | null {
+  const measured = usage?.cacheMeasuredInputTokens ?? null, read = usage?.cachedReadTokens ?? null;
+  if (measured === null || read === null || measured <= 0) return null;
+  return Math.min(1, read / measured);
+}
+/** "93,4 %"; one decimal at most, in the user's locale. */
+export const cacheHitRateLabel = (rate: number | null): string | null =>
+  rate === null ? null : `${(rate * 100).toLocaleString("es", { maximumFractionDigits: 1 })} %`;
 
 /** Compact consumption kept per delegation, member and team. */
 export type UsageTotals = { newTokens: number; cacheReadTokens: number; outputTokens: number; costUsd: number | null; requests: number | null };
@@ -124,6 +148,9 @@ export function subtractUsageTotals(after: UsageTotals | null | undefined, befor
   return result.newTokens || result.outputTokens || result.cacheReadTokens ? result : null;
 }
 /** Reported cost only; a missing cost is never shown as free. */
+/** «Coste estimado» when Trex computed it from configured prices; «Coste informado» when the provider reported it. */
+export const costKind = (usage: Pick<ApiUsage, "costEstimated"> | null | undefined): string =>
+  usage?.costEstimated ? "Coste estimado" : "Coste informado";
 export function costLabel(value: number | null | undefined): string | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
   if (value > 0 && value < 0.0001) return "< US$0,0001";

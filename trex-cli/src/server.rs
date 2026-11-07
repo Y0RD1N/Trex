@@ -101,6 +101,10 @@ struct Turn {
     #[serde(default)]
     context_cutoff: usize,
     started_at: u64,
+    /// Per-request prompt-cache measurements (`usage::cache_sample`). Kept
+    /// apart from `usage` so the protocol's usage payload keeps its shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    cache_steps: Vec<Value>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -133,6 +137,11 @@ struct Journal {
     context_summary: String,
     #[serde(default)]
     compactions: Vec<Value>,
+    /// Message index before which large tool results are archived in the
+    /// model-facing history. Moves forward in batches (see
+    /// `context::next_archive_boundary`), never back.
+    #[serde(default)]
+    archive_before: usize,
     #[serde(default)]
     budget_reserved_estimate_usd: f64,
     #[serde(default)]
@@ -373,6 +382,32 @@ pub fn export_session(id: &str, markdown: bool) -> Result<String> {
         }
     }
     Ok(text)
+}
+/// Per-request cache series of a conversation, oldest first, with hit rates
+/// overall, at user-turn boundaries and inside tool loops. Read-only and
+/// lock-free: journals are replaced atomically, so it also works while the
+/// conversation is open in the app.
+pub fn cache_report(id: &str) -> Result<Value> {
+    ensure!(
+        Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id),
+        "conversation ID must be a canonical UUID"
+    );
+    let data = load_journal(&conversation_dir()?.join(format!("{id}.json")))?;
+    ensure!(data.id == id, "conversation identity mismatch");
+    let mut turns = data
+        .turns
+        .iter()
+        .filter(|(_, turn)| !turn.cache_steps.is_empty())
+        .map(|(turn_id, turn)| (turn.started_at, turn_id.as_str(), turn.cache_steps.as_slice()))
+        .collect::<Vec<_>>();
+    turns.sort_by_key(|(started, ..)| *started);
+    let rows = turns
+        .iter()
+        .map(|(_, turn_id, samples)| (*turn_id, *samples))
+        .collect::<Vec<_>>();
+    let mut report = crate::usage::cache_report(&rows);
+    report["conversationId"] = json!(id);
+    Ok(report)
 }
 pub fn fork_session(id: &str) -> Result<Value> {
     let (path, _lock, mut data) = locked_conversation(id)?;
@@ -801,6 +836,7 @@ impl Server {
                 context_cutoff: 0,
                 context_summary: String::new(),
                 compactions: vec![],
+                archive_before: 0,
                 budget_reserved_estimate_usd: 0.0,
                 budget_reserved_estimate_tokens: 0,
                 id: id.clone(),
@@ -898,6 +934,7 @@ impl Server {
                 context_cutoff: 0,
                 context_summary: String::new(),
                 compactions: vec![],
+                archive_before: 0,
                 budget_reserved_estimate_usd: 0.0,
                 budget_reserved_estimate_tokens: 0,
                 id: String::new(),
@@ -1013,6 +1050,7 @@ impl Server {
                 usage: None,
                 context_cutoff,
                 started_at: now(),
+                cache_steps: Vec::new(),
             },
         );
         if let Err(error) = session.persist(&mut data) {
@@ -1147,6 +1185,7 @@ impl Server {
         model: &str,
         totals: &UsageTotals,
         context: Option<u64>,
+        cache_steps: &[Value],
     ) -> Result<Value> {
         let mut usage = json!({"contextModel":model,"apiUsage":totals.value()});
         if let (Some(input), Some(output)) = (totals.input_tokens, totals.output_tokens) {
@@ -1168,6 +1207,7 @@ impl Server {
             if let Some(turn) = data.turns.get_mut(message_id) {
                 turn.context_cutoff = cutoff;
                 turn.usage = Some(usage.clone());
+                turn.cache_steps = cache_steps.to_vec();
             }
             session.persist(&mut data)?;
             (data.id.clone(), restored_usage(&data).0["apiUsage"].clone())
@@ -1190,6 +1230,13 @@ impl Server {
         )
         .await?;
         let mut api_usage = UsageTotals::default();
+        let mut cache_steps = Vec::<Value>::new();
+        // The request sent just before the first one of this turn, if any: it
+        // tells whether the prefix survived the turn boundary.
+        let mut previous_request = {
+            let data = session.data.lock().await;
+            last_measured_request(&data, message_id)
+        };
         {
             let mut data = session.data.lock().await;
             let model = data.model.clone();
@@ -1207,13 +1254,35 @@ impl Server {
         // Decided once per user turn: which old tool results are archived and
         // where this turn starts (image selection). The projection is then
         // stable for every request of the tool loop, so prefix caches hold.
+        // Archiving moves in batches: only when the history grows past the
+        // threshold, so ordinary turns only append to the cached prefix.
         let (archive_before, turn_start) = {
-            let data = session.data.lock().await;
+            let mut data = session.data.lock().await;
+            let context = &settings.context;
+            let archive_before = match context.clear_tool_results_after_turns {
+                None => 0,
+                Some(turns) => {
+                    let candidate = crate::context::archive_boundary(&data.messages, Some(turns));
+                    let threshold = context
+                        .archive_above_tokens
+                        .map(|t| context.max_active_tokens.map_or(t, |cap| t.min(cap / 2)));
+                    let estimate = threshold.map_or(0, |_| {
+                        crate::context::estimate(&json!(crate::context::projection_with(
+                            &data.messages,
+                            data.context_cutoff,
+                            &data.context_summary,
+                            data.archive_before,
+                        )))
+                    });
+                    crate::context::next_archive_boundary(data.archive_before, candidate, estimate, threshold)
+                }
+            };
+            if archive_before != data.archive_before {
+                data.archive_before = archive_before;
+                session.persist(&mut data)?;
+            }
             (
-                crate::context::archive_boundary(
-                    &data.messages,
-                    settings.context.clear_tool_results_after_turns,
-                ),
+                archive_before,
                 data.messages
                     .iter()
                     .rposition(|m| m["role"] == "user")
@@ -1475,6 +1544,7 @@ impl Server {
                 cancel.clone(),
                 &provider_options,
                 output_limit,
+                Some(&session_id),
             );
             tokio::pin!(completion);
             let mut channel_open = true;
@@ -1487,7 +1557,7 @@ impl Server {
                             Err(error)=>{
                                 let rejected_usage=error.downcast_ref::<provider::ApiError>().map(|e|json!({"trex_request_attempts":e.attempts}));
                                 api_usage.observe_priced(error.downcast_ref::<provider::IncompleteCompletion>().and_then(|v|v.usage.as_ref()).or(rejected_usage.as_ref()), pricing.as_ref());
-                                self.record_usage(&session, message_id, &model, &api_usage, None).await?;
+                                self.record_usage(&session, message_id, &model, &api_usage, None, &cache_steps).await?;
                                 if let Some(incomplete)=error.downcast_ref::<provider::IncompleteCompletion>() {
                                     let mut data=session.data.lock().await;
                                     data.rejected_responses.push(json!({"messageId":message_id,"step":step,"message":incomplete.message,"rawDeltas":incomplete.raw_deltas,"usage":incomplete.usage,"finishReason":incomplete.finish_reason,"cancelled":incomplete.cancelled}));
@@ -1526,8 +1596,21 @@ impl Server {
                 .and_then(provider_token_counts)
                 .map(|(input, output)| input.saturating_add(output));
             api_usage.observe_priced(completed.usage.as_ref(), pricing.as_ref());
+            // Per-request cache measurement; the first request of a user turn
+            // is where the history projection is rebuilt.
+            if let Some(sample) = completed.usage.as_ref().and_then(|raw| {
+                crate::usage::cache_sample(raw, step as u64, &model, step == 0, previous_request)
+            }) {
+                previous_request = sample["promptTokens"]
+                    .as_u64()
+                    .map(|prompt| (prompt, sample["completionTokens"].as_u64().unwrap_or(0)));
+                if cache_steps.len() >= MAX_CACHE_STEPS {
+                    cache_steps.remove(0);
+                }
+                cache_steps.push(sample);
+            }
             let usage = self
-                .record_usage(&session, message_id, &model, &api_usage, context)
+                .record_usage(&session, message_id, &model, &api_usage, context, &cache_steps)
                 .await?;
             let calls = completed
                 .message
@@ -2734,6 +2817,27 @@ fn omit_binary_history(value: &mut Value) {
     }
 }
 
+/// Cache samples kept per turn; a tool loop is bounded far below this.
+const MAX_CACHE_STEPS: usize = 256;
+
+/// Prompt and completion tokens of the latest measured request of an earlier
+/// turn: the request sent just before a new turn's first one.
+fn last_measured_request(data: &Journal, current: &str) -> Option<(u64, u64)> {
+    data.turns
+        .iter()
+        .filter(|(id, _)| id.as_str() != current)
+        .filter_map(|(_, turn)| {
+            let last = turn.cache_steps.last()?;
+            Some((
+                turn.started_at,
+                last["promptTokens"].as_u64()?,
+                last["completionTokens"].as_u64().unwrap_or(0),
+            ))
+        })
+        .max_by_key(|(started, ..)| *started)
+        .map(|(_, prompt, completion)| (prompt, completion))
+}
+
 fn restored_usage(data: &Journal) -> (Value, Option<String>) {
     let item_order = data
         .items
@@ -3303,6 +3407,7 @@ mod tests {
                         "apiUsage":{"inputTokens":input,"outputTokens":1,"totalTokens":input+1,"requests":1,"costUsd":cost,"partial":false,"costPartial":false}})),
                     context_cutoff: 0,
                     started_at: input,
+                    cache_steps: Vec::new(),
                 },
             );
         }
@@ -3327,6 +3432,7 @@ mod tests {
                 usage: None,
                 context_cutoff: 0,
                 started_at: 0,
+                cache_steps: Vec::new(),
             },
         );
         data.messages.push(json!({"role":"assistant","content":null,"tool_calls":[

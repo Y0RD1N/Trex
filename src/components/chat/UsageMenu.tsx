@@ -5,7 +5,7 @@ import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import { accountUsageWindows, headlineWindow, type PlanUsage, type UsageSeverity } from "../../planUsage";
 import DropdownMenu from "../DropdownMenu";
 import { AlertIcon, CloseIcon, RefreshIcon } from "../Icons";
-import { cacheReadTokens, newTokenParts, newTokens, type ApiUsage } from "../../tokenUsage";
+import { cacheHitRate, cacheHitRateLabel, cacheReadTokens, costKind, newTokenParts, newTokens, type ApiUsage } from "../../tokenUsage";
 import { ContextDetails } from "./ContextMeter";
 import { PlanWindows } from "./PlanMeter";
 import "./UsageMenu.css";
@@ -71,12 +71,13 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
   // Lo nuevo de este chat; las lecturas de caché son reutilización barata del mismo contexto.
   const chatTokens = newTokens(apiUsage);
   const cachedTokens = cacheReadTokens(apiUsage);
-  const cacheNote = cachedTokens > 0 ? ` (+ ${cachedTokens.toLocaleString("es")} leídos de caché)` : "";
+  const hitRate = cacheHitRateLabel(cacheHitRate(apiUsage));
+  const cacheNote = cachedTokens > 0 ? ` (+ ${cachedTokens.toLocaleString("es")} leídos de caché${hitRate ? ` · ${hitRate} de aciertos` : ""})` : "";
   // Casi todo lo «nuevo» del primer turno es escribir en caché el prompt fijo del agente.
   const parts = newTokenParts(apiUsage);
   const partsNote = parts && parts.cacheWrite > 0
     ? `\n  entrada ${parts.input.toLocaleString("es")} · escritura de caché ${parts.cacheWrite.toLocaleString("es")} · salida ${parts.output.toLocaleString("es")}` : "";
-  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens nuevos de este chat: ${chatTokens.toLocaleString("es")}${cacheNote}${partsNote}` : ""}${cost ? `\nCoste informado: ${cost}` : ""}`;
+  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens nuevos de este chat: ${chatTokens.toLocaleString("es")}${cacheNote}${partsNote}` : ""}${cost ? `\n${costKind(apiUsage)}: ${cost}` : ""}`;
   const ringPercent = percent ?? (showPlan ? limiting.percent : 0);
   const ringLength = 2 * Math.PI * 5.5;
   const ringFilled = ringPercent > 0 ? Math.max(ringPercent, 4) : 0;
@@ -162,12 +163,13 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
               ["Lectura de caché", apiUsage.cachedReadTokens], ["Escritura de caché", apiUsage.cachedWriteTokens],
               ["Total procesado", apiUsage.totalTokens], ["Intentos de API", apiUsage.requests]] as const).filter(([, value]) => value !== null).map(([label, value]) =>
               <div key={label}><dt>{label}</dt><dd>{value!.toLocaleString("es")}</dd></div>)}
+            {hitRate && <div><dt>Aciertos de caché</dt><dd>{hitRate}</dd></div>}
           </dl>
-          <p className="chat-context-note">{apiUsage.partial ? "El proveedor no informó todos los contadores; el consumo mostrado es parcial. " : ""}Tokens nuevos = entrada sin caché + salida + escritura de caché. Las lecturas de caché reutilizan contexto ya enviado y se muestran aparte. El consumo corresponde a este chat.</p>
+          <p className="chat-context-note">{apiUsage.partial ? "El proveedor no informó todos los contadores; el consumo mostrado es parcial. " : ""}Tokens nuevos = entrada sin caché + salida + escritura de caché. Las lecturas de caché reutilizan contexto ya enviado y se muestran aparte. {hitRate ? "Aciertos de caché = parte de la entrada servida desde la caché del proveedor, contando solo las peticiones que informaron ese contador. " : ""}El consumo corresponde a este chat.</p>
         </> : <p className="chat-context-note">Aún sin datos de consumo. Se mostrarán los tokens informados por el proveedor después de responder.</p>}
       </section>}
       <div className="chat-usage-footer">
-        {cost ? <p className="chat-usage-plan-name">Coste informado{costPartial ? " (parcial)" : ""}: <strong>{cost}</strong></p>
+        {cost ? <p className="chat-usage-plan-name">{costKind(apiUsage)}{costPartial ? " (parcial)" : ""}: <strong>{cost}</strong></p>
           : showUnavailable && <p className="chat-context-note">{product === "Trex CLI" ? "El proveedor no ha informado un coste. Consulta el saldo y la facturación en tu cuenta de API." : "Antigravity no ha informado un coste monetario para esta conversación."}</p>}
         <button type="button" className="context-item chat-plan-all" onClick={() => runAction(onOpenAll)}>
           Ver todas las cuentas

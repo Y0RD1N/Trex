@@ -961,7 +961,9 @@ fn old_tool_results_are_archived_at_turn_boundaries_and_stay_searchable() {
     let body = format!("ARCHIVE_ME_HEAD\n{}", "padding line\n".repeat(400));
     fs::write(f.workspace.path().join("big.txt"), &body).unwrap();
     let mut agent = f.agent();
-    let session = start(&f, &mut agent, "plan", json!({}));
+    // Per-turn archiving (no batch threshold), so this small history archives
+    // as soon as the result is two user turns old.
+    let session = start(&f, &mut agent, "plan", json!({"context":{"archiveAboveTokens":null}}));
     agent.turn(&session, "one", "Read big.txt");
     f.api.chat().completion(
         calls(vec![tool("read", "read_file", json!({"path":"big.txt","limit":2000}))]),

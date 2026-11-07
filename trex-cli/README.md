@@ -204,9 +204,36 @@ Prompt caching: DeepSeek, OpenAI, Gemini 2.5+, Grok and similar providers cache
 prompt prefixes automatically, so nothing is added. For OpenRouter `anthropic/*`
 models the request adds top-level automatic `cache_control` (the breakpoint moves
 with the conversation) and a breakpoint on the system prompt, two of Anthropic's
-four. Unknown fields are never sent to other providers. The system prompt, tool
-list and history projection are kept stable within a turn so caches survive the
-tool loop.
+four. OpenRouter requests also carry the conversation ID as `x-session-id`, so
+OpenRouter keeps the conversation on one upstream provider (and its cache) from the
+first request, even after a compaction rewrites the opening messages. Unknown
+fields are never sent to other providers. The system prompt, tool list and
+history projection are kept stable within a turn so caches survive the tool loop;
+across user turns the only deliberate change is archiving old tool results (over
+1 KiB), done in batches (`archiveAboveTokens`). A test checks that every other
+request only appends to the previous one. Measured with a simulated provider over
+8 turns against archiving at every turn: batches cost 30% less input on DeepSeek
+Flash and 19% less on Anthropic 5.5 in light sessions (no cache break at all), and
+17% / 10% less with heavy tool use (2 breaks instead of 6). Never archiving matches
+batches in light sessions but costs 44–60% more with heavy tool use, because the
+context reaches `maxActiveTokens` and compaction rewrites the prompt every turn.
+Providers that bill a cache hit at 10% (MiniMax, OpenAI up to GPT-5.5) pay 4–6%
+more with batches; `"archiveAboveTokens": null` restores per-turn archiving.
+Against DeepSeek itself, a 5-turn session kept 98.5% of the prompt cached at each
+new user turn without archiving, versus 41% when archiving every turn.
+
+Measuring the cache: every provider request stores a sample (prompt tokens, hit,
+miss and write counters, hit rate) in the conversation journal.
+`trex-agent sessions cache UUID [--json]` prints the series and the hit rate
+overall, for the first request of each user turn (where the history projection is
+rebuilt) and inside tool loops. It is read-only and works while the conversation is
+open. `continuity` is the share of the previous request's prompt that this one read
+from the cache, so it drops when something early in the prompt changed. Counters a
+provider does not report stay empty, never zero, and requests without a cache counter
+are left out of every hit rate. The app shows the same rate in the usage menu and in
+each response's token breakdown. DeepSeek's `prompt_cache_hit_tokens` and
+`prompt_cache_miss_tokens` are read directly. `metrics --json` (with diagnostics on)
+adds `cacheHit`, `cacheMiss` and `cacheWrite` per request and a `cache` summary.
 
 Context preflight reserves output and headroom. Automatic extractive compaction
 archives complete tool batches, keeps recent work and records its cutoff. It
@@ -230,6 +257,12 @@ Context settings that bound what is re-sent on every request:
   `messageIndex`. Call/result pairing is unchanged, the journal keeps the result,
   and `history_search({messageIndex, offset})` pages it back. Within a turn the
   projection never changes, so prompt caches hold during the tool loop.
+- `context.archiveAboveTokens` (default 64000, capped at half of
+  `maxActiveTokens`; `null` archives at every turn): archiving moves in batches.
+  While the history stays under it nothing more is archived, so each user turn
+  only appends to the cached prefix; above it, every result older than
+  `clearToolResultsAfterTurns` is archived at once. The boundary is kept in the
+  conversation journal and never moves back.
 - `context.maxHistoryImages` (default 3, max 16): screenshots and attachments
   re-sent from earlier turns, chosen once per user turn. Images produced in the
   current turn keep between that many and two more: the oldest leave three at a

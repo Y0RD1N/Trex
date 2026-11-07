@@ -261,6 +261,18 @@ fn client(url: &Url) -> Result<Client> {
     Ok(result)
 }
 
+/// Sticky routing from the first request: with a session id OpenRouter keeps
+/// the conversation on one upstream provider, and so on its prompt cache, also
+/// after a compaction changes the opening messages it would otherwise hash.
+/// Other providers route by prefix themselves and get no extra header.
+/// https://openrouter.ai/docs/guides/best-practices/prompt-caching
+fn with_session(request: RequestBuilder, profile: &Profile, conversation: Option<&str>) -> RequestBuilder {
+    match conversation {
+        Some(id) if profile.provider == "openrouter" => request.header("x-session-id", id),
+        _ => request,
+    }
+}
+
 fn authenticated(request: RequestBuilder, profile: &Profile, url: &Url) -> Result<RequestBuilder> {
     let key = profile::api_key(profile)?;
     let key = key.as_deref().filter(|key| !key.is_empty());
@@ -1236,6 +1248,7 @@ pub async fn complete_configured(
     cancel: CancellationToken,
     options: &crate::settings::ProviderSettings,
     max_output: u64,
+    conversation: Option<&str>,
 ) -> Result<Completion> {
     let mut body = request_body(
         profile,
@@ -1287,11 +1300,12 @@ pub async fn complete_configured(
     let started = Instant::now();
     for attempt in 0..=options.retries {
         ensure!(!cancel.is_cancelled(), "Provider request cancelled");
+        let builder = client(&url)?
+            .post(url.clone())
+            .header(ACCEPT, "text/event-stream, application/json")
+            .header("X-Request-ID", &request_id);
         let request = authenticated(
-            client(&url)?
-                .post(url.clone())
-                .header(ACCEPT, "text/event-stream, application/json")
-                .header("X-Request-ID", &request_id)
+            with_session(builder, profile, conversation)
                 .json(&body)
                 .timeout(Duration::from_millis(
                     options
@@ -2684,6 +2698,22 @@ mod tests {
             count
         });
         (request, server)
+    }
+
+    #[test]
+    fn only_openrouter_requests_carry_the_conversation_as_session_id() {
+        let url = Url::parse("http://127.0.0.1:9/chat/completions").unwrap();
+        let header = |provider: &str, conversation: Option<&str>| {
+            let request = with_session(client(&url).unwrap().post(url.clone()), &profile(provider), conversation)
+                .build()
+                .unwrap();
+            request.headers().get("x-session-id").map(|v| v.to_str().unwrap().to_owned())
+        };
+        assert_eq!(header("openrouter", Some("2f0c")).as_deref(), Some("2f0c"));
+        assert_eq!(header("openrouter", None), None);
+        for provider in ["deepseek", "minimax", "custom"] {
+            assert_eq!(header(provider, Some("2f0c")), None, "{provider}");
+        }
     }
 
     fn profile(provider: &str) -> Profile {

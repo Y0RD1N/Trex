@@ -47,6 +47,13 @@ pub struct ContextSettings {
     /// only. The journal keeps them; history_search retrieves them. null
     /// disables clearing.
     pub clear_tool_results_after_turns: Option<usize>,
+    /// Archive in batches: while the history stays at or under this many
+    /// tokens nothing more is archived, so each user turn only appends and the
+    /// provider's prompt cache survives it. Above it, every result older than
+    /// clearToolResultsAfterTurns is archived at once (one cache break instead
+    /// of one per turn). Capped at half of maxActiveTokens so archiving comes
+    /// before compaction. null archives at every turn.
+    pub archive_above_tokens: Option<u64>,
     /// Images (tool screenshots and user attachments) re-sent from earlier
     /// turns. Images produced in the current turn have the same separate cap.
     pub max_history_images: usize,
@@ -62,6 +69,7 @@ impl Default for ContextSettings {
             fallback_window: Some(128_000),
             max_active_tokens: Some(128_000),
             clear_tool_results_after_turns: Some(2),
+            archive_above_tokens: Some(64_000),
             max_history_images: 3,
             keep_recent_turns: 4,
             summary_max_chars: 24000,
@@ -274,6 +282,12 @@ impl Settings {
                 .clear_tool_results_after_turns
                 .is_none_or(|v| (1..=64).contains(&v)),
             "clearToolResultsAfterTurns must be 1..64"
+        );
+        ensure!(
+            self.context
+                .archive_above_tokens
+                .is_none_or(|v| (1024..=16_000_000).contains(&v)),
+            "archiveAboveTokens must be 1024..16000000"
         );
         ensure!(
             self.context.max_history_images <= 16,
@@ -538,22 +552,25 @@ mod tests {
         assert_eq!(s.context.fallback_window, Some(128_000));
         assert_eq!(s.context.max_active_tokens, Some(128_000));
         assert_eq!(s.context.clear_tool_results_after_turns, Some(2));
+        assert_eq!(s.context.archive_above_tokens, Some(64_000));
         assert_eq!(s.context.max_history_images, 3);
         // Omitted fields take the defaults; explicit null opts out.
         let s: Settings = serde_json::from_value(json!({"context":{"thresholdPercent":70}})).unwrap();
         assert_eq!(s.context.max_active_tokens, Some(128_000));
         let s = overlay(
             Settings::default(),
-            Some(&json!({"context":{"fallbackWindow":null,"maxActiveTokens":null,"clearToolResultsAfterTurns":null,"maxHistoryImages":0}})),
+            Some(&json!({"context":{"fallbackWindow":null,"maxActiveTokens":null,"clearToolResultsAfterTurns":null,"archiveAboveTokens":null,"maxHistoryImages":0}})),
         )
         .unwrap();
         assert_eq!(s.context.fallback_window, None);
         assert_eq!(s.context.max_active_tokens, None);
         assert_eq!(s.context.clear_tool_results_after_turns, None);
+        assert_eq!(s.context.archive_above_tokens, None);
         assert_eq!(s.context.max_history_images, 0);
         for bad in [
             json!({"context":{"maxActiveTokens":100}}),
             json!({"context":{"clearToolResultsAfterTurns":0}}),
+            json!({"context":{"archiveAboveTokens":100}}),
             json!({"context":{"maxHistoryImages":17}}),
             json!({"provider":{"pricing":{"inputUsdPerMillion":1.0,"outputUsdPerMillion":1.0,"cachedInputUsdPerMillion":-1.0}}}),
             json!({"provider":{"pricing":{"inputUsdPerMillion":1.0,"outputUsdPerMillion":1.0,"cachedInput":0.1}}}),

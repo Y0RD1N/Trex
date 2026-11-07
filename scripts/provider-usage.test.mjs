@@ -5,7 +5,7 @@ const { parseAntigravityUsage, acpContext, AntigravityUsageReader } = await load
 const { antigravityReducer } = await load("antigravityChat");
 const { trexReducer } = await load("trexChat");
 const { initialChatState, contextPercent } = await load("chatState");
-const { readApiUsage } = await load("tokenUsage");
+const { readApiUsage, addApiUsage, subtractApiUsage, cacheHitRate, cacheHitRateLabel, costKind } = await load("tokenUsage");
 const report = `### Session Usage
 - **Session total:** 13,224 tokens (prompt: 13,138, completion: 6, thinking: 80)
 
@@ -76,4 +76,36 @@ test("Trex live snapshots and terminal replies use absolute totals, including ac
   assert.deepEqual(restored.apiUsage,readApiUsage(metrics)); assert.equal(restored.costUsd,0);
   const fresh=trexReducer(restored,{type:"trexReady",result:{sessionId:"new",model:"mock",items:[]},models:[]});
   assert.equal(fresh.apiUsage,null); assert.equal(fresh.costUsd,null);
+});
+test("cache hit rate counts only requests that reported a cache counter and survives per-response deltas", () => {
+  const reported = (input, read, measured) => readApiUsage({ inputTokens: input, outputTokens: 10, cachedReadTokens: read, cacheMeasuredInputTokens: measured, totalTokens: input + 10, requests: 1 });
+  // One request reported its cache counters (900 of 1000); another provider reported none (5000 tokens).
+  const first = reported(1000, 900, 1000);
+  const silent = readApiUsage({ inputTokens: 5000, outputTokens: 10, totalTokens: 5010, requests: 1 });
+  const both = addApiUsage(first, silent);
+  assert.equal(both.inputTokens, 6000);
+  assert.equal(both.cacheMeasuredInputTokens, 1000);
+  assert.equal(cacheHitRate(both), 0.9);
+  assert.equal(cacheHitRateLabel(cacheHitRate(both)), "90 %");
+  assert.equal(cacheHitRate(silent), null, "a provider without cache counters is unknown, never 0 %");
+  // The response shown in the chat is the difference of conversation totals and keeps its own denominator.
+  const delta = subtractApiUsage(addApiUsage(both, reported(2000, 500, 2000)), both);
+  assert.equal(delta.cacheMeasuredInputTokens, 2000);
+  assert.equal(cacheHitRate(delta), 0.25);
+  // Totals from Claude Code, Codex or older sessions keep their exact shape.
+  assert.equal("cacheMeasuredInputTokens" in silent, false);
+  assert.equal(cacheHitRate(null), null);
+  assert.equal(cacheHitRateLabel(null), null);
+});
+
+test("a cost Trex computed from configured prices is labelled as an estimate, a reported one is not", () => {
+  const reported = readApiUsage({ inputTokens: 100, outputTokens: 10, costUsd: 0.002 });
+  const estimated = readApiUsage({ inputTokens: 100, outputTokens: 10, costUsd: 0.001, costEstimated: true });
+  assert.equal(costKind(reported), "Coste informado");
+  assert.equal(costKind(estimated), "Coste estimado");
+  assert.equal(costKind(null), "Coste informado");
+  // Any estimated part makes the total an estimate, and a response keeps it.
+  assert.equal(costKind(addApiUsage(reported, estimated)), "Coste estimado");
+  assert.equal(costKind(subtractApiUsage(addApiUsage(reported, estimated), reported)), "Coste estimado");
+  assert.equal(readApiUsage({ inputTokens: 1, outputTokens: 1, costEstimated: "yes" }).costEstimated, undefined);
 });
