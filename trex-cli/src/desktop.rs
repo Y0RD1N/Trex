@@ -494,18 +494,26 @@ fn run(
         .lock()
         .map_err(|_| anyhow::anyhow!("desktop input unavailable"))?;
     ensure!(!cancel.is_cancelled(), "cancelled before desktop operation");
-    let mut lease = if name == "desktop_status" || name == "desktop_monitors" {
+    let mut state = state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("desktop session unavailable"))?;
+    let informational = name == "desktop_status" || name == "desktop_monitors";
+    // Expired, stale or invalid input fails here, before it takes the desktop
+    // lease or touches the display.
+    let prepared = if informational || name == "desktop_screenshot" {
+        None
+    } else {
+        Some(prepare_input(&mut state, name, input)?)
+    };
+    let mut lease = if informational {
         None
     } else {
         Some(DesktopLease::acquire()?)
     };
     #[cfg(windows)]
     let _dpi = windows::DpiScope::enter()?;
-    let mut state = state
-        .lock()
-        .map_err(|_| anyhow::anyhow!("desktop session unavailable"))?;
     ensure!(!cancel.is_cancelled(), "cancelled before desktop operation");
-    if name == "desktop_status" || name == "desktop_monitors" {
+    if informational {
         validate_fields(input, &[], &[])?;
         return if name == "desktop_status" {
             status()
@@ -576,54 +584,13 @@ fn run(
             json!({"content":[{"type":"text","text":format!("{}{}", framed.summary(&token, monitor, screens), foreground_note())},{"type":"image","mimeType":"image/png","data":STANDARD.encode(&framed.png)}],"structuredContent":structured}),
         );
     }
-    // Una entrada suelta o varias (desktop_actions): todas se validan antes de enviar nada.
-    let common = ["observation", "capture", "settleMs"];
-    let steps: Vec<(&str, Value)> = if name == "desktop_actions" {
-        validate_fields(input, &["observation", "actions", "capture", "settleMs"], &["observation", "actions"])?;
-        let list = input["actions"]
-            .as_array()
-            .filter(|list| (1..=MAX_ACTIONS).contains(&list.len()))
-            .with_context(|| format!("actions must list 1 to {MAX_ACTIONS} inputs"))?;
-        list.iter()
-            .map(|action| {
-                let kind = action["type"].as_str().context("each action needs a type")?;
-                let tool = INPUT_TOOLS
-                    .iter()
-                    .copied()
-                    .find(|tool| tool.strip_prefix("desktop_") == Some(kind))
-                    .with_context(|| format!("unknown action type {kind}"))?;
-                let mut fields = action.clone();
-                fields.as_object_mut().context("each action must be an object")?.remove("type");
-                Ok((tool, fields))
-            })
-            .collect::<Result<_>>()?
-    } else {
-        let tool = INPUT_TOOLS.iter().copied().find(|tool| *tool == name).context("unknown desktop tool")?;
-        let mut fields = input.clone();
-        let object = fields.as_object_mut().context("expected an object")?;
-        ensure!(object.contains_key("observation"), "missing desktop argument");
-        for key in common {
-            object.remove(key);
-        }
-        vec![(tool, fields)]
-    };
-    for (tool, fields) in &steps {
-        let (allowed, required) = input_fields(tool);
-        validate_fields(fields, allowed, required)?;
-    }
-    let (after, settle) = after_options(input)?;
-    let observation = state
-        .as_ref()
-        .context("take a fresh screenshot first")?
-        .clone();
-    ensure!(
-        input["observation"].as_str() == Some(&observation.token),
-        "stale desktop observation; take a new screenshot"
-    );
-    if observation.captured_at.elapsed() > Duration::from_secs(30) {
-        *state = None;
-        bail!("desktop observation expired; take a fresh screenshot");
-    }
+    let PreparedInput {
+        steps,
+        acts,
+        after,
+        settle,
+        observation,
+    } = prepared.context("unknown desktop tool")?;
     ensure!(
         lease
             .as_mut()
@@ -632,11 +599,6 @@ fn run(
             == observation.generation,
         "another agent changed the desktop; take a fresh screenshot"
     );
-    // Validate every argument before connecting to the desktop or consuming the token.
-    let acts = steps
-        .iter()
-        .map(|(tool, fields)| parse_act(tool, fields, &observation))
-        .collect::<Result<Vec<_>>>()?;
     check_platform()?;
     #[cfg(windows)]
     {
@@ -711,6 +673,84 @@ fn run(
         content.push(json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(bytes)}));
     }
     Ok(json!({"content":content,"structuredContent":structured,"isError":stopped.is_some()}))
+}
+
+/// Input that passed every check that needs neither the desktop lease nor the display.
+struct PreparedInput {
+    steps: Vec<(&'static str, Value)>,
+    acts: Vec<Act>,
+    after: AfterCapture,
+    settle: u64,
+    observation: Observation,
+}
+
+/// Validates an input tool call against the current observation. An expired
+/// observation is discarded.
+fn prepare_input(
+    state: &mut Option<Observation>,
+    name: &str,
+    input: &Value,
+) -> Result<PreparedInput> {
+    // Una entrada suelta o varias (desktop_actions): todas se validan antes de enviar nada.
+    let common = ["observation", "capture", "settleMs"];
+    let steps: Vec<(&'static str, Value)> = if name == "desktop_actions" {
+        validate_fields(input, &["observation", "actions", "capture", "settleMs"], &["observation", "actions"])?;
+        let list = input["actions"]
+            .as_array()
+            .filter(|list| (1..=MAX_ACTIONS).contains(&list.len()))
+            .with_context(|| format!("actions must list 1 to {MAX_ACTIONS} inputs"))?;
+        list.iter()
+            .map(|action| {
+                let kind = action["type"].as_str().context("each action needs a type")?;
+                let tool = INPUT_TOOLS
+                    .iter()
+                    .copied()
+                    .find(|tool| tool.strip_prefix("desktop_") == Some(kind))
+                    .with_context(|| format!("unknown action type {kind}"))?;
+                let mut fields = action.clone();
+                fields.as_object_mut().context("each action must be an object")?.remove("type");
+                Ok((tool, fields))
+            })
+            .collect::<Result<_>>()?
+    } else {
+        let tool = INPUT_TOOLS.iter().copied().find(|tool| *tool == name).context("unknown desktop tool")?;
+        let mut fields = input.clone();
+        let object = fields.as_object_mut().context("expected an object")?;
+        ensure!(object.contains_key("observation"), "missing desktop argument");
+        for key in common {
+            object.remove(key);
+        }
+        vec![(tool, fields)]
+    };
+    for (tool, fields) in &steps {
+        let (allowed, required) = input_fields(tool);
+        validate_fields(fields, allowed, required)?;
+    }
+    let (after, settle) = after_options(input)?;
+    let observation = state
+        .as_ref()
+        .context("take a fresh screenshot first")?
+        .clone();
+    ensure!(
+        input["observation"].as_str() == Some(&observation.token),
+        "stale desktop observation; take a new screenshot"
+    );
+    if observation.captured_at.elapsed() > Duration::from_secs(30) {
+        *state = None;
+        bail!("desktop observation expired; take a fresh screenshot");
+    }
+    // Validate every argument before connecting to the desktop or consuming the token.
+    let acts = steps
+        .iter()
+        .map(|(tool, fields)| parse_act(tool, fields, &observation))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(PreparedInput {
+        steps,
+        acts,
+        after,
+        settle,
+        observation,
+    })
 }
 
 /// Campos de cada entrada (sin la observación ni las opciones de captura).
