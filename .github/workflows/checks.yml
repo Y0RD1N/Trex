@@ -50,6 +50,14 @@ jobs:
         run: pwsh -NoProfile -File scripts/test-installer-process-lifecycle.ps1
       - name: Prepare native CLI resource
         run: npm run cli:build -- --debug
+      # Electron downloads its binary on first use, not on install.
+      - name: Download the pinned Electron for the Trex Browser shell
+        if: runner.os == 'Windows'
+        run: |
+          npm ci --prefix trex-browser/shell --no-audit --no-fund
+          node trex-browser/shell/node_modules/electron/install.js
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - name: Prepare native Windows Browser resources
         if: runner.os == 'Windows'
         run: npm run browser:build -- --debug
@@ -76,7 +84,7 @@ jobs:
       - name: Prepare an ordinary private build tree
         run: |
           mkdir -m 700 /tmp/trex-fedora-ci
-          tar --exclude=.git -cf - . | tar -xf - -C /tmp/trex-fedora-ci
+          tar --exclude=.git -cf - . | tar --no-same-owner -xf - -C /tmp/trex-fedora-ci
       - name: Frontend and Linux packaging tests
         working-directory: /tmp/trex-fedora-ci
         run: |
@@ -100,7 +108,12 @@ jobs:
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
       - name: Build Fedora RPM with private Browser runtime
         working-directory: /tmp/trex-fedora-ci
-        run: npm run tauri -- build --bundles rpm
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm ci --prefix trex-browser/shell --no-audit --no-fund
+          node trex-browser/shell/node_modules/electron/install.js
+          npm run tauri -- build --bundles rpm
       - name: Verify installed RPM and app runtime discovery
         working-directory: /tmp/trex-fedora-ci
         run: |
