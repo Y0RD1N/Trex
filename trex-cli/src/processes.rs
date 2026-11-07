@@ -735,14 +735,24 @@ mod tests {
                 &CancellationToken::new(),
             )
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(15), async {
+        let started = std::time::Instant::now();
+        let finished = tokio::time::timeout(Duration::from_secs(15), async {
             while manager.read("output").unwrap()["status"] == "running" {
                 tokio::time::sleep(Duration::from_millis(30)).await;
             }
         })
-        .await
-        .unwrap();
+        .await;
         let output = manager.read("output").unwrap();
+        let text = output["text"].as_str().unwrap();
+        assert!(
+            finished.is_ok(),
+            "still {} after {:?}: offset {}, {} bytes kept, ends with {:?}",
+            output["status"],
+            started.elapsed(),
+            output["offset"],
+            text.len(),
+            &text[text.len().saturating_sub(40)..]
+        );
         assert!(output["text"].as_str().unwrap().len() <= OUTPUT_LIMIT);
         assert_eq!(output["truncated"], true);
         assert!(output["text"].as_str().unwrap().contains("TAIL"));

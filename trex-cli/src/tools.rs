@@ -2607,29 +2607,47 @@ mod tests {
                 "Start-Sleep -Seconds 30"
             };
             let command = format!("$p=Start-Process -FilePath '{}' -ArgumentList @('-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30') -NoNewWindow -PassThru; $p.Id | Set-Content child.pid; {tail}", ps.display());
+            // The shell must start two PowerShells and write the PID before its
+            // timeout: allow a slow, busy machine. Cancel and drop stop it as
+            // soon as the PID appears, so their timeout must never fire first.
+            let timeout = if mode == "timeout" { 5000 } else { 60_000 };
             let cancel = CancellationToken::new();
             let child_cancel = cancel.clone();
             let task = tokio::spawn(async move {
                 execute(
                     &cwd,
                     "shell",
-                    &json!({"command":command,"timeoutMs":2000}),
+                    &json!({"command":command,"timeoutMs":timeout}),
                     child_cancel,
                 )
                 .await
             });
             let pid_file = dir.path().join("child.pid");
+            let started = std::time::Instant::now();
             let mut pid = None;
-            for _ in 0..200 {
+            for _ in 0..1000 {
                 if let Ok(text) = fs::read_to_string(&pid_file) {
                     if let Ok(value) = text.trim().parse::<u32>() {
                         pid = Some(value);
                         break;
                     }
                 }
+                if task.is_finished() {
+                    break;
+                }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            let pid = pid.expect("descendant did not start");
+            let Some(pid) = pid else {
+                let shell = if task.is_finished() {
+                    format!("{:?}", task.await)
+                } else {
+                    "still running".to_owned()
+                };
+                panic!(
+                    "descendant did not start ({mode}) after {:?}; shell: {shell}",
+                    started.elapsed()
+                );
+            };
             match mode {
                 "cancel" => {
                     cancel.cancel();
