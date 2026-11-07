@@ -596,6 +596,20 @@ impl Policy {
         unsafe { (*(self.token_user.as_ptr().cast::<TOKEN_USER>())).User.Sid }
     }
 
+    /// Whether `owner` may own private-home entries. The owner keeps
+    /// READ_CONTROL and WRITE_DAC whatever the DACL says, so any other owner
+    /// could reopen the home. BUILTIN\Administrators is accepted too: it owns
+    /// whatever an elevated process (or the browser it starts) creates. Only
+    /// elevated administrators can use that ownership, since UAC-filtered
+    /// tokens carry Administrators as deny-only, and they can take ownership of
+    /// any file anyway. The DACL rules (only the user and SYSTEM) are unchanged.
+    fn trusted_owner(&self, owner: PSID) -> bool {
+        !owner.is_null()
+            && unsafe { IsValidSid(owner) } != 0
+            && (unsafe { EqualSid(owner, self.user_sid()) } != 0
+                || unsafe { IsWellKnownSid(owner, WinBuiltinAdministratorsSid) } != 0)
+    }
+
     fn create_directory(&self, path: &Path) -> Result<()> {
         let path = wide_path(path);
         let attributes = SECURITY_ATTRIBUTES {
@@ -641,8 +655,7 @@ impl Policy {
         let _descriptor = LocalAllocation(descriptor);
         if descriptor.is_null()
             || unsafe { IsValidSecurityDescriptor(descriptor) } == 0
-            || owner.is_null()
-            || unsafe { EqualSid(owner, self.user_sid()) } == 0
+            || !self.trusted_owner(owner)
         {
             bail!("the private home and its contents must be owned by the current Windows user");
         }
@@ -813,11 +826,7 @@ impl Policy {
             )
         };
         let _descriptor = LocalAllocation(descriptor);
-        if status != ERROR_SUCCESS
-            || owner.is_null()
-            || unsafe { IsValidSid(owner) } == 0
-            || unsafe { EqualSid(owner, self.user_sid()) } == 0
-        {
+        if status != ERROR_SUCCESS || !self.trusted_owner(owner) {
             bail!("imported browser data must be owned by the current user");
         }
         if old_acl.is_null() || unsafe { IsValidAcl(old_acl) } == 0 {
