@@ -37,6 +37,10 @@ jobs:
             src-tauri -> target
       - name: Install frontend dependencies
         run: npm ci
+      - name: Download the pinned Electron for the Trex Browser shell
+        run: npm ci --prefix trex-browser/shell --no-audit --no-fund
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - name: Build the NSIS installer
         run: npm run tauri build
       - name: Install silently and check the installed app
@@ -129,8 +133,11 @@ jobs:
           tar --exclude=.git -cf - . | tar -xf - -C /tmp/trex-fedora
       - name: Build the RPM with the private Browser runtime
         working-directory: /tmp/trex-fedora
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
           npm ci
+          npm ci --prefix trex-browser/shell --no-audit --no-fund
           npm run tauri -- build --bundles rpm
       - name: Install the RPM and check the installed app
         working-directory: /tmp/trex-fedora
