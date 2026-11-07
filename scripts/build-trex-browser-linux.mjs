@@ -28,7 +28,8 @@ export async function buildLinuxBrowser(argv=[]){
   const manifest=(await download(`${release}/SHASUMS256.txt`,128*1024)).toString('utf8'),bytes=existsSync(archive)?readFileSync(archive):await download(`${release}/${filename}`,128*1024*1024);verifyNodeArchive(bytes,manifest,arch,'linux');if(!existsSync(archive))writeFileSync(archive,bytes,{flag:'wx'});
   const work=join(installer,'payload',`.browser-linux-build-${randomUUID()}`);mkdirSync(work,{recursive:true,mode:0o700});
   try{
-    const extracted=join(work,'archive');mkdirSync(extracted);run('/usr/bin/tar',['-xf',archive,'-C',extracted]);const distribution=join(extracted,`node-v${NODE_VERSION}-linux-${arch}`),payload=join(work,'browser-linux'),runtime=join(payload,'trex-browser-runtime');mkdirSync(runtime,{recursive:true});
+    // Built as root (CI containers), tar would keep the archive's owner, which the launcher refuses to trust.
+    const extracted=join(work,'archive');mkdirSync(extracted);run('/usr/bin/tar',['--no-same-owner','-xf',archive,'-C',extracted]);const distribution=join(extracted,`node-v${NODE_VERSION}-linux-${arch}`),payload=join(work,'browser-linux'),runtime=join(payload,'trex-browser-runtime');mkdirSync(runtime,{recursive:true});
     copyFileSync(launcher,join(payload,'trex-browser'));chmodSync(join(payload,'trex-browser'),0o755);copyFileSync(join(distribution,'bin/node'),join(runtime,'node'));chmodSync(join(runtime,'node'),0o755);copyFileSync(join(distribution,'LICENSE'),join(runtime,'NODE_LICENSE'));
     for(const name of ['package.json','package-lock.json'])copyFileSync(join(core,name),join(runtime,name));for(const name of readdirSync(join(core,'worker')).filter(name=>name.endsWith('.mjs')))copyFileSync(join(core,'worker',name),join(runtime,name));
     const config=join(work,'npmrc'),globalConfig=join(work,'global.npmrc');writeFileSync(globalConfig,'');writeFileSync(config,'registry=https://registry.npmjs.org/\nstrict-ssl=true\n');

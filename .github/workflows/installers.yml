@@ -133,7 +133,7 @@ jobs:
       - name: Prepare an ordinary private build tree
         run: |
           mkdir -m 700 /tmp/trex-fedora
-          tar --exclude=.git -cf - . | tar -xf - -C /tmp/trex-fedora
+          tar --exclude=.git -cf - . | tar --no-same-owner -xf - -C /tmp/trex-fedora
       - name: Build the RPM with the private Browser runtime
         working-directory: /tmp/trex-fedora
         env:
