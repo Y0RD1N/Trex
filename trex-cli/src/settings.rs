@@ -486,6 +486,9 @@ pub fn configure_environment(command: &mut tokio::process::Command, settings: &S
                 | "PATH"
                 | "PATHEXT"
                 | "COMSPEC"
+                // Without it Windows PowerShell rescans every installed module
+                // to find its first cmdlet: 25-40 s with many modules installed.
+                | "PSMODULEPATH"
                 | "PROGRAMFILES"
                 | "PROGRAMFILES(X86)"
                 | "PROGRAMDATA"
@@ -535,6 +538,21 @@ pub fn configure_environment(command: &mut tokio::process::Command, settings: &S
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn minimal_environment_keeps_the_powershell_module_path() {
+        let Some(expected) = std::env::var_os("PSModulePath") else {
+            return;
+        };
+        let mut command = tokio::process::Command::new("powershell.exe");
+        configure_environment(&mut command, &ShellSettings::default());
+        let forwarded = command
+            .as_std()
+            .get_envs()
+            .find(|(name, _)| name.eq_ignore_ascii_case("PSModulePath"))
+            .and_then(|(_, value)| value);
+        assert_eq!(forwarded, Some(expected.as_os_str()));
+    }
     #[test]
     fn validates_limits_and_rejects_unknown_authority() {
         Settings::default().validate().unwrap();
