@@ -38,8 +38,12 @@ function ContextRing({ percent }: { percent: number | null }) {
   </span>;
 }
 
+// El título del campo ya dice qué se limita (equipo o agente) y el encabezado que son tokens: la opción es solo la cantidad.
 const presetOptions = (presets: (number | null)[], current: number | null) => [...new Set([...presets, current])]
-  .sort((a, b) => (a ?? Infinity) - (b ?? Infinity)).map(value => ({ value: value === null ? "" : String(value), label: budgetLabel(value) }));
+  .sort((a, b) => (a ?? Infinity) - (b ?? Infinity)).map(value => ({ value: value === null ? "" : String(value), label: value === null ? "Sin límite" : formatTokens(value) }));
+/** Cada ventana de la cuota con su propio nivel: solo la que se agota se marca. */
+const quotaParts = (quota: AccountQuota) => [quota.fiveHour ? { label: "5 h", percent: quota.fiveHour.percent } : null, quota.week ? { label: "Semana", percent: quota.week.percent } : null]
+  .filter((part): part is { label: string; percent: number } => part !== null);
 
 export default function AgentTeamToolbar({ team, states, snapshot, starting, busy, onStop, onResume, onLoad, onOpen, onPermission, permissionsLocked, onRecover, canRecover, usage, onBudgetChange }: Props) {
   // Permisos del miembro: un selector cuando se pueden cambiar (el asistente ofrece varios modos); si no, la insignia de siempre.
@@ -93,13 +97,15 @@ export default function AgentTeamToolbar({ team, states, snapshot, starting, bus
       <button type="button" className="btn btn-small btn-ghost" onClick={() => onBudgetChange(null)}>Quitar límites</button>
     </div>}
     <div id={id} className="agent-team-members" hidden={!expanded}>
-      {onBudgetChange && <div className="team-budget-controls">
-        <span className="team-budget-label">Presupuesto</span>
-        <Select value={budget?.teamTokens ? String(budget.teamTokens) : ""} aria-label={`Presupuesto del equipo: ${budgetLabel(budget?.teamTokens)}`} align="start"
-          options={presetOptions(TEAM_BUDGET_PRESETS, budget?.teamTokens ?? null)} onChange={value => onBudgetChange({ teamTokens: value ? Number(value) : null, memberTokens: budget?.memberTokens ?? null })} />
-        <Select value={budget?.memberTokens ? String(budget.memberTokens) : ""} aria-label={`Presupuesto por agente: ${budgetLabel(budget?.memberTokens)}`} align="start"
-          options={presetOptions(MEMBER_BUDGET_PRESETS, budget?.memberTokens ?? null).map(option => option.value ? { ...option, label: option.label + " por agente" } : { ...option, label: "Sin límite por agente" })}
-          onChange={value => onBudgetChange({ teamTokens: budget?.teamTokens ?? null, memberTokens: value ? Number(value) : null })} />
+      {onBudgetChange && <div className="team-budget-controls" role="group" aria-label="Presupuesto de tokens">
+        <span className="team-budget-label">Presupuesto de tokens</span>
+        <div className="team-budget-field"><span aria-hidden="true">Equipo</span>
+          <Select value={budget?.teamTokens ? String(budget.teamTokens) : ""} aria-label={`Presupuesto del equipo: ${budgetLabel(budget?.teamTokens)}`} align="start"
+            options={presetOptions(TEAM_BUDGET_PRESETS, budget?.teamTokens ?? null)} onChange={value => onBudgetChange({ teamTokens: value ? Number(value) : null, memberTokens: budget?.memberTokens ?? null })} /></div>
+        <div className="team-budget-field"><span aria-hidden="true">Por agente</span>
+          <Select value={budget?.memberTokens ? String(budget.memberTokens) : ""} aria-label={`Presupuesto por agente: ${budgetLabel(budget?.memberTokens)}`} align="end"
+            options={presetOptions(MEMBER_BUDGET_PRESETS, budget?.memberTokens ?? null)}
+            onChange={value => onBudgetChange({ teamTokens: budget?.teamTokens ?? null, memberTokens: value ? Number(value) : null })} /></div>
       </div>}
       {groups.map(group => {
         const quota = usage?.members[group.members[0].id]?.quota ?? null;
@@ -107,7 +113,9 @@ export default function AgentTeamToolbar({ team, states, snapshot, starting, bus
           <header className="team-account-heading">
             <span className="team-account-name">{group.profileName}</span>
             {group.members.length > 1 && <small>{group.members.length} agentes comparten esta cuenta</small>}
-            {quota && <span className={`team-quota${quotaLevel(quota.peak)}`} aria-label={`Uso del plan de ${group.profileName}: ${quotaText(quota)}`}>{quotaText(quota)}</span>}
+            {quota && <span className="team-quota" aria-label={`Uso del plan de ${group.profileName}: ${quotaText(quota)}`}>
+              {quotaParts(quota).flatMap((part, index) => [...(index ? [<i key={`sep-${part.label}`} aria-hidden="true">·</i>] : []),
+                <span key={part.label} className={`team-quota-part${quotaLevel(part.percent)}`} aria-hidden="true">{part.label} {percentText(part.percent)}</span>])}</span>}
           </header>
           {group.members.map(({ member }) => {
             const state = states[member.id], model = state ? currentModel(state.models, state.model, state.modelChoice) : null;

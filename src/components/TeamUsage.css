@@ -53,16 +53,19 @@
   padding: var(--sp-2) 0 var(--sp-1);
 }
 .team-budget-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-1-5);
-  padding: var(--sp-2) 0 var(--sp-2-5);
+  display: grid;
+  /* Dos columnas mientras quepan; en un panel muy estrecho pasan a una. */
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  align-items: end;
+  gap: var(--sp-1-5) var(--sp-2);
+  padding: var(--sp-2) 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
 }
-.team-budget-controls .select-trigger { flex: 1 1 120px; min-width: 0; min-height: var(--hit-min); }
+.team-budget-field { display: grid; gap: var(--sp-1); min-width: 0; }
+.team-budget-field > span { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.3; }
+.team-budget-controls .select-trigger { width: 100%; min-width: 0; height: 32px; min-height: 32px; padding: 0 var(--sp-2-5); font-size: var(--fs-sm); }
 .team-budget-label {
-  flex-basis: 100%;
+  grid-column: 1 / -1;
   color: var(--text-dim);
   font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
@@ -78,6 +81,8 @@
 }
 .team-account-group + .team-account-group { margin-top: var(--sp-1); border-top: 1px solid var(--border); }
 .team-account-heading {
+  /* Nombre y cuota en la primera fila (la cuota a la derecha); si no caben, la cuota baja sin solaparse.
+     La nota de cuenta compartida va siempre debajo. */
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -85,6 +90,9 @@
   color: var(--text-dim);
   font-size: var(--fs-xs);
 }
+.team-account-heading > .team-account-name { white-space: nowrap; }
+.team-account-heading > .team-quota { margin-left: auto; white-space: nowrap; }
+.team-account-heading > small { order: 3; flex-basis: 100%; font-size: var(--fs-xs); }
 .team-account-name {
   color: var(--text-muted);
   font-weight: var(--fw-semibold);
@@ -99,7 +107,9 @@
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
 }
-.team-account-heading .team-quota { margin-left: auto; }
+.team-quota-part.warning { color: var(--warn-text); }
+.team-quota-part.critical { color: var(--danger-text); font-weight: var(--fw-medium); }
+.team-quota > i { font-style: normal; opacity: .6; }
 .team-quota.warning { color: var(--warn-text); }
 .team-quota.critical { color: var(--danger-text); font-weight: var(--fw-medium); }
 .team-member-usage {
