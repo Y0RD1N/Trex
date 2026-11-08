@@ -460,6 +460,37 @@ fn find_desktop(wanted: &str) -> Option<DesktopEntry> {
     best.map(|(_, entry)| entry)
 }
 
+/// Apps que solo publican su árbol de accesibilidad si estaba activa al arrancar
+/// (Chromium y derivados, Electron; Firefox y Thunderbird pueden necesitarlo también).
+const STARTUP_ONLY: [&str; 26] = ["brave", "brave-browser", "chrome", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+    "msedge", "microsoft-edge", "vivaldi", "vivaldi-bin", "opera", "electron", "code", "codium", "cursor", "discord", "slack", "spotify",
+    "obsidian", "signal-desktop", "teams-for-linux", "firefox", "librewolf", "thunderbird", "zen"];
+
+/// Si un proceso es la ventana principal de una de esas apps (no un proceso hijo
+/// de Chromium o Firefox), su nombre.
+pub(super) fn startup_only_app(args: &[String]) -> Option<String> {
+    // Chromium reescribe su línea de comandos con espacios en vez de separadores
+    // nulos: todo llega como un solo argumento.
+    let words: Vec<&str> = args.iter().flat_map(|arg| arg.split_whitespace()).collect();
+    let program = words.first()?.rsplit('/').next()?.to_lowercase();
+    let child = words.iter().any(|word| word.starts_with("--type=") || *word == "-contentproc" || word.contains("crashpad"));
+    (!child && STARTUP_ONLY.contains(&program.as_str())).then_some(program)
+}
+
+/// Si una app aparece entre las registradas en el bus (por su nombre de app o de proceso).
+pub(super) fn exposed(app: &str, registered: &[String]) -> bool {
+    let app = app.trim_end_matches("-browser").trim_end_matches("-stable").trim_end_matches("-bin");
+    registered.iter().map(|name| name.to_lowercase()).filter(|name| name.chars().count() >= 3)
+        .any(|name| name == app || name.contains(app) || app.contains(name.as_str()))
+}
+
+/// Por qué una app abierta no aparece, y qué hacer.
+fn unexposed_note(apps: &[String]) -> String {
+    format!("Running but not exposed to accessibility: {}. Chromium-based browsers and Electron apps only expose their windows if \
+accessibility was on when they started (Trex has it on now). Ask the user to close the app completely and open it again; do not restart it \
+yourself (the user would lose open tabs or work).", apps.join(", "))
+}
+
 /// Programas que ejecutan a otros: su nombre no dice qué app es.
 fn interpreter(name: &str) -> bool {
     ["python", "perl", "ruby", "node", "gjs", "bash", "sh", "java", "mono", "dotnet", "env", "bwrap"].iter().any(|prefix| name.starts_with(prefix))
@@ -686,6 +717,38 @@ impl AtspiEngine {
         name
     }
 
+    /// Apps abiertas de la persona que no están en el bus de accesibilidad aunque
+    /// deberían (arrancaron antes de que se activara).
+    fn unexposed(&mut self) -> Vec<String> {
+        use std::os::unix::fs::MetadataExt;
+        let conn = self.bus.conn().clone();
+        let apps = self.bus.block(async {
+            let apps = bus::children(&conn, &bus::registry_root()).await.unwrap_or_default();
+            stream::iter(apps).map(|app| { let conn = &conn; async move { (bus::name(conn, &app).await.unwrap_or_default(), app.bus) } })
+                .buffered(16).collect::<Vec<_>>().await
+        });
+        let mut registered = Vec::new();
+        for (name, bus_name) in apps {
+            registered.push(name);
+            registered.push(self.process(&bus_name));
+        }
+        let uid = std::fs::metadata("/proc/self").map(|meta| meta.uid()).ok();
+        let mut found: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+            if !entry.file_name().to_string_lossy().chars().all(|ch| ch.is_ascii_digit()) || entry.metadata().ok().map(|meta| meta.uid()) != uid {
+                continue;
+            }
+            let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else { continue };
+            let args: Vec<String> = raw.split(|byte| *byte == 0).filter(|part| !part.is_empty()).map(|part| String::from_utf8_lossy(part).into_owned()).collect();
+            if let Some(app) = startup_only_app(&args) {
+                if !found.contains(&app) && !exposed(&app, &registered) {
+                    found.push(app);
+                }
+            }
+        }
+        found
+    }
+
     /// Ventanas de primer nivel visibles de todas las aplicaciones.
     fn windows(&mut self) -> Vec<WindowInfo> {
         let conn = self.bus.conn().clone();
@@ -757,7 +820,14 @@ impl AtspiEngine {
             window.app == app || window.app_name == app || window.app_name.rsplit('.').next() == Some(app.as_str()) || window.title.to_lowercase().contains(&app)
         }).collect();
         match matches.len() {
-            0 => Err(ToolError::new("NOT_FOUND", format!("No open window matches {app}. Use a11y_list_windows or a11y_launch."))),
+            0 => {
+                let hidden: Vec<String> = self.unexposed().into_iter().filter(|name| name.contains(app.as_str()) || app.contains(name.as_str())).collect();
+                if hidden.is_empty() {
+                    Err(ToolError::new("NOT_FOUND", format!("No open window matches {app}. Use a11y_list_windows or a11y_launch.")))
+                } else {
+                    Err(ToolError::new("NOT_EXPOSED", unexposed_note(&hidden)))
+                }
+            }
             1 => Ok(matches.into_iter().next().unwrap()),
             _ => {
                 let list = matches.iter().take(8).map(WindowInfo::line).collect::<Vec<_>>().join("\n");
@@ -1002,11 +1072,18 @@ impl AtspiEngine {
             .filter(|window| filter.as_ref().is_none_or(|text| window.app.contains(text.as_str()) || window.app_name.contains(text.as_str()) || window.title.to_lowercase().contains(text.as_str())))
             .map(WindowInfo::line)
             .collect();
-        Ok(if lines.is_empty() {
-            "No matching windows. (Apps appear here when they expose accessibility: GTK, Qt, Firefox, Chromium and Electron apps do.)".into()
+        let hidden: Vec<String> = self.unexposed().into_iter()
+            .filter(|app| filter.as_ref().is_none_or(|text| app.contains(text.as_str()) || text.contains(app.as_str())))
+            .collect();
+        let mut text = if lines.is_empty() {
+            "No matching windows. (Apps appear here when they expose accessibility: GTK, Qt, Firefox, Chromium and Electron apps do.)".to_owned()
         } else {
             format!("{} windows (id app \"title\" state):\n{}", lines.len(), lines.join("\n"))
-        })
+        };
+        if !hidden.is_empty() {
+            text.push_str(&format!("\n{}", unexposed_note(&hidden)));
+        }
+        Ok(text)
     }
 
     fn snapshot(&mut self, args: &Value) -> ToolResult {

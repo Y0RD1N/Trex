@@ -196,6 +196,26 @@ fn window_ids_are_stable_and_parseable() {
 }
 
 #[test]
+fn browsers_started_before_accessibility_are_spotted() {
+    let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    // Brave en Flatpak, su proceso hijo y uno que no es de esa familia.
+    assert_eq!(startup_only_app(&args(&["/app/brave/brave", "--no-default-browser-check"])), Some("brave".into()));
+    assert_eq!(startup_only_app(&args(&["/app/brave/brave", "--type=zygote"])), None, "Chromium children are not apps");
+    assert_eq!(startup_only_app(&args(&["/usr/lib64/firefox/firefox", "-contentproc", "1"])), None);
+    assert_eq!(startup_only_app(&args(&["/usr/bin/nautilus"])), None, "GTK apps always expose it");
+    assert_eq!(startup_only_app(&[]), None);
+    // Línea reescrita por Chromium (todo en un argumento, con rutas en las opciones).
+    assert_eq!(startup_only_app(&args(&["/app/brave/brave --user-data-dir=/x/chromium-browser --no-default-browser-check"])), Some("brave".into()));
+    assert_eq!(startup_only_app(&args(&["/app/brave/brave --type=renderer --lang=es"])), None);
+    assert!(exposed("brave", &["gnome-shell".into(), "Brave".into()]));
+    assert!(exposed("google-chrome-stable", &["Google Chrome".into(), "chrome".into()]));
+    assert!(exposed("electron", &["electron".into()]));
+    assert!(!exposed("brave", &["gnome-shell".into(), "org.gnome.Nautilus".into(), "trex".into(), "".into()]));
+    let note = unexposed_note(&["brave".into()]);
+    assert!(note.contains("brave") && note.contains("close the app completely") && note.contains("do not restart it"));
+}
+
+#[test]
 fn title_buttons_in_common_languages() {
     assert!(title_button("Close", "close") && title_button("Cerrar", "close") && title_button(" Fermer ", "close"));
     assert!(title_button("Minimizar", "minimize") && title_button("Maximizar", "maximize") && title_button("Restaurar", "restore"));

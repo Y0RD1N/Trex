@@ -238,7 +238,7 @@ windows, changed values or focus), so use those refs directly instead of taking 
 go in one a11y_batch call. To read a page or document use a11y_snapshot with format:\"text\" (no refs, much shorter); to reach content beyond \
 the window (long lists, hidden bars) use a11y_scroll or a11y_scroll_to: they report what came into view. Refs expire after a few snapshots. \
 USER_ACTIVE means the user kept working in that window: wait (a11y_wait) and retry. WINDOW_BUSY means another Trex agent is using that window. NOT_KEPT means the app did not keep \
-a value: do not claim success. Never repeat an uncertain action automatically. Snapshots include visible text: never repeat secrets. Never use \
+a value: do not claim success. NOT_EXPOSED means the app is open but hidden from accessibility: tell the user what the message says. Never repeat an uncertain action automatically. Snapshots include visible text: never repeat secrets. Never use \
 the clipboard, shell commands or files as a workaround to put text into an app; if a field refuses text, explain it. {permissions}"
     )
 }
