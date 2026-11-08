@@ -8,6 +8,7 @@ import type { BrowserOptions } from "../browser";
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { createBatchScheduler, createOrderedQueue } from "../lineBatch";
 import {
   agentKill, agentSpawn, agentWrite, agentTerminalOutput, listenAgentExit, listenAgentLine, listenAgentStderr, type AgentSpawnRequest,
 } from "../api";
@@ -40,6 +41,8 @@ export type ChatSessionOptions = {
   model?: string | null;
   /** Esfuerzo elegido antes del primer turno; null conserva el del proveedor/perfil. */
   effort?: string | null;
+  /** Velocidad elegida antes del primer turno (true: rápida); null conserva la del proveedor/perfil. */
+  fast?: boolean | null;
   /** Pestaña de planificación de un workflow; no puede abandonar plan durante su vida. */
   planningOnly?: boolean;
   /** Función de lectura del equipo; no sustituye las restricciones nativas. */
@@ -93,6 +96,20 @@ let counter = 0;
 /** Identificador único para mensajes y peticiones propias. */
 export const localId = (): string => `trex-${Date.now().toString(36)}-${(++counter).toString(36)}`;
 
+/** Tanda compartida por todas las sesiones: ver `lineBatch.ts`. */
+const agentEvents = createBatchScheduler({
+  now: () => performance.now(),
+  hidden: () => typeof document !== "undefined" && document.hidden,
+  setTimer: (callback, ms) => setTimeout(callback, ms),
+  clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  // Se relanza fuera de la tanda para que llegue al registro de errores sin cortar al resto.
+  onError: error => { setTimeout(() => { throw error; }); },
+});
+// Al ocultarse la ventana los temporizadores se frenan: lo pendiente se entrega ya.
+if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => { if (document.hidden) agentEvents.flush(); });
+
+type AgentEvent = { kind: "line"; line: string } | { kind: "stderr"; line: string } | { kind: "exit"; code: number | null };
+
 export type AgentProcessHandlers = {
   onLine: (line: string, procId: string) => void;
   onStderr: (line: string) => void;
@@ -129,10 +146,18 @@ export function useAgentProcess(sessionId: string, handlers: AgentProcessHandler
     unlistenRef.current = [];
     if (previous) void agentKill(previous).catch(() => undefined);
 
+    // Líneas, avisos y salida van por la misma cola para conservar su orden; lo de un proceso
+    // sustituido se descarta al entregarse, no solo al llegar.
+    const queue = createOrderedQueue<AgentEvent>(agentEvents, event => {
+      if (event.kind === "line") { if (!tracker.observe(event.line, procId)) handlersRef.current.onLine(event.line, procId); }
+      else if (event.kind === "stderr") handlersRef.current.onStderr(event.line);
+      else { tracker.detach(); handlersRef.current.onExit(event.code); }
+    }, () => isCurrent(procId), error => { setTimeout(() => { throw error; }); });
     const listeners = await Promise.all([
-      listenAgentLine(procId, line => { if (isCurrent(procId) && !tracker.observe(line, procId)) handlersRef.current.onLine(line, procId); }),
-      listenAgentStderr(procId, line => { if (isCurrent(procId)) handlersRef.current.onStderr(line); }),
-      listenAgentExit(procId, code => { if (isCurrent(procId)) { tracker.detach(); handlersRef.current.onExit(code); } }),
+      listenAgentLine(procId, line => queue.push({ kind: "line", line })),
+      listenAgentStderr(procId, line => queue.push({ kind: "stderr", line })),
+      // La salida no espera a la próxima tanda: se entrega con todo lo anterior, en orden.
+      listenAgentExit(procId, code => { queue.push({ kind: "exit", code }); queue.drainNow(); }),
     ]);
     if (!isCurrent(procId)) { listeners.forEach(unlisten => unlisten()); return null; }
     unlistenRef.current = listeners;

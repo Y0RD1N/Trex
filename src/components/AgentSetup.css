@@ -1,0 +1,124 @@
+/* Configuración de agentes (dos agentes y equipo): una sola superficie, sin textos de ayuda. */
+
+.modal.feature-dialog.agent-workflow-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+  max-height: calc(100dvh - 40px);
+}
+.agent-workflow-dialog > .modal-header,
+.agent-workflow-dialog > .modal-footer { flex-shrink: 0; }
+.agent-workflow-dialog > .feature-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  overscroll-behavior: contain;
+}
+.agent-workflow-dialog > .feature-content > * { flex-shrink: 0; }
+.agent-workflow-dialog .btn { flex-shrink: 0; }
+.agent-workflow-dialog > .modal-footer { align-items: center; }
+.agent-project {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  min-width: 0;
+  margin-right: auto;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-project > svg { flex: 0 0 auto; }
+.agent-start { gap: var(--sp-1-5); max-width: 100%; }
+
+/* --- Selector de modo y opciones excluyentes --------------------------------- */
+.segmented { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-md); background: var(--bg-inset); }
+.segmented > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 28px;
+  padding: 0 var(--sp-2-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: var(--fw-medium) var(--fs-xs) var(--font-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur), color var(--dur);
+}
+.segmented > button:hover:not(:disabled):not([aria-checked="true"]) { color: var(--text); }
+.segmented > button[aria-checked="true"] { background: var(--bg-surface); box-shadow: var(--shadow-1); color: var(--text); }
+.segmented > button:disabled { opacity: .5; cursor: default; }
+.segmented > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.setup-switch { align-self: flex-start; }
+.setup-switch > button { min-width: 96px; }
+
+/* --- Tarjeta de agente ------------------------------------------------------------ */
+.agent-stack { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.agent-link-arrow { display: grid; place-items: center; height: 18px; color: var(--text-dim); }
+.agent-card {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-3-5);
+  border: 1px solid var(--surface-edge);
+  border-radius: var(--radius-section);
+  background: var(--surface-raised);
+}
+.agent-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
+.agent-card-head h3 { margin: 0; color: var(--text); font-size: var(--fs-md); font-weight: var(--fw-semibold); letter-spacing: -.15px; }
+.agent-card-icon { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: var(--radius-md); background: var(--bg-inset); color: var(--text-muted); }
+.agent-card-head > .agent-account { margin-left: auto; }
+.agent-tag { padding: var(--sp-0-5) var(--sp-2); border-radius: var(--radius-pill); background: var(--bg-inset); color: var(--text-muted); font-size: var(--fs-xs); white-space: nowrap; }
+.agent-card-controls { display: flex; align-items: center; gap: var(--sp-0-5); flex-shrink: 0; }
+.agent-card-controls .icon-btn { width: 28px; height: 28px; }
+.agent-card-controls .icon-btn:disabled { opacity: .3; }
+
+.agent-fields { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.1fr) auto minmax(0, 1.3fr); gap: var(--sp-3); align-items: end; }
+.agent-field { display: grid; gap: var(--sp-1-5); min-width: 0; }
+.agent-field > label, .agent-field-label { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.3; }
+.agent-workflow-dialog .agent-select { width: 100%; min-width: 0; height: 34px; min-height: 34px; padding: 0 var(--sp-2-5); border-radius: var(--radius-md); font-size: var(--fs-sm); text-align: left; }
+.agent-select[aria-invalid="true"] { border-color: var(--danger); }
+.agent-workflow-dialog .agent-account { width: min(230px, 100%); flex: 0 1 230px; }
+.agent-speed > button { min-width: 0; }
+
+.agent-note { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1-5); margin: 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.agent-note > svg { flex: 0 0 auto; }
+.agent-note.error { color: var(--danger); }
+.agent-workflow-dialog > .feature-content > .agent-note.error {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-lg);
+  background: var(--danger-bg);
+}
+.agent-link { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 0; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.agent-link:hover:not(:disabled) { color: var(--text); }
+.agent-link[aria-expanded] > svg { transform: rotate(90deg); transition: transform var(--dur) var(--ease-out); }
+.agent-link[aria-expanded="true"] > svg { transform: rotate(-90deg); }
+.agent-link:disabled { opacity: .5; cursor: default; }
+.agent-link:focus-visible, .agent-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* --- Menús desplegables ---------------------------------------------------------- */
+.context-menu.select-menu.workflow-select-menu { width: max(240px, var(--select-width)); max-width: min(420px, var(--floating-max-width, calc(100vw - 24px))); max-height: min(300px, var(--floating-max-height, calc(100dvh - 24px))); padding: var(--sp-1-5); border-radius: var(--radius-xl); overscroll-behavior: contain; }
+.workflow-select-menu .select-option { min-height: 40px; padding: var(--sp-2) var(--sp-2-5); border-radius: var(--radius-md); align-items: center; }
+.workflow-select-menu .select-option-text { gap: 1px; font-size: var(--fs-sm); line-height: 1.5; }
+.workflow-select-menu .select-option-text small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: var(--fs-xs); line-height: 1.5; }
+.workflow-select-menu .select-group-label { padding: var(--sp-2) var(--sp-2-5) var(--sp-1-5); font-size: var(--fs-xs); }
+.workflow-select-menu .select-check { align-self: center; }
+
+@media (max-width: 640px) {
+  .modal.feature-dialog.agent-workflow-dialog { max-height: calc(100dvh - 24px); }
+  .agent-workflow-dialog > .feature-content { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+  .agent-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .agent-workflow-dialog .agent-account { flex-basis: 100%; width: 100%; margin-left: 0; order: 3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segmented > button, .agent-link[aria-expanded] > svg { transition: none; }
+}
+:root[data-motion="reduced"] .segmented > button,
+:root[data-motion="reduced"] .agent-link[aria-expanded] > svg { transition: none; }

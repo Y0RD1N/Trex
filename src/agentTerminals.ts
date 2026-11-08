@@ -23,6 +23,11 @@ export type TerminalSession = {
   stop: (id: string) => Promise<void>;
   write?: (id: string, text: string) => Promise<void>;
 };
+/** Las entradas solo tienen valores simples: basta comparar campo a campo. */
+const sameTerminal = (a: AgentTerminal, b: AgentTerminal): boolean => {
+  const keys = Object.keys(a) as (keyof AgentTerminal)[];
+  return keys.length === Object.keys(b).length && keys.every(key => a[key] === b[key]);
+};
 type Entry = AgentTerminal & { nativeId: string; thread: string; itemId: string; outputFile: boolean };
 type Pending = { resolve: (value: Json) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 type NativeLog = (processId: string, taskId: string) => Promise<{ text: string; truncated: boolean; available?: boolean }>;
@@ -48,7 +53,13 @@ export class AgentTerminals {
   constructor(private provider: AgentProvider | undefined, private write: (process: string, line: string) => Promise<void>, private nativeLog?: NativeLog) {}
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   private publish(status = this.snapshot.status, error: string | null = null): void {
-    this.snapshot = { status, entries: [...this.entries.values()].map(({ nativeId: _id, thread: _thread, itemId: _item, outputFile: _file, ...entry }) => entry), error };
+    const entries = [...this.entries.values()].map(({ nativeId: _id, thread: _thread, itemId: _item, outputFile: _file, ...entry }) => entry);
+    // La consulta periódica (cada 2,5 s) casi siempre devuelve lo mismo: sin cambios no se avisa, o cada
+    // sesión (y en un equipo, todo el hilo mezclado) se volvía a renderizar sin que nada hubiera cambiado.
+    const previous = this.snapshot;
+    if (previous.status === status && previous.error === error && previous.entries.length === entries.length
+      && previous.entries.every((entry, index) => sameTerminal(entry, entries[index]))) return;
+    this.snapshot = { status, entries, error };
     for (const listener of this.listeners) listener();
   }
   attach(process: string, cwd: string): void {

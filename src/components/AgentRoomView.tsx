@@ -110,9 +110,10 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       const conversationId = state.sessionId && state.items.some(item => item.kind === "user") ? state.sessionId : participant.conversationId;
       const mode = state.modeChoice ?? participant.mode;
       if (conversationId === participant.conversationId && mode === participant.mode
-        && state.modelChoice === participant.agent.model && state.effortChoice === (participant.agent.effort ?? null)) return current;
+        && state.modelChoice === participant.agent.model && state.effortChoice === (participant.agent.effort ?? null)
+        && state.fastChoice === (participant.agent.fast ?? null)) return current;
       return { ...current, [role]: { ...participant, conversationId, mode,
-        agent: { ...participant.agent, model: state.modelChoice, effort: state.effortChoice } } };
+        agent: { ...participant.agent, model: state.modelChoice, effort: state.effortChoice, fast: state.fastChoice } } };
     });
   }, [change]);
 
@@ -557,7 +558,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       const options: ChatSessionOptions = {
       // Computer and accessibility control follow the user's settings only for a role that can act.
       browser: browsers[role], desktopEnabled, a11yEnabled, integrations: props.settings.integrations, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
-        conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort,
+        conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort, fast: participant.agent.fast ?? null,
         mode: participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner"),
         planningOnly: readOnly,
         ...(role === "executor" && participant.mode === "plan" ? { planningInstruction: TEAM_READER_POLICY } : {}), visible: props.visible,

@@ -5,7 +5,7 @@ import { normalizeLaunch } from "./profiles";
 import type { AgentProvider, SessionLaunch } from "./types";
 import type { ChatTask } from "./chatTasks";
 
-export type WorkflowAgent = { profileId: string; profileName: string; provider: AgentProvider; model: string | null; effort?: string | null; launch: SessionLaunch };
+export type WorkflowAgent = { profileId: string; profileName: string; provider: AgentProvider; model: string | null; effort?: string | null; /** Velocidad rápida elegida (null o ausente: la del perfil). */ fast?: boolean | null; launch: SessionLaunch };
 
 /** El predeterminado del perfil puede venir de sus argumentos; no se adivina a partir del catálogo. */
 export function workflowEffortLevels(models: ModelInfo[], model: string | null): string[] {
@@ -48,8 +48,9 @@ function agent(raw: unknown): WorkflowAgent | null {
   if (value.model != null && !model) return null;
   const effort = normalizeEffortChoice(value.effort);
   if (value.effort != null && !effort) return null;
+  if (value.fast != null && typeof value.fast !== "boolean") return null;
   return { profileId: value.profileId, profileName: value.profileName, provider: value.provider, model,
-    ...(value.effort !== undefined ? { effort } : {}), launch };
+    ...(value.effort !== undefined ? { effort } : {}), ...(typeof value.fast === "boolean" ? { fast: value.fast } : {}), launch };
 }
 
 /** Solo metadatos y referencias locales; los planes se guardan fuera de config.json. */

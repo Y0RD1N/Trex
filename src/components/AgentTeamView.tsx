@@ -7,7 +7,7 @@ import { addToLedger, compactionNeeded, memberQuota, observeUsage, readAccountPl
 import { agentTeamFinishTask, agentTeamPublishUsage } from "../teamApi";
 import type { PlanUsage } from "../planUsage";
 import { browserOptions, type BrowserSpace } from "../browser";
-import { currentModel, modelName, type ChatState } from "../chatState";
+import { currentModel, effortLabel, modelName, pendingPermissions, type ChatState } from "../chatState";
 import { buildHandoffPrompt, sanitizeHandoffText, withoutGitSnapshot } from "../handoff";
 import { planningContext } from "../agentWorkflow";
 import type { ChatSession, ChatSessionOptions } from "../hooks/chatSession";
@@ -18,6 +18,8 @@ import { ChatPanel, type ChatViewProps } from "./ChatView";
 import AgentTeamToolbar from "./AgentTeamToolbar";
 import { defaultAgentPermission } from "../agentPermissions";
 import { chatTasks, teamTasks } from "../chatTasks";
+import AgentIcon from "./AgentIcon";
+import { ChevronIcon, StopIcon } from "./Icons";
 import { INBOX_WAKE, messageQueueId } from "../messageQueue";
 import "./AgentRoomView.css";
 import "./AgentTeamView.css";
@@ -36,6 +38,46 @@ function TrexRuntime(props: RuntimeProps) { return <Publish {...props} session={
 type Attempt = { epoch: string; task: TeamTask; member: TeamMember; session: ChatSession; previous: string | null; users: Set<string>; accepted: boolean; ledger: TaskUsage | null };
 const REPORT_TRANSPORT_LIMIT = 900_000;
 const noop = (): void => undefined;
+/**
+ * Conversación completa de un subagente, de solo lectura: sus tareas las asigna el principal, y un
+ * mensaje escrito aquí se confundiría con una delegación. Sus permisos y preguntas se responden
+ * en su propia sesión. Nada de lo que muestra se informa a la pestaña (actividad, título, modo…).
+ */
+function SubagentChat({ member, session, props, waiting, browser, onBack, onStop }: {
+  member: TeamMember; session: ChatSession; props: Props; waiting: boolean;
+  browser: ReturnType<typeof browserOptions>; onBack: () => void; onStop: () => void;
+}) {
+  const back = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => { back.current?.focus({ preventScroll: true }); }, []);
+  const state = session.state;
+  const model = currentModel(state.models, state.model, state.modelChoice);
+  const effort = state.effortChoice ?? state.effort ?? member.agent.effort ?? null;
+  const working = state.pendingTurns > 0;
+  const pending = pendingPermissions(state) > 0;
+  const modelLabel = [member.agent.profileName, model ? modelName(model) : member.agent.model ?? "Modelo del perfil", effort ? effortLabel(effort) : null].filter(Boolean).join(" · ");
+  const readOnly = (): "blocked" => { props.onMessage("Este subagente recibe sus tareas del principal. Escribe en el chat principal."); return "blocked"; };
+  return <div className="agent-subchat">
+    <header className="agent-subchat-head">
+      <button ref={back} type="button" className="agent-subchat-back" onClick={onBack} aria-label={waiting ? "Volver al principal: hay una solicitud pendiente" : "Volver al principal"}>
+        <ChevronIcon size={14} /><span>Principal</span>{waiting && <i className="agent-subchat-dot" aria-hidden="true" />}</button>
+      <span className="agent-subchat-title"><AgentIcon kind={member.agent.provider} size={18} activity={working ? "working" : pending ? "waiting" : "idle"} />
+        <span><strong>{member.name}</strong><small>{TEAM_ROLES[member.role].name} · {modelLabel}</small></span></span>
+      <span className="agent-subchat-status" role="status">{pending ? "Necesita tu respuesta" : working ? <><span className="chat-spinner" aria-hidden="true" />Trabajando</> : "Solo lectura"}</span>
+      {working && <button type="button" className="agent-subchat-stop" onClick={onStop} aria-label={`Detener a ${member.name}`} title="Detener a este subagente y pausar el equipo"><StopIcon size={12} />Detener</button>}
+    </header>
+    <ChatPanel {...props} sessionId={props.sessionId + "-" + member.id} provider={member.agent.provider} session={session}
+      visible={props.visible} focused={props.focused} browser={{ ...browser, enabled: false, clientId: props.team.id + "-" + member.id }} browserSpaces={undefined} onStopBrowserAgent={undefined}
+      profileId={member.agent.profileId} profileName={member.agent.profileName} conversationId={member.conversationId}
+      terminalOwners={session.terminals ? [{ id: member.id, label: member.name + " · " + TEAM_ROLES[member.role].name, provider: member.agent.provider, session: session.terminals }] : []}
+      toolbar={undefined} itemLabels={undefined} taskPlan={undefined} taskAuthor={member.name} onOpenSubagent={undefined}
+      historyReadOnly planningOnly={!member.canWrite} inputLocked
+      emptyState={{ title: "Aún no ha trabajado", description: "Cuando el principal le delegue una tarea, aquí verás todo lo que haga.",
+        participants: [{ id: member.id, name: member.name, role: TEAM_ROLES[member.role].name, provider: member.agent.provider, model: member.agent.model, effort: member.agent.effort }] }}
+      handoff={undefined} handoffRestored={undefined} onHandoffConsumed={undefined}
+      onActivity={noop} onNotice={noop} onTitle={noop} onConversation={noop} onMode={noop} onModel={noop} onEffort={noop} onPlanHere={undefined} onHandoffRequest={undefined}
+      onBeforeSend={readOnly} onQueuedSend={undefined} queuedSendReason={() => "Este subagente recibe sus tareas del principal."} localCommandReason={() => "Esta conversación es de solo lectura."} />
+  </div>;
+}
 export default function AgentTeamView(props: Props) {
   const { team } = props;
   const latest = useRef(props); latest.current = props;
@@ -50,7 +92,16 @@ export default function AgentTeamView(props: Props) {
   const mounted = useRef(true), generation = useRef(0), ticking = useRef(false);
   const sessionsRef = useRef<Record<string,ChatSession>>({});
   const [published, setPublished] = useState<{epoch:string; sessions:Record<string,ChatSession>}>({epoch:team.epoch,sessions:{}});
-  const [snapshot, setSnapshot] = useState<TeamSnapshot | null>(null);
+  const [snapshot, setSnapshotState] = useState<TeamSnapshot | null>(null);
+  const snapshotKey = useRef("");
+  // El latido cambia en cada consulta y nadie lo lee: sin este filtro el equipo entero se volvía a
+  // renderizar (mezcla del hilo incluida) cada 750 ms aunque no hubiera ningún cambio.
+  const setSnapshot = useCallback((value: TeamSnapshot | null): void => {
+    const key = value ? JSON.stringify({ ...value, heartbeat: 0 }) : "";
+    if (key !== "" && key === snapshotKey.current) return;
+    snapshotKey.current = key;
+    setSnapshotState(value);
+  }, []);
   const [openedEpoch, setOpenedEpoch] = useState("");
   const [starting, setStarting] = useState(false);
   const [preparingMessage, setPreparingMessage] = useState(false);
@@ -60,6 +111,9 @@ export default function AgentTeamView(props: Props) {
   const attempt = useRef(new Map<string,Attempt>());
   const epoch = useRef(team.epoch);
   const wasRestored = useRef(team.phase === "paused");
+  // Subagente cuya conversación completa se está viendo; null es el chat del principal.
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const focusReturn = useRef<HTMLElement | null>(null);
   const masterCompletion = useRef<string | null>(null);
   const feedback=useRef<string | null>(null),waitingReports=useRef(false);
   const opening = useRef<string | null>(null);
@@ -95,8 +149,9 @@ export default function AgentTeamView(props: Props) {
       const conversationId=state.sessionId && state.items.some(item=>item.kind==="user")?state.sessionId:member.conversationId;
       const model=id===value.master.id?state.modelChoice:member.agent.model;
       const effort=(id===value.master.id?state.effortChoice:member.agent.effort)??null;
-      if (conversationId===member.conversationId && model===member.agent.model && effort===(member.agent.effort??null)) return value;
-      const next={...member,conversationId,agent:{...member.agent,model,effort}};
+      const fast=(id===value.master.id?state.fastChoice:member.agent.fast)??null;
+      if (conversationId===member.conversationId && model===member.agent.model && effort===(member.agent.effort??null) && fast===(member.agent.fast??null)) return value;
+      const next={...member,conversationId,agent:{...member.agent,model,effort,fast}};
       return id===value.master.id?{...value,master:next}:{...value,workers:value.workers.map(item=>item.id===id?next:item)};
     });
   },[change]);
@@ -344,9 +399,24 @@ export default function AgentTeamView(props: Props) {
   const locked=paused || starting || openedEpoch!==team.epoch;
   const block=(message:string):"blocked"=>{latest.current.onMessage(message);return "blocked";};
   const usageView=useMemo(()=>teamUsageView(team,states,accountPlans),[team,states,accountPlans]);
+  const openSubagent=useCallback((memberId:string):void=>{
+    if(!current.current.workers.some(member=>member.id===memberId))return;
+    focusReturn.current=document.activeElement instanceof HTMLElement?document.activeElement:null;
+    setActivated(previous=>previous.has(memberId)?previous:new Set([...previous,memberId]));
+    const session=sessionsRef.current[memberId];
+    if(session && ["failed","exited"].includes(session.state.process))void session.start().catch(error=>latest.current.onMessage(formatError(error)));
+    setFocusId(memberId);
+  },[]);
+  const closeSubagent=useCallback((): void=>{
+    setFocusId(null);
+    requestAnimationFrame(()=>{const target=focusReturn.current;focusReturn.current=null;if(target?.isConnected)target.focus({preventScroll:true});});
+  },[]);
+  const focusedMember=focusId?team.workers.find(member=>member.id===focusId)??null:null;
+  const subSession=focusedMember?sessions[focusedMember.id]??null:null;
   const toolbar=<AgentTeamToolbar team={team} states={states} snapshot={snapshot} starting={starting} busy={busy}
     usage={usageView} onBudgetChange={budget=>change(value=>({...value,budget}))}
     onStop={()=>stop()} onResume={()=>void resume()}
+    onOpen={member=>openSubagent(member.id)}
     onLoad={member=>{ setActivated(previous=>new Set([...previous,member.id])); const session=sessions[member.id];
       if(session && ["failed","exited"].includes(session.state.process))void session.start().catch(error=>latest.current.onMessage(formatError(error))); }}
     canRecover={member=>!!sessions[member.id]?.recover && sessions[member.id].state.process==="ready" && sessions[member.id].state.pendingTurns===0}
@@ -418,14 +488,20 @@ export default function AgentTeamView(props: Props) {
     if(team.master.canWrite && snapshot?.tasks.some(task=>["claimed","running"].includes(task.status)))
       aggregate.state={...aggregate.state,pendingTurns:Math.max(1,aggregate.state.pendingTurns)};
   }
-  const labels=Object.fromEntries(Object.entries(merged.owners).map(([id,owner])=>{
-    const member=members.find(member=>member.id===owner.memberId)!;
+  // Una etiqueta por miembro (no por elemento del hilo): el hilo tiene miles de elementos y se mezcla
+  // con cada fragmento de texto. Los elementos de un mismo miembro comparten el objeto.
+  const memberLabels=new Map(members.map(member=>{
     const state=sessions[member.id]?.state;
     const model=state?currentModel(state.models,state.model,state.modelChoice):null;
-    return [id,{provider:member.agent.provider,label:member.name,profile:member.agent.profileName,memberId:member.id,role:TEAM_ROLES[member.role].name,
+    return [member.id,{provider:member.agent.provider,label:member.name,profile:member.agent.profileName,memberId:member.id,role:TEAM_ROLES[member.role].name,
       model:model?modelName(model):member.agent.model,effort:state?.effortChoice??state?.effort??member.agent.effort,worker:member.id!==team.master.id,busy:(state?.pendingTurns??0)>0}];
   }));
-  return <div className="agent-room agent-team" ref={root}>
+  const labels=Object.fromEntries(Object.entries(merged.owners).flatMap(([id,owner])=>{
+    const label=memberLabels.get(owner.memberId);
+    return label?[[id,label]]:[];
+  }));
+  const subOpen=!!focusedMember && !!subSession;
+  return <div className={"agent-room agent-team"+(subOpen?" is-subchat":"")} ref={root}>
     {members.map(member=>{
       const historyOnly=paused && openedEpoch!==team.epoch;
       const readOnly=!member.canWrite || historyOnly;
@@ -435,7 +511,7 @@ export default function AgentTeamView(props: Props) {
       const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,desktopEnabled: !historyOnly && desktopEnabled, a11yEnabled: !historyOnly && a11yEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
         sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
         conversationId:member.conversationId,mode:readOnly?"plan":member.mode??defaultAgentPermission(member.agent.provider),
-        model:member.agent.model,effort:member.agent.effort,planningOnly:readOnly,
+        model:member.agent.model,effort:member.agent.effort,fast:member.agent.fast??null,planningOnly:readOnly,
         ...(readOnly?{planningInstruction:member.id===team.master.id?TEAM_COORDINATOR_POLICY:TEAM_READER_POLICY}:{}),
         ...(member.id===team.master.id && !historyOnly?{team:{id:team.id,epoch:team.epoch}}:{}),
         visible:activated.has(member.id) && (openedEpoch===team.epoch || historyOnly && props.visible && !!member.conversationId),
@@ -443,7 +519,7 @@ export default function AgentTeamView(props: Props) {
       const Runtime=member.agent.provider==="antigravity"?AntigravityRuntime:member.agent.provider==="claude"?ClaudeRuntime:member.agent.provider==="codex"?CodexRuntime:TrexRuntime;
       return <Runtime key={team.epoch+"-"+member.id} id={member.id} epoch={team.epoch} options={options} publish={publish} />;
     })}
-    {aggregate?<ChatPanel {...props} provider={team.master.agent.provider} session={aggregate} browser={{...browser,clientId:team.id+"-"+team.master.id,label:team.master.name,...spaces.find(space=>space.clientId===team.id+"-"+team.master.id),enabled:browser.enabled}} browserSpaces={spaces.map(space=>({...space,active:(sessions[space.clientId.slice(team.id.length+1)]?.state.pendingTurns??0)>0}))} onStopBrowserAgent={clientId=>{const member=members.find(member=>team.id+"-"+member.id===clientId);if(member){sessionsRef.current[member.id]?.interrupt();stop("Se detuvo a "+member.name+". Revisa su tarea antes de reanudar el equipo.");}}}
+    {aggregate?<ChatPanel {...props} visible={props.visible && !subOpen} focused={props.focused && !subOpen} onOpenSubagent={openSubagent} provider={team.master.agent.provider} session={aggregate} browser={{...browser,clientId:team.id+"-"+team.master.id,label:team.master.name,...spaces.find(space=>space.clientId===team.id+"-"+team.master.id),enabled:browser.enabled}} browserSpaces={spaces.map(space=>({...space,active:(sessions[space.clientId.slice(team.id.length+1)]?.state.pendingTurns??0)>0}))} onStopBrowserAgent={clientId=>{const member=members.find(member=>team.id+"-"+member.id===clientId);if(member){sessionsRef.current[member.id]?.interrupt();stop("Se detuvo a "+member.name+". Revisa su tarea antes de reanudar el equipo.");}}}
       profileId={team.master.agent.profileId} profileName={team.master.agent.profileName} conversationId={team.master.conversationId}
       terminalOwners={members.flatMap(member=>{const session=sessions[member.id]?.terminals;return session?[{id:member.id,label:member.name+" · "+TEAM_ROLES[member.role].name,provider:member.agent.provider,session}]:[];})} toolbar={toolbar} itemLabels={labels} taskPlan={taskPlan} taskAuthor={team.master.name+" · Principal"} tasksPaused={paused} historyReadOnly planningOnly={!team.master.canWrite} inputLocked={locked||preparingMessage}
       emptyState={{title:paused?"Tu equipo está en pausa":"Tu equipo está listo",description:paused?"La configuración está guardada. Revisa las cuentas y el historial antes de reanudar.":`Escribe tu idea a ${team.master.name}. Preparará el plan, repartirá las tareas y revisará los resultados contigo.`,
@@ -459,5 +535,9 @@ export default function AgentTeamView(props: Props) {
         {team.setup&&(preparingMessage||!busy)&&<small>{preparingMessage?"Preparando tu idea y el contexto del equipo…":"Escribe tu idea aquí; el principal preparará el plan y coordinará al equipo."}</small>}
         {snapshot?.tasks.some(teamTaskActive)&&<small>{snapshot.tasks.filter(task=>["claimed","running"].includes(task.status)).length} delegaciones en curso; las aclaraciones pueden añadirse a la cola.</small>}</div>} />
       :<div className="agent-room-starting">{toolbar}<p>{starting?"Preparando el equipo…":paused?"Revisa el equipo para recuperar la conversación.":"Conectando al agente principal…"}</p></div>}
+    {subOpen && focusedMember && subSession && <SubagentChat key={focusedMember.id} member={focusedMember} session={subSession} props={props}
+      waiting={Object.entries(states).some(([id,state])=>id!==focusedMember.id && pendingPermissions(state)>0)}
+      browser={browser} onBack={closeSubagent}
+      onStop={()=>{sessionsRef.current[focusedMember.id]?.interrupt();stop("Se detuvo a "+focusedMember.name+". Revisa su tarea antes de reanudar el equipo.");}} />}
   </div>;
 }

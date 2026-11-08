@@ -86,7 +86,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     const next = timedChatReducer(before, action);
     return planningOnly ? { ...next, permissionMode: "plan", modeChoice: "plan" } : next;
   };
-  const [state, dispatch] = useReducer(plannerReducer, null, () => initialChatState(planningOnly ? "plan" : options.mode, options.model, options.effort));
+  const [state, dispatch] = useReducer(plannerReducer, null, () => initialChatState(planningOnly ? "plan" : options.mode, options.model, options.effort, options.fast));
   const stateRef = useRef(state);
   stateRef.current = state;
   const callbacks = useRef(options);

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 const terminalModule = await load("agentTerminals");
+const lineBatchModule = await load("lineBatch");
 const code = ts.transpileModule(await readFile(new URL("../src/hooks/chatSession.ts",import.meta.url),"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 const compile = new Function("require","exports",code);
 const tick = () => new Promise(resolve=>setImmediate(resolve));
@@ -21,7 +22,7 @@ function harness(t){
     listenAgentLine:async(id,fn)=>{lines.set(id,fn);return()=>lines.delete(id)},listenAgentExit:async(id,fn)=>{exits.set(id,fn);return()=>exits.delete(id)},listenAgentStderr:async()=>()=>{},
     agentWrite:async(id,line)=>{const request=JSON.parse(line);writes.push({runtime:id,...request});if(request.method==="thread/backgroundTerminals/list")queueMicrotask(()=>lines.get(id)?.(JSON.stringify({id:request.id,result:{data:[{processId:"42",itemId:"a",command:"dev server",cwd:"D:/project"}]}})))},
   };
-  const exports={};compile(name=>name==="react"?hooks:name==="../api"?api:name==="../agentTerminals"?terminalModule:(()=>{throw Error(name)})(),exports);
+  const exports={};compile(name=>name==="react"?hooks:name==="../api"?api:name==="../agentTerminals"?terminalModule:name==="../lineBatch"?lineBatchModule:(()=>{throw Error(name)})(),exports);
   const render=()=>{cursor=0;current=exports.useAgentProcess("tab",{onLine:(line,id)=>forwarded.push({id,line}),onExit(){},onStderr(){}},"codex");for(const effect of effects.splice(0))effect();return current};
   render();t.after(()=>{for(const slot of slots)slot?.cleanup?.()});
   return{render,lines,exits,forwarded,killed,writes,get current(){return render()}};
@@ -29,7 +30,9 @@ function harness(t){
 test("The actual transport exposes owned terminal state and consumes only its own RPC replies",async t=>{
   const h=harness(t);const id=await h.current.spawn({cwd:"D:/project",command:"codex",flags:["app-server"]});h.current.bindTerminals("thread");await h.current.terminals.refresh();
   assert.equal(h.current.terminals.snapshot.entries[0].command,"dev server");assert.equal(h.forwarded.length,0);
-  h.lines.get(id)(JSON.stringify({method:"turn/completed",params:{threadId:"thread"}}));assert.equal(h.forwarded.length,1);
+  h.lines.get(id)(JSON.stringify({method:"turn/completed",params:{threadId:"thread"}}));
+  // Las líneas se entregan por tandas (lineBatch): una llegada a menos de 50 ms de otra espera a la siguiente.
+  await new Promise(resolve=>setTimeout(resolve,80));assert.equal(h.forwarded.length,1);
   assert.equal(h.current.terminals.snapshot.entries[0].state,"running");
 });
 test("Transport replacement rejects old observers without clearing or writing to the new runtime",async t=>{

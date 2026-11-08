@@ -187,11 +187,11 @@ export const normalizeModelChoice = (value: unknown): string | null =>
     ? value.trim() : null;
 
 /** Estado inicial con las elecciones guardadas antes de arrancar el proceso. */
-export const initialChatState = (mode: string | null = null, model: string | null = null, effort: string | null = null): ChatState => ({
+export const initialChatState = (mode: string | null = null, model: string | null = null, effort: string | null = null, fast: boolean | null = null): ChatState => ({
   items: [], pendingTurns: 0, pendingMessageIds: [], interruptedMessageIds: [], activeMessageIds: [], completedTurnIds: [],
   lastCompletion: null, turnItemStart: null,
   turnStartedAt: null, sessionId: null, turnId: null, turnDiff: null, model: null, models: [],
-  modelChoice: normalizeModelChoice(model), effort: normalizeEffortChoice(effort), effortChoice: normalizeEffortChoice(effort), fast: false, fastChoice: null, permissionMode: mode, modeChoice: mode,
+  modelChoice: normalizeModelChoice(model), effort: normalizeEffortChoice(effort), effortChoice: normalizeEffortChoice(effort), fast: fast === true, fastChoice: typeof fast === "boolean" ? fast : null, permissionMode: mode, modeChoice: mode,
   commands: [], agents: [], skills: [], usage: null, plan: null, costUsd: null, apiUsage: null,
   stream: { messageId: null, blocks: {} }, queuedAfterInterrupt: null, historyCount: 0, process: "starting", exitCode: null, stderr: [],
 });

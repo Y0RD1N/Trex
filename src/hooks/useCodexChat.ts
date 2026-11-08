@@ -112,7 +112,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     const next = timedCodexReducer(before, action);
     return planningOnly ? { ...next, permissionMode: "plan", modeChoice: "plan" } : next;
   };
-  const [state, dispatch] = useReducer(plannerReducer, null, () => initialChatState(planningOnly ? "plan" : options.mode, options.model, options.effort));
+  const [state, dispatch] = useReducer(plannerReducer, null, () => initialChatState(planningOnly ? "plan" : options.mode, options.model, options.effort, options.fast));
   const stateRef = useRef(state);
   stateRef.current = state;
   const callbacks = useRef(options);
@@ -177,7 +177,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   }, []);
   /** Modo, modelo, esfuerzo y velocidad elegidos: se leen al empezar cada turno, sin esperar al render. */
   const choicesRef = useRef<{ mode: string | null; model: string | null; effort: string | null; fast: boolean | null }>({
-    mode: planningOnly ? "plan" : options.mode, model: state.modelChoice, effort: state.effortChoice, fast: null });
+    mode: planningOnly ? "plan" : options.mode, model: state.modelChoice, effort: state.effortChoice, fast: state.fastChoice });
   const writeRef = useRef<(line: string) => Promise<void>>(() => Promise.resolve());
 
   const notice = useCallback((tone: "info" | "warn" | "error", text: string) => dispatch({ type: "notice", id: localId(), tone, text }), []);

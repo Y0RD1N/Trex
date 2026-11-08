@@ -96,3 +96,27 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Conversación completa de un subagente: sustituye al chat del principal, que sigue montado. */
+.agent-room.is-subchat > .chat { display: none; }
+.agent-subchat { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.agent-subchat > .chat { flex: 1; min-height: 0; height: auto; }
+.agent-subchat .chat-composer, .agent-subchat .chat-controls, .agent-subchat .chat-side { display: none; }
+/* Sin compositor, el contenedor solo se ve si el subagente hace una pregunta. */
+.agent-subchat .chat-dock:not(:has(.chat-ask)) { display: none; }
+.agent-subchat-head { display: flex; align-items: center; gap: var(--sp-3); flex: 0 0 auto; min-width: 0; padding: var(--sp-2-5) var(--sp-3); border-bottom: 1px solid var(--border); background: var(--bg-surface); }
+.agent-subchat-back { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; gap: var(--sp-1); height: 30px; padding: 0 var(--sp-2-5) 0 var(--sp-1-5); border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--fs-sm); cursor: pointer; transition: border-color var(--dur), color var(--dur), background-color var(--dur); }
+.agent-subchat-back > svg { transform: rotate(180deg); }
+.agent-subchat-back:hover { border-color: var(--border-strong); background: var(--hover); color: var(--text); }
+.agent-subchat-back:focus-visible, .agent-subchat-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agent-subchat-dot { position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.agent-subchat-title { display: flex; align-items: center; flex: 1; gap: var(--sp-2-5); min-width: 0; }
+.agent-subchat-title > span { display: grid; min-width: 0; gap: 1px; }
+.agent-subchat-title strong { overflow: hidden; font-size: var(--fs-md); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.agent-subchat-title small { overflow: hidden; color: var(--text-dim); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.agent-subchat-status { display: inline-flex; align-items: center; flex-shrink: 0; gap: var(--sp-1-5); color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
+.agent-subchat-stop { display: inline-flex; align-items: center; flex-shrink: 0; gap: var(--sp-1); height: 28px; padding: 0 var(--sp-2-5); border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.agent-subchat-stop:hover { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger); }
+@media (max-width: 640px) { .agent-subchat-head { flex-wrap: wrap; gap: var(--sp-2); } .agent-subchat-title { order: 3; flex-basis: 100%; } .agent-subchat-status { margin-left: auto; } }
+@media (prefers-reduced-motion: reduce) { .agent-subchat-back { transition: none; } }
+:root[data-motion="reduced"] .agent-subchat-back { transition: none; }

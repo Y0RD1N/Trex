@@ -78,6 +78,8 @@ export type ChatViewProps = ChatSessionOptions & {
   browserSpaces?: import("../browser").BrowserSpace[];
   onStopBrowserAgent?: (clientId:string)=>void;
   itemLabels?: Record<string, ChatAttribution>;
+  /** Abre la conversación completa de un subagente (la tarjeta del hilo deja de mostrar sus pasos). */
+  onOpenSubagent?: (memberId: string) => void;
   taskPlan?: ChatTask[];
   taskAuthor?: string;
   tasksPaused?: boolean;
@@ -1061,6 +1063,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     hadTasks.current = tasks.length > 0;
   }, [tasks.length]);
   const revealTask = (task: ChatTask): void => {
+    if (task.memberId && props.onOpenSubagent) { props.onOpenSubagent(task.memberId); return; }
     const matches = threadItems.filter(item => task.memberId ? props.itemLabels?.[item.id]?.memberId === task.memberId : item.id === task.sourceId);
     const target = matches[matches.length - 1];
     if (!target) { props.onMessage("La actividad aparecerá cuando se inicie esta tarea."); return; }
@@ -1139,10 +1142,13 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       if (!group.author) return rendered[group.start];
       const items = visibleItems.slice(group.start, group.end);
       const live = !!group.author.busy && !visibleItems.slice(group.end).some(item => props.itemLabels?.[item.id]?.memberId === group.author!.memberId);
-      return <SubagentActivity key={items[0].id} author={group.author} items={items} live={live}>{rendered.slice(group.start, group.end).filter((_row, at) => items[at].kind !== "user")}</SubagentActivity>;
+      // Sus permisos y preguntas pendientes se quedan en este hilo: la tarjeta avisa de que hay una.
+      const attention = visibleItems.some(item => item.kind === "permission" && item.state === "pending" && props.itemLabels?.[item.id]?.memberId === group.author!.memberId);
+      return <SubagentActivity key={items[0].id} author={group.author} items={items} live={live} attention={attention} onOpen={props.onOpenSubagent}>
+        {props.onOpenSubagent ? null : rendered.slice(group.start, group.end).filter((_row, at) => items[at].kind !== "user")}</SubagentActivity>;
     });
   }, [threadItems, threadStart, enterFrom, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
-    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels, props.browser, props.planningOnly, mode, session, tasks.length]);
+    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels, props.onOpenSubagent, props.browser, props.planningOnly, mode, session, tasks.length]);
   const stderrTail = state.stderr.slice(-6).join("\n");
   // Una pestaña sin contenido (sin equipo o sin repositorio) no se muestra.
   const activeSide = sideTab === "git" && !branch || sideTab === "team" && !props.toolbar ? null : sideTab;

@@ -54,8 +54,12 @@
   scroll-padding-bottom: calc(var(--composer-space, 120px) + 16px);
   transition: opacity var(--dur) var(--ease-out);
 }
-/* La barra empieza bajo la cabecera flotante: no pasa por debajo de sus botones. */
-.chat-scroll::-webkit-scrollbar-track { margin: calc(var(--chat-header-space, 0px) + 4px) 0 4px; }
+/* La barra empieza bajo la cabecera flotante: no pasa por debajo de sus botones, y termina
+   antes de la esquina redondeada de la ventana (sin radio al maximizar ni en Windows). */
+.chat-scroll::-webkit-scrollbar-track { margin: calc(var(--chat-header-space, 0px) + 4px) 0 max(4px, var(--window-radius)); }
+/* Este scroll va pegado al borde de la ventana: el pulgar visible (4px) queda a 4px del borde, no a 2px. */
+.chat-scroll::-webkit-scrollbar { width: 12px; }
+.chat-scroll::-webkit-scrollbar-thumb { border-width: 4px; }
 
 .chat-thread {
   display: flex;

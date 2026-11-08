@@ -2,17 +2,17 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { AgentProvider, LauncherProfile, Project, Settings } from "../types";
 import { handoffTargetReason } from "./HandoffDialog";
 import { TEAM_ROLES, MAX_TEAM_WORKERS, teamBrowserDefault, type TeamBudget, type TeamRole } from "../agentTeam";
-import { agentPermissionOptions, defaultAgentPermission } from "../agentPermissions";
+import { defaultAgentPermission } from "../agentPermissions";
 import { EFFORT_LEVELS, modelName } from "../chatState";
 import { suggestEffort, suggestModel } from "../modelTiers";
 import { budgetLabel, MEMBER_BUDGET_PRESETS, TEAM_BUDGET_PRESETS } from "../teamBudget";
 import { accountGroups, accountQuota, QUOTA_WARNING, readAccountPlan, type AccountQuota } from "../teamUsage";
-import { useWorkflowStage } from "./AgentWorkflowDialog";
-import type { WorkflowRequest } from "./AgentWorkflowDialog";
+import { useWorkflowStage, type WorkflowRequest } from "../hooks/useWorkflowStage";
 import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
 import AgentIcon from "./AgentIcon";
+import { AgentFields, SetupSwitch } from "./AgentSetup";
 import Select from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowRightIcon, ArrowUpIcon, CloseIcon, GaugeIcon, PlusIcon, ShieldIcon } from "./Icons";
+import { AlertIcon, ArrowDownIcon, ArrowRightIcon, ArrowUpIcon, ChevronIcon, CloseIcon, FolderIcon, GaugeIcon, GlobeIcon, PlusIcon, SparkIcon } from "./Icons";
 import "./AgentTeamDialog.css";
 import "./TeamUsage.css";
 
@@ -35,9 +35,10 @@ function MemberEditor({ draft, targets, settings, cwd, disabled, leaving, initia
   const stage = useWorkflowStage(targets, draft.provider, settings, cwd, leaving, initial);
   const latest = useRef(onSelection); latest.current = onSelection;
   const field = useId();
+  const [open, setOpen] = useState(false);
   const mode = stage.mode ?? (stage.profile ? defaultAgentPermission(stage.profile.provider, draft.canWrite) : "plan");
-  useEffect(() => latest.current(draft.id, { profileId: stage.profileId, model: stage.model || null, effort: stage.effort, mode, ready: stage.ready }),
-    [draft.id, stage.profileId, stage.model, stage.effort, stage.ready, mode]);
+  useEffect(() => latest.current(draft.id, { profileId: stage.profileId, model: stage.model || null, effort: stage.effort, fast: stage.fast, mode, ready: stage.ready }),
+    [draft.id, stage.profileId, stage.model, stage.effort, stage.fast, stage.ready, mode]);
   // Suggestions only prefill what the user has not chosen for this account.
   const [chosen, setChosen] = useState<Record<string, { model?: boolean; effort?: boolean }>>(() =>
     initial ? { [initial.profileId]: { model: initial.model !== null, effort: initial.effort !== null } } : {});
@@ -63,59 +64,40 @@ function MemberEditor({ draft, targets, settings, cwd, disabled, leaving, initia
   const canWrite = mode !== "plan";
   const browserDefault = teamBrowserDefault(draft.role, canWrite);
   const browserOn = draft.browser ?? browserDefault;
-  return <section className="team-member-editor" aria-label={principal ? "Agente principal" : draft.name}>
-    <header><span className="workflow-eyebrow">{principal ? "Agente principal" : `Subagente ${position}`}</span>
-      {onRemove && <div className="team-member-controls"><button type="button" className="icon-btn" disabled={disabled || !onMoveUp} onClick={onMoveUp} aria-label={"Subir " + draft.name}><ArrowUpIcon size={13} /></button>
-        <button type="button" className="icon-btn" disabled={disabled || !onMoveDown} onClick={onMoveDown} aria-label={"Bajar " + draft.name}><ArrowDownIcon size={13} /></button>
-        <button type="button" className="icon-btn" disabled={disabled} onClick={onRemove} aria-label={"Quitar " + draft.name}><CloseIcon size={14} /></button></div>}
-    </header>
-    <div className="team-member-fields">
-      <label className="workflow-field"><span className="workflow-field-label">Nombre</span>
-        <input className="input" data-autofocus={principal||undefined} maxLength={80} value={draft.name} disabled={disabled} onChange={event => onChange({ name: event.currentTarget.value })} />
-      </label>
-      {!principal && <div className="workflow-field">
-        <label className="workflow-field-label" htmlFor={field + "-role"}>Función</label>
-        <Select id={field + "-role"} value={draft.role} disabled={disabled} align="start"
+  const label = principal ? "Principal" : draft.name;
+  return <section className="agent-card agent-member" aria-label={principal ? "Agente principal" : draft.name}>
+    <header className="agent-card-head">
+      <input className="input agent-name" aria-label={`Nombre · ${principal ? "principal" : `subagente ${position}`}`} placeholder="Nombre" data-autofocus={principal || undefined}
+        maxLength={80} value={draft.name} disabled={disabled} onChange={event => onChange({ name: event.currentTarget.value })} />
+      {principal ? <span className="agent-tag">Principal</span>
+        : <Select aria-label={`Función · ${label}`} className="agent-select agent-role" value={draft.role} disabled={disabled} align="start"
           options={Object.entries(TEAM_ROLES).filter(([role]) => role !== "coordinator").map(([value, role]) => ({ value, label: role.name, description: role.description }))}
-          onChange={value => { const role = value as TeamRole; stage.setMode(null); onChange({ role, canWrite: TEAM_ROLES[role].writes, instructions: TEAM_ROLES[role].description }); }} />
-      </div>}
-    </div>
-    <div className="workflow-field">
-      <label className="workflow-field-label" htmlFor={field + "-profile"}>Cuenta o conexión</label>
-      <Select id={field + "-profile"} value={stage.profileId} disabled={disabled || !stage.profile} align="start"
+          onChange={value => { const role = value as TeamRole; stage.setMode(null); onChange({ role, canWrite: TEAM_ROLES[role].writes, instructions: TEAM_ROLES[role].description }); }} />}
+      <Select aria-label={`Asistente · ${label}`} className="agent-select agent-account" value={stage.profileId} disabled={disabled || !stage.profile} align="end"
         options={targets.map(({ profile, reason }) => ({ value: profile.id, label: profile.name, description: reason ?? profile.provider, disabled: !!reason, icon: <AgentIcon kind={profile.provider} size={16} /> }))}
         onChange={stage.setProfileId} />
-    </div>
-    <div className="team-member-fields">
-      <div className="workflow-field"><label className="workflow-field-label" htmlFor={field + "-model"}>Modelo</label>
-        <Select id={field + "-model"} value={stage.model} options={stage.options} align="start" disabled={disabled || stage.loading || !stage.profile}
-          placeholder={stage.loading ? "Cargando modelos…" : "Elige un modelo"} onChange={value => { choose("model"); stage.setModel(value); }} />
+      {onRemove && <div className="agent-card-controls">
+        <button type="button" className="icon-btn" disabled={disabled || !onMoveUp} onClick={onMoveUp} aria-label={"Subir " + draft.name}><ArrowUpIcon size={13} /></button>
+        <button type="button" className="icon-btn" disabled={disabled || !onMoveDown} onClick={onMoveDown} aria-label={"Bajar " + draft.name}><ArrowDownIcon size={13} /></button>
+        <button type="button" className="icon-btn" disabled={disabled} onClick={onRemove} aria-label={"Quitar " + draft.name}><CloseIcon size={14} /></button>
+      </div>}
+    </header>
+    <AgentFields stage={stage} mode={mode ?? ""} disabled={disabled} accessibleName={label}
+      onModel={() => choose("model")} onEffort={() => choose("effort")}
+      onMode={value => { stage.setMode(value); onChange({ canWrite: value !== "plan" }); }} />
+    <div className="agent-card-foot">
+      <div className="agent-card-more">
+        <button type="button" className="agent-link" aria-expanded={open} aria-controls={field + "-instructions"} onClick={() => setOpen(value => !value)}>
+          {principal ? "Responsabilidad" : "Instrucciones"}<ChevronIcon size={12} /></button>
+        {suggestion && <span className="agent-suggested" tabIndex={0} title={"Sugerido para esta función: " + suggestion}><SparkIcon size={12} />Sugerido</span>}
       </div>
-      <div className="workflow-field"><label className="workflow-field-label" htmlFor={field + "-effort"}>Esfuerzo</label>
-        <Select id={field + "-effort"} value={stage.effort ?? ""} options={stage.effortOptions} align="start"
-          disabled={disabled || !stage.effortLevels.length} onChange={value => { choose("effort"); stage.setEffort(value); }} />
-      </div>
+      {settings.browserEnabled && <button type="button" className="agent-chip" aria-pressed={browserOn} disabled={disabled}
+        title={draft.browser == null ? browserDefault ? "Según su función" + (canWrite ? "" : " (solo observar)") : "Desactivado para esta función: ahorra contexto" : "Elegido para este agente"}
+        onClick={() => onChange({ browser: !browserOn === browserDefault ? null : !browserOn })}><GlobeIcon size={13} />Navegador</button>}
     </div>
-    <p className="workflow-field-hint">{stage.loading ? "Consultando el catálogo de esta cuenta…" : stage.effortHint}</p>
-    {suggestion && <p className="team-suggestion-hint">Sugerido para esta función: {suggestion}</p>}
-    {stage.error && <p className="workflow-field-hint">No se pudo cargar el catálogo: {stage.error} <button type="button" className="btn btn-small btn-ghost" disabled={disabled} onClick={stage.retry}>Reintentar</button></p>}
-    {!stage.loading && !stage.validModel && <p className="workflow-model-error">El modelo elegido ya no está disponible en este catálogo.</p>}
-    <label className="workflow-field"><span className="workflow-field-label">{principal ? "Responsabilidad del principal" : "Instrucciones de la función"}</span>
-      <textarea className="input" rows={2} maxLength={2000} value={draft.instructions} disabled={disabled}
-        onChange={event => onChange({ instructions: event.currentTarget.value })} />
-    </label>
-    <div className="workflow-field"><label className="workflow-field-label" htmlFor={field + "-permissions"}>Permisos de archivos y acciones</label>
-      <Select id={field + "-permissions"} value={mode ?? ""} align="start" disabled={disabled || !stage.profile}
-        options={agentPermissionOptions(stage.profile?.provider ?? "claude")} onChange={value => { stage.setMode(value || null); onChange({ canWrite: value !== "plan" }); }} />
-    </div>
-    {settings.browserEnabled && <label className="team-member-browser">
-      <input type="checkbox" checked={browserOn} disabled={disabled} onChange={event => onChange({ browser: event.currentTarget.checked === browserDefault ? null : event.currentTarget.checked })} />
-      <span>Navegador</span>
-      <small>{draft.browser == null ? browserDefault ? "Según su función" + (canWrite ? "" : " (solo observar)") : "Desactivado para esta función: ahorra contexto" : "Elegido para este agente"}</small>
-    </label>}
-    <p className="team-member-policy"><ShieldIcon size={13} />{principal
-      ? mode === "plan" ? "Planifica y delega sin editar directamente." : "También puede editar. El principal y sus delegaciones se turnan para utilizar el proyecto."
-      : mode === "plan" ? "La lectura no puede ampliarse desde una aprobación del agente." : "El asistente aplicará este modo a sus archivos, comandos e integraciones habilitadas."}</p>
+    {open && <textarea id={field + "-instructions"} className="input agent-instructions" rows={3} maxLength={2000} value={draft.instructions} disabled={disabled}
+      aria-label={principal ? "Responsabilidad del principal" : "Instrucciones de la función"}
+      onChange={event => onChange({ instructions: event.currentTarget.value })} />}
   </section>;
 }
 const draft = (id: string, role: TeamRole, provider: AgentProvider): Draft => ({
@@ -142,7 +124,7 @@ export default function AgentTeamDialog({ project, profiles, settings, onClose, 
   });
   const choice = (member: Draft): TeamMemberChoice => ({ id: member.id, name: member.name.trim(), role: member.role,
     instructions: member.instructions.trim(), canWrite: selections[member.id].mode !== "plan", mode: selections[member.id].mode,
-    profileId: selections[member.id].profileId, model: selections[member.id].model, effort: selections[member.id].effort, browser: member.browser ?? null });
+    profileId: selections[member.id].profileId, model: selections[member.id].model, effort: selections[member.id].effort, fast: selections[member.id].fast ?? null, browser: member.browser ?? null });
   // Pre-launch summary: who shares which account and how much of its plan is left (reading /usage spends no tokens).
   const groups = accountGroups(members.flatMap(member => {
     const profile = profiles.find(profile => profile.id === selections[member.id]?.profileId);
@@ -171,59 +153,49 @@ export default function AgentTeamDialog({ project, profiles, settings, onClose, 
       ...(group.members.length >= 3 ? [`${group.members.length} agentes comparten ${group.profileName}: consumen la misma cuota.`] : []),
     ];
   });
-  const budgetText = budget.teamTokens === null && budget.memberTokens === null ? "Sin límite"
-    : [budget.teamTokens !== null ? `${budgetLabel(budget.teamTokens)} por equipo` : null, budget.memberTokens !== null ? `${budgetLabel(budget.memberTokens)} por agente` : null].filter(Boolean).join(" · ");
   const start = (): void => {
     if (!ready) return;
     const request: TeamRequest = { master: choice(master), workers: workers.map(choice), budget: budget.teamTokens === null && budget.memberTokens === null ? null : budget };
     onStart(request);
   };
   const presetOptions = (presets: (number | null)[], suffix: string) => presets.map(value => ({ value: value === null ? "" : String(value), label: value === null ? "Sin límite" : `${budgetLabel(value)}${suffix}` }));
-  return <FeatureDialog {...motion} title="Equipo con agente principal" onClose={onClose} className="agent-workflow-dialog agent-team-dialog"
-    footer={<><span className="feature-hint">{members.length} agentes · {groups.length} {groups.length === 1 ? "cuenta" : "cuentas"} · {budgetText}. Tu idea se escribe en el chat.</span>
-      <button type="button" className="btn btn-ghost" disabled={submitting} onClick={onBack}>Flujo de dos agentes</button>
+  return <FeatureDialog {...motion} title="Planificar e implementar" onClose={onClose} className="agent-workflow-dialog agent-team-dialog"
+    footer={<>
+      <span className="agent-project" title={project.path}><FolderIcon size={14} />{project.name} · {members.length} agentes</span>
       <button type="button" className="btn btn-ghost" disabled={submitting} onClick={onClose}>Cancelar</button>
-      <button type="button" className="btn btn-primary" disabled={!ready} onClick={start}>
+      <button type="button" className="btn btn-primary agent-start" disabled={!ready} onClick={start}>
         {submitting ? <span className="chat-spinner" /> : <ArrowRightIcon size={15} />}{submitting ? "Guardando…" : "Guardar y abrir chat"}
       </button></>}>
-    <p className="workflow-explanation">Configura el equipo de {project.name}: el principal y la función, cuenta, modelo y esfuerzo de cada subagente. Después escribe tu idea en el chat; el principal preparará el plan, delegará y revisará los resultados.</p>
-    <ol className="workflow-setup-steps" aria-label="Cómo empieza el equipo"><li><span>1</span>Organiza tu equipo</li><li><ArrowRightIcon size={13} aria-hidden="true" /><span>2</span>Escribe tu idea en el chat</li></ol>
-    {initialMaster && <p className="workflow-field-hint">Para continuar en este chat, conserva su cuenta actual en el principal o en uno de los subagentes.</p>}
+    <SetupSwitch team disabled={submitting} onChange={() => onBack()} />
+    {initialMaster && <p className="agent-note">Mantén la cuenta de este chat en el principal o en un subagente para continuar la conversación.</p>}
     <MemberEditor draft={master} targets={targets} settings={settings} cwd={project.path} disabled={submitting} leaving={!!motion.leaving} initial={initialMaster}
       onChange={patch => setMaster(previous => ({ ...previous, ...patch }))} onSelection={select} />
-    <div className="team-workers-heading"><div><h3>Subagentes · orden de trabajo</h3><p>Usa las flechas para ordenar sus funciones. Puedes combinar cuentas y proveedores.</p></div>
+    <div className="agent-section-head"><h3>Subagentes</h3>
       <button type="button" className="btn btn-small btn-ghost" disabled={submitting || workers.length >= MAX_TEAM_WORKERS}
-        onClick={() => setWorkers(previous => [...previous, draft("worker-" + next.current++, "research", "claude")])}><PlusIcon size={14} />Añadir subagente</button>
+        onClick={() => setWorkers(previous => [...previous, draft("worker-" + next.current++, "research", "claude")])}><PlusIcon size={14} />Añadir</button>
     </div>
-    <div className="team-workers-grid">{workers.map((worker,index) => <MemberEditor key={worker.id} draft={worker} targets={targets} settings={settings} position={index+1}
+    <div className="agent-stack">{workers.map((worker,index) => <MemberEditor key={worker.id} draft={worker} targets={targets} settings={settings} position={index+1}
       cwd={project.path} disabled={submitting} leaving={!!motion.leaving} onSelection={select}
       onChange={patch => setWorkers(previous => previous.map(item => item.id === worker.id ? { ...item, ...patch } : item))}
       onRemove={() => setWorkers(previous => previous.filter(item => item.id !== worker.id))}
       onMoveUp={index>0?()=>move(worker.id,-1):undefined} onMoveDown={index<workers.length-1?()=>move(worker.id,1):undefined} />)}</div>
-    <div className="workflow-field">
-      <span className="workflow-field-label" id={field + "-budget"}>Presupuesto de tokens nuevos</span>
-      <div className="team-budget-field" role="group" aria-labelledby={field + "-budget"}>
-        <Select value={budget.teamTokens === null ? "" : String(budget.teamTokens)} aria-label={`Presupuesto del equipo: ${budgetLabel(budget.teamTokens)}`} align="start" disabled={submitting}
-          options={presetOptions(TEAM_BUDGET_PRESETS, " por equipo")} onChange={value => setBudget(previous => ({ ...previous, teamTokens: value ? Number(value) : null }))} />
-        <Select value={budget.memberTokens === null ? "" : String(budget.memberTokens)} aria-label={`Presupuesto por agente: ${budgetLabel(budget.memberTokens)}`} align="start" disabled={submitting}
-          options={presetOptions(MEMBER_BUDGET_PRESETS, " por agente").map(option => option.value ? option : { ...option, label: "Sin límite por agente" })}
-          onChange={value => setBudget(previous => ({ ...previous, memberTokens: value ? Number(value) : null }))} />
-      </div>
-      <p className="workflow-field-hint">Cuenta los tokens nuevos (sin lecturas de caché). Al agotarse, la siguiente delegación no empieza y el equipo se pausa para que decidas si lo amplías.</p>
+    <div className="agent-budget" role="group" aria-labelledby={field + "-budget"}
+      title="Cuenta los tokens nuevos (sin lecturas de caché). Al agotarse, la siguiente delegación no empieza y el equipo se pausa para que decidas si lo amplías.">
+      <span className="agent-budget-label" id={field + "-budget"}><GaugeIcon size={14} />Límite de tokens</span>
+      <Select className="agent-select" value={budget.teamTokens === null ? "" : String(budget.teamTokens)} aria-label={`Presupuesto del equipo: ${budgetLabel(budget.teamTokens)}`} align="start" disabled={submitting}
+        options={presetOptions(TEAM_BUDGET_PRESETS, " por equipo")} onChange={value => setBudget(previous => ({ ...previous, teamTokens: value ? Number(value) : null }))} />
+      <Select className="agent-select" value={budget.memberTokens === null ? "" : String(budget.memberTokens)} aria-label={`Presupuesto por agente: ${budgetLabel(budget.memberTokens)}`} align="start" disabled={submitting}
+        options={presetOptions(MEMBER_BUDGET_PRESETS, " por agente").map(option => option.value ? option : { ...option, label: "Sin límite por agente" })}
+        onChange={value => setBudget(previous => ({ ...previous, memberTokens: value ? Number(value) : null }))} />
     </div>
-    <section className="team-launch-summary" aria-label="Resumen antes de iniciar">
-      <h3><GaugeIcon size={13} /> {members.length} agentes · {groups.length} {groups.length === 1 ? "cuenta" : "cuentas"} · Presupuesto: {budgetText}</h3>
-      <ul className="team-launch-accounts">{groups.map(group => {
-        const reading = readings[group.profileId], quota = reading?.status === "ready" ? reading.quota : null;
-        return <li key={group.profileId}><AgentIcon kind={group.members[0].profile.provider} size={14} /><strong>{group.profileName}</strong>
-          <span>{group.members.length} {group.members.length === 1 ? "agente" : "agentes"}</span>
-          <span aria-label={`Uso del plan: ${quotaPart("5 h", quota?.fiveHour ?? null)}, ${quotaPart("semana", quota?.week ?? null)}`}>
-            {reading?.status === "loading" ? "Leyendo uso…" : `${quotaPart("5 h", quota?.fiveHour ?? null)} · ${quotaPart("Semana", quota?.week ?? null)}`}</span></li>;
-      })}</ul>
-      {warnings.length > 0 && <ul className="team-launch-warnings">{warnings.map(warning => <li key={warning}><AlertIcon size={12} />{warning}</li>)}</ul>}
-    </section>
-    <p className="workflow-automation-note"><ShieldIcon size={15} />Las tareas que escriben el proyecto se ejecutan de una en una; hasta cuatro de lectura pueden trabajar a la vez. Detener el equipo interrumpe al principal y a sus subagentes. Una sesión recuperada empieza en pausa.</p>
-    <p className="workflow-field-hint">Para investigación web con un modelo API, activa Trex Browser y comprueba que esté instalado. Las herramientas web disponibles dependen del asistente y de los componentes habilitados.</p>
-    {error && <p className="workflow-status error" role="alert">{error}</p>}
+    {groups.length > 0 && <ul className="team-launch-accounts" aria-label="Uso de las cuentas">{groups.map(group => {
+      const reading = readings[group.profileId], quota = reading?.status === "ready" ? reading.quota : null;
+      return <li key={group.profileId}><AgentIcon kind={group.members[0].profile.provider} size={14} /><strong>{group.profileName}</strong>
+        <span>{group.members.length} {group.members.length === 1 ? "agente" : "agentes"}</span>
+        <span aria-label={`Uso del plan: ${quotaPart("5 h", quota?.fiveHour ?? null)}, ${quotaPart("semana", quota?.week ?? null)}`}>
+          {reading?.status === "loading" ? "Leyendo uso…" : `${quotaPart("5 h", quota?.fiveHour ?? null)} · ${quotaPart("Semana", quota?.week ?? null)}`}</span></li>;
+    })}</ul>}
+    {warnings.length > 0 && <ul className="team-launch-warnings">{warnings.map(warning => <li key={warning}><AlertIcon size={12} />{warning}</li>)}</ul>}
+    {error && <p className="agent-note error" role="alert">{error}</p>}
   </FeatureDialog>;
 }

@@ -637,7 +637,7 @@ La app, Trex CLI y Trex Browser se empaquetan juntos en un RPM. El navegador usa
 
 ## Equipos con agente principal
 
-En **Nueva sesión → Configurar flujo de agentes → Trabajar con un equipo** puedes elegir un coordinador y entre uno y ocho colaboradores. Cada participante elige su cuenta, modelo, esfuerzo e instrucciones independientemente; puedes combinar Claude, Codex y conexiones API de Trex, o usar una misma cuenta con modelos diferentes. El flujo anterior de dos agentes sigue disponible.
+En **Nueva sesión → Configurar flujo de agentes → Equipo** puedes elegir un coordinador y entre uno y ocho colaboradores. Cada participante elige su cuenta, función, modelo, esfuerzo, velocidad (rápida, si el modelo la admite), permisos e instrucciones independientemente; puedes combinar Claude, Codex y conexiones API de Trex, o usar una misma cuenta con modelos diferentes. El selector **Dos agentes / Equipo** del diálogo alterna con el flujo de planificación e implementación.
 
 La ventana de planificación solo configura los agentes: funciones, cuentas, modelos, esfuerzo e instrucciones reutilizables. Ordena los subagentes con las flechas y pulsa **Guardar y abrir chat**. No hay que escribir una idea en esa ventana. En el nuevo chat verás el equipo guardado y podrás escribir tu idea normalmente; el trabajo empieza al enviar ese mensaje al principal. El flujo de dos agentes funciona igual: se guarda primero y el primer mensaje inicia la planificación. Al convertir un chat existente, su contexto se conserva para ese primer mensaje y no se envía automáticamente.
 

@@ -133,40 +133,7 @@
 .team-usage-context.critical { color: var(--danger-text); }
 .team-usage-context.critical .value { stroke: var(--danger); }
 
-/* --- Setup dialog --------------------------------------------------------- */
-.team-member-browser {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1-5);
-  color: var(--text-muted);
-  font-size: var(--fs-sm);
-}
-.team-member-browser small { color: var(--text-dim); font-size: var(--fs-xs); }
-.team-suggestion-hint {
-  color: var(--ok-text);
-  font-size: var(--fs-xs);
-}
-.team-budget-field {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--sp-2) var(--sp-3);
-}
-.team-launch-summary {
-  display: grid;
-  gap: var(--sp-1-5);
-  padding: var(--sp-2-5) var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-inset);
-  color: var(--text-muted);
-  font-size: var(--fs-sm);
-}
-.team-launch-summary h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-}
+/* --- Setup dialog: uso de las cuentas ------------------------------------- */
 .team-launch-accounts {
   display: grid;
   gap: var(--sp-1);

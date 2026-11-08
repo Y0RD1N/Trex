@@ -12,7 +12,7 @@ import { AlertIcon, ChevronIcon, GaugeIcon, RotateIcon, StopIcon } from "./Icons
 import "./TeamUsage.css";
 
 type Props = { team: AgentTeam; states: Record<string, ChatState>; snapshot: TeamSnapshot | null; starting: boolean; busy: boolean;
-  onStop: () => void; onResume: () => void; onLoad: (member: TeamMember) => void; onRecover: (member: TeamMember) => void;
+  onStop: () => void; onResume: () => void; onLoad: (member: TeamMember) => void; /** Abre la conversación completa de un subagente. */ onOpen?: (member: TeamMember) => void; onRecover: (member: TeamMember) => void;
   canRecover: (member: TeamMember) => boolean;
   /** Tokens nuevos por participante, contexto y cuota de su cuenta. */
   usage?: TeamUsageView; onBudgetChange?: (budget: TeamBudget | null) => void };
@@ -39,7 +39,7 @@ function ContextRing({ percent }: { percent: number | null }) {
 const presetOptions = (presets: (number | null)[], current: number | null) => [...new Set([...presets, current])]
   .sort((a, b) => (a ?? Infinity) - (b ?? Infinity)).map(value => ({ value: value === null ? "" : String(value), label: budgetLabel(value) }));
 
-export default function AgentTeamToolbar({ team, states, snapshot, starting, busy, onStop, onResume, onLoad, onRecover, canRecover, usage, onBudgetChange }: Props) {
+export default function AgentTeamToolbar({ team, states, snapshot, starting, busy, onStop, onResume, onLoad, onOpen, onRecover, canRecover, usage, onBudgetChange }: Props) {
   const [expanded, setExpanded] = useState(false), id = useId();
   const paused = ["paused", "failed"].includes(team.phase), members = [team.master, ...team.workers];
   const active = snapshot?.tasks.filter(task => ["claimed", "running"].includes(task.status)).length ?? 0;
@@ -115,7 +115,7 @@ export default function AgentTeamToolbar({ team, states, snapshot, starting, bus
                 {warn && <span className={`team-quota${quotaLevel(warn.peak)}`} title={quotaText(warn)} aria-label={`Cuenta al ${percentText(warn.peak ?? 0)} de su cuota`}><AlertIcon size={11} />{percentText(warn.peak ?? 0)}</span>}
               </span>
               {task && <small className="agent-team-task">{task.status === "queued" ? "En espera" : task.status === "claimed" ? "Preparando" : "Trabajando"}</small>}
-              <div className="agent-team-member-actions"><button type="button" disabled={starting || paused && !member.conversationId} onClick={() => onLoad(member)}>{paused && !member.conversationId ? "Sin historial" : state?.process === "failed" ? "Reintentar" : "Cargar historial"}</button>
+              <div className="agent-team-member-actions"><button type="button" disabled={starting || paused && !member.conversationId} onClick={() => member.id !== team.master.id && onOpen ? onOpen(member) : onLoad(member)}>{paused && !member.conversationId ? "Sin historial" : state?.process === "failed" ? "Reintentar" : member.id !== team.master.id && onOpen ? "Abrir" : "Cargar historial"}</button>
                 {canRecover(member) && <button type="button" disabled={starting} onClick={() => onRecover(member)}>Confirmar revisión de operaciones</button>}</div>
             </div>;
           })}

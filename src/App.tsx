@@ -885,10 +885,11 @@ function AppShell() {
       if (choice.model !== null && !model) throw new Error("El modelo elegido no es válido.");
       const effort = normalizeEffortChoice(choice.effort);
       if (choice.effort != null && !effort) throw new Error("El nivel de esfuerzo elegido no es válido.");
+      if (choice.fast != null && typeof choice.fast !== "boolean") throw new Error("La velocidad elegida no es válida.");
       const launch = launchForProfile(current.settings, profile);
       // Cada etapa tiene su propio modo; un --permission-mode del perfil no debe sustituirlo.
       if (profile.provider === "claude") launch.args = claudePlanningArgs(launch.args, IS_WINDOWS && launch.shell !== "wsl");
-      return { profileId: profile.id, profileName: profile.name, provider: profile.provider, model, effort, launch };
+      return { profileId: profile.id, profileName: profile.name, provider: profile.provider, model, effort, ...(typeof choice.fast === "boolean" ? { fast: choice.fast } : {}), launch };
     };
     workflowStartingRef.current = true;
     setWorkflowSubmitting(true);
@@ -964,7 +965,7 @@ function AppShell() {
           instructions: sanitizeHandoffText(choice.instructions), canWrite: mode !== "plan", mode,
           // Explicit Trex Browser choice from the dialog; absent means the role default.
           ...(typeof choice.browser === "boolean" ? { browser: choice.browser } : {}),
-          agent: { profileId: profile.id, profileName: profile.name, provider: profile.provider, model, effort, launch }, conversationId: null };
+          agent: { profileId: profile.id, profileName: profile.name, provider: profile.provider, model, effort, ...(typeof choice.fast === "boolean" ? { fast: choice.fast } : {}), launch }, conversationId: null };
       };
       const master = pick(request.master, true), workers = request.workers.map(worker => pick(worker));
       const captured = workflowSourceRef.current;

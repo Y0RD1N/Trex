@@ -193,6 +193,21 @@ export function teamPlanningContext(team: AgentTeam, task: string, source: Hando
   return context;
 }
 
+/**
+ * Un elemento sin cambios sale igual (mismo objeto) en cada mezcla: cada fragmento de texto de
+ * cualquier miembro vuelve a mezclar el hilo, y recrearlo todo anulaba las filas memoizadas y la
+ * caché de resúmenes de trabajo. Los elementos son inmutables: un cambio llega como objeto nuevo.
+ */
+const presentedCache = new WeakMap<ChatItem, { memberId: string; key: string; out: ChatItem }>();
+function presented(item: ChatItem, memberId: string, key: string): ChatItem {
+  const cached = presentedCache.get(item);
+  if (cached && cached.memberId === memberId && cached.key === key) return cached.out;
+  const out: ChatItem = item.kind === "text" || item.kind === "thinking" ? { ...item, id: key, messageId: `${memberId}::${item.messageId}` }
+    : item.kind === "permission" ? { ...item, id: key, toolUseId: item.toolUseId ? `${memberId}::${item.toolUseId}` : null } : { ...item, id: key };
+  presentedCache.set(item, { memberId, key, out });
+  return out;
+}
+
 /** Une el hilo visual sin sustituir las identidades nativas usadas al aprobar permisos. */
 export function mergeTeamItems(members: TeamMember[], sessions: Record<string, ChatState>, order: string[]) {
   const current = new Map<string, ChatItem>(), owners: Record<string, { memberId: string; originalId: string }> = {};
@@ -238,8 +253,7 @@ export function mergeTeamItems(members: TeamMember[], sessions: Record<string, C
       const item = items[index];
       if(!validItem(item.id))continue;
       const key = ids[index];
-      const rendered: ChatItem = item.kind === "text" || item.kind === "thinking" ? { ...item, id: key, messageId: `${member.id}::${item.messageId}` }
-        : item.kind === "permission" ? { ...item, id: key, toolUseId: item.toolUseId ? `${member.id}::${item.toolUseId}` : null } : { ...item, id: key };
+      const rendered = presented(item, member.id, key);
       current.set(key, rendered); owners[key] = { memberId: member.id, originalId: item.id };
       if (!seen.has(key)) {
         if (index < (sessions[member.id]?.historyCount ?? 0)) {

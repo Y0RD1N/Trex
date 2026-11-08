@@ -1,25 +1,37 @@
-.modal.feature-dialog.agent-workflow-dialog.agent-team-dialog { width: min(1000px, calc(100vw - 40px)); max-width: 1000px; }
-.team-member-editor { display: grid; gap: var(--sp-3); min-width: 0; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--radius-2xl); background: var(--surface-inset); }
-.team-member-editor > header { display: flex; align-items: center; justify-content: space-between; min-height: 24px; }
-.team-member-controls { display: flex; align-items: center; gap: var(--sp-1); flex-shrink: 0; }
-.team-member-controls .icon-btn { width: 29px; height: 29px; flex-shrink: 0; }
-.team-member-controls .icon-btn:disabled { opacity: .3; }
-.team-member-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-3); }
-.team-member-editor .select-trigger { width: 100%; min-width: 0; text-align: left; }
-.team-member-editor .workflow-field { min-width: 0; margin: 0; }
-.team-member-editor .input { width: 100%; min-width: 0; }
-.team-member-editor .select-trigger { min-height: 42px; height: auto; padding: var(--sp-2) var(--sp-3); }
-.team-member-editor textarea.input { height: auto; min-height: 84px; padding: var(--sp-2-5) var(--sp-3); line-height: 1.65; resize: vertical; }
-.team-member-editor > header .workflow-eyebrow { color: var(--text-muted); font-size: var(--fs-xs); }
-.team-member-editor:has(.team-member-policy > svg) { border-color: color-mix(in srgb, var(--accent) 28%, var(--border)); }
-.team-workers-heading > .btn { min-height: 36px; }
-.team-member-policy { display: flex; align-items: flex-start; gap: var(--sp-2); margin: 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.6; }
-.team-member-policy > svg { flex: 0 0 auto; margin-top: var(--sp-0-5); }
-.team-member-policy > input { margin: var(--sp-1) 0 0; accent-color: var(--accent); }
-.team-workers-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding-top: var(--sp-1-5); }
-.team-workers-heading h3 { margin: 0; font-size: var(--fs-base); }
-.team-workers-heading p { margin: var(--sp-1) 0 0; font-size: var(--fs-xs); line-height: 1.6; color: var(--text-muted); }
-.team-workers-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: var(--sp-3-5); }
-@media (max-width: 720px) { .team-workers-grid { grid-template-columns: minmax(0,1fr); } .team-workers-heading { align-items: flex-start; flex-direction: column; } }
-@media (max-width: 420px) { .team-member-fields { grid-template-columns: minmax(0,1fr); } }
-@media (max-width: 640px) { .agent-team-dialog > .modal-footer .btn-primary { width: 100%; } .agent-team-dialog > .modal-footer .feature-hint { flex-basis: 100%; } }
+/* Equipo: extiende la tarjeta de agente de AgentSetup.css con nombre, función y presupuesto. */
+.agent-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding-top: var(--sp-1); }
+.agent-section-head h3 { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
+.agent-section-head .btn { min-height: 30px; height: 30px; }
+
+.agent-member .agent-name { flex: 1 1 140px; min-width: 0; width: auto; height: 34px; padding: 0 var(--sp-2-5); border-radius: var(--radius-md); font-size: var(--fs-md); font-weight: var(--fw-medium); }
+.agent-workflow-dialog .agent-role { flex: 0 1 170px; width: 170px; }
+.agent-member .agent-account { margin-left: 0; }
+.agent-team-dialog .agent-stack { gap: var(--sp-2-5); }
+.agent-card-more { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.agent-suggested { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--ok-text); font-size: var(--fs-xs); cursor: help; }
+.agent-suggested:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.agent-card-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); min-height: 24px; }
+.agent-chip { display: inline-flex; align-items: center; gap: var(--sp-1); height: 26px; padding: 0 var(--sp-2-5); border: 1px solid var(--surface-edge); border-radius: var(--radius-pill); background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-xs); cursor: pointer; transition: border-color var(--dur), background-color var(--dur), color var(--dur); }
+.agent-chip:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
+.agent-chip[aria-pressed="true"] { border-color: var(--border-strong); background: var(--selected); color: var(--text); }
+.agent-chip:disabled { opacity: .5; cursor: default; }
+.agent-workflow-dialog textarea.agent-instructions { width: 100%; height: auto; min-height: 76px; padding: var(--sp-2) var(--sp-2-5); font-size: var(--fs-sm); line-height: 1.6; resize: vertical; }
+
+.agent-budget { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); padding-top: var(--sp-1); }
+.agent-budget-label { display: inline-flex; align-items: center; gap: var(--sp-1-5); margin-right: auto; color: var(--text-muted); font-size: var(--fs-sm); }
+.agent-budget-label > svg { color: var(--text-dim); }
+.agent-workflow-dialog .agent-budget .agent-select { flex: 0 1 180px; width: 180px; }
+
+.agent-team-dialog .team-launch-accounts li { color: var(--text-dim); font-size: var(--fs-xs); }
+.agent-team-dialog .team-launch-warnings { font-size: var(--fs-xs); }
+
+@media (max-width: 640px) {
+  /* Fila 1: nombre y controles; fila 2: función y asistente lado a lado. */
+  .agent-member .agent-name { flex: 1 1 calc(100% - 112px); order: 1; }
+  .agent-member .agent-card-controls, .agent-member .agent-tag { order: 2; }
+  .agent-member .agent-card-head > .agent-role { flex: 1 1 calc(50% - var(--sp-2)); width: auto; order: 3; }
+  .agent-member .agent-card-head > .agent-account { flex: 1 1 calc(50% - var(--sp-2)); width: auto; margin-left: 0; order: 4; }
+  .agent-workflow-dialog .agent-budget .agent-select { flex: 1 1 140px; width: auto; }
+}
+@media (prefers-reduced-motion: reduce) { .agent-chip { transition: none; } }
+:root[data-motion="reduced"] .agent-chip { transition: none; }
