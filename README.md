@@ -393,11 +393,18 @@ para una conexión nueva, lo consulta al terminar de introducir la credencial.
 Elige el modelo de la lista y guarda la conexión. **Actualizar** vuelve a consultar
 el catálogo; si el proveedor no lo ofrece o rechaza el acceso, puedes usar un ID
 manual. Consultar modelos no genera respuestas ni comprueba saldo o permisos de uso.
-Por ejemplo, **TREX1** para DeepSeek, **TREX2** para MiniMax y **TREX3**
-para OpenRouter. También admite endpoints personalizados compatibles con Chat
-Completions. Guardar la conexión modifica el CLI al instante; **Guardar cambios**
+Por ejemplo, **TREX1** para DeepSeek, **TREX2** para MiniMax, **TREX3**
+para OpenRouter y **TREX5** para Anthropic. También admite endpoints personalizados
+compatibles con Chat Completions. Guardar la conexión modifica el CLI al instante; **Guardar cambios**
 conserva su referencia en la lista de asistentes de la app. La clave no se guarda
 en la configuración de Trex, los argumentos del proceso ni el historial del chat.
+
+**Anthropic** usa la API de Mensajes nativa con una clave `sk-ant-…` de la Consola
+de tu organización (no la suscripción de Claude). Esa clave consume el saldo y los
+créditos de la organización, incluidos los promocionales cuando la cuenta los
+tiene. Trex activa el razonamiento adaptativo, la caché de prompts automática y los
+niveles de esfuerzo que el catálogo de Anthropic declara para cada modelo, y
+muestra el uso real (entrada, salida y caché) en el panel de uso.
 
 En MiniMax puedes introducir una **API Key** de pago por uso o una
 **Subscription Key** de M Plan / Token Plan. Son credenciales de productos distintos;

@@ -1,5 +1,9 @@
-//! OpenAI-compatible provider transport. Assistant messages are deliberately kept
-//! as JSON so signed/opaque reasoning can be replayed without being discarded.
+//! Provider transport: OpenAI-compatible chat completions, plus the native
+//! Anthropic Messages API (`anthropic`). Assistant messages are deliberately
+//! kept as JSON so signed/opaque reasoning can be replayed without being
+//! discarded, and the Anthropic adapter returns the same message shape.
+
+mod anthropic;
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -26,6 +30,8 @@ const MAX_TOOL_CALLS: u64 = 4096;
 const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CATALOG_OUTPUT_BYTES: usize = 1024 * 1024 - 64;
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
+/// Output budget for callers that pass none (Anthropic requires `max_tokens`).
+const DEFAULT_MAX_OUTPUT: u64 = 16_384;
 const EFFORT_METADATA_PATHS: &[&str] = &[
     "/efforts",
     "/supportedEfforts",
@@ -164,7 +170,7 @@ impl std::error::Error for IncompleteCompletion {}
 
 fn provider_name(profile: &Profile) -> Result<&str> {
     match profile.provider.as_str() {
-        "deepseek" | "minimax" | "openrouter" | "custom" => Ok(&profile.provider),
+        "deepseek" | "minimax" | "openrouter" | "anthropic" | "custom" => Ok(&profile.provider),
         _ => bail!("Unsupported API provider"),
     }
 }
@@ -174,6 +180,7 @@ fn endpoint(profile: &Profile, resource: &str) -> Result<Url> {
         "deepseek" => "https://api.deepseek.com",
         "minimax" => "https://api.minimax.io/v1",
         "openrouter" => "https://openrouter.ai/api/v1",
+        "anthropic" => "https://api.anthropic.com/v1",
         "custom" => {
             ensure!(
                 !profile.base_url.trim().is_empty(),
@@ -281,13 +288,30 @@ fn authenticated(request: RequestBuilder, profile: &Profile, url: &Url) -> Resul
         "An API key is required for this provider; save one in the profile"
     );
     if let Some(key) = key {
-        let mut header = HeaderValue::from_str(&format!("Bearer {key}"))
-            .map_err(|_| anyhow!("API key cannot be used as an authorization header"))?;
-        header.set_sensitive(true);
-        Ok(request.header(AUTHORIZATION, header))
+        credential(request, &profile.provider, key)
+            .ok_or_else(|| anyhow!("API key cannot be used as an authorization header"))
     } else {
         Ok(request)
     }
+}
+
+/// Attach the key the way the provider expects it. Anthropic takes `x-api-key`
+/// and a mandatory version header; every other provider takes a Bearer token.
+fn credential(request: RequestBuilder, provider: &str, key: &str) -> Option<RequestBuilder> {
+    if provider == "anthropic" {
+        let mut header = HeaderValue::from_str(key).ok()?;
+        header.set_sensitive(true);
+        return Some(
+            request
+                .header("x-api-key", header)
+                .header("anthropic-version", anthropic::VERSION),
+        );
+    }
+    // Both MiniMax pay-as-you-go API keys and M-Plan subscription keys
+    // use the same OpenAI-compatible Bearer authorization wire format.
+    let mut header = HeaderValue::from_str(&format!("Bearer {key}")).ok()?;
+    header.set_sensitive(true);
+    Some(request.header(AUTHORIZATION, header))
 }
 
 /// Discover a remote catalog without requiring or saving a configured model.
@@ -353,14 +377,14 @@ pub async fn discover_models(input: Value) -> std::result::Result<Vec<Value>, Ca
         builder = builder.no_proxy();
     }
     let client = builder.build().map_err(|_| Unavailable)?;
+    let mut url = url;
+    if requested.provider == "anthropic" {
+        // One page of up to 1000 models; the default page holds only 20.
+        url.set_query(Some("limit=1000"));
+    }
     let mut request = client.get(url).header(ACCEPT, "application/json");
     if let Some(key) = key {
-        // Both MiniMax pay-as-you-go API keys and M-Plan subscription keys
-        // use the same OpenAI-compatible Bearer authorization wire format.
-        let mut header =
-            HeaderValue::from_str(&format!("Bearer {key}")).map_err(|_| InvalidRequest)?;
-        header.set_sensitive(true);
-        request = request.header(AUTHORIZATION, header);
+        request = credential(request, &requested.provider, key).ok_or(InvalidRequest)?;
     }
     let bytes = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
         let response = request.send().await.map_err(|_| Unavailable)?;
@@ -439,6 +463,13 @@ fn normalize_catalog(
     let mut models = Vec::with_capacity(catalog.len());
     for model in catalog {
         catalog_deadline(deadline)?;
+        let converted;
+        let model = if provider == "anthropic" {
+            converted = anthropic::catalog_view(model);
+            &converted
+        } else {
+            model
+        };
         // Check raw cardinality before filtering or deduplicating. Even an
         // ignored alias or 100,000 identical strings must fail in constant time.
         for path in EFFORT_METADATA_PATHS
@@ -677,6 +708,11 @@ fn normalize_models_with_context(
                             normalized["pricing"][target] = json!(price*1_000_000.0);
                         }
                     }
+                }
+            }
+            if provider == "anthropic" {
+                if let Some(price) = anthropic::documented_pricing(id) {
+                    normalized["pricing"] = price;
                 }
             }
             let efforts = string_metadata(model, EFFORT_METADATA_PATHS).or_else(|| {
@@ -1133,6 +1169,9 @@ fn request_body(
 ) -> Result<Value> {
     ensure!(!model.trim().is_empty(), "A model must be selected");
     provider_name(profile)?;
+    if profile.provider == "anthropic" {
+        return anthropic::request_body(model, effort, messages, tools, DEFAULT_MAX_OUTPUT);
+    }
     let mut body = json!({"model": model, "messages": messages, "stream": true});
     if profile.provider != "custom" {
         body["stream_options"] = json!({"include_usage": true});
@@ -1224,7 +1263,7 @@ pub async fn complete(
 ) -> Result<Completion> {
     ensure!(!cancel.is_cancelled(), "Provider request cancelled");
     let body = request_body(profile, model, effort, messages, tools)?;
-    let url = endpoint(profile, "chat/completions")?;
+    let url = endpoint(profile, resource(profile))?;
     let request = authenticated(
         client(&url)?
             .post(url.clone())
@@ -1233,7 +1272,16 @@ pub async fn complete(
         profile,
         &url,
     )?;
-    completion_request(request, tx, cancel).await
+    completion_request(request, Protocol::of(profile), tx, cancel).await
+}
+
+/// The generation endpoint relative to the provider's base URL.
+fn resource(profile: &Profile) -> &'static str {
+    if profile.provider == "anthropic" {
+        "messages"
+    } else {
+        "chat/completions"
+    }
 }
 
 /// All retries happen before a successful response/stream. Nothing replays a
@@ -1250,17 +1298,24 @@ pub async fn complete_configured(
     max_output: u64,
     conversation: Option<&str>,
 ) -> Result<Completion> {
-    let mut body = request_body(
-        profile,
-        model,
-        if profile.provider == "custom" {
-            None
-        } else {
-            effort
-        },
-        messages,
-        tools,
-    )?;
+    let native = profile.provider == "anthropic";
+    let mut body = if native {
+        provider_name(profile)?;
+        // The adapter clamps the budget to what the model accepts.
+        anthropic::request_body(model, effort, messages, tools, max_output)?
+    } else {
+        request_body(
+            profile,
+            model,
+            if profile.provider == "custom" {
+                None
+            } else {
+                effort
+            },
+            messages,
+            tools,
+        )?
+    };
     if profile.provider == "custom" {
         if let Some(effort) = effort {
             ensure!(
@@ -1281,21 +1336,24 @@ pub async fn complete_configured(
         "custom" => &options.custom_output_parameter,
         _ => "max_tokens",
     };
-    body[parameter] = json!(max_output);
+    if !native {
+        body[parameter] = json!(max_output);
+    }
     if profile.provider == "custom" && options.custom_stream_usage {
         body["stream_options"] = json!({"include_usage":true});
     }
     if let Some(v) = options.temperature {
         ensure!(
-            profile.provider != "minimax",
+            profile.provider != "minimax" && !native,
             "temperature is not supported by this provider adapter"
         );
         body["temperature"] = json!(v);
     }
     if let Some(v) = options.top_p {
+        ensure!(!native, "top_p is not supported by this provider adapter");
         body["top_p"] = json!(v);
     }
-    let url = endpoint(profile, "chat/completions")?;
+    let url = endpoint(profile, resource(profile))?;
     let request_id = uuid::Uuid::new_v4().to_string();
     let started = Instant::now();
     for attempt in 0..=options.retries {
@@ -1323,7 +1381,7 @@ pub async fn complete_configured(
                     .saturating_sub(started.elapsed().as_millis() as u64)
                     .max(1),
             ),
-            completion_request(request, tx.clone(), cancel.clone()),
+            completion_request(request, Protocol::of(profile), tx.clone(), cancel.clone()),
         )
         .await;
         match result {
@@ -1404,8 +1462,78 @@ fn attach_attempts(usage: &mut Option<Value>, attempts: u64) {
     usage.as_mut().unwrap()["trex_request_attempts"] = json!(attempts);
 }
 
+/// Wire format of the generation endpoint.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Protocol {
+    /// OpenAI-style `chat/completions`.
+    Chat,
+    /// Anthropic `messages`.
+    Messages,
+}
+
+impl Protocol {
+    fn of(profile: &Profile) -> Self {
+        if profile.provider == "anthropic" {
+            Self::Messages
+        } else {
+            Self::Chat
+        }
+    }
+}
+
+/// The accumulator for the protocol in use, behind one interface.
+enum Assembly {
+    Chat(Accumulator),
+    Messages(anthropic::Accumulator),
+}
+
+impl Assembly {
+    fn new(protocol: Protocol) -> Self {
+        match protocol {
+            Protocol::Chat => Self::Chat(Accumulator::default()),
+            Protocol::Messages => Self::Messages(anthropic::Accumulator::default()),
+        }
+    }
+
+    fn done(&self) -> bool {
+        match self {
+            Self::Chat(inner) => inner.done,
+            Self::Messages(inner) => inner.done,
+        }
+    }
+
+    fn event(&mut self, data: &[u8], tx: &UnboundedSender<ProviderDelta>) -> Result<()> {
+        match self {
+            Self::Chat(inner) => inner.event(data, tx),
+            Self::Messages(inner) => inner.event(data, tx),
+        }
+    }
+
+    fn full_response(&mut self, value: &Value, tx: &UnboundedSender<ProviderDelta>) -> Result<()> {
+        match self {
+            Self::Chat(inner) => inner.full_response(value, tx),
+            Self::Messages(inner) => inner.full_response(value, tx),
+        }
+    }
+
+    fn incomplete(&self, cancelled: bool) -> anyhow::Error {
+        match self {
+            Self::Chat(inner) => inner.incomplete(cancelled),
+            Self::Messages(inner) => inner.incomplete(cancelled),
+        }
+    }
+
+    fn finish(self) -> Result<Completion> {
+        match self {
+            Self::Chat(inner) => inner.finish(),
+            Self::Messages(inner) => inner.finish(),
+        }
+    }
+}
+
 async fn completion_request(
     request: RequestBuilder,
+    protocol: Protocol,
     tx: UnboundedSender<ProviderDelta>,
     cancel: CancellationToken,
 ) -> Result<Completion> {
@@ -1440,8 +1568,10 @@ async fn completion_request(
             403 => "forbidden",
             404 => "model_or_endpoint_unavailable",
             408 | 504 => "upstream_timeout",
+            413 => "request_too_large",
             429 => "rate_limit",
-            503 => "overloaded",
+            // 529 is Anthropic's "overloaded_error".
+            503 | 529 => "overloaded",
             400 | 422 => "invalid_request",
             _ => "provider_error",
         }
@@ -1479,6 +1609,20 @@ async fn completion_request(
                         }
                     }
                 }
+                // Anthropic reports both of these as a generic invalid_request_error;
+                // only a fixed code is kept, never the provider's sentence.
+                if protocol == Protocol::Messages {
+                    let message = value
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if message.contains("credit balance") {
+                        code = "insufficient_credit".into();
+                    } else if message.contains("prompt is too long") {
+                        code = "context_length_exceeded".into();
+                    }
+                }
             }
         }
         return Err(ApiError {
@@ -1486,14 +1630,14 @@ async fn completion_request(
             code,
             status: Some(status),
             retry_after_ms,
-            retryable: matches!(status, 429 | 503),
+            retryable: matches!(status, 429 | 503 | 529),
             request_id: String::new(),
         }
         .into());
     }
     let mut chunks = response.bytes_stream();
     let mut decoder = SseDecoder::default();
-    let mut accumulator = Accumulator::default();
+    let mut accumulator = Assembly::new(protocol);
     let mut prefix = Vec::new();
     let mut json_body = Vec::new();
     let mut mode = None;
@@ -1532,11 +1676,11 @@ async fn completion_request(
             } else {
                 for event in decoder.push(&bytes)? {
                     accumulator.event(&event, &tx)?;
-                    if accumulator.done {
+                    if accumulator.done() {
                         break;
                     }
                 }
-                if accumulator.done {
+                if accumulator.done() {
                     break;
                 }
             }
@@ -1546,10 +1690,10 @@ async fn completion_request(
             let value = parse_json(&json_body)?;
             json_applied = true;
             accumulator.full_response(&value, &tx)?;
-        } else if !accumulator.done {
+        } else if !accumulator.done() {
             for event in decoder.finish()? {
                 accumulator.event(&event, &tx)?;
-                if accumulator.done {
+                if accumulator.done() {
                     break;
                 }
             }
@@ -3281,7 +3425,7 @@ mod tests {
         let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
         let (request, server) = mock_response(response.into_bytes()).await;
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let result = completion_request(request, tx, CancellationToken::new())
+        let result = completion_request(request, Protocol::Chat, tx, CancellationToken::new())
             .await
             .unwrap();
         assert_eq!(result.message, message);
@@ -3297,7 +3441,7 @@ mod tests {
             let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
             let (request, server) = mock_response(response.into_bytes()).await;
             let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-            let error = completion_request(request, tx, CancellationToken::new())
+            let error = completion_request(request, Protocol::Chat, tx, CancellationToken::new())
                 .await
                 .unwrap_err();
             let incomplete = error.downcast_ref::<IncompleteCompletion>().unwrap();
@@ -3327,7 +3471,7 @@ mod tests {
         let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
         let (request, server) = mock_response(response.into_bytes()).await;
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let error = completion_request(request, tx, CancellationToken::new())
+        let error = completion_request(request, Protocol::Chat, tx, CancellationToken::new())
             .await
             .unwrap_err();
         let incomplete = error.downcast_ref::<IncompleteCompletion>().unwrap();
@@ -3351,7 +3495,7 @@ mod tests {
         let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
         let (request, server) = mock_response(response.into_bytes()).await;
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let error = completion_request(request, tx, CancellationToken::new())
+        let error = completion_request(request, Protocol::Chat, tx, CancellationToken::new())
             .await
             .unwrap_err();
         let incomplete = error.downcast_ref::<IncompleteCompletion>().unwrap();
@@ -3367,7 +3511,7 @@ mod tests {
             let response = format!("HTTP/1.1 {status}\r\nLocation: /duplicate\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             let (request, server) = mock_response(response.into_bytes()).await;
             let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-            assert!(completion_request(request, tx, CancellationToken::new())
+            assert!(completion_request(request, Protocol::Chat, tx, CancellationToken::new())
                 .await
                 .is_err());
             assert_eq!(server.await.unwrap(), 1);
@@ -3396,7 +3540,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let task_cancel = cancel.clone();
         let task = tokio::spawn(async move {
-            completion_request(client(&url).unwrap().post(url).body("{}"), tx, task_cancel).await
+            completion_request(client(&url).unwrap().post(url).body("{}"), Protocol::Chat, tx, task_cancel).await
         });
         tokio::time::timeout(Duration::from_secs(5), ready_rx)
             .await
@@ -3426,6 +3570,161 @@ mod tests {
         );
         assert_eq!(incomplete.finish_reason, None);
         server.await.unwrap();
+    }
+
+    fn sse_body(events: &[Value]) -> String {
+        events
+            .iter()
+            .map(|event| format!("event: {}\ndata: {event}\n\n", event["type"].as_str().unwrap_or("message")))
+            .collect()
+    }
+
+    fn http_response(status: &str, content_type: &str, body: &str) -> Vec<u8> {
+        format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_bytes()
+    }
+
+    #[tokio::test]
+    async fn anthropic_stream_over_http_becomes_the_shared_completion_shape() {
+        let body = sse_body(&[
+            json!({"type":"message_start","message":{"id":"msg_1","role":"assistant","usage":{"input_tokens":12,"cache_read_input_tokens":200,"cache_creation_input_tokens":0,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Voy a leerlo 🦖"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01","name":"read_file","input":{}}}),
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}),
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"a.txt\"}"}}),
+            json!({"type":"content_block_stop","index":1}),
+            json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":31}}),
+            json!({"type":"message_stop"}),
+        ]);
+        let (request, server) = mock_response(http_response("200 OK", "text/event-stream", &body)).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let done = completion_request(request, Protocol::Messages, tx, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(done.finish_reason, "tool_calls");
+        assert_eq!(done.message["role"], "assistant");
+        assert_eq!(done.message["content"], "Voy a leerlo 🦖");
+        assert_eq!(done.message["tool_calls"][0]["id"], "toolu_01");
+        assert_eq!(done.message["tool_calls"][0]["function"]["arguments"], "{\"path\":\"a.txt\"}");
+        let usage = done.usage.unwrap();
+        assert_eq!(usage["prompt_tokens"], 212);
+        assert_eq!(usage["completion_tokens"], 31);
+        assert_eq!(usage["prompt_tokens_details"]["cached_tokens"], 200);
+        assert!(matches!(rx.recv().await, Some(ProviderDelta::Text(text)) if text == "Voy a leerlo 🦖"));
+        assert_eq!(server.await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn anthropic_stream_cut_before_message_stop_never_succeeds() {
+        // A tool call whose arguments are complete, but no stop reason arrived.
+        let body = sse_body(&[
+            json!({"type":"message_start","message":{"usage":{"input_tokens":3,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"run","input":{}}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":\"ls\"}"}}),
+        ]);
+        let (request, server) = mock_response(http_response("200 OK", "text/event-stream", &body)).await;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let error = completion_request(request, Protocol::Messages, tx, CancellationToken::new())
+            .await
+            .unwrap_err();
+        let incomplete = error.downcast_ref::<IncompleteCompletion>().unwrap();
+        assert_eq!(incomplete.finish_reason, None);
+        assert_eq!(incomplete.usage.as_ref().unwrap()["prompt_tokens"], 3);
+        assert_eq!(server.await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn anthropic_errors_map_to_finite_codes_without_quoting_the_provider() {
+        let cases = [
+            ("400 Bad Request", 400, "Your credit balance is too low to access the Anthropic API. secret-account-1234", "insufficient_credit", false),
+            ("400 Bad Request", 400, "prompt is too long: 250000 tokens > 200000 maximum", "context_length_exceeded", false),
+            ("400 Bad Request", 400, "something else secret-account-1234", "invalid_request", false),
+            ("413 Payload Too Large", 413, "x", "request_too_large", false),
+            ("529 Overloaded", 529, "Overloaded", "overloaded", true),
+            ("429 Too Many Requests", 429, "slow down", "rate_limit", true),
+            ("401 Unauthorized", 401, "invalid x-api-key", "unauthorized", false),
+        ];
+        for (status, number, message, code, retryable) in cases {
+            let body = json!({"type":"error","error":{"type":"invalid_request_error","message":message}}).to_string();
+            let (request, server) = mock_response(http_response(status, "application/json", &body)).await;
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            let error = completion_request(request, Protocol::Messages, tx, CancellationToken::new())
+                .await
+                .unwrap_err();
+            let api = error.downcast_ref::<ApiError>().expect(code);
+            assert_eq!((api.status, api.code.as_str(), api.retryable), (Some(number), code, retryable), "{status}");
+            for text in [format!("{error}"), format!("{error:?}")] {
+                assert!(!text.contains("secret-account"), "{text}");
+            }
+            assert_eq!(server.await.unwrap(), 1);
+        }
+        // Chat providers keep treating 529 as an unknown provider failure.
+        let body = "{}";
+        let (request, server) = mock_response(http_response("400 Bad Request", "application/json", body)).await;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let error = completion_request(request, Protocol::Chat, tx, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.downcast_ref::<ApiError>().unwrap().code, "invalid_request");
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn anthropic_endpoint_headers_and_request_use_the_messages_api() {
+        let saved = profile("anthropic");
+        assert_eq!(
+            endpoint(&saved, resource(&saved)).unwrap().as_str(),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(endpoint(&saved, "models").unwrap().as_str(), "https://api.anthropic.com/v1/models");
+        assert_eq!(resource(&profile("deepseek")), "chat/completions");
+        assert!(Protocol::of(&saved) == Protocol::Messages && Protocol::of(&profile("custom")) == Protocol::Chat);
+        let url = endpoint(&saved, "messages").unwrap();
+        let built = credential(client(&url).unwrap().post(url.clone()), "anthropic", "sk-ant-test").unwrap().build().unwrap();
+        let headers = built.headers();
+        assert_eq!(headers.get("x-api-key").unwrap(), "sk-ant-test");
+        assert!(headers.get("x-api-key").unwrap().is_sensitive());
+        assert_eq!(headers.get("anthropic-version").unwrap(), anthropic::VERSION);
+        assert!(headers.get(AUTHORIZATION).is_none(), "Anthropic does not take a Bearer token");
+        let bearer = credential(client(&url).unwrap().post(url.clone()), "openrouter", "k").unwrap().build().unwrap();
+        assert!(bearer.headers().get("x-api-key").is_none() && bearer.headers().get(AUTHORIZATION).is_some());
+        assert!(credential(client(&url).unwrap().post(url), "anthropic", "bad\nkey").is_none());
+        // The shared body builder delegates, and effort is validated natively.
+        let body = request_body(&saved, "claude-opus-5-5", Some("high"), &[json!({"role":"user","content":"hola"})], &[]).unwrap();
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert_eq!(body["max_tokens"], DEFAULT_MAX_OUTPUT);
+        assert!(body.get("stream_options").is_none() && body.get("temperature").is_none());
+        assert!(request_body(&saved, "claude-opus-5-5", Some("none"), &[json!({"role":"user","content":"hola"})], &[]).is_err());
+    }
+
+    #[test]
+    fn anthropic_catalog_reports_context_efforts_pricing_and_image_input() {
+        let body = json!({"data":[
+            {"type":"model","id":"claude-opus-5-5","display_name":"Claude Opus 5.5","max_input_tokens":1_000_000,"max_tokens":128_000,
+             "capabilities":{"image_input":{"supported":true},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}}}},
+            {"type":"model","id":"claude-haiku-5-5","display_name":"Claude Haiku 5.5","max_input_tokens":500_000,"max_tokens":64_000,
+             "capabilities":{"image_input":{"supported":true},"effort":{"supported":false}}},
+        ],"has_more":false,"first_id":"a","last_id":"b"})
+        .to_string();
+        let anthropic_profile = profile("anthropic");
+        let models = normalize_catalog(body.as_bytes(), &anthropic_profile, Some("sk-ant-key"), Instant::now() + Duration::from_secs(5)).unwrap();
+        assert_eq!(models.len(), 2);
+        let opus = &models[0];
+        assert_eq!((opus["id"].as_str(), opus["name"].as_str()), (Some("claude-opus-5-5"), Some("Claude Opus 5.5")));
+        assert_eq!(opus["contextWindow"], 1_000_000);
+        assert_eq!(opus["maxOutputTokens"], 128_000);
+        assert_eq!(opus["efforts"], json!(["low", "medium", "high", "xhigh", "max"]));
+        assert_eq!(opus["inputModalities"], json!(["text", "image"]));
+        assert_eq!(opus["pricing"]["inputUsdPerMillion"], 4.0);
+        assert_eq!(opus["pricing"]["cachedInputUsdPerMillion"], 0.2);
+        let haiku = &models[1];
+        assert!(haiku.get("efforts").is_none(), "no effort levels for a model without effort support");
+        assert!(haiku.get("pricing").is_none(), "tiered prices are not guessed");
+        assert_eq!(haiku["contextWindow"], 500_000);
+        // The same code path as other providers must still reject a catalog that echoes the key.
+        let echoed = body.replace("Claude Haiku 5.5", "sk-ant-key");
+        assert!(normalize_catalog(echoed.as_bytes(), &anthropic_profile, Some("sk-ant-key"), Instant::now() + Duration::from_secs(5)).is_err());
     }
 
     /// A realistic Trex Browser snapshot envelope as `trex-browser call`

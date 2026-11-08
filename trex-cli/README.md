@@ -1,7 +1,8 @@
 # Trex Agent
 
-Standalone Rust API coding agent for named DeepSeek, MiniMax, OpenRouter, and
-custom OpenAI-compatible profiles. It is independent of the desktop app.
+Standalone Rust API coding agent for named DeepSeek, MiniMax, OpenRouter,
+Anthropic, and custom OpenAI-compatible profiles. It is independent of the desktop
+app.
 
 Build and test from the repository root:
 
@@ -199,6 +200,20 @@ provider reports no `usage.cost` (DeepSeek, MiniMax, most custom APIs) the cost 
 computed locally from these prices, billing prompt-cache hits at the cached price,
 and the usage is marked `costEstimated: true`. Session usage also includes
 `byModel`, the measured totals per model.
+
+Anthropic (`"provider":"anthropic"`, default base URL `https://api.anthropic.com/v1`)
+talks to the native Messages API with an `sk-ant-…` API key sent as `x-api-key`,
+so spend and credits are those of the key's organization. The CLI keeps its
+OpenAI-shaped history and translates only at the transport: system prompt,
+tool definitions and results, images, streamed text, summarized adaptive
+thinking and `output_config.effort` (only the levels the model catalog
+declares). Automatic caching plus a system-prompt breakpoint are always on, and
+usage is reported as input + cache reads + cache writes, so the usage panel and
+budgets see the real figures. Thinking blocks are shown but never sent back (the
+history is edited between turns, which Anthropic would reject), `temperature` and
+`top_p` are refused, and a stream that ends without `message_stop`, a refusal or an
+output limit never executes tools. Built-in prices are listed only for models with
+a single flat rate; for any other model set `provider.pricing`.
 
 Prompt caching: DeepSeek, OpenAI, Gemini 2.5+, Grok and similar providers cache
 prompt prefixes automatically, so nothing is added. For OpenRouter `anthropic/*`

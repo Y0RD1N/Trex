@@ -7,7 +7,7 @@ import { CheckIcon, PlusIcon, RotateIcon, TrashIcon } from "./Icons";
 import Select from "./Select";
 import "./TrexCliProfiles.css";
 
-type ApiProvider = "deepseek" | "minimax" | "openrouter" | "custom";
+type ApiProvider = "deepseek" | "minimax" | "openrouter" | "anthropic" | "custom";
 export type TrexCliStatus = { installed: boolean; path: string | null; version?: string | null };
 export type TrexCliProfile = {
   name: string;
@@ -27,6 +27,7 @@ const PROVIDERS: { id: ApiProvider; label: string; name: string; baseUrl: string
   { id: "deepseek", label: "DeepSeek", name: "TREX1", baseUrl: "https://api.deepseek.com" },
   { id: "minimax", label: "MiniMax", name: "TREX2", baseUrl: "https://api.minimax.io/v1" },
   { id: "openrouter", label: "OpenRouter", name: "TREX3", baseUrl: "https://openrouter.ai/api/v1" },
+  { id: "anthropic", label: "Anthropic", name: "TREX5", baseUrl: "https://api.anthropic.com/v1" },
   { id: "custom", label: "Personalizada", name: "TREX4", baseUrl: "" },
 ];
 const providerLabel = (provider: ApiProvider): string => PROVIDERS.find(item => item.id === provider)?.label ?? "Personalizada";
@@ -360,7 +361,8 @@ function TrexConnectionForm({ profile, connections, launcherProfiles, connection
         onChange={event => { invalidateCatalog(); setKeyEntered(!!event.currentTarget.value.trim()); setError(null); setNotice(""); }}
         onBlur={() => { if (passwordRef.current?.value.trim()) void queryModels(); }} />
       <small id={`${id}-key-hint`}>{needsKey ? "Necesaria para esta conexión. " : "Escribe una clave solo si quieres reemplazarla. "}Se usa para consultar modelos; solo se guarda al guardar la conexión. El campo se vacía al guardar o salir de estos ajustes.
-        {provider === "minimax" && <> MiniMax acepta una API Key de pago por uso o una Subscription Key de M Plan / Token Plan: son productos distintos. Pega una sola credencial, sin «Bearer»; Trex lo añade automáticamente. <a href="https://platform.minimax.io/docs/m-plan/other-tools" target="_blank" rel="noreferrer">Documentación de MiniMax</a>.</>}</small></div>
+        {provider === "minimax" && <> MiniMax acepta una API Key de pago por uso o una Subscription Key de M Plan / Token Plan: son productos distintos. Pega una sola credencial, sin «Bearer»; Trex lo añade automáticamente. <a href="https://platform.minimax.io/docs/m-plan/other-tools" target="_blank" rel="noreferrer">Documentación de MiniMax</a>.</>}
+        {provider === "anthropic" && <> Usa una clave de la API de Anthropic (empieza por sk-ant-), creada en la Consola de tu organización: es una clave distinta de la suscripción de Claude y consume el saldo y los créditos de esa organización. Pégala sin prefijos. <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noreferrer">Claves API</a>.</>}</small></div>
     <div className="profile-field trex-model-field"><label htmlFor={`${id}-model`}>{manualModel ? "ID del modelo (manual)" : "Modelo"}</label>
       {manualModel ? <input id={`${id}-model`} className="input settings-mono" value={model} disabled={pending} placeholder="ID exacto del proveedor" spellCheck={false} autoComplete="off"
         aria-invalid={fieldError("model")} aria-describedby={hint("model")} onChange={event => { setModel(event.currentTarget.value); setError(null); setNotice(""); }} />

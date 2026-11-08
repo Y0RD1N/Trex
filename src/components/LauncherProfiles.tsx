@@ -136,7 +136,7 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
       <div className="trex-cli-heading"><span className="profile-card-icon"><AgentIcon kind="trex" size={16} /></span>
         <div><strong>Trex API <span>Opcional</span></strong><span role="status">{trex.loading ? "Comprobando Trex CLI…" : trex.status?.installed ? `Trex CLI disponible${trex.status.version ? ` · ${trex.status.version}` : ""}` : trex.error ? "Trex CLI no disponible" : "Trex CLI no instalado"}</span></div>
         <button type="button" className="btn btn-small btn-ghost" disabled={trex.loading || trexBusy} onClick={() => void trex.refresh()}>Comprobar</button></div>
-      <p id={`${id}-trex-hint`}>{trex.error ?? (trex.status?.installed ? "Conecta DeepSeek, MiniMax, OpenRouter o una API compatible. Cada cuenta guarda su propio modelo y clave en Trex CLI." : "Trex CLI es opcional. Activa «Instalar Trex CLI» en el instalador de trex y pulsa Comprobar para añadir conexiones API. Tus perfiles de Claude y Codex siguen disponibles.")}</p>
+      <p id={`${id}-trex-hint`}>{trex.error ?? (trex.status?.installed ? "Conecta DeepSeek, MiniMax, OpenRouter, Anthropic o una API compatible. Cada cuenta guarda su propio modelo y clave en Trex CLI." : "Trex CLI es opcional. Activa «Instalar Trex CLI» en el instalador de trex y pulsa Comprobar para añadir conexiones API. Tus perfiles de Claude y Codex siguen disponibles.")}</p>
       {trex.status?.path && <code className="trex-cli-path">{trex.status.path}</code>}
     </div>
 

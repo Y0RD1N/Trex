@@ -100,6 +100,7 @@ const providers = [
   { id: "deepseek", label: "DeepSeek", url: "https://api.deepseek.com" },
   { id: "minimax", label: "MiniMax", url: "https://api.minimax.io/v1" },
   { id: "openrouter", label: "OpenRouter", url: "https://openrouter.ai/api/v1" },
+  { id: "anthropic", label: "Anthropic", url: "https://api.anthropic.com/v1" },
   { id: "custom", label: "Personalizada", url: "https://offline-provider.invalid/v1" },
 ];
 const connection = (name = "Account_A", provider = "deepseek", extra = {}) => ({

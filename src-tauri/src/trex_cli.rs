@@ -351,7 +351,7 @@ pub async fn trex_cli_models(request: ModelCatalogRequest) -> Result<ModelCatalo
     crate::blocking(move || {
         if !matches!(
             request.provider.as_str(),
-            "minimax" | "deepseek" | "openrouter" | "custom"
+            "minimax" | "deepseek" | "openrouter" | "anthropic" | "custom"
         ) || request.name.as_ref().is_some_and(|name| {
             name.trim().is_empty()
                 || name.starts_with('-')

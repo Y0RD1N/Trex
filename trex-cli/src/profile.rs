@@ -238,8 +238,9 @@ fn provider_url(provider: &str) -> Result<&'static str> {
         "deepseek" => Ok("https://api.deepseek.com"),
         "minimax" => Ok("https://api.minimax.io/v1"),
         "openrouter" => Ok("https://openrouter.ai/api/v1"),
+        "anthropic" => Ok("https://api.anthropic.com/v1"),
         "custom" => Ok(""),
-        _ => bail!("provider must be deepseek, minimax, openrouter, or custom"),
+        _ => bail!("provider must be deepseek, minimax, openrouter, anthropic, or custom"),
     }
 }
 
@@ -1269,6 +1270,7 @@ mod tests {
             ("deepseek", "https://api.deepseek.com"),
             ("minimax", "https://api.minimax.io/v1"),
             ("openrouter", "https://openrouter.ai/api/v1"),
+            ("anthropic", "https://api.anthropic.com/v1"),
         ] {
             let mut value = input("example");
             value["provider"] = json!(provider);
