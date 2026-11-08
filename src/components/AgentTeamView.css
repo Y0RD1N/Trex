@@ -65,6 +65,13 @@
 .agent-team-member-title small[data-risk="read"] { border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok-text); }
 .agent-team-member-title small[data-risk="edit"] { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn-text); }
 .agent-team-member-title small[data-risk="full"] { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-text); }
+/* Permisos editables: el mismo aspecto que la insignia, con el menú de modos. */
+.agent-team-member-title .agent-team-permission { width: auto; min-width: 0; max-width: 58%; min-height: 22px; height: 22px; padding: 0 var(--sp-1-5) 0 var(--sp-2); gap: var(--sp-1); border-radius: var(--radius-xs); color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-medium); }
+.agent-team-member-title .agent-team-permission > svg { width: 11px; height: 11px; }
+.agent-team-member-title .agent-team-permission[data-risk="read"] { border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok-text); }
+.agent-team-member-title .agent-team-permission[data-risk="edit"] { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn-text); }
+.agent-team-member-title .agent-team-permission[data-risk="full"] { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-text); }
+.agent-team-member-title .agent-team-permission:disabled { opacity: .7; cursor: not-allowed; }
 .agent-team-member > span { color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal); overflow-wrap: anywhere; }
 .agent-team-task { display: inline-flex; align-items: center; gap: var(--sp-1-5); color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-medium); }
 .agent-team-task::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }

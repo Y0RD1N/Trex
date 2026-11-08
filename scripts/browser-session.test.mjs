@@ -479,6 +479,33 @@ test("ChatPanel opens the exact broker provenance id with pinned context, withou
   t.after(() => env.timers.clear());
 });
 
+test("ChatPanel opens a lean agent artifact in this chat's own allocated space, not the settings profile", async t => {
+  const nativeCalls = [], resolved = [], h = harness(t, "claude"); await h.ready();
+  const env = components.environment(), host = components.host(t);
+  const automatic = { enabled: true, profile: "BROWSER1", clientId: "ordinary-chat", automatic: true, label: "Claude Code" };
+  const { ChatPanel } = components.panelModule(env, { "../api": { ...components.api,
+    gitBranch: async () => null,
+    trexBrowserResolveSpace: async (...args) => { resolved.push(args); return { enabled: true, clientId: automatic.clientId, profile: "BROWSER42" }; },
+    trexBrowserOpenArtifact: async (...args) => { nativeCalls.push(args); return { content: [], isError: false }; },
+  } });
+  // Exactly what Claude, Codex and Antigravity hand to the transcript: no checksum, size or profile.
+  const [lean] = browserModule.browserArtifacts([{ artifactId: "3f1f2f0e-0000-4000-8000-000000000001", kind: "screenshot", mimeType: "image/png", width: 640, height: 480 }]);
+  const item = { kind: "tool", id: "browser-tool", name: "mcp__trex_browser__browser_take_screenshot", input: {}, status: "done", output: "", patch: null, artifacts: [lean] };
+  const session = { ...h.session, state: { ...h.state, items: [item] } };
+  const tree = host.render(() => ChatPanel({ ...components.baseProps(), visible: true, provider: "claude", browser: automatic, session }));
+  const row = [...components.elements(tree)].find(node => node.props.item === item && node.props.onOpenArtifact);
+  assert.ok(row);
+  await row.props.onOpenArtifact(lean);
+  assert.deepEqual(resolved.map(args => [args[0], args[1].clientId]), [[cwd, "ordinary-chat"]]);
+  assert.deepEqual(nativeCalls, [[lean.id, cwd, "full", "ordinary-chat", "BROWSER42"]]);
+  // An artifact that does name its profile (Trex CLI) is opened there without asking the broker again.
+  const named = { ...lean, provenance: { projectId: "project", profile: "BROWSER17" } };
+  await row.props.onOpenArtifact(named);
+  assert.equal(resolved.length, 1);
+  assert.deepEqual(nativeCalls[1], [lean.id, cwd, "full", "ordinary-chat", "BROWSER17"]);
+  t.after(() => env.timers.clear());
+});
+
 test("rendered browser artifact button contains metadata only and returns its exact reference", async t => {
   const source = await readFile(new URL("../src/components/chat/ChatItems.tsx", import.meta.url), "utf8");
   const ast = ts.createSourceFile("ChatItems.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);

@@ -22,10 +22,6 @@
 .browser-settings-note { padding:var(--sp-3) var(--sp-3-5); border:1px solid var(--border); border-radius:var(--radius-lg); font-size:var(--fs-sm); line-height:1.6; color:var(--text-muted); }
 .browser-settings-field { display:grid; gap:var(--sp-2); font-size:var(--fs-sm); color:var(--text-muted); min-width:0; }
 .browser-settings-field .input { width:100%; min-width:0; }
-.browser-profile-menu .select-option-text > span { font-family:var(--font-mono); font-size:var(--fs-sm); }
-.browser-settings-create { display:flex; align-items:end; gap:var(--sp-2-5); }
-.browser-settings-create label { flex:1; }
-.browser-settings-create button { min-height:36px; flex-shrink:0; }
 .browser-settings-folders { list-style:none; margin:0; padding:0; display:grid; gap:var(--sp-1-5); }
 .browser-settings-folders li { display:flex; align-items:center; gap:var(--sp-2-5); min-height:36px; padding:var(--sp-1) var(--sp-1-5) var(--sp-1) var(--sp-3); border:1px solid var(--border); border-radius:var(--radius-lg); color:var(--text-muted); font-size:var(--fs-sm); }
 .browser-settings-folders li > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); color:var(--text); }
@@ -40,4 +36,4 @@
 .integration-display > div { display:grid; gap:var(--sp-1); min-width:0; }
 .integration-display strong { font-size:var(--fs-sm); font-weight:500; overflow:hidden; text-overflow:ellipsis; }
 .integration-display small { color:var(--text-muted); font-size:var(--fs-xs); }
-@media(max-width:440px) { .browser-settings-card { padding:var(--sp-4); } .browser-settings-status { margin-left:52px; } .browser-settings-create { align-items:stretch; flex-direction:column; } }
+@media(max-width:440px) { .browser-settings-card { padding:var(--sp-4); } .browser-settings-status { margin-left:52px; } }

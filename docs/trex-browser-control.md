@@ -74,7 +74,7 @@ superficie de herramientas más pequeña y un plugin por agente encima.** No es
 4. **Anotaciones MCP** `readOnlyHint` / `destructiveHint`: Codex puede aprobar
    automáticamente las lecturas (`default_tools_approval_mode = "writes"`).
 5. **Salidas grandes como artefactos** (`resource_link`) en lugar de texto en línea.
-6. `browser_run_code` (script Playwright en sandbox) solo en modo *full*.
+6. `browser_run_code` (script Playwright en sandbox) está previsto para el modo *full*, pero **todavía no se expone**; tampoco `browser_find`. En *full* solo se añade `browser_save_download` respecto a *qa*.
 
 ### 3.3 Plugin por agente (encima del MCP)
 
@@ -97,7 +97,7 @@ incluir además un hook que informe a Trex.
 
 | Fase | Contenido | Resultado |
 |---|---|---|
-| A (hecho) | Shell Electron + integración con el worker por CDP pipe | Navegador con diseño Trex; mismas 42 herramientas |
+| A (hecho) | Shell Electron + integración con el worker por CDP pipe | Navegador con diseño Trex; las mismas herramientas (43 en modo *full*, 42 en *qa*, 15 en *observe*) |
 | B (hecho) | Endpoint MCP HTTP en el broker + tokens de sesión; Claude y Codex por HTTP | Sin procesos por agente; cambio de modo sin reinicio en Claude |
 | C (en parte) | `browser_snapshot {compact:true}` y resumen `effect` en cada acción (URL, título, pestañas, diálogos, errores de consola). Falta: refs nativas `ai` y anotaciones | Menos llamadas y menos tokens |
 | D | Plugins/skills por agente; Trex CLI por HTTP | Instalación y flujo guiado en cada agente |

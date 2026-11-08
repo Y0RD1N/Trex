@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { trexBrowserCall, trexBrowserFocus, trexBrowserOpen, trexBrowserOpenArtifact, trexBrowserStatus, trexBrowserResolveSpace, trexBrowserListSpaces } from "../../api";
-import { browserResultArtifacts, brokerArtifactId, type BrowserArtifact, type BrowserOptions, type BrowserStatus, type BrowserSpace } from "../../browser";
+import { browserErrorText, browserFocusNotice, browserOpenFailure, browserResultArtifacts, brokerArtifactId, type BrowserArtifact, type BrowserOptions, type BrowserStatus, type BrowserSpace } from "../../browser";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import DropdownMenu from "../DropdownMenu";
 import { CloseIcon, GlobeIcon, ImageIcon } from "../Icons";
 import "./BrowserMenu.css";
 
 const SPACE_ACTIVITY: Record<string,string>={browser_navigate:"Abriendo página",browser_navigate_back:"Navegando",browser_reload:"Recargando",browser_snapshot:"Inspeccionando",browser_click:"Interactuando",browser_type:"Escribiendo",browser_fill_form:"Completando",browser_take_screenshot:"Tomando captura",browser_evaluate:"Revisando página",browser_wait_for:"Esperando",browser_save_download:"Guardando descarga",browser_batch:"Ejecutando pasos",browser_start_video:"Grabando"};
+
+const STATUS_FAILED="No se pudo consultar el estado de este espacio. Se volverá a intentar automáticamente.";
 
 /** Explicit human controls use a separate full grant; agent grants remain immutable. */
 export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd: string; browser: BrowserOptions; spaces?:BrowserSpace[]; onStopAgent?:(clientId:string)=>void }) {
@@ -29,6 +31,10 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
   const [status, setStatus] = useState<BrowserStatus | null>(null), [busy, setBusy] = useState(false);
   const [url, setUrl] = useState("http://localhost:3000"), [error, setError] = useState("");
   const [inventoryError,setInventoryError]=useState("");
+  // Neutral outcome of the last window/status action (opened, raised, refreshed).
+  const [openNote, setOpenNote] = useState("");
+  // Failure of the status poll; unlike `error` it clears itself when a poll succeeds.
+  const [statusError,setStatusError]=useState("");
   const address=useRef({profile:"",loaded:false,edited:false});
   useEffect(()=>{
     const key=cwd+"/"+activeBrowser.profile;
@@ -44,7 +50,7 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
   const inFlight = useRef(false);
   const call = async (name: string, args: Record<string, unknown> = {}): Promise<boolean> => {
     if (inFlight.current || bindingPending || loadingTabs) return false;
-    inFlight.current = true; setBusy(true); setError("");
+    inFlight.current = true; setBusy(true); setError(""); setOpenNote("");
     try {
       const result = await trexBrowserCall({ name, arguments: args, cwd, mode: "full", clientId: activeBrowser.clientId, profile: activeBrowser.profile,
         operationId: crypto.randomUUID(), timeoutMs: 60_000 });
@@ -98,49 +104,64 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
         const request={cwd,mode:"full" as const,clientId:activeBrowser.clientId,profile:activeBrowser.profile};
         const state=await trexBrowserCall({...request,name:"browser_status",arguments:{},timeoutMs:10000});
         if(cancelled)return;
+        // An error result is not "no tabs, not paused": keep what was known and say so.
+        if(state.isError){setStatusError(STATUS_FAILED);return;}
         const data=state.structuredContent?.data as Record<string,unknown>|undefined;
         setPaused(data?.paused===true);setPauseReason(typeof data?.pauseReason==="string"?data.pauseReason:null);setOtherOwner(data?.owner==="other");
         setRecording(!!data?.capture&&(data.capture as {kind?:string}).kind==="video");setNeedsRestart(data?.paused===true&&(data?.pendingAction as {cancelRequested?:boolean})?.cancelRequested===true);
         if(data?.running && data?.owner!=="other"){
           const result=await trexBrowserCall({...request,name:"browser_tabs",arguments:{action:"list"},timeoutMs:10000});
           if(cancelled)return;
+          if(result.isError){setStatusError(STATUS_FAILED);return;}
           const pages=(result.structuredContent?.data as {tabs?:typeof tabs}|undefined)?.tabs;
           if(Array.isArray(pages)){setTabs(pages);setCounts(before=>({...before,[request.profile]:pages.length}));}
         }else {setTabs([]);setCounts(before=>({...before,[request.profile]:typeof data?.tabs==="number"?data.tabs:0}));}
-      }catch{if(!cancelled)setError("No se pudo actualizar este espacio. Vuelve a consultar su estado.");}
+        setStatusError("");
+      }catch{if(!cancelled)setStatusError(STATUS_FAILED);}
       finally{pending=false;if(!cancelled)setLoadingTabs(false);}
     };
-    setLoadingTabs(true);setTabs([]);setArtifacts([]);setError("");void refresh();const timer=window.setInterval(()=>void refresh(),3000);
+    setLoadingTabs(true);setTabs([]);setArtifacts([]);setError("");setStatusError("");void refresh();const timer=window.setInterval(()=>void refresh(),3000);
     return()=>{cancelled=true;window.clearInterval(timer);};
   },[anchor,status?.ready,bindingPending,cwd,activeBrowser.clientId,activeBrowser.profile]);
   // Trex Browser windows are raised by the host, never by an agent's tab selection.
   // A space running an external Chrome keeps the previous select-only behaviour.
-  const showWindow = async (tabId?: string): Promise<boolean> => {
-    try { const result = await trexBrowserFocus(cwd, activeBrowser.profile, tabId); return result.focused; }
-    catch { return false; }
+  const showWindow = async (tabId?: string): Promise<{ focused: boolean; note?: string; failure?: string }> => {
+    try { const result = await trexBrowserFocus(cwd, activeBrowser.profile, tabId); return result.focused ? { focused: true } : { focused: false, note: browserFocusNotice(result.reason) }; }
+    catch (e) { return { focused: false, failure: browserErrorText(e, "No se pudo traer la ventana al frente.") }; }
+  };
+  const raiseWindow = async (): Promise<void> => {
+    setOpenNote(""); setError("");
+    const raised = await showWindow();
+    if (raised.failure) setError(raised.failure); else if (raised.note) setOpenNote(raised.note);
   };
   const openTab = async (tabId: string): Promise<void> => {
-    if (await showWindow(tabId)) { setTabs(before => before.map(tab => ({...tab, selected: tab.tabId === tabId}))); return; }
+    if ((await showWindow(tabId)).focused) { setTabs(before => before.map(tab => ({...tab, selected: tab.tabId === tabId}))); return; }
     await call("browser_tabs",{action:"select",tabId});
   };
+  // "Actualizar estado" would otherwise look like a no-op: say when it finished.
+  const refreshStatus = async (): Promise<void> => {
+    if (await call("browser_status")) setOpenNote(`Estado actualizado a las ${new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}.`);
+  };
   // Personal tabs share the application window and keep their own storage.
-  const [openNote, setOpenNote] = useState("");
   const openPersonal = async (): Promise<void> => {
-    setOpenNote("");
-    try { await trexBrowserOpen(null); setOpenNote("Pestañas personales abiertas en Trex Browser. Google puede requerir el navegador del sistema."); }
-    catch { setError("No se pudo abrir Trex Browser."); }
+    setOpenNote(""); setError("");
+    try {
+      const result = await trexBrowserOpen(null);
+      if (result.opened) setOpenNote("Pestañas personales abiertas en Trex Browser. Google puede requerir el navegador del sistema.");
+      else setError("No se pudo abrir Trex Browser.");
+    } catch (e) { setError(browserErrorText(e, "No se pudo abrir Trex Browser.")); }
   };
   const signInForAgent = async (): Promise<void> => {
-    setOpenNote("");
+    setOpenNote(""); setError("");
     try {
       const result = await trexBrowserOpen({ cwd, profile: activeBrowser.profile });
       if (result.opened) setOpenNote("Espacio abierto en la ventana compartida. El agente conserva las sesiones iniciadas aquí; Google puede requerir el navegador del sistema.");
-      else setError(result.reason === "agent-running" ? "El agente tiene abierto este espacio. Ciérralo o espera a que termine para iniciar sesión." : "No se pudo abrir este espacio para iniciar sesión.");
-    } catch { setError("No se pudo abrir este espacio para iniciar sesión."); }
+      else setError(browserOpenFailure(result.reason));
+    } catch (e) { setError(browserErrorText(e, "No se pudo abrir este espacio para iniciar sesión.")); }
   };
   const show = (): void => {
     const version=++showVersion.current;
-    setAnchor({ element: trigger.current! }); setError("");setInventoryError("");setBindingPending(true);
+    setAnchor({ element: trigger.current! }); setError("");setInventoryError("");setStatusError("");setOpenNote("");setBindingPending(true);
     void (async()=>{
       const next=await trexBrowserStatus();
       const binding=next.ready?await trexBrowserResolveSpace(cwd,browser,next):browser;
@@ -172,10 +193,10 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
         {(loadingTabs||!!tabs.length)&&<div className="browser-space-tabs" aria-label="Pestañas del espacio">{loadingTabs?<small className="browser-space-loading" role="status">Consultando pestañas…</small>:tabs.map(tab=><button type="button" key={tab.tabId} disabled={locked||paused} aria-pressed={tab.selected} title={tab.url} onClick={()=>void openTab(tab.tabId)}><span>{tab.title||tab.url||"Nueva pestaña"}</span><small>{tab.selected?"Activa":"Abrir"}</small></button>)}</div>}
         <div className="chat-browser-actions">
           <button type="button" disabled={locked||paused} onClick={()=>void call("browser_tabs",{action:"new",url})}>+ Nueva pestaña</button>
-          {selected?.running&&<button type="button" onClick={()=>void showWindow()} title="Trae al frente la ventana de este espacio">Mostrar ventana</button>}
+          {selected?.running&&<button type="button" onClick={()=>void raiseWindow()} title="Trae al frente la ventana de este espacio">Mostrar ventana</button>}
           {!selected?.running&&<button type="button" onClick={()=>void signInForAgent()} title="Abre el espacio de este agente en la ventana compartida para revisar sus cuentas">Iniciar sesión para este agente</button>}
           <button type="button" onClick={()=>void openPersonal()} title="Pestañas personales en la misma ventana de Trex Browser, separadas de los agentes">Abrir Trex Browser personal</button>
-          <button type="button" disabled={locked} onClick={()=>void call("browser_status")}>Actualizar estado</button>
+          <button type="button" disabled={locked} onClick={()=>void refreshStatus()}>Actualizar estado</button>
           <button type="button" disabled={locked} onClick={() => void call("browser_take_screenshot")}><ImageIcon size={15} />Tomar captura</button>
           <button type="button" disabled={locked || (paused && !recording)} onClick={() => void call(recording ? "browser_stop_video" : "browser_start_video")}>{recording ? "■ Detener vídeo" : "○ Grabar vídeo"}</button>
           <button type="button" disabled={locked || needsRestart} onClick={() => void call(paused ? "browser_resume" : "browser_pause")}>{paused ? "Reanudar automatización" : "Pausar para revisar"}</button>
@@ -189,10 +210,10 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
           : "Controles pausados para revisión. Las capturas y consultas siguen disponibles; reanuda cuando termines."
           : recording ? "Grabación en curso. Detén el vídeo para guardarlo." : "El agente puede revisar consola, red, rendimiento y contenido de la página."}</p>
         {needsRestart && <p className="chat-browser-hint">Reiniciar cierra las pestañas de este perfil y descarta la ejecución pendiente. Tus sesiones guardadas y los archivos se conservan; después puedes abrir la página de nuevo.</p>}
-        {!!artifacts.length && <div className="chat-browser-recent"><small>Archivos recientes</small>{artifacts.map(artifact => <button type="button" key={artifact.id} disabled={locked || !brokerArtifactId(artifact)} onClick={() => void open(artifact)}>{artifact.mimeType.startsWith("video/") ? "Abrir vídeo" : "Abrir captura"}<span>{Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB ↗</span></button>)}</div>}
+        {!!artifacts.length && <div className="chat-browser-recent"><small>Archivos recientes</small>{artifacts.map(artifact => <button type="button" key={artifact.id} disabled={locked || !brokerArtifactId(artifact)} onClick={() => void open(artifact)}>{artifact.mimeType.startsWith("video/") ? "Abrir vídeo" : "Abrir captura"}<span>{artifact.sizeBytes === undefined ? "" : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB `}↗</span></button>)}</div>}
       </> : <p className="chat-browser-hint">{!status ? "Comprobando instalación…" : status.error?.message ?? "Selecciona Trex Browser al instalar trex o utiliza su instalador independiente."}</p>}
-      {(error||inventoryError) && <p className="chat-browser-error" role="alert">{error||inventoryError}</p>}
-      {openNote && !error && !inventoryError && <p className="chat-browser-note" role="status">{openNote}</p>}
+      {(error||inventoryError||statusError) && <p className="chat-browser-error" role="alert">{error||inventoryError||statusError}</p>}
+      {openNote && !error && !inventoryError && !statusError && <p className="chat-browser-note" role="status">{openNote}</p>}
       <div className="chat-browser-foot">Capturas y vídeos guardados en este dispositivo.</div>
     </DropdownMenu>
   </>;

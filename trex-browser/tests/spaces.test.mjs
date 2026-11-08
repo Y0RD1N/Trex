@@ -109,3 +109,18 @@ test('a snapshot taken while a click is in flight keeps that click and its ref v
   const snapshot=await service.call(ctx,'browser_snapshot',{},'concurrent-snapshot',5000);assert.deepEqual(snapshot.data.elements,['fixture-e1 button Fixture']);
   finish();assert.equal((await pending).data.clicked,true);assert.ok(service.pageState(state,page).refs.has('fixture-e1'));
 });
+
+test('when all spaces are taken, a never-opened space of a gone chat is reused; opened and manual ones are kept',t=>{
+  const {service,ctx}=fixture(t);
+  const label=(id,clientId)=>{const file=path.join(service.profileDir({...ctx,profile:id}),'profile.json');fs.writeFileSync(file,JSON.stringify({...JSON.parse(fs.readFileSync(file,'utf8')),...(clientId?{space:{clientId,label:'Chat '+clientId}}:{})}));};
+  for(let i=2;i<100;i++){const id=`BROWSER${i}`;service.createProfile({...ctx,profile:id});label(id,i===2||i===3||i===5?`old-${i}`:i===4?undefined:`old-${i}`);}
+  // BROWSER2 was opened once (it has data), BROWSER4 is manual: neither may be taken. BROWSER3 never was.
+  fs.mkdirSync(path.join(service.profileDir({...ctx,profile:'BROWSER2'}),'user-data'));
+  const result=ensureSpaces(service,ctx,[{clientId:'new-chat',label:'Nuevo'}]);
+  assert.equal(result.spaces[0].profile,'BROWSER3');
+  assert.deepEqual(ensureSpaces(service,ctx,[{clientId:'new-chat',label:'Nuevo'}]).spaces,result.spaces,'the same chat keeps its space');
+  const manifest=profile=>JSON.parse(fs.readFileSync(path.join(service.profileDir({...ctx,profile}),'profile.json'),'utf8'));
+  assert.equal(manifest('BROWSER3').space.clientId,'new-chat');
+  assert.equal(manifest('BROWSER2').space.clientId,'old-2','an opened space keeps its chat');
+  assert.equal(manifest('BROWSER4').space,undefined,'a manual profile is untouched');
+});

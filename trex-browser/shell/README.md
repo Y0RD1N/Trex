@@ -66,6 +66,15 @@ but the desktop behind it is not blurred.
 | `Ctrl/⌘+R`, `F5` | Reload |
 | `Alt+←` / `Alt+→` | Back / forward |
 | `Ctrl/⌘+1..9` | Select tab |
+| `Ctrl/⌘+Tab`, `Ctrl/⌘+PageDown` / `Shift+Tab`, `PageUp` | Next / previous tab |
+| `Ctrl/⌘+Shift+T` | Reopen the last closed tab of your own |
+| `Ctrl/⌘+F` | Find in page |
+| `Ctrl/⌘+P` | Print |
+| `F11` | Full screen |
+| `Esc` | Close the agents center (or the find bar) |
+
+While the agents center is open the page below is hidden, so the shortcuts that act on it
+(close, reload, zoom, find, history, tab number) do nothing until it closes.
 
 ## Development
 
@@ -132,3 +141,23 @@ re-run the same checks.
 
 - Windows and macOS builds on real machines, plus signing and notarization.
 - MCP over HTTP (see `docs/trex-browser-control.md`).
+
+
+## Behaviours worth knowing
+
+- **Address field.** `example.com` opens over https; `localhost`, LAN IPs, `*.local`, `*.test` and
+  hosts with a custom port (`foo.test:3000`) over http; `file:`, `view-source:` and `about:blank` are kept;
+  anything else is a search.
+- **Failed loads and crashes.** A tab of your own shows `trex://error/` with the reason in Spanish and a
+  "Reintentar" link; the address bar keeps the address that failed and reload retries it. Agent tabs keep
+  the raw failure for their tools instead.
+- **Page background.** Pages that paint no background of their own show white (as in every browser);
+  our own pages (new tab, errors) use the dark base.
+- **After you navigate or pick a tab, the keyboard goes to the page** (arrows, Space, PageDown). `Ctrl+T`
+  and "+" always open a tab of your own, never inside an agent's session.
+- **Permissions.** Allow is remembered per site; Block lasts until the browser restarts, because there is
+  no site-settings page to undo it. Screen sharing answers `getDisplayMedia` with the first screen or
+  window the system offers.
+- **Known limits.** `window.prompt()` is not implemented by Electron (it returns `null`); HTTP basic-auth
+  and certificate-error pages are not handled; `Page.javascriptDialogOpening` answers from agents work for
+  `alert` and `confirm`.

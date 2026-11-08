@@ -2,7 +2,7 @@
 // The worker launches this executable the same way it launched Chrome
 // (Playwright launchPersistentContext over --remote-debugging-pipe), so no
 // debugging port is opened. Personal tabs and automated spaces share one application window.
-import { app, BaseWindow, WebContentsView, ipcMain, protocol, net, session, nativeTheme, Menu, clipboard, shell as desktop } from 'electron';
+import { app, BaseWindow, WebContentsView, ipcMain, protocol, net, session, nativeTheme, Menu, clipboard, desktopCapturer, shell as desktop } from 'electron';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -114,14 +114,50 @@ function serveFrom(hosts) {
     return net.fetch(pathToFileURL(file).toString());
   };
 }
+// A page that fails to load (or whose process dies) used to stay blank with no explanation.
+// trex://error/ is built from the query only: nothing the failing site sends is rendered.
+const NET_ERRORS = {
+  ERR_NAME_NOT_RESOLVED: ['No se encontró el sitio', 'No se pudo encontrar la dirección del servidor. Revisa que esté bien escrita.'],
+  ERR_CONNECTION_REFUSED: ['El servidor rechazó la conexión', 'Puede que el servicio no esté en marcha o que el puerto no sea el correcto.'],
+  ERR_CONNECTION_TIMED_OUT: ['El servidor tardó demasiado', 'El servidor no respondió a tiempo.'],
+  ERR_CONNECTION_RESET: ['Se interrumpió la conexión', 'La conexión con el servidor se cerró de forma inesperada.'],
+  ERR_CONNECTION_CLOSED: ['Se interrumpió la conexión', 'La conexión con el servidor se cerró de forma inesperada.'],
+  ERR_EMPTY_RESPONSE: ['El servidor no respondió con datos', 'El servidor cerró la conexión sin enviar nada.'],
+  ERR_PROXY_CONNECTION_FAILED: ['Falló la conexión con el proxy', 'Revisa la configuración de proxy de este equipo.'],
+  ERR_INTERNET_DISCONNECTED: ['Sin conexión a internet', 'Comprueba tu red y vuelve a intentarlo.'],
+  ERR_ADDRESS_UNREACHABLE: ['No se puede llegar al servidor', 'La red no tiene ruta hasta esa dirección.'],
+  ERR_SSL_PROTOCOL_ERROR: ['Error de seguridad en la conexión', 'No se pudo establecer una conexión segura con el sitio.'],
+  ERR_CERT_AUTHORITY_INVALID: ['El certificado no es de confianza', 'El sitio usa un certificado que este equipo no reconoce.'],
+  ERR_CERT_DATE_INVALID: ['El certificado ha caducado', 'El certificado del sitio no es válido en esta fecha.'],
+  ERR_CERT_COMMON_NAME_INVALID: ['El certificado no corresponde al sitio', 'El certificado es de otro dominio.'],
+  ERR_UNSAFE_PORT: ['Puerto bloqueado', 'Este navegador no abre conexiones a ese puerto por seguridad.'],
+  ERR_BLOCKED_BY_CLIENT: ['Bloqueado', 'La carga fue bloqueada.'],
+  ERR_TOO_MANY_REDIRECTS: ['Demasiadas redirecciones', 'El sitio redirige sin parar.'],
+  CRASHED: ['La pestaña se cerró inesperadamente', 'El proceso de esta página terminó. Puedes volver a cargarla.'],
+};
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+function errorPage(url) {
+  const shown = url.searchParams.get('url') || '', code = (url.searchParams.get('code') || '').replace(/[^\w]/g, '').slice(0, 60);
+  const [title, detail] = NET_ERRORS[code] || ['No se pudo cargar la página', 'Ocurrió un error al abrir esta dirección.'];
+  const retry = /^https?:\/\//i.test(shown) ? `<a class="btn" href="${escapeHtml(shown)}">Reintentar</a>` : '';
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
+    html,body{height:100%;margin:0;background:#121212;color:#e8e8ea;font:15px/1.5 system-ui,sans-serif}
+    main{max-width:560px;margin:0 auto;padding:16vh 28px 0}h1{font-size:22px;font-weight:600;margin:0 0 8px}
+    p{color:#b6b6bd;margin:6px 0}code{color:#9a9aa3;font-size:12px;overflow-wrap:anywhere}
+    .btn{display:inline-block;margin-top:18px;padding:8px 16px;border-radius:10px;background:#e8834a;color:#171717;text-decoration:none;font-weight:600}
+  </style></head><body><main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>${shown ? `<p><code>${escapeHtml(shown)}</code></p>` : ''}${code && code !== 'CRASHED' ? `<p><code>${escapeHtml(code)}</code></p>` : ''}${retry}</main></body></html>`;
+  return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+}
+// Pages only get the new tab page (and its assets) and the error page.
+function servePage(request) {
+  const url = new URL(request.url);
+  if (url.host === 'error') return errorPage(url);
+  if (url.host !== 'newtab') return Response.error();
+  return serveFrom(['newtab'])(request);
+}
 function serveUi() {
   session.fromPartition(UI_PARTITION).protocol.handle('trex', serveFrom(['ui', 'newtab']));
-  // Pages only get the new tab page (and its assets).
-  protocol.handle('trex', request => {
-    const url = new URL(request.url);
-    if (url.host !== 'newtab') return Response.error();
-    return serveFrom(['newtab'])(request);
-  });
+  protocol.handle('trex', servePage);
 }
 
 // UI documents are the views this process created for its own interface;
@@ -265,13 +301,19 @@ const PROMPTED = { media: 'usar tu cámara o micrófono', geolocation: 'conocer 
   'clipboard-read': 'leer tu portapapeles', midi: 'usar dispositivos MIDI', 'display-capture': 'compartir tu pantalla', openExternal: 'abrir una aplicación externa' };
 const SILENT = new Set(['clipboard-sanitized-write', 'fullscreen', 'pointerLock']);
 let decisions = null;
+const blockedThisSession = new Set();
 const decisionsFile = () => path.join(app.getPath('userData'), 'trex-permissions.json');
 function loadDecisions() { if (decisions) return decisions; try { decisions = JSON.parse(fs.readFileSync(decisionsFile(), 'utf8')); } catch { decisions = {}; } return decisions; }
-function saveDecisions() { try { fs.writeFileSync(decisionsFile(), JSON.stringify(decisions), { mode: 0o600 }); } catch {} }
+function saveDecisions() { try { fs.writeFileSync(decisionsFile(), JSON.stringify(decisions), { mode: 0o600 }); } catch (error) { debug('no se pudieron guardar los permisos', error?.message); } }
 const originOf = url => { try { return new URL(url).origin; } catch { return ''; } };
 function permissionLabel(permission, details) {
   if (permission === 'media') { const t = details?.mediaTypes ?? []; return t.includes('video') && t.includes('audio') ? 'usar tu cámara y micrófono' : t.includes('video') ? 'usar tu cámara' : 'usar tu micrófono'; }
   return PROMPTED[permission];
+}
+// getDisplayMedia fails for every site unless the session answers the request itself, even after the
+// person allowed screen sharing in the bar: share the first screen (or window) the system offers.
+function displayMedia(_request, callback) {
+  desktopCapturer.getSources({ types: ['screen', 'window'] }).then(sources => callback(sources[0] ? { video: sources[0] } : {})).catch(() => callback({}));
 }
 function requestPermission(wc, permission, done, details) {
   if (SILENT.has(permission)) return done(true);
@@ -281,6 +323,7 @@ function requestPermission(wc, permission, done, details) {
   if (!tab || !PROMPTED[permission] || !origin || HEADLESS) return done(false);
   const key = `${tab.profile ? tab.profile + '|' : ''}${origin}|${permission}`, saved = loadDecisions()[key];
   if (saved !== undefined) return done(saved);
+  if (blockedThisSession.has(key)) return done(false);
   const id = nextId++;
   const timer = setTimeout(() => resolvePrompt(id, false, false), 120_000);
   prompts.set(id, { id, tabId: tab.id, origin, permission, label: permissionLabel(permission, details), done, timer, key });
@@ -289,7 +332,9 @@ function requestPermission(wc, permission, done, details) {
 function resolvePrompt(id, allow, remember) {
   const p = prompts.get(id); if (!p) return;
   prompts.delete(id); clearTimeout(p.timer);
-  if (remember) { loadDecisions()[p.key] = allow; saveDecisions(); }
+  // An allow is saved; a block is kept only until the browser restarts, because there is no site
+  // settings page to undo a saved one and a wrong click would silence that site for good.
+  if (remember) { if (allow) { loadDecisions()[p.key] = true; saveDecisions(); } else blockedThisSession.add(p.key); }
   try { p.done(allow); } catch {}
   broadcast();
 }
@@ -358,21 +403,39 @@ function addOverlay(part) {
 }
 
 const NEW_TAB = 'trex://newtab/';
+// The address bar shows the address that failed, not our error page.
+const shownAddress = address => { if (!/^trex:\/\/error\//i.test(address)) return address; try { return new URL(address).searchParams.get('url') || address; } catch { return address; } };
+// The person's own tabs: everything outside a shared agent window, or the 'personal' profile inside it.
+const isHumanTab = tab => SHARED_ROOT ? tab.profile === 'personal' : !AUTOMATION;
+const humanProfile = () => SHARED_ROOT && scopes.has('personal') ? 'personal' : undefined;
+const closedTabs = [];
 function createTab(url = NEW_TAB, { activate = true, profile = tabs.get(activeTab)?.profile || scopes.keys().next().value, popupOptions } = {}) {
   const scope = profile && scopes.get(profile);
   if (SHARED_ROOT && !scope) return null;
   const id = `t${nextTab++}`;
   const view = new WebContentsView({ ...(popupOptions || {}), webPreferences: { ...(popupOptions?.webPreferences || {}), ...(scope ? { session: scope.session } : {}), preload: undefined, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: !HEADLESS && !AUTOMATION } });
   view.setBorderRadius(RADIUS);
-  view.setBackgroundColor('#121212');
+  // The base colour shows through every page that paints no background of its own: dark for our
+  // pages, white for the web (black text on a dark base made plain pages unreadable).
+  const baseColor = address => /^trex:/i.test(address) ? '#121212' : '#ffffff';
+  view.setBackgroundColor(baseColor(url));
   const tab = { id, view, title: 'Nueva pestaña', url, favicon: null, loading: true, profile };
   tabs.set(id, tab);
   const wc = view.webContents;
-  const update = () => { tab.title = wc.getTitle() || tab.title; tab.url = wc.getURL(); broadcast(); };
+  const update = () => { tab.title = wc.getTitle() || tab.title; tab.url = shownAddress(wc.getURL()); broadcast(); };
   wc.on('page-title-updated', update);
-  wc.on('did-navigate', update);
+  wc.on('did-navigate', () => { view.setBackgroundColor(baseColor(wc.getURL())); update(); });
   wc.on('did-navigate-in-page', update);
   wc.on('did-start-loading', () => { tab.loading = true; broadcast(); });
+  // A person's tab shows why a page did not load; an agent's tab keeps the real failure for its tools.
+  wc.on('did-fail-load', (_e, code, description, failedUrl, isMainFrame) => {
+    if (!isMainFrame || code === -3 || !isHumanTab(tab) || /^trex:/i.test(failedUrl)) return;
+    wc.loadURL(`trex://error/?code=${encodeURIComponent(String(description).replace(/^net::/, ''))}&url=${encodeURIComponent(failedUrl)}`).catch(() => {});
+  });
+  wc.on('render-process-gone', (_e, details) => {
+    if (details.reason === 'clean-exit' || !isHumanTab(tab) || wc.isDestroyed()) return;
+    wc.loadURL(`trex://error/?code=CRASHED&url=${encodeURIComponent(tab.url)}`).catch(() => {});
+  });
   wc.on('did-stop-loading', () => { tab.loading = false; update(); });
   wc.once('destroyed', () => {
     const targetId = targetIds.get(wc);
@@ -381,8 +444,9 @@ function createTab(url = NEW_TAB, { activate = true, profile = tabs.get(activeTa
     if (!tabs.has(id)) return;
     // Closing the window destroys it before its tabs: only forget the tab then.
     if (closing || app.isQuitting || !win || win.isDestroyed()) { tabs.delete(id); return; }
+    const order = [...tabs.keys()];
     win.contentView.removeChildView(view); tabs.delete(id);
-    if (activeTab === id) activeTab = [...tabs.keys()].at(-1) ?? null;
+    if (activeTab === id) activeTab = neighbourOf(tab, order);
     if (!app.isQuitting && (SHARED_ROOT ? !closingScopes.has(profile) && ![...tabs.values()].some(t => t.profile === profile) : !tabs.size)) createTab(undefined, { profile, activate: activeTab === null });
     layout(); broadcast();
   });
@@ -416,42 +480,70 @@ function createTab(url = NEW_TAB, { activate = true, profile = tabs.get(activeTa
   return id;
 }
 
+// After closing the active tab, go to the one beside it in the same profile (right, then left), then
+// to another of the person's tabs; never to the last tab of whatever agent happens to own it.
+function neighbourOf(closed, order) {
+  const at = order.indexOf(closed.id);
+  const same = order.filter(key => key !== closed.id && tabs.get(key)?.profile === closed.profile);
+  return same.find(key => order.indexOf(key) > at) ?? same.at(-1) ?? [...tabs.keys()].find(key => isHumanTab(tabs.get(key))) ?? [...tabs.keys()].at(-1) ?? null;
+}
 function closeTab(id) {
   const tab = tabs.get(id); if (!tab) return;
+  const order = [...tabs.keys()];
+  if (isHumanTab(tab) && /^https?:/i.test(tab.url)) { closedTabs.push({ url: tab.url, profile: tab.profile }); if (closedTabs.length > 20) closedTabs.shift(); }
   win.contentView.removeChildView(tab.view);
   tab.view.webContents.close();
   tabs.delete(id);
-  if (activeTab === id) activeTab = [...tabs.keys()].at(-1) ?? null;
-  if (SHARED_ROOT ? !closingScopes.has(tab.profile) && ![...tabs.values()].some(t => t.profile === tab.profile) : !tabs.size) createTab(undefined, { profile: tab.profile, activate: activeTab === null });
+  const wasActive = activeTab === id;
+  if (wasActive) activeTab = neighbourOf(tab, order);
+  const lastOfProfile = SHARED_ROOT ? !closingScopes.has(tab.profile) && ![...tabs.values()].some(t => t.profile === tab.profile) : !tabs.size;
+  if (lastOfProfile) createTab(undefined, { profile: tab.profile, activate: activeTab === null || wasActive && isHumanTab(tab) });
+  else if (wasActive) tabs.get(activeTab)?.view.webContents.focus();
   layout(); broadcast();
 }
 
+// What the address field accepts. Local and development addresses (LAN IPs, hosts with a custom port,
+// *.local / *.test / *.localhost) use http, as every browser does; a bare word is a search.
 function normalizeAddress(input) {
   const text = String(input).trim();
-  if (/^https?:\/\//i.test(text)) return text;
-  if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(text)) return `http://${text}`;
-  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/.test(text)) return `https://${text}`;
+  if (/^https?:\/\//i.test(text) || /^(about:blank|trex:\/\/newtab\/?)$/i.test(text)) return text;
+  if (/^(file|view-source):/i.test(text)) return text;
+  const host = /^(\[[0-9a-f:.]+\]|[\w-]+(?:\.[\w-]+)*)(?::(\d{1,5}))?(?:[\/?#].*)?$/i.exec(text);
+  if (host) {
+    const [, name, port] = host, lower = name.toLowerCase();
+    const local = lower === 'localhost' || lower.endsWith('.localhost') || lower.endsWith('.local') || lower.endsWith('.test') || lower.startsWith('[')
+      || /^\d{1,3}(\.\d{1,3}){3}$/.test(lower);
+    const dotted = lower.includes('.');
+    if (local || port && !['443', '8443', '9443'].includes(port) && (dotted || port)) return `http://${text}`;
+    if (dotted) return `https://${text}`;
+  }
   return `https://duckduckgo.com/?q=${encodeURIComponent(text)}`;
 }
 
 // Commands from our own UI documents only (trex://ui).
 const commands = {
-  navigate: ({ url }) => tabs.get(activeTab)?.view.webContents.loadURL(normalizeAddress(url)).catch(() => {}),
+  // After an address is entered the keyboard belongs to the page (arrows, Space, PageDown).
+  navigate: ({ url }) => { const wc = tabs.get(activeTab)?.view.webContents; if (!wc) return; wc.loadURL(normalizeAddress(url)).catch(() => {}); wc.focus(); },
   back: () => tabs.get(activeTab)?.view.webContents.navigationHistory.goBack(),
   forward: () => tabs.get(activeTab)?.view.webContents.navigationHistory.goForward(),
-  reload: () => tabs.get(activeTab)?.view.webContents.reload(),
+  reload: () => {
+    const wc = tabs.get(activeTab)?.view.webContents; if (!wc) return;
+    // Reloading our error page retries the address that failed.
+    if (/^trex:\/\/error\//i.test(wc.getURL())) wc.loadURL(shownAddress(wc.getURL())).catch(() => {}); else wc.reload();
+  },
   openExternal: async () => {
     const url = tabs.get(activeTab)?.view.webContents.getURL();
     if (url && /^https?:\/\//i.test(url)) await desktop.openExternal(url);
   },
   newTab: ({ url } = {}) => {
-    const id = createTab(url ? normalizeAddress(url) : undefined);
+    // A new tab from the bar is the person's own, even while an agent's tab is in view.
+    const id = createTab(url ? normalizeAddress(url) : undefined, { profile: humanProfile() ?? tabs.get(activeTab)?.profile ?? scopes.keys().next().value });
     if (url) return;
     // A freshly loaded page may take keyboard focus; give it back to the address field.
     revealBar(true);
     tabs.get(id)?.view.webContents.once('did-finish-load', () => { if (activeTab === id) revealBar(true); });
   },
-  selectTab: ({ id }) => { if (tabs.has(id)) { if (id !== activeTab) commands.findClose(); activeTab = id; const scope=scopes.get(tabs.get(id).profile);if(scope)scope.selectedId=id;layout(); broadcast(); } },
+  selectTab: ({ id }) => { if (tabs.has(id)) { if (id !== activeTab) commands.findClose(); activeTab = id; const scope=scopes.get(tabs.get(id).profile);if(scope)scope.selectedId=id;layout(); broadcast(); if (!tabs.get(id).url.startsWith('trex://newtab')) tabs.get(id).view.webContents.focus(); } },
   closeTab: ({ id }) => closeTab(id),
   toggleCenter: async ({ open } = {}) => {
     centerOpen = open ?? !centerOpen;
@@ -459,7 +551,8 @@ const commands = {
     if (centerOpen) backdrop = await tabs.get(activeTab)?.view.webContents.capturePage().then(i => i.resize({ width: 960 }).toDataURL()).catch(() => null);
     layout(); broadcast();
     chromeView.webContents.send('shell:backdrop', backdrop);
-    if (!centerOpen) tabs.get(activeTab)?.view.webContents.focus();
+    // Open: the centre needs the keyboard (Esc closes it); closed: it goes back to the page.
+    if (centerOpen) chromeView.webContents.focus(); else tabs.get(activeTab)?.view.webContents.focus();
     emitToWorker({ type: 'center', open: centerOpen, profile: tabs.get(activeTab)?.profile });
   },
   overlaySize: ({ part, width, height }, sender) => {
@@ -540,8 +633,9 @@ const workerApi = {
       const storage = scopePath(SHARED_ROOT, profile);
       fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
       const ses = session.fromPath(storage);
-      ses.protocol.handle('trex', request => new URL(request.url).host === 'newtab' ? serveFrom(['newtab'])(request) : Response.error());
+      ses.protocol.handle('trex', servePage);
       ses.setPermissionRequestHandler(requestPermission);
+      ses.setDisplayMediaRequestHandler(displayMedia);
       ses.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || grantedPermission(scopes.get(profile), permission, originOf(origin)) || loadDecisions()[`${profile}|${originOf(origin)}|${permission}`] === true);
       scope = { profile, session: ses, personal: profile === 'personal' }; scopes.set(profile, scope);
       ses.on('will-download', (event, item, wc) => {
@@ -641,6 +735,7 @@ const controls = humanControls(emitToWorker);
 app.whenReady().then(() => {
   serveUi();
   session.defaultSession.setPermissionRequestHandler(requestPermission);
+  session.defaultSession.setDisplayMediaRequestHandler(displayMedia);
   session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || loadDecisions()[`${originOf(origin)}|${permission}`] === true);
   session.defaultSession.on('will-download', trackDownload);
   win = new BaseWindow({
@@ -675,8 +770,24 @@ function shortcut(input) {
   const mod = process.platform === 'darwin' ? input.meta : input.control;
   const key = input.key.toLowerCase();
   if (mod && input.shift && key === 'a') { commands.toggleCenter(); return true; }
+  // With the agents centre open the page below is hidden: Esc closes the centre, and the shortcuts
+  // that act on the page (close, reload, zoom, find, history, tab number) must not reach it.
+  if (centerOpen) {
+    if (key === 'escape') { commands.toggleCenter({ open: false }); return true; }
+    const onPage = mod && (['w', 'f', 'r', 'p', '=', '+', '-', '0'].includes(key) || /^[1-9]$/.test(key)) || key === 'f5' || key === 'f12' || key === 'f11'
+      || mod && input.shift && key === 'i' || input.alt && (key === 'arrowleft' || key === 'arrowright');
+    if (onPage) return true;
+  }
+  if (mod && input.shift && key === 't') { const last = closedTabs.pop(); if (last) createTab(last.url, { profile: last.profile }); return true; }
   if (mod && key === 't') { commands.newTab(); return true; }
   if (mod && key === 'w') { if (activeTab) closeTab(activeTab); return true; }
+  if (mod && (key === 'tab' || key === 'pagedown' || key === 'pageup')) {
+    const ids = [...tabs.keys()], at = ids.indexOf(activeTab), step = key === 'pageup' || key === 'tab' && input.shift ? -1 : 1;
+    if (ids.length > 1 && at >= 0) commands.selectTab({ id: ids[(at + step + ids.length) % ids.length] });
+    return true;
+  }
+  if (key === 'f11') { win?.setFullScreen(!win.isFullScreen()); return true; }
+  if (mod && key === 'p') { tabs.get(activeTab)?.view.webContents.print(); return true; }
   if (mod && key === 'l') { revealBar(true); return true; }
   if (mod && key === 'f') { commands.findOpen(); return true; }
   if (key === 'escape' && find.open) { commands.findClose(); return true; }
@@ -704,6 +815,13 @@ app.on('web-contents-created', (_e, wc) => {
   wc.on('dom-ready', () => { if (!isUi(wc) && !wc.getURL().startsWith('devtools:')) wc.insertCSS(SCROLLBAR_CSS, { cssOrigin: 'user' }).catch(() => {}); });
   if (process.env.TREX_SHELL_DEBUG === '1') wc.on('input-event', (_ev, input) => { if (/mouseDown|keyDown|mouseEnter/.test(input.type)) debug('input', input.type, wc.getURL().slice(0, 50), input.x ?? '', input.y ?? '', input.key ?? ''); });
   wc.on('before-input-event', (event, input) => { if (shortcut(input)) event.preventDefault(); });
+  // Cut, copy and paste from the right-click menu in our own text fields (address, find, agents search).
+  wc.on('context-menu', (_e, params) => {
+    if (HEADLESS || !isUi(wc) || !params.isEditable) return;
+    Menu.buildFromTemplate([{ label: 'Deshacer', role: 'undo' }, { label: 'Rehacer', role: 'redo' }, { type: 'separator' },
+      { label: 'Cortar', role: 'cut' }, { label: 'Copiar', role: 'copy' }, { label: 'Pegar', role: 'paste' }, { type: 'separator' },
+      { label: 'Seleccionar todo', role: 'selectAll' }]).popup({ window: win });
+  });
   wc.on('will-attach-webview', e => e.preventDefault());
   // Our UI never navigates away from trex://ui.
   wc.on('will-navigate', (e, url) => { if (isUi(wc) && !url.startsWith(UI_ORIGIN + '/')) e.preventDefault(); });

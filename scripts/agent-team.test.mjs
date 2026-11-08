@@ -68,3 +68,18 @@ test("aggregate usage belongs to the main model while activity and completions k
   const sessions={principal:main,implement:worker};const merged=mergeTeamItems(members,sessions,[]);const combined=teamCombinedState(main,sessions,merged.items,"principal",merged.owners);
   assert.equal(combined.usage,main.usage);assert.equal(combined.pendingTurns,3);assert.deepEqual(combined.pendingMessageIds,["principal::same","implement::same"]);assert.deepEqual(combined.lastCompletion.itemIds,["principal::answer"]);
 });
+test("withMemberPermission changes one member and keeps mode and canWrite coherent",async()=>{
+  const { withMemberPermission, permissionChangeNote } = await load("agentTeam");
+  const make=(id,provider,canWrite=false)=>({id,name:id,role:id==="principal"?"coordinator":"implementation",instructions:"x",canWrite,agent:{profileId:provider,profileName:provider,provider,model:null,launch:{profileId:provider,profileName:provider,command:provider,args:"",shell:"",launchMode:"arg",env:null}},conversationId:null});
+  const team={id:"t",epoch:"e",phase:"running",master:make("principal","claude"),workers:[make("w1","codex"),make("w2","antigravity")],order:[],initial:null,error:null};
+  const up=withMemberPermission(team,"w1","auto");
+  assert.equal(up.workers[0].mode,"auto");assert.equal(up.workers[0].canWrite,true);
+  assert.equal(up.master,team.master,"others are untouched");assert.equal(team.workers[0].canWrite,false,"the input is not mutated");
+  assert.equal(withMemberPermission(up,"w1","plan").workers[0].canWrite,false);
+  assert.equal(withMemberPermission(team,"principal","acceptEdits").master.canWrite,true);
+  assert.equal(withMemberPermission(team,"missing","auto"),null);
+  assert.equal(withMemberPermission(team,"w1","bypassPermissions"),null,"a mode the assistant does not have");
+  assert.equal(withMemberPermission(team,"w2","plan"),null,"Antigravity cannot be made read-only");
+  assert.match(permissionChangeNote(up.workers[0]),/^w1: .*puede modificar archivos/);
+  assert.match(permissionChangeNote(withMemberPermission(up,"w1","plan").workers[0]),/solo lectura/);
+});

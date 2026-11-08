@@ -62,6 +62,19 @@ const noted=(target,data)=>target?.trexNote?{...data,note:target.trexNote}:data;
 // hidden, disabled) then fails with certainty instead of as a timed-out action
 // whose outcome is uncertain: nothing happened, so the page is not paused.
 // Only fixed phrases leave this function: the call log quotes page markup.
+// A field that cannot take the input (missing, hidden, disabled, read-only, or a select without the
+// requested option) fails with certainty and names the reason; otherwise the 10 s fill/select timeout
+// would pause the whole space as "uncertain" although nothing happened.
+async function ensureFillable(target,verb,{values}={}){
+  const fail=reason=>{throw Object.assign(new Error(`Nothing was ${verb}: ${reason}.`),{code:'NOT_ACTIONABLE'});};
+  try{await target.waitFor({state:'visible',timeout:5000});}catch(e){if(e?.name!=='TimeoutError')throw e;fail('the element is missing or not visible after 5 s');}
+  if(!await target.isEnabled({timeout:2000}).catch(()=>true))fail('it is disabled');
+  if(values){
+    const options=await target.evaluate(e=>e.tagName==='SELECT'?[...e.options].map(o=>({value:o.value,label:(o.label||o.text||'').trim()})):null).catch(()=>null);
+    if(Array.isArray(options)){const known=new Set(options.flatMap(o=>[o.value,o.label]));const missing=values.filter(v=>!known.has(String(v)));
+      if(missing.length)fail(`no option matches ${missing.map(v=>JSON.stringify(v)).join(', ')}. Options: ${options.slice(0,20).map(o=>JSON.stringify(o.label||o.value)).join(', ')}${options.length>20?', …':''}`);}
+  }else if(!await target.isEditable({timeout:2000}).catch(()=>true))fail('it is read-only');
+}
 async function ensureActionable(target,action,options){
   try{await target[action]({...options,trial:true,timeout:10000});}
   catch(e){
@@ -358,6 +371,8 @@ export class BrowserService {
     const generation=s.generation,owner=s.owner;
     const read=async()=>{
       const [doc,url,title]=await main.evaluate(()=>[performance.timeOrigin,location.href,document.title]);
+      // A selector that matches nothing is a mistake of the caller, not a slow page: say so instead of timing out.
+      if(selector&&await f.locator(selector).count().catch(()=>1)===0)throw Object.assign(new Error(`No element matches the selector ${JSON.stringify(String(selector).slice(0,120))}. Take a browser_snapshot without a selector to see the page.`),{code:'NOT_FOUND'});
       const tree=await (selector?f.locator(selector).first():f.locator('body')).ariaSnapshotJSON({mode:'ai',timeout:5000});
       if(await main.evaluate(()=>performance.timeOrigin)!==doc)throw stale('The page loaded a new document while being read');
       return {doc,url:f===main?url:f.url(),title:clean(title,200),tree};
@@ -443,7 +458,16 @@ export class BrowserService {
       if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Only the current owner may handle a dialog'),{code:'OWNERSHIP'});
       if(!s.dialog)throw new Error('No pending dialog');const dialog=s.dialog;s.dialog=null;
       try{await abortableRead(args.accept?dialog.dialog.accept(args.promptText):dialog.dialog.dismiss(),AbortSignal.timeout(timeoutMs));}
-      catch{ this.pause(s,'uncertain',{id:operationId,name});throw Object.assign(new Error('Dialog response is uncertain; inspect before resuming'),{code:'UNCERTAIN'}); }
+      catch(error){
+        // The dialog may be gone already: the person answered it natively, or the page or the shell closed it.
+        // Nothing is left to answer, so the outcome is known (not uncertain) and the space must not pause.
+        if(/No dialog is showing|already handled/i.test(String(error?.message))){
+          const p=s.tabs.get(dialog.tabId);
+          return {data:{handled:false,alreadyClosed:true,note:'The dialog was already closed (answered by the person or closed by the page); your answer was not applied. Take a browser_snapshot to see the result.'},artifacts:[],generation:s.generation,revision:p?this.pageState(s,p).revision:s.revision};
+        }
+        this.pause(s,'uncertain',{id:operationId,name});
+        throw Object.assign(new Error(`Dialog response is uncertain (${String(error?.message||error).split('\n')[0].slice(0,160)}); inspect before resuming`),{code:'UNCERTAIN'});
+      }
       // An answer changes no document by itself: refs stay. Report what it changed (a confirm that deletes a row).
       const p=s.tabs.get(dialog.tabId),snap=p&&s.pageStates?.get(p)?.snap;
       const effect=snap?await Promise.race([this.report(s,p,AbortSignal.timeout(4000),snap).catch(()=>null),sleep(4000).then(()=>null)]):null;
@@ -533,7 +557,11 @@ export class BrowserService {
     // Inventory queries are passive. A fresh profile has no tabs until the
     // agent navigates, creates a tab, or requests another page operation.
     if(name==='browser_tabs'&&(!a.action||a.action==='list')&&!s.browser&&!s.opening)return out({tabs:[]});
-    await this.ensure(s,ctx);signal.throwIfAborted();if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});const p=this.page(s,a);
+    await this.ensure(s,ctx);signal.throwIfAborted();if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});// Closing the last tab left every tool failing with "Tab not found" (even new and list) until browser_close.
+    // Listing and creating tabs do not need a current page, and navigating opens one when none is left.
+    if(!s.tabs.size&&name==='browser_navigate'){const tab=s.shell?await s.shell.newTab():await s.browser.newPage();this.attachPage(s,tab);s.selected=[...s.tabs].find(([,v])=>v===tab)[0];}
+    const tabsOnly=name==='browser_tabs'&&(!a.action||a.action==='list'||a.action==='new');
+    const p=tabsOnly?s.tabs.get(a.tabId||s.selected)??null:this.page(s,a);
     const before=REPORTED.has(name)&&!this.dialogOpen(s,p)?await this.baseline(s,p,signal):null;
     const result=await this.act(s,ctx,name,a,signal,p,out);
     if(before&&result?.data){const effect=await this.report(s,p,signal,before);if(effect){result.reported=true;if(Object.keys(effect).length)result.data={...result.data,effect};}}
@@ -545,7 +573,7 @@ export class BrowserService {
       case 'browser_navigate_back': await p.goBack({waitUntil:'domcontentloaded'});return out({url:p.url()});
       case 'browser_reload': await p.reload({waitUntil:'domcontentloaded'});return out({url:p.url()});
       case 'browser_tabs':{
-        if(a.action==='new'){const tab=s.shell?await s.shell.newTab():await s.browser.newPage();this.attachPage(s,tab);s.selected=[...s.tabs].find(([,v])=>v===tab)[0];if(a.url)await tab.goto(navigateUrl(a.url),{waitUntil:'domcontentloaded'});}
+        if(a.action==='new'){const destination=a.url?navigateUrl(a.url):null;const tab=s.shell?await s.shell.newTab():await s.browser.newPage();this.attachPage(s,tab);s.selected=[...s.tabs].find(([,v])=>v===tab)[0];if(destination)await tab.goto(destination,{waitUntil:'domcontentloaded'});}
         if(a.action==='select'){this.page(s,a);s.selected=a.tabId;if(s.shell)await s.shell.select(this.page(s));else await this.page(s).bringToFront();}
         if(a.action==='close')await this.page(s,a).close();
         return out({tabs:await Promise.all([...s.tabs].map(async([tabId,page])=>({tabId,url:page.url(),title:text(await page.title().catch(()=>'')),selected:tabId===s.selected}))),dialog:s.dialog?{type:s.dialog.type,message:s.dialog.message,tabId:s.dialog.tabId}:null});
@@ -563,13 +591,13 @@ export class BrowserService {
       }
       case 'browser_click':{const target=await this.locator(s,a,signal),options={button:a.button||'left',clickCount:bounded(a.clickCount,1,3,1)};await ensureActionable(target,'click',options);signal.throwIfAborted();await target.click({...options,timeout:10000,noWaitAfter:true});return out(noted(target,{clicked:true}));}
       case 'browser_hover':{const target=await this.locator(s,a,signal);await ensureActionable(target,'hover',{});signal.throwIfAborted();await target.hover({timeout:10000});return out(noted(target,{hovered:true}));}
-      case 'browser_drag':{const src=await this.locator(s,{...a,...a.source},signal),dst=await this.locator(s,{...a,...a.destination},signal);const from=await src.boundingBox(),to=await dst.boundingBox();if(!from||!to)throw new Error('Drag elements must be visible');await p.mouse.move(from.x+from.width/2,from.y+from.height/2);await p.mouse.down();try{await p.mouse.move(to.x+to.width/2,to.y+to.height/2,{steps:12});}finally{await p.mouse.up();}return out({dragged:true});}
+      case 'browser_drag':{const src=await this.locator(s,{...a,...a.source},signal),dst=await this.locator(s,{...a,...a.destination},signal);await src.scrollIntoViewIfNeeded({timeout:5000}).catch(()=>{});const from=await src.boundingBox();if(!from)throw new Error('Drag elements must be visible');await p.mouse.move(from.x+from.width/2,from.y+from.height/2);await p.mouse.down();try{await dst.scrollIntoViewIfNeeded({timeout:5000}).catch(()=>{});const to=await dst.boundingBox();if(!to)throw new Error('Drag elements must be visible');await p.mouse.move(to.x+to.width/2,to.y+to.height/2,{steps:12});}finally{await p.mouse.up();}return out({dragged:true});}
       case 'browser_mouse':{const button=a.button||'left';if(a.action==='move'||a.action==='click'){if(!Number.isFinite(a.x)||!Number.isFinite(a.y))throw new Error('x and y required');if(a.action==='move')await p.mouse.move(a.x,a.y,{steps:bounded(a.steps,1,100,1)});else await p.mouse.click(a.x,a.y,{button});}else if(a.action==='wheel')await p.mouse.wheel(a.deltaX||0,a.deltaY||0);else await p.mouse[a.action]({button});return out({mouse:a.action});}
       case 'browser_press_key':await p.keyboard.press(a.key);return out({pressed:a.key});
       // Inputs are read back: masks, maxlength or page scripts can store something else.
-      case 'browser_type':{const target=await this.locator(s,a,signal);await target.fill(a.text,{timeout:10000});const mismatch=await this.readBack(target,a.text);if(a.submit)await target.press('Enter',{timeout:10000});return out(noted(target,{typed:true,...(mismatch?{mismatch}:{})}));}
-      case 'browser_fill_form':{if(a.fields.length>50)throw new Error('Maximum 50 fields');const mismatches=[];for(const [index,field] of a.fields.entries()){if(signal.aborted)throw new Error('Cancelled');const target=await this.locator(s,{...a,...field},signal);if(typeof field.value==='boolean')await target.setChecked(field.value,{timeout:10000});else await target.fill(String(field.value??''),{timeout:10000});const mismatch=await this.readBack(target,typeof field.value==='boolean'?field.value:String(field.value??''));if(mismatch)mismatches.push({field:index,...mismatch});}return out({filled:a.fields.length,...(mismatches.length?{mismatches}:{})});}
-      case 'browser_select_option':{const target=await this.locator(s,a,signal);await target.selectOption(a.values,{timeout:10000});const selected=await target.evaluate(e=>e.selectedOptions?[...e.selectedOptions].map(o=>(o.label||o.text||'').trim()):null).catch(()=>null);return out(noted(target,{selected:selected??true}));}
+      case 'browser_type':{const target=await this.locator(s,a,signal);await ensureFillable(target,'typed');signal.throwIfAborted();await target.fill(a.text,{timeout:10000});const mismatch=await this.readBack(target,a.text);if(a.submit)await target.press('Enter',{timeout:10000});return out(noted(target,{typed:true,...(mismatch?{mismatch}:{})}));}
+      case 'browser_fill_form':{if(a.fields.length>50)throw new Error('Maximum 50 fields');const mismatches=[];for(const [index,field] of a.fields.entries()){if(signal.aborted)throw new Error('Cancelled');const target=await this.locator(s,{...a,...field},signal);const kind=await target.evaluate(e=>({tag:e.tagName,type:e.type})).catch(()=>({}));await ensureFillable(target,'filled',kind.tag==='SELECT'?{values:[String(field.value??'')]}:{});const flag=typeof field.value==='boolean'?field.value:(kind.type==='checkbox'||kind.type==='radio')&&/^(true|false|on|off|1|0|yes|no)$/i.test(String(field.value))?/^(true|on|1|yes)$/i.test(String(field.value)):undefined;if(flag!==undefined)await target.setChecked(flag,{timeout:10000});else if(kind.tag==='SELECT')await target.selectOption(String(field.value??''),{timeout:10000});else await target.fill(String(field.value??''),{timeout:10000});const mismatch=await this.readBack(target,flag!==undefined?flag:String(field.value??''));if(mismatch)mismatches.push({field:index,...mismatch});}return out({filled:a.fields.length,...(mismatches.length?{mismatches}:{})});}
+      case 'browser_select_option':{const target=await this.locator(s,a,signal);await ensureFillable(target,'selected',{values:a.values});signal.throwIfAborted();await target.selectOption(a.values,{timeout:10000});const selected=await target.evaluate(e=>e.selectedOptions?[...e.selectedOptions].map(o=>(o.label||o.text||'').trim()):null).catch(()=>null);return out(noted(target,{selected:selected??true}));}
       case 'browser_evaluate':{if(a.function.length>32768)throw new Error('JavaScript limit 32 KiB');const data=await this.frame(s,a).evaluate(({source,arg})=>{const fn=(0,eval)(`(${source})`);if(typeof fn!=='function')throw new Error('function must be a JavaScript function expression');return fn(arg);},{source:a.function,arg:a.arg});if(JSON.stringify(data)?.length>65536)throw new Error('Evaluation result exceeds 64 KiB');return out({value:data,untrustedContent:true});}
       case 'browser_resize':await p.setViewportSize({width:bounded(a.width,200,3840,1280),height:bounded(a.height,200,2160,800)});return out({viewport:p.viewportSize()});
       case 'browser_emulate':{
@@ -654,8 +682,10 @@ export class BrowserService {
   }
   /** The value or checked state a field holds now, when it differs from what was set. */
   async readBack(target,expected){
-    const got=await target.evaluate(e=>({password:e.type==='password',value:'value' in e&&e.tagName!=='BUTTON'?String(e.value):e.isContentEditable?e.innerText:null,checked:e.checked,editable:!!e.isContentEditable})).catch(()=>null);
+    const got=await target.evaluate(e=>({password:e.type==='password',value:'value' in e&&e.tagName!=='BUTTON'?String(e.value):e.isContentEditable?e.innerText:null,checked:e.checked,editable:!!e.isContentEditable,chosen:e.tagName==='SELECT'?[...e.options].filter(o=>o.selected).flatMap(o=>[o.value,(o.label||o.text||'').trim()]):null})).catch(()=>null);
     if(!got)return null;
+    // A select holds an option, which may be named by its value or its label.
+    if(Array.isArray(got.chosen))return got.chosen.includes(String(expected))?null:{expected:String(expected).slice(0,200),actual:got.chosen.slice(0,2).join(' / ').slice(0,200)};
     if(typeof expected==='boolean')return got.checked===expected?null:{expected,actual:!!got.checked};
     if(got.value===null||(got.editable?clean(got.value,1e6)===clean(expected,1e6):got.value===expected))return null;
     return got.password?{expected:'(hidden)',actual:`(hidden, ${got.value.length} chars)`}:{expected:expected.slice(0,200),actual:got.value.slice(0,200)};

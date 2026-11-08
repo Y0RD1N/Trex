@@ -10,6 +10,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import zlib from 'node:zlib';
 
 process.env.TREX_BROWSER_DEV ??= '1';
 process.env.TREX_BROWSER_HEADLESS ??= '1';
@@ -224,6 +225,15 @@ describe('Trex Browser shell', { skip: !available && 'Trex shell or display unav
     fs.symlinkSync(`testhost-${process.pid}`, path.join(userData, 'SingletonLock')); // held by a live process
     try { await assert.rejects(call(ctx, 'browser_navigate', { url: `${base}/` }), e => e.code === 'PROFILE_IN_USE'); }
     finally { fs.rmSync(path.join(userData, 'SingletonLock'), { force: true }); }
+  });
+
+  it('paints a page that declares no background white, not the dark window base', async () => {
+    await call(A, 'browser_navigate', { url: `${base}/` }); // the fixture page sets no background
+    const tab = [...service.state(A).tabs.values()][0];
+    const png = await tab.screenshot({ type: 'png', clip: { x: 5, y: 150, width: 1, height: 1 } });
+    let offset = 8; const data = [];
+    while (offset < png.length) { const length = png.readUInt32BE(offset); if (png.toString('ascii', offset + 4, offset + 8) === 'IDAT') data.push(png.subarray(offset + 8, offset + 8 + length)); offset += 12 + length; }
+    assert.deepEqual([...zlib.inflateSync(Buffer.concat(data)).subarray(1, 4)], [255, 255, 255], 'black text on the dark base made unstyled pages unreadable');
   });
 
   it('closes cleanly and reopens on the next navigation', async () => {

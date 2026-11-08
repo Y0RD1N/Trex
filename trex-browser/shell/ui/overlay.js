@@ -146,8 +146,9 @@ function renderIsland(s) {
 
 function renderDock(s) {
   const a = s.agent;
-  const paused = a.state === 'paused';
-  const doing = paused ? 'está en pausa' : `${(ACTIVITY[a.tool] || 'está trabajando').toLowerCase()}`;
+  // An uncertain action (review) halts the agent like a pause: only Reanudar applies, not Pausar.
+  const paused = a.state === 'paused' || a.state === 'review';
+  const doing = a.state === 'review' ? 'tiene una acción incierta' : paused ? 'está en pausa' : `${(ACTIVITY[a.tool] || 'está trabajando').toLowerCase()}`;
   patchMarkup(root, `<div class="dock glass ${paused ? 'paused' : ''}">
     <span class="pulse"></span>
     <span class="msg"><b>${esc(a.label)}</b> ${esc(doing)}${a.detail ? ` <b>“${esc(a.detail)}”</b>` : ''}</span>
@@ -210,7 +211,8 @@ root.addEventListener('click', e => {
     case 'center': return cmd('toggleCenter'); case 'newtab': return cmd('newTab');
     case 'zoomreset': e.preventDefault(); return cmd('zoom', { reset: true });
     case 'downloads': panel = panel === 'downloads' ? null : 'downloads'; return render(state);
-    case 'dlclear': return cmd('downloadsClear');
+    // The list is empty afterwards: closing the panel releases the bar, which stays pinned while it is open.
+    case 'dlclear': panel = null; return cmd('downloadsClear');
     case 'findnext': return cmd('find', { text: findText, forward: true, next: true });
     case 'findprev': return cmd('find', { text: findText, forward: false, next: true });
     case 'findclose': return cmd('findClose');

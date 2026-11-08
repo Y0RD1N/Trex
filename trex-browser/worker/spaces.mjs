@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { jsonRead, writePrivate } from './security.mjs';
 
@@ -15,9 +16,18 @@ export function ensureSpaces(service, ctx, members) {
   }
   const profiles = service.profiles(ctx), used = new Set(profiles.map(profile => profile.id));
   const available = Array.from({length:98}, (_,i) => `BROWSER${i+2}`).filter(id => !used.has(id));
+  // Every new chat reserves a space and nothing frees them, so after 98 the next chat could not start.
+  // A space whose chat is gone (not one of the requested members) and that was never opened has no
+  // cookies, tabs or files to lose: it can be handed to a new chat. Opened spaces and manual
+  // profiles are always preserved.
+  const requested = new Set(members.map(member => member.clientId));
+  const neverOpened = profile => !!profile.space && !requested.has(profile.space.clientId)
+    && !service.sessions.get(service.key({...ctx,profile:profile.id}))
+    && !fs.existsSync(path.join(service.profileDir({...ctx,profile:profile.id}),'user-data'));
+  const reusable = profiles.filter(neverOpened).map(profile => profile.id).sort((a,b) => Number(a.slice(7)) - Number(b.slice(7)));
   const planned = members.map(member => {
     const owned = profiles.find(profile => profile.space?.clientId === member.clientId);
-    const profile = owned?.id || available.shift();
+    const profile = owned?.id || available.shift() || reusable.shift();
     if (!profile) throw new Error('No free browser profiles remain in this project; existing profiles are preserved');
     return {...member, profile};
   });

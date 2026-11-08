@@ -36,8 +36,9 @@ export async function connectBrowser(options: BrowserOptions | undefined, cwd: s
       } catch { /* fall back to the stdio adapter below */ }
     }
     return browserConfigForShell(await trexBrowserMcpConfig(cwd, bound, binding.clientId, binding.profile), shell);
-  } catch {
-    if (preparing) throw new Error(PREPARE_FAILED);
+  } catch (error) {
+    // Only the native bridge's own sentence (a string, never a JS error) names the cause, e.g. no free spaces left.
+    if (preparing) throw new Error(typeof error === "string" && error.trim() ? `${PREPARE_FAILED} Motivo: ${error.trim()}` : PREPARE_FAILED);
     warn("Trex Browser no está disponible. Puedes revisar su instalación en Ajustes; el asistente continúa sin navegador.");
     return null;
   }

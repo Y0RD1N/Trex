@@ -324,3 +324,56 @@ test("computer and accessibility control follow the user's switches for every te
   const off=harness(t,{settings:{desktopEnabled:false,a11yEnabled:false},masterMode:"acceptEdits"});await off.settle();
   for(const node of nodes(off.tree).filter(node=>node.props?.options))assert.deepEqual([node.props.options.desktopEnabled,node.props.options.a11yEnabled],[false,false],"the user's switches decide");
 });
+const toolbar=h=>nodes(h.tree).find(node=>node.props?.onPermission).props;
+test("a member's permission changes from the team panel: the team reopens in a new epoch and the principal is told on its next message",async t=>{
+  const h=harness(t);await h.settle();
+  const review=h.team.workers.find(m=>m.id==="review");assert.equal(review.canWrite,false);
+  toolbar(h).onPermission(review,"auto");await h.settle();
+  assert.deepEqual(h.calls.filter(c=>c[0]==="open").at(-1).slice(2),[true],"reopened as a resume of the same team");
+  assert.notEqual(h.team.epoch,"epoch-1");
+  const changed=h.team.workers.find(m=>m.id==="review");
+  assert.equal(changed.mode,"auto");assert.equal(changed.canWrite,true);
+  const options=nodes(h.tree).find(node=>node.props?.options&&node.props.id==="review").props.options;
+  assert.equal(options.planningOnly,false);assert.equal(options.mode,"auto");
+  assert.equal(await h.panel().session.send("Sigue con la revisión",[],[]),true);
+  assert.match(h.delivered.at(-1).text,/Cambio de permisos del equipo[\s\S]*- review: .*puede modificar archivos/);
+  assert.equal(h.delivered.at(-1).display,"Sigue con la revisión","the person's own message is shown unchanged");
+  h.complete("principal");h.publish();await h.settle();
+  assert.equal(await h.panel().session.send("Otra cosa",[],[]),true);
+  assert.equal(h.delivered.at(-1).text,"Otra cosa","told only once");
+});
+test("a read-only member becomes read-only again with plan, and a no-op change does not reopen the team",async t=>{
+  const h=harness(t);await h.settle();
+  const implement=h.team.workers.find(m=>m.id==="implement");assert.equal(implement.canWrite,true);
+  const opens=()=>h.calls.filter(c=>c[0]==="open").length;
+  toolbar(h).onPermission(implement,implement.mode??"ask");await h.settle();assert.equal(opens(),1,"same permission: nothing to do");
+  toolbar(h).onPermission(implement,"plan");await h.settle();
+  assert.equal(h.team.workers.find(m=>m.id==="implement").canWrite,false);
+  assert.equal(nodes(h.tree).find(node=>node.props?.options&&node.props.id==="implement").props.options.planningOnly,true);
+});
+test("permissions cannot change while the team is working; the reason is shown and nothing changes",async t=>{
+  const h=harness(t);await h.settle();
+  h.sessions.implement.state={...h.sessions.implement.state,pendingTurns:1};h.publish();
+  const props=toolbar(h);assert.match(props.permissionsLocked,/termine su trabajo/);
+  const before=h.team.epoch,review=h.team.workers.find(m=>m.id==="review");
+  props.onPermission(review,"auto");await h.settle();
+  assert.equal(h.team.epoch,before);assert.equal(h.team.workers.find(m=>m.id==="review").canWrite,false);
+  assert.ok(h.notices.some(text=>/termine su trabajo/.test(text)));
+});
+test("a paused team keeps the new permissions for when it resumes",async t=>{
+  const h=harness(t,{phase:"paused"});await h.settle();
+  const review=h.team.workers.find(m=>m.id==="review");
+  toolbar(h).onPermission(review,"auto");await h.settle();
+  assert.equal(h.team.workers.find(m=>m.id==="review").canWrite,true);
+  assert.equal(h.team.phase,"paused");assert.equal(h.calls.filter(c=>c[0]==="open").length,0,"nothing reopens until the team resumes");
+  assert.ok(h.notices.some(text=>/al reanudar/.test(text)));
+  await h.button("Revisado: reanudar").props.onClick();await h.settle();
+  assert.deepEqual(h.calls.filter(c=>c[0]==="open").at(-1).slice(2),[true]);
+  assert.equal(h.team.phase,"running");assert.equal(h.team.workers.find(m=>m.id==="review").mode,"auto");
+});
+test("the principal's own permission can be raised from the panel too",async t=>{
+  const h=harness(t);await h.settle();
+  toolbar(h).onPermission(h.team.master,"acceptEdits");await h.settle();
+  assert.equal(h.team.master.mode,"acceptEdits");assert.equal(h.team.master.canWrite,true);
+  assert.equal(nodes(h.tree).find(node=>node.type==="ChatPanel").props.planningOnly,false);
+});

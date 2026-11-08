@@ -31,10 +31,14 @@ export type BrowserCall = {
 };
 export type BrowserSpace = { clientId: string; profile: string; label: string; active?: boolean; running?: boolean; inUse?: boolean; paused?: boolean; tabCount?: number; currentTool?: string | null; pageTitle?: string; url?: string };
 export type BrowserProfile = { id: string; name: string; projectId: string; createdAt: string };
+/** `sha256` and `sizeBytes` are missing in the lean artifacts agents receive (Claude, Codex, Antigravity);
+ * the broker checks integrity itself when one is opened, by id. */
 export type BrowserArtifact = {
-  id: string; sha256: string; mimeType: string; sizeBytes: number; width?: number; height?: number;
+  id: string; sha256?: string; mimeType: string; sizeBytes?: number; width?: number; height?: number;
   kind: string; storage: "local" | "broker"; provenance: unknown;
 };
+/** Free slots per project: BROWSER2..BROWSER99 (BROWSER1 is the manual one). Mirrors trex-browser/worker/spaces.mjs. */
+export const BROWSER_SPACE_LIMIT = 98;
 export const OBSERVE_BROWSER_TOOLS = new Set([
   "browser_batch", "browser_navigate", "browser_navigate_back", "browser_reload", "browser_tabs", "browser_frames",
   "browser_snapshot", "browser_console_messages", "browser_network_requests", "browser_network_body",
@@ -58,17 +62,36 @@ export function browserConfigForShell(config: BrowserConfig, shell: string): Bro
   const match = /^(?:\\\\\?\\)?([a-z]):[\\/](.*)$/i.exec(config.command);
   return shell === "wsl" && match ? { ...config, command: `/mnt/${match[1].toLowerCase()}/${match[2].replace(/\\/g, "/")}` } : config;
 }
+/** The native bridge rejects with an already readable (Spanish) sentence naming the cause;
+ * anything else (JS errors, odd shapes) is not shown and gets `fallback`. */
+export function browserErrorText(error: unknown, fallback: string): string {
+  const text = typeof error === "string" ? error.trim() : "";
+  return text && text.length <= 600 ? text : fallback;
+}
+/** Why "Mostrar ventana" raised nothing, from the host's `{ focused: false, reason }`. */
+export function browserFocusNotice(reason?: string): string {
+  return reason === "external-browser" ? "Este espacio usa el Chrome del sistema, no la ventana de Trex Browser, así que no se puede traer al frente desde aquí. Búscalo en la barra de tareas."
+    : reason === "closed" ? "Este espacio ya no tiene ninguna ventana abierta."
+    : "No se pudo traer la ventana al frente. Puede que el sistema lo impida; búscala en la barra de tareas.";
+}
+/** Why a space or the personal window did not open (`{ opened: false, reason }`). */
+export function browserOpenFailure(reason?: string): string {
+  return reason === "unknown-profile" ? "Este espacio todavía no existe en el proyecto: se crea cuando el agente lo usa por primera vez."
+    : "No se pudo abrir este espacio para iniciar sesión.";
+}
 export function browserArtifacts(value: unknown): BrowserArtifact[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 32).flatMap(raw => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>, id = item.id ?? item.artifactId, size = item.sizeBytes ?? item.bytes;
+    // Lean artifacts carry neither checksum nor size: absent is fine, present-but-malformed drops the entry.
     if (typeof id !== "string" || !/^[a-zA-Z0-9_:.\-]{1,256}$/.test(id) || id.includes("..")
-      || typeof item.sha256 !== "string" || (item.sha256 !== "" && !/^[a-f0-9]{64}$/i.test(item.sha256))
+      || (item.sha256 !== undefined && (typeof item.sha256 !== "string" || (item.sha256 !== "" && !/^[a-f0-9]{64}$/i.test(item.sha256))))
       || typeof item.mimeType !== "string" || item.mimeType.length > 128
       || !/^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/.test(item.mimeType) || item.mimeType.trim() !== item.mimeType
-      || typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) return [];
-    return [{ id, sha256: item.sha256, mimeType: item.mimeType, sizeBytes: size,
+      || (size !== undefined && (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0))) return [];
+    return [{ id, ...(typeof item.sha256 === "string" ? { sha256: item.sha256 } : {}), mimeType: item.mimeType,
+      ...(typeof size === "number" ? { sizeBytes: size } : {}),
       ...(typeof item.width === "number" && Number.isSafeInteger(item.width) && item.width > 0 ? { width: item.width } : {}),
       ...(typeof item.height === "number" && Number.isSafeInteger(item.height) && item.height > 0 ? { height: item.height } : {}),
       kind: typeof item.kind === "string" ? item.kind : "artifact",

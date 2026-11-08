@@ -39,6 +39,15 @@ behind the active window (focus-stealing prevention); bring it forward first.
 - [ ] Download a file: the download button and panel appear, with progress. "Abrir" and the folder button work, and the file is in `~/Descargas` or `~/Downloads`.
 - [ ] Ask for notification and location permission. A notice appears in the bar with Bloquear and Permitir, and the decision is remembered after a reload.
 
+- [ ] Type `192.168.1.5:3000`, `foo.test:3000` and `localhost:3000`: they open over http. Type a bare word: it searches.
+- [ ] Open a page that cannot load (`http://no-existe.invalid`, a stopped local server): the error page shows the reason and "Reintentar"; reload retries the same address.
+- [ ] A page without its own background (plain text, a bare HTML file) is white, not dark.
+- [ ] After entering an address or picking a tab, arrows, Space and PageDown scroll the page without clicking it first.
+- [ ] `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle tabs; `Ctrl+Shift+T` reopens your last closed tab; `F11` toggles full screen.
+- [ ] With the agents center open, `Esc` closes it, and `Ctrl+W` / `F5` do not touch the hidden page.
+- [ ] Right-click inside the address field and the find field: Deshacer, Cortar, Copiar, Pegar and Seleccionar todo work.
+- [ ] Open the downloads panel, press "Limpiar": the panel closes and the bar hides again.
+
 ## Agents (from a trex chat)
 - [ ] The first navigation by an agent opens this browser, not Chrome or Chromium.
 - [ ] While the agent acts, the frame turns orange and the dock shows the agent, the tool and the element name.

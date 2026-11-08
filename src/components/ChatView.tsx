@@ -14,7 +14,7 @@ import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browse
  */
 import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { formatError, gitBranch, listProjectFiles, readClipboard, trexBrowserOpenArtifact, trexBrowserSpaces } from "../api";
+import { formatError, gitBranch, listProjectFiles, readClipboard, trexBrowserOpenArtifact, trexBrowserResolveSpace, trexBrowserSpaces } from "../api";
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
 import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from "../chatFiles";
 import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
@@ -1093,8 +1093,11 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const openArtifact = useStableCallback(async (artifact: Parameters<NonNullable<Parameters<typeof ToolRow>[0]["onOpenArtifact"]>>[0]): Promise<void> => {
     const id = brokerArtifactId(artifact); if (!id || !props.browser) return;
     const profile=(artifact.provenance as {profile?:string}|null)?.profile;
-    const binding=props.browserSpaces?.find(space=>space.profile===profile)??{...props.browser,profile:profile&&validBrowserProfile(profile)?profile:props.browser.profile};
-    try { const result = await trexBrowserOpenArtifact(id, cwd, "full", binding?.clientId??props.browser.clientId, binding?.profile??props.browser.profile);
+    try {
+      // Los artefactos que reciben Claude, Codex y Antigravity no dicen de qué perfil son: se abren con el espacio propio de este chat.
+      const binding=props.browserSpaces?.find(space=>space.profile===profile)
+        ??(profile&&validBrowserProfile(profile)?{...props.browser,profile}:props.browser.automatic?await trexBrowserResolveSpace(cwd,props.browser):props.browser);
+      const result = await trexBrowserOpenArtifact(id, cwd, "full", binding.clientId, binding.profile);
       if (result.isError) session.notice("warn", "No se pudo abrir el archivo. Revisa el estado del navegador.");
     } catch { session.notice("warn", "No se pudo abrir el archivo del navegador."); }
   });

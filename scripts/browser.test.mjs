@@ -301,6 +301,60 @@ offlineTest("CLI metadata-only diagnostics with an absent checksum remain visibl
   assert.deepEqual(browserArtifacts([metadata]), [metadata]);
 });
 
+// What the worker gives agents (forAgent/modelView): no checksum, no size, no provenance.
+const lean = Object.freeze({ artifactId: core.artifactId, kind: "screenshot", mimeType: "image/png", width: 640, height: 480 });
+const expectedLean = { id: core.artifactId, mimeType: "image/png", width: 640, height: 480, kind: "screenshot", storage: "broker",
+  provenance: { projectId: undefined, profile: undefined } };
+
+offlineTest("lean agent artifacts (no sha256, no size) are accepted and open by their id alone", () => {
+  assert.deepEqual(browserArtifacts([lean]), [expectedLean]);
+  const [artifact] = browserArtifacts([lean]);
+  assert.equal(Object.hasOwn(artifact, "sha256"), false);
+  assert.equal(Object.hasOwn(artifact, "sizeBytes"), false);
+  assert.equal(brokerArtifactId(artifact), core.artifactId);
+  // Video and diagnostics carry no dimensions.
+  assert.deepEqual(browserArtifacts([{ artifactId: "vid-1", kind: "video", mimeType: "video/webm" }]).map(item => [item.id, item.kind, item.mimeType]), [["vid-1", "video", "video/webm"]]);
+  // A mix of lean and full shapes keeps both, in order.
+  assert.deepEqual(browserArtifacts([lean, core]), [expectedLean, expectedCore]);
+});
+
+offlineTest("lean artifacts are found in every envelope the Claude, Codex and Antigravity adapters pass", () => {
+  const view = { ok: true, tabs: 1, revision: 4, artifacts: [lean] };
+  for (const raw of [
+    { content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view },    // Codex item.result / Antigravity rawOutput
+    { content: [{ type: "text", text: JSON.stringify(view) }] },                              // Claude tool_result content
+    { content: JSON.stringify(view) },                                                         // Claude tool_result with a plain string
+    JSON.stringify({ content: [{ type: "text", text: JSON.stringify(view) }], structuredContent: view }),
+    { structuredContent: view },
+  ]) {
+    const found = browserResultArtifacts(raw);
+    assert.deepEqual(found.map(item => item.id), [core.artifactId], JSON.stringify(raw).slice(0, 60));
+    assert.equal(brokerArtifactId(found[0]), core.artifactId);
+  }
+});
+
+offlineTest("an artifact that omits the checksum or size is fine, one that sends them malformed is dropped", () => {
+  assert.deepEqual(browserArtifacts([{ ...lean, sizeBytes: 12 }]), [{ ...expectedLean, sizeBytes: 12 }]);
+  assert.deepEqual(browserArtifacts([{ ...lean, sha256 }]), [{ ...expectedLean, sha256 }]);
+  for (const bad of [{ sha256: 42 }, { sha256: null }, { sha256: "g".repeat(64) }, { sizeBytes: -1 }, { sizeBytes: "12" }, { bytes: 1.5 }, { mimeType: undefined }, { artifactId: "../x" }]) {
+    assert.deepEqual(browserArtifacts([{ ...lean, ...bad }]), [], JSON.stringify(bad));
+  }
+});
+
+offlineTest("host text for native failures: only the bridge's own sentence is shown", () => {
+  const { browserErrorText, browserFocusNotice, browserOpenFailure } = browser;
+  assert.equal(browserErrorText("  Este espacio está abierto en otra ventana.  ", "genérico"), "Este espacio está abierto en otra ventana.");
+  for (const value of [new Error("TypeError: private diagnostic"), undefined, null, 42, "", "   ", "x".repeat(601), { message: "no" }]) {
+    assert.equal(browserErrorText(value, "genérico"), "genérico");
+  }
+  assert.match(browserFocusNotice("external-browser"), /Chrome del sistema/);
+  assert.match(browserFocusNotice("closed"), /ya no tiene ninguna ventana/);
+  assert.match(browserFocusNotice(undefined), /No se pudo traer la ventana al frente/);
+  assert.match(browserOpenFailure("unknown-profile"), /todavía no existe/);
+  assert.match(browserOpenFailure("agent-running"), /No se pudo abrir este espacio/);
+  assert.match(browserOpenFailure(), /No se pudo abrir este espacio/);
+});
+
 offlineTest("artifact parsing drops malformed required metadata while retaining valid siblings", () => {
   const invalid = [null, false, 123, "artifact", [], {},
     { ...cli, id: "" }, { ...cli, id: "../outside" }, { ...cli, id: "a/b" }, { ...cli, id: "a\\b" },
@@ -592,6 +646,13 @@ offlineTest("a ready installed component cannot silently disappear when app-side
   const h=nativeHarness(command=>{if(command==="trex_browser_status")return ready;throw new Error("private native preparation diagnostic");});
   await assert.rejects(h.connect(options),error=>error.message.includes("no se pudo preparar")&&!error.message.includes("private native preparation diagnostic"));
   assert.equal(h.calls.length,2);assert.deepEqual(h.warnings,[]);
+});
+
+offlineTest("a rejection from the native bridge names its cause; a JS error never leaks into the chat",async()=>{
+  const reason="No quedan espacios de navegador libres en este proyecto (máximo 98); los existentes se conservan.";
+  const fails=thrown=>nativeHarness(command=>{if(command==="trex_browser_status")return ready;throw thrown;});
+  await assert.rejects(fails(reason).connect(options),error=>error.message.includes("no se pudo preparar")&&error.message.endsWith(`Motivo: ${reason}`));
+  await assert.rejects(fails(new Error(reason)).connect(options),error=>error.message.includes("no se pudo preparar")&&!error.message.includes(reason));
 });
 
 offlineTest("API native bridge forwards browser commands and trusted arguments without rewriting", async () => {

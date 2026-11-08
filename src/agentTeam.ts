@@ -44,6 +44,21 @@ export type TeamTask = { id: string; epoch: string; key: string; memberId: strin
 export type TeamPlanStep = { taskKey: string; memberId: string; task: string; dependsOn?: string[] };
 export type TeamSnapshot = { id: string; epoch: string; phase: "running" | "paused"; tasks: TeamTask[]; plan?: TeamPlanStep[]; heartbeat: number };
 export const teamTaskActive = (task: TeamTask): boolean => ["queued", "claimed", "running"].includes(task.status);
+/**
+ * The same team with one member's permission changed (`plan` is read-only, anything else may write).
+ * Null when the member does not exist or its assistant does not support that mode. The team is
+ * reopened afterwards (new epoch), because the native scheduler and each session start from it.
+ */
+export function withMemberPermission(team: AgentTeam, memberId: string, mode: string): AgentTeam | null {
+  const member = memberId === team.master.id ? team.master : team.workers.find(item => item.id === memberId);
+  if (!member || !validAgentPermission(member.agent.provider, mode)) return null;
+  const patch = (item: TeamMember): TeamMember => item.id === memberId ? { ...item, mode, canWrite: mode !== "plan" } : item;
+  return { ...team, master: patch(team.master), workers: team.workers.map(patch) };
+}
+/** One line for the principal, who learned the team's permissions in its first message. */
+export function permissionChangeNote(member: Pick<TeamMember, "name" | "canWrite" | "mode" | "agent">): string {
+  return `${member.name}: ${agentPermissionLabel(member.agent.provider, member.mode, member.canWrite)}, ${member.canWrite ? "puede modificar archivos con esos permisos" : "solo lectura, no modifica archivos"}.`;
+}
 const obj = (raw: unknown): Record<string, unknown> | null => raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
 const id = (raw: unknown): raw is string => typeof raw === "string" && /^[a-zA-Z0-9-]{1,100}$/.test(raw);
 

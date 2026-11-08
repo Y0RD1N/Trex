@@ -276,7 +276,7 @@ function BrowserArtifactButton({ artifact, onOpen }: { artifact: BrowserArtifact
     if (!onOpen || !canOpen || busy) return;
     setBusy(true); void onOpen(artifact).finally(() => setBusy(false));
   }} title={canOpen ? `Abrir ${label.toLowerCase()}` : "Archivo local del navegador"}>
-    <ImageIcon size={15} /><span>{busy ? "Abriendo…" : label}</span><small>{artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB`}</small>
+    <ImageIcon size={15} /><span>{busy ? "Abriendo…" : label}</span><small>{artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : artifact.sizeBytes === undefined ? "" : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB`}</small>
   </button>;
 }
 

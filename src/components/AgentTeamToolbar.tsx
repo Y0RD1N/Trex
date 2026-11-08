@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { TEAM_ROLES, teamTaskActive, type AgentTeam, type TeamBudget, type TeamMember, type TeamSnapshot } from "../agentTeam";
-import { agentPermissionLabel } from "../agentPermissions";
+import { agentPermissionLabel, agentPermissionOptions, defaultAgentPermission } from "../agentPermissions";
 import { chatActivity, currentModel, formatTokens, modelName, type ChatState } from "../chatState";
 import { budgetExhausted, budgetLabel, MEMBER_BUDGET_PRESETS, raisedBudget, TEAM_BUDGET_PRESETS, teamBudgetUse } from "../teamBudget";
 import { accountGroups, QUOTA_WARNING, type AccountQuota, type TeamUsageView } from "../teamUsage";
@@ -12,7 +12,9 @@ import { AlertIcon, ChevronIcon, GaugeIcon, RotateIcon, StopIcon } from "./Icons
 import "./TeamUsage.css";
 
 type Props = { team: AgentTeam; states: Record<string, ChatState>; snapshot: TeamSnapshot | null; starting: boolean; busy: boolean;
-  onStop: () => void; onResume: () => void; onLoad: (member: TeamMember) => void; /** Abre la conversación completa de un subagente. */ onOpen?: (member: TeamMember) => void; onRecover: (member: TeamMember) => void;
+  onStop: () => void; onResume: () => void; onLoad: (member: TeamMember) => void; /** Abre la conversación completa de un subagente. */ onOpen?: (member: TeamMember) => void;
+  /** Cambia los permisos de un miembro; `permissionsLocked` es el motivo por el que ahora no se puede (o null). */
+  onPermission?: (member: TeamMember, mode: string) => void; permissionsLocked?: string | null; onRecover: (member: TeamMember) => void;
   canRecover: (member: TeamMember) => boolean;
   /** Tokens nuevos por participante, contexto y cuota de su cuenta. */
   usage?: TeamUsageView; onBudgetChange?: (budget: TeamBudget | null) => void };
@@ -39,7 +41,17 @@ function ContextRing({ percent }: { percent: number | null }) {
 const presetOptions = (presets: (number | null)[], current: number | null) => [...new Set([...presets, current])]
   .sort((a, b) => (a ?? Infinity) - (b ?? Infinity)).map(value => ({ value: value === null ? "" : String(value), label: budgetLabel(value) }));
 
-export default function AgentTeamToolbar({ team, states, snapshot, starting, busy, onStop, onResume, onLoad, onOpen, onRecover, canRecover, usage, onBudgetChange }: Props) {
+export default function AgentTeamToolbar({ team, states, snapshot, starting, busy, onStop, onResume, onLoad, onOpen, onPermission, permissionsLocked, onRecover, canRecover, usage, onBudgetChange }: Props) {
+  // Permisos del miembro: un selector cuando se pueden cambiar (el asistente ofrece varios modos); si no, la insignia de siempre.
+  const permissionBadge = (member: TeamMember) => {
+    const risk = member.mode ? permissionRisk(member.mode) : member.canWrite ? "ask" : "read";
+    const label = agentPermissionLabel(member.agent.provider, member.mode, member.canWrite);
+    const options = agentPermissionOptions(member.agent.provider);
+    if (!onPermission || options.length < 2) return <small data-risk={risk}>{label}</small>;
+    return <Select className="agent-team-permission" data-risk={risk} aria-label={`Permisos de ${member.name}: ${label}`} title={permissionsLocked ?? "Cambiar los permisos"}
+      align="end" placeholder={label} value={member.mode ?? defaultAgentPermission(member.agent.provider, member.canWrite) ?? ""} options={options}
+      disabled={!!permissionsLocked} onChange={mode => onPermission(member, mode)} />;
+  };
   const [expanded, setExpanded] = useState(false), id = useId();
   const paused = ["paused", "failed"].includes(team.phase), members = [team.master, ...team.workers];
   const active = snapshot?.tasks.filter(task => ["claimed", "running"].includes(task.status)).length ?? 0;
@@ -104,7 +116,7 @@ export default function AgentTeamToolbar({ team, states, snapshot, starting, bus
             const memberBudget = spent.members[member.id];
             const warn = entry?.quota && entry.quota.peak !== null && entry.quota.peak >= QUOTA_WARNING ? entry.quota : null;
             return <div className="agent-team-member" key={member.id}>
-              <div className="agent-team-member-title"><AgentIcon kind={member.agent.provider} size={14} /><strong>{member.name}</strong><small data-risk={member.mode ? permissionRisk(member.mode) : member.canWrite ? "ask" : "read"}>{agentPermissionLabel(member.agent.provider, member.mode, member.canWrite)}</small></div>
+              <div className="agent-team-member-title"><AgentIcon kind={member.agent.provider} size={14} /><strong>{member.name}</strong>{permissionBadge(member)}</div>
               <span>{member.id === team.master.id ? "Principal" : TEAM_ROLES[member.role].name} · {member.agent.profileName}</span>
               <span>{model ? modelName(model) : member.agent.model ?? "Modelo del perfil"}{member.agent.effort ? ` · ${member.agent.effort}` : ""}</span>
               <span className="team-member-usage">

@@ -30,7 +30,11 @@ function emit(value){process.stdout.write(encode(value)+'\n');}
 // A failed batch names its failed, completed and unrun steps in the text, so an
 // agent never replays completed steps; per-step receipts stay in structuredContent.
 function errorResult(error,operationId,ctx){const message=cleanError(error.message);return {content:[{type:'text',text:error.batchSteps?batchFailureText(message,error.batchSteps,error.batchTools):message}],isError:true,structuredContent:{ok:false,operationId,...(ctx?{projectId:ctx.projectId,profile:ctx.profile}:{}),artifacts:error.batchSteps?.flatMap(step=>step.artifacts||[])||[],...(error.batchSteps?{data:{steps:error.batchSteps}}:{}),error:{code:error.code||'BROWSER_ERROR',message:cleanError(error.message)},receipt:{status:error.code==='UNCERTAIN'?'uncertain':error.code==='CANCELLED'?'cancelled':'rejected',manualReview:error.code==='UNCERTAIN',replaySafe:false}}};}
-function cleanError(message){return String(message||'Browser operation failed').replace(/(?:[A-Za-z]:\\|\/)(?:[^\s:'"<>]+[\\/])+[^\s:'"<>]*/g,'[private path]').slice(0,2000);}
+// Local file paths (the user's home, temp and system folders, drive paths) are private; URLs and CSS
+// selectors such as a[href="/docs"] are not, and an error that hides them says nothing useful.
+function cleanError(message){return String(message||'Browser operation failed')
+  .replace(/(?<![\w.\-])\/(?:home|Users|tmp|var|private|root|opt|mnt|run|etc|proc|snap|media|usr|srv)\/[^\s'"<>]*/g,'[private path]')
+  .replace(/(?<![\w])[A-Za-z]:\\[^\s'"<>]*/g,'[private path]').slice(0,2000);}
 // Agents (MCP over stdio or HTTP) get a lean result: only what they act on.
 // Text is the JSON of structuredContent, as MCP recommends, except batch steps:
 // their operation IDs and receipts stay only in structuredContent. Hosts (call,

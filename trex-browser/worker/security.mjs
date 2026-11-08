@@ -97,8 +97,11 @@ export function uploadSnapshot(cwd,input){
     try{const opened=fs.fstatSync(fd);if(!opened.isFile()||opened.nlink!==1||opened.size>MAX_ARTIFACT||opened.dev!==before.dev||opened.ino!==before.ino)throw new Error('Upload identity changed');safePath(file);const current=fs.lstatSync(file);if(current.dev!==opened.dev||current.ino!==opened.ino)throw new Error('Upload identity changed');buffer=fs.readFileSync(fd);const after=fs.fstatSync(fd);if(after.nlink!==1||after.size!==opened.size||after.mtimeMs!==opened.mtimeMs||buffer.length>MAX_ARTIFACT)throw new Error('Upload changed while reading');safePath(file);
     }finally{fs.closeSync(fd);}
   }
-  if(buffer.length>MAX_ARTIFACT)throw new Error('Upload snapshot exceeds 64 MiB');return {name:path.basename(file),mimeType:'application/octet-stream',buffer};
+  if(buffer.length>MAX_ARTIFACT)throw new Error('Upload snapshot exceeds 64 MiB');return {name:path.basename(file),mimeType:uploadMime(file),buffer};
 }
+// Sites check file.type before accepting an image or a PDF; a browser derives it from the extension, so do the same.
+const UPLOAD_MIME={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',svg:'image/svg+xml',pdf:'application/pdf',txt:'text/plain',csv:'text/csv',json:'application/json',md:'text/markdown',html:'text/html',htm:'text/html',xml:'application/xml',zip:'application/zip',mp3:'audio/mpeg',wav:'audio/wav',mp4:'video/mp4',webm:'video/webm'};
+function uploadMime(file){return UPLOAD_MIME[path.extname(file).slice(1).toLowerCase()]||'application/octet-stream';}
 export class Artifacts {
   constructor(home){this.home=home;this.dir=path.join(home,'artifacts');this.index=path.join(this.dir,'index.json');this.items=jsonRead(this.index,[]);this.prune();}
   prune(){const cutoff=Date.now()-7*86400000;let total=0;const keep=[];for(const a of [...this.items].reverse()){if(Date.parse(a.createdAt)>cutoff&&total+a.bytes<=512*1024*1024&&keep.length<200){keep.unshift(a);total+=a.bytes;}else{for(const suffix of ['', '.png','.jpg','.webm']){const f=path.join(this.dir,a.artifactId+suffix);safePath(f,{allowMissing:true});fs.rmSync(f,{force:true});}}}this.items=keep;this.save();}

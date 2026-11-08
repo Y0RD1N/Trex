@@ -19,11 +19,20 @@ export function fakePage({ tree = [], url = 'http://localhost/', title = 'Fixtur
     press: async key => { page.actions.push(['press', ref, key]); },
     selectOption: async values => { page.actions.push(['select', ref, values]); page.fields.set(ref, values); },
     boundingBox: async () => ({ x: 0, y: 0, width: 10, height: 10 }),
+    // Pre-checks of the real locator API: the fake element is always visible, enabled and editable.
+    waitFor: async () => {},
+    isEnabled: async () => true,
+    isEditable: async () => true,
+    scrollIntoViewIfNeeded: async () => {},
     // Read-back of a field and "required": answered from page.fields / page.required.
     evaluate: async fn => {
       const source = String(fn);
       if (source.includes('required')) return page.required?.has(ref) || false;
       if (source.includes('selectedOptions')) return (page.fields.get(ref) || []).map(v => page.labels?.[v] ?? v);
+      // fill_form asks what kind of field it is; the select pre-check lists its options; read-back asks what is chosen.
+      if (source.includes('tag:e.tagName')) return page.kinds?.get(ref) ?? {};
+      if (source.includes('label:(o.label')) return page.options?.get(ref) ?? null;
+      if (source.includes('o.selected') && page.kinds?.get(ref)?.tag === 'SELECT') return { value: '', chosen: [].concat(page.fields.get(ref) || []).flatMap(v => [v, page.labels?.[v] ?? v]) };
       const value = page.fields.get(ref);
       return typeof value === 'boolean' ? { checked: value, value: 'on' } : { value: value ?? '', password: page.password?.has(ref) };
     },

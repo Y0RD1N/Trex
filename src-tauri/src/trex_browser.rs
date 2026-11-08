@@ -15,9 +15,12 @@ const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 const PROBE_LIMIT: usize = 1024 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const CALL_TIMEOUT: Duration = Duration::from_secs(100);
+// The worker allows its broker 45 s to open a window (cold Electron start), plus starting the broker itself.
+const OPEN_TIMEOUT: Duration = Duration::from_secs(70);
 const FAILED: &str = "No se pudo completar la operación de Trex Browser.";
 const INVALID: &str = "Trex Browser devolvió una respuesta no válida.";
 const MISSING: &str = "Trex Browser no está instalado. Activa su opción en el instalador o instala el componente independiente.";
+const NO_BROWSER: &str = "No se encontró el navegador de Trex ni Chrome. Reinstala Trex Browser o instala Chromium, Google Chrome o Microsoft Edge.";
 const TOOL_NAMES: &[&str] = &[
     "browser_navigate", "browser_navigate_back", "browser_reload", "browser_tabs", "browser_frames",
     "browser_handle_dialog", "browser_snapshot", "browser_click", "browser_hover", "browser_drag",
@@ -328,8 +331,48 @@ fn invoke_command(mut command: Command, args: &[&str], input: Option<Vec<u8>>, t
     }
     let bytes = output_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .map_err(|_| FAILED.to_string())?.map_err(|_| FAILED.to_string())?;
-    if !status.success() { return Err(FAILED.into()); }
+    if !status.success() { return Err(worker_failure(&bytes)); }
     Ok(bytes)
+}
+
+/// A failing worker still writes its error envelope to stdout before exiting 1
+/// (`errorResult` in worker.mjs: `structuredContent.error.{code,message}`, with
+/// private paths already stripped). stderr stays discarded. Without a readable
+/// envelope the reason is the generic sentence.
+fn worker_failure(stdout: &[u8]) -> String {
+    let Ok(envelope) = serde_json::from_slice::<Value>(stdout) else { return FAILED.into() };
+    let error = envelope.pointer("/structuredContent/error");
+    let field = |name: &str| error.and_then(|error| error.get(name)).and_then(Value::as_str);
+    let message = field("message").or_else(|| envelope.pointer("/content/0/text").and_then(Value::as_str)).unwrap_or("");
+    explain_failure(field("code").unwrap_or(""), message)
+}
+
+/// Spanish reason for a worker failure. The broker's HTTP replies drop error codes
+/// (everything arrives as BROWSER_ERROR), so known causes are also recognised by
+/// their message; anything else is shown as the worker wrote it.
+fn explain_failure(code: &str, message: &str) -> String {
+    let lower = message.to_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
+    let known = if code == "PROFILE_IN_USE" || has(&["older separate trex browser window", "open in a person's trex browser window"]) {
+        "Este espacio está abierto en otra ventana independiente de Trex Browser. Ciérrala e inténtalo de nuevo."
+    } else if code == "PROFILE_CLOSING" || has(&["profile is closing"]) {
+        "Este espacio se está cerrando. Espera unos segundos e inténtalo de nuevo."
+    } else if has(&["shell is not installed"]) {
+        "Falta la ventana de Trex Browser. Reinstala el componente."
+    } else if has(&["install google chrome"]) {
+        NO_BROWSER
+    } else if has(&["broker startup", "broker launch", "broker is not running", "aborted due to timeout", "fetch failed"]) {
+        "El servicio de Trex Browser no respondió a tiempo. Vuelve a intentarlo en unos segundos."
+    } else if has(&["no free browser profiles"]) {
+        "No quedan espacios de navegador libres en este proyecto (máximo 98); los existentes se conservan."
+    } else if has(&["shell ui did not start", "shell ui documents", "new tab did not attach"]) {
+        "La ventana de Trex Browser no llegó a abrirse. Vuelve a intentarlo."
+    } else if has(&["tab not found"]) {
+        "Esa pestaña ya no existe."
+    } else if plain(message, 2000) {
+        return format!("Trex Browser indicó: {}", message.chars().take(300).collect::<String>());
+    } else { FAILED };
+    known.into()
 }
 
 fn status_error(installed: bool, code: &str, message: &str) -> BrowserStatus {
@@ -365,7 +408,7 @@ fn doctor_status(bytes: &[u8]) -> Result<BrowserStatus, String> {
         }).collect()), error: None };
     status.error = if !compatible { Some(BrowserError { code: "incompatible".into(), message: "Actualiza Trex Browser para usar este protocolo.".into() }) }
         else if !runtime_ready { Some(BrowserError { code: "missing_runtime".into(), message: "Faltan archivos del runtime de Trex Browser. Reinstala el componente.".into() }) }
-        else if !doctor.browser.available { Some(BrowserError { code: "missing_browser".into(), message: "No se encontró el navegador de Trex ni Chrome. Reinstala Trex Browser o instala Chromium, Google Chrome o Microsoft Edge.".into() }) }
+        else if !doctor.browser.available { Some(BrowserError { code: "missing_browser".into(), message: NO_BROWSER.into() }) }
         else { None };
     Ok(status)
 }
@@ -561,7 +604,7 @@ pub async fn trex_browser_open(cwd: Option<String>, profile: Option<String>, url
             _ => return Err(INVALID.into()),
         };
         let bytes = serde_json::to_vec(&input).map_err(|_| FAILED.to_string())?;
-        let output = invoke_at(&installed_browser_path()?, &["open","--stdin-json"], Some(bytes), PROBE_TIMEOUT, PROBE_LIMIT)?;
+        let output = invoke_command(browser_command(&installed_browser_path()?), &["open","--stdin-json"], Some(bytes), OPEN_TIMEOUT, PROBE_LIMIT)?;
         serde_json::from_slice(&output).map_err(|_| INVALID.to_string())
     }).await
 }
@@ -710,6 +753,44 @@ mod tests {
             Some(vec![b'x'; INPUT_LIMIT]), Duration::from_millis(150), 1024);
         assert_eq!(result.err().unwrap(), FAILED);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn worker_failures_name_their_cause_in_spanish_and_never_invent_one() {
+        let envelope = |code: &str, message: &str| serde_json::to_vec(&serde_json::json!({
+            "content":[{"type":"text","text":message}],"isError":true,
+            "structuredContent":{"ok":false,"error":{"code":code,"message":message},"receipt":{"status":"rejected"}}
+        })).unwrap();
+        let reason = |code: &str, message: &str| worker_failure(&envelope(code, message));
+        assert!(reason("PROFILE_IN_USE", "anything").contains("otra ventana"));
+        // The broker's HTTP reply loses the code: the message still identifies the cause.
+        assert!(reason("BROWSER_ERROR", "Close the older separate Trex Browser window before opening this profile in the shared window.").contains("otra ventana"));
+        assert!(reason("PROFILE_CLOSING", "x").contains("cerrando"));
+        assert!(reason("BROWSER_ERROR", "Trex Browser shell is not installed").contains("Falta la ventana"));
+        assert_eq!(reason("BROWSER_ERROR", "Install Google Chrome (or Microsoft Edge) before opening a browser"), NO_BROWSER);
+        for timeout in ["Broker startup timed out; inspect private installation/runtime", "Detached broker launch timed out", "The operation was aborted due to timeout"] {
+            assert!(reason("BROWSER_ERROR", timeout).contains("no respondió a tiempo"), "{timeout}");
+        }
+        assert!(reason("BROWSER_ERROR", "No free browser profiles remain in this project; existing profiles are preserved").contains("máximo 98"));
+        assert!(reason("BROWSER_ERROR", "Tab not found").contains("pestaña"));
+        // Unknown causes are passed through, bounded; unreadable output is the generic sentence.
+        assert_eq!(reason("BROWSER_ERROR", "Algo raro"), "Trex Browser indicó: Algo raro");
+        assert_eq!(reason("BROWSER_ERROR", &"x".repeat(1000)).chars().count(), "Trex Browser indicó: ".chars().count() + 300);
+        assert_eq!(reason("BROWSER_ERROR", ""), FAILED);
+        assert_eq!(reason("BROWSER_ERROR", "line\nbreak"), FAILED);
+        for bytes in [b"".as_slice(), b"not json".as_slice(), br#"{"engine":"auto"}"#.as_slice()] { assert_eq!(worker_failure(bytes), FAILED); }
+        // Without structuredContent the first text block is the message.
+        assert!(worker_failure(br#"{"content":[{"type":"text","text":"Tab not found"}],"isError":true}"#).contains("pestaña"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_command_reports_the_envelope_on_its_stdout() {
+        let run = |script: &str| invoke_command(Command::new("sh"), &["-c", script], None, Duration::from_secs(5), 1024);
+        let failing = r#"printf '%s' '{"structuredContent":{"error":{"code":"PROFILE_IN_USE","message":"x"}}}'; exit 1"#;
+        assert!(run(failing).unwrap_err().contains("otra ventana"));
+        assert_eq!(run("exit 1").unwrap_err(), FAILED);
+        assert_eq!(run("printf ok").unwrap(), b"ok");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { agentTeamClaim, agentTeamFinish, agentTeamOpen, agentTeamPause, agentTeamPoll, agentTeamSnapshot, trexBrowserStatus, trexBrowserSpaces, formatError, loadHandoff, prepareHandoff } from "../api";
-import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, mergeTeamItems, teamCombinedState, teamGitSnapshot, teamMemberUsesBrowser, teamPlanningContext, teamReportsPrompt, teamRoleBlock, teamRoleBlockNeeded, teamRoleReminder, teamTaskActive, teamTaskRunnable, type AgentTeam, type TaskUsage, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
+import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, mergeTeamItems, teamCombinedState, teamGitSnapshot, teamMemberUsesBrowser, teamPlanningContext, teamReportsPrompt, teamRoleBlock, teamRoleBlockNeeded, teamRoleReminder, teamTaskActive, teamTaskRunnable, permissionChangeNote, withMemberPermission, type AgentTeam, type TaskUsage, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
 import { budgetNote, budgetRefusal, budgetRemaining } from "../teamBudget";
 import { addToLedger, compactionNeeded, memberQuota, observeUsage, readAccountPlan, requestCompaction, teamUsageReport, teamUsageView, usageSince, type UsageObservation } from "../teamUsage";
 import { agentTeamFinishTask, agentTeamPublishUsage } from "../teamApi";
@@ -111,6 +111,8 @@ export default function AgentTeamView(props: Props) {
   const attempt = useRef(new Map<string,Attempt>());
   const epoch = useRef(team.epoch);
   const wasRestored = useRef(team.phase === "paused");
+  // Permission changes the principal has not been told about yet (it learned them in its first message).
+  const permissionNotes = useRef<string[]>([]);
   // Subagente cuya conversación completa se está viendo; null es el chat del principal.
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusReturn = useRef<HTMLElement | null>(null);
@@ -207,12 +209,13 @@ export default function AgentTeamView(props: Props) {
     }).catch(error=>{if(mounted.current && current.current.epoch===binding)change(value=>({...value,phase:"failed",error:formatError(error)}));})
       .finally(()=>{if(opening.current===binding){opening.current=null;if(mounted.current)setStarting(false);}});
   },[team.epoch,team.phase,team.id,openedEpoch,props.cwd,change]);
-  const resume=async():Promise<void>=>{
+  /** Reopens the team in a new epoch; `modify` first applies a change (e.g. a member's permissions) to it. */
+  const resume=async(modify?:(value:AgentTeam)=>AgentTeam):Promise<void>=>{
     if(starting)return;
     const token=++generation.current, before=current.current;
     setStarting(true);
     try{
-      const next={...before,epoch:crypto.randomUUID(),phase:"running" as const,error:null};
+      const next={...(modify?modify(before):before),epoch:crypto.randomUUID(),phase:"running" as const,error:null};
       const bindings=await allocateSpaces(next);
       if(!mounted.current || generation.current!==token)return;
       const value=await agentTeamOpen(next,latest.current.cwd,true);
@@ -399,6 +402,22 @@ export default function AgentTeamView(props: Props) {
   const locked=paused || starting || openedEpoch!==team.epoch;
   const block=(message:string):"blocked"=>{latest.current.onMessage(message);return "blocked";};
   const usageView=useMemo(()=>teamUsageView(team,states,accountPlans),[team,states,accountPlans]);
+  // Permissions are changed from the team panel (the composer only offers "plan" to a read-only principal).
+  // Busy: refused. Paused: kept for when the team resumes. Idle: the team reopens in a new epoch, so the
+  // native scheduler and every session start from the new permissions (histories and conversations are kept).
+  const taskActive=!!snapshot?.tasks.some(teamTaskActive);
+  const permissionsLocked=starting?"Preparando el equipo…":busy||taskActive?"Espera a que el equipo termine su trabajo para cambiar permisos.":null;
+  const setMemberMode=(memberId:string,mode:string):void=>{
+    const before=current.current, updated=withMemberPermission(before,memberId,mode);
+    const member=[before.master,...before.workers].find(item=>item.id===memberId);
+    if(!updated||!member)return;
+    if((member.mode??defaultAgentPermission(member.agent.provider,member.canWrite))===mode)return;
+    if(permissionsLocked){block(permissionsLocked);return;}
+    const changed=[updated.master,...updated.workers].find(item=>item.id===memberId)!;
+    permissionNotes.current=[...permissionNotes.current.filter(note=>!note.startsWith(changed.name+":")),permissionChangeNote(changed)];
+    if(["paused","failed"].includes(before.phase)){change(()=>updated);latest.current.onMessage("Los permisos de "+changed.name+" se aplicarán al reanudar el equipo.");return;}
+    void resume(value=>withMemberPermission(value,memberId,mode)??value);
+  };
   const openSubagent=useCallback((memberId:string):void=>{
     if(!current.current.workers.some(member=>member.id===memberId))return;
     focusReturn.current=document.activeElement instanceof HTMLElement?document.activeElement:null;
@@ -417,6 +436,7 @@ export default function AgentTeamView(props: Props) {
     usage={usageView} onBudgetChange={budget=>change(value=>({...value,budget}))}
     onStop={()=>stop()} onResume={()=>void resume()}
     onOpen={member=>openSubagent(member.id)}
+    onPermission={(member,mode)=>setMemberMode(member.id,mode)} permissionsLocked={permissionsLocked}
     onLoad={member=>{ setActivated(previous=>new Set([...previous,member.id])); const session=sessions[member.id];
       if(session && ["failed","exited"].includes(session.state.process))void session.start().catch(error=>latest.current.onMessage(formatError(error))); }}
     canRecover={member=>!!sessions[member.id]?.recover && sessions[member.id].state.process==="ready" && sessions[member.id].state.pendingTurns===0}
@@ -455,12 +475,14 @@ export default function AgentTeamView(props: Props) {
             if(!valid())return false;
             outgoing=buildHandoffPrompt(prepared,"Atiende la idea del usuario. Planifica, delega según el equipo configurado y revisa los resultados. "+(current.current.master.canWrite?"Puedes editar respetando tus permisos y ceder el proyecto al terminar tu turno.":"No implementes directamente."));
           }
+          if(permissionNotes.current.length && text!==INBOX_WAKE)outgoing="Cambio de permisos del equipo (vigente desde ahora; trex_team_members muestra el estado actual):\n"+permissionNotes.current.map(note=>"- "+note).join("\n")+"\n\n"+outgoing;
           if(!valid())return false;
           change(value=>({...value,phase:"running",error:null}));
           waitingReports.current=false;
           dispatched=true;
           const accepted=(await sessionsRef.current[current.current.master.id]!.send(outgoing,images,previews,display??text))===true;
           if(!valid())return false;
+          if(accepted)permissionNotes.current=[];
           if(accepted && setup)change(value=>({...value,setup:null}));
           if(!accepted && setup)stop("No se pudo confirmar el primer mensaje. Revisa el historial antes de reanudar; no se reenviará automáticamente.");
           return accepted;
@@ -481,7 +503,7 @@ export default function AgentTeamView(props: Props) {
         if(original?.kind!=="permission" || original.state!=="pending"){block("Esta solicitud ya no está pendiente.");return;}
         session!.answer(original,allowed,remember,choices);
       },
-      setMode:()=>{block("Los permisos del principal y de cada subagente se eligen al configurar el equipo.");},
+      setMode:()=>{block("Cambia los permisos de cada agente en el panel «Equipo» (Agentes, uso y permisos).");},
       setModel:value=>{if(busy)block("Espera a que termine el turno antes de cambiar el modelo principal.");else main.setModel(value);},
       setEffort:value=>{if(busy)block("Espera a que termine el turno antes de cambiar el esfuerzo principal.");else main.setEffort(value);},
     };

@@ -6,6 +6,9 @@
 // Elements an agent acts on, and context it reads (headings, alerts, live status).
 export const ACTIONABLE = new Set(['button','link','textbox','searchbox','checkbox','radio','switch','combobox','listbox','option','menuitem','menuitemcheckbox','menuitemradio','tab','slider','spinbutton','treeitem']);
 const CONTEXT = new Set(['heading','alert','alertdialog','dialog','status']);
+// Plenty of web apps build their buttons from a plain element with a click handler. The aria snapshot
+// marks those with cursor:pointer; without them an agent cannot see (or target by ref) such a control.
+const clickable = node => node.role === 'generic' && node.cursor === 'pointer' && !!clean(textOf(node), 80);
 export const FIELDS = new Set(['textbox','searchbox','combobox','listbox','checkbox','radio','switch','slider','spinbutton']);
 // Containers whose children are elements of their own; other listed elements are leaves.
 const CONTAINERS = new Set(['listbox','dialog','alertdialog','treeitem']);
@@ -37,7 +40,7 @@ function states(node) {
 }
 
 function entryOf(node, framed) {
-  const role = node.role;
+  const role = node.role === 'generic' ? 'clickable' : node.role;
   let name = clean(TEXTUAL.has(role) ? (node.name || textOf({ ...node, name: '' })) : (node.name || (FIELDS.has(role) ? node.placeholder : textOf(node))), TEXTUAL.has(role) && role !== 'heading' ? 200 : 80);
   let value;
   if (role === 'combobox' || role === 'listbox') {
@@ -58,7 +61,7 @@ export function flatten(roots) {
     if (node.role === 'iframe') { for (const child of kids(node)) visit(child, true, true, 'iframe'); return; }
     // Options of a native select are its value, not separate lines.
     if (node.role === 'option' && parent === 'combobox') return;
-    const listed = (ACTIONABLE.has(node.role) || CONTEXT.has(node.role)) && !!node.ref;
+    const listed = (ACTIONABLE.has(node.role) || CONTEXT.has(node.role) || clickable(node)) && !!node.ref;
     if (listed) entries.push(entryOf(node, framed));
     // Listed elements' own text is their name; elements nested in them (a link in
     // an alert, a popup list owned by a combobox) are still visited.
