@@ -27,7 +27,7 @@ export function accessibilityKeyboard(config: BrowserConfig): boolean {
 
 /**
  * Configuración del servidor para este chat, o null con un aviso si no se puede
- * usar (otro sistema que Windows, Trex CLI antiguo): el chat sigue sin esta
+ * usar (un sistema sin motor, sin bus de accesibilidad, Trex CLI antiguo): el chat sigue sin esta
  * integración en vez de fallar al arrancar.
  */
 export async function accessibilityServer(mode: BrowserMode, warn: (text: string) => void): Promise<BrowserConfig | null> {

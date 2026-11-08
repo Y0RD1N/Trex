@@ -1,7 +1,7 @@
 //! Motor de accesibilidad propio de Trex (experimental).
 //!
 //! Lee y maneja las aplicaciones a través del árbol de accesibilidad del sistema
-//! (UI Automation en Windows), sin mover el ratón ni escribir con el teclado de
+//! (UI Automation en Windows, AT-SPI en Linux), sin mover el ratón ni escribir con el teclado de
 //! la persona. Es independiente del control de computadora (capturas y
 //! entrada real): la persona elige cuál usar.
 //!
@@ -15,12 +15,13 @@
 //! - el árbol se devuelve como texto compacto con referencias `@s1:e4`, mucho
 //!   más corto que JSON, y cada acción dice qué cambió (elementos y ventanas
 //!   nuevos, ya con referencia), sin tener que releer la ventana;
-//! - un resaltado translúcido marca dónde actúa, sin bloquear el ratón;
+//! - un resaltado translúcido marca dónde actúa, sin bloquear el ratón (Windows:
+//!   Wayland no deja dibujar sobre otras ventanas);
 //! - varios agentes no actúan a la vez sobre la misma ventana (`locks`);
 //! - los atajos de teclado solo existen si se permiten en Ajustes (`--keyboard`).
 //!
 //! Este archivo es común a todas las plataformas (catálogo, formato y servidor
-//! MCP); el motor de Windows está en `uia.rs`.
+//! MCP); el motor de Windows está en `uia.rs` y el de Linux en `atspi.rs`.
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -35,6 +36,8 @@ pub mod keys;
 pub mod locks;
 #[cfg(windows)]
 mod uia;
+#[cfg(target_os = "linux")]
+mod atspi;
 
 /// Herramientas de lectura (todas, también al planificar).
 pub const READ_TOOLS: [&str; 6] = ["snapshot", "find", "get", "list_windows", "wait", "status"];
@@ -91,10 +94,38 @@ pub fn batch_problem(args: &Value, mode: &str, keyboard: bool) -> Option<String>
 
 // --- Catálogo ----------------------------------------------------------------------
 
+/// Ejemplos de apps de esta plataforma para las descripciones.
+#[cfg(not(target_os = "linux"))]
+const APP_EXAMPLE: &str = "Process name (notepad)";
+#[cfg(target_os = "linux")]
+const APP_EXAMPLE: &str = "Process or app name (gnome-text-editor, nautilus)";
+#[cfg(not(target_os = "linux"))]
+const LAUNCH_DESCRIPTION: &str = "Open an application (notepad, calc, a path or a document) without activating it when the app allows, and report its new windows.";
+#[cfg(target_os = "linux")]
+const LAUNCH_DESCRIPTION: &str = "Open an application (a program such as gnome-text-editor, an installed app name such as Calculator, a path or a document) and report its new windows.";
+#[cfg(not(target_os = "linux"))]
+const PRESS_DESCRIPTION: &str = "Send a real key combination (ctrl+s, alt+f, enter) to a window or element. It briefly brings the window to the front and uses the keyboard, only while the user is not typing, then returns the focus. Use it only when no semantic action exists.";
+#[cfg(target_os = "linux")]
+const PRESS_DESCRIPTION: &str = "Send a real key combination (ctrl+s, alt+f, enter) to a window or element. Only into the window that is already active (Linux cannot bring windows to the front) and only while the user is not typing; the first time, the desktop asks the user for permission. Use it only when no semantic action exists.";
+#[cfg(not(target_os = "linux"))]
+const SCROLL_DESCRIPTION: &str = "Scroll to read or reach more: pass ref_id to scroll its nearest scrollable container, or a window (window_id/app) to scroll its \
+main content. Uses the app's own scrolling, or mouse-wheel messages sent to the window when it has none (the user's pointer never moves). The \
+response lists what came into view, with refs.";
+#[cfg(target_os = "linux")]
+const SCROLL_DESCRIPTION: &str = "Scroll to read or reach more: pass ref_id to scroll its nearest scrollable container, or a window (window_id/app) to scroll its \
+main content. Uses the app's accessible scroll bars, or brings the next off-screen element into view when there are none (web pages); the user's \
+pointer never moves. The response lists what came into view, with refs.";
+#[cfg(not(target_os = "linux"))]
+const SCROLL_TO_DESCRIPTION: &str = "Bring an element that is off screen into view (any ref; uses mouse-wheel messages when the app has no scroll support) and report \
+what came into view.";
+#[cfg(target_os = "linux")]
+const SCROLL_TO_DESCRIPTION: &str = "Bring an element that is off screen into view (any ref; uses the app's own scrolling or its panel's scroll bar) and report what \
+came into view.";
+
 fn window_target() -> Value {
     json!({
         "window_id": {"type": "string", "description": "Window id from a11y_list_windows, e.g. w1A2B3C."},
-        "app": {"type": "string", "description": "Process name (notepad) or part of the window title, when it matches one window."}
+        "app": {"type": "string", "description": format!("{APP_EXAMPLE} or part of the window title, when it matches one window.")}
     })
 }
 
@@ -150,18 +181,15 @@ fn definition(tool: &str) -> (&'static str, Value, Vec<&'static str>) {
             with(reference(), json!({"collapse": {"type": "boolean"}})), vec!["ref_id"]),
         "select" => ("Select a list, tab or tree item ref, or pass value to choose an option of a list or combobox by its name.",
             with(reference(), json!({"value": {"type": "string", "description": "Option name inside the referenced list or combobox."}})), vec!["ref_id"]),
-        "scroll" => ("Scroll to read or reach more: pass ref_id to scroll its nearest scrollable container, or a window (window_id/app) to scroll its \
-main content. Uses the app's own scrolling, or mouse-wheel messages sent to the window when it has none (the user's pointer never moves). The \
-response lists what came into view, with refs.",
+        "scroll" => (SCROLL_DESCRIPTION,
             with(with(window_target(), reference()), json!({
                 "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
                 "amount": {"type": "integer", "description": "Steps, 1 to 20 (default 3 small steps, or 1 page)."},
                 "page": {"type": "boolean", "description": "Steps of about a screen instead of a few lines."},
                 "to": {"type": "string", "enum": ["top", "bottom"], "description": "Jump to the top or the bottom instead of a direction."}
             })), vec![]),
-        "scroll_to" => ("Bring an element that is off screen into view (any ref; uses mouse-wheel messages when the app has no scroll support) and report \
-what came into view.", ref_only.0, ref_only.1),
-        "launch" => ("Open an application (notepad, calc, a path or a document) without activating it when the app allows, and report its new windows.",
+        "scroll_to" => (SCROLL_TO_DESCRIPTION, ref_only.0, ref_only.1),
+        "launch" => (LAUNCH_DESCRIPTION,
             json!({"app": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}), vec!["app"]),
         "window" => ("Minimize, maximize or restore a window, or close it as its close button would (it may show a save dialog).",
             with(window_target(), json!({"action": {"type": "string", "enum": ["minimize", "maximize", "restore", "close"]}})), vec!["action"]),
@@ -169,7 +197,7 @@ what came into view.", ref_only.0, ref_only.1),
 send a form. Each step is {tool, ...that tool's arguments}, e.g. {\"tool\":\"set_value\",\"ref_id\":\"@s2:e4\",\"value\":\"Ana\"}. Steps: click, set_value, \
 toggle, expand, select, scroll, scroll_to, window, wait, find (and press when allowed). Stops at the first failure and lists the steps that completed.",
             json!({"steps": {"type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "object", "properties": {"tool": {"type": "string"}}, "required": ["tool"]}}}), vec!["steps"]),
-        "press" => ("Send a real key combination (ctrl+s, alt+f, enter) to a window or element. It briefly brings the window to the front and uses the keyboard, only while the user is not typing, then returns the focus. Use it only when no semantic action exists.",
+        "press" => (PRESS_DESCRIPTION,
             with(with(window_target(), reference()), json!({"keys": {"type": "string", "description": "For example ctrl+s, ctrl+shift+n, alt+f4, enter, f5. No Windows-key shortcuts."}})), vec!["keys"]),
         _ => ("", json!({}), vec![]),
     };
@@ -308,7 +336,8 @@ struct Flight {
 
 /// Atiende peticiones MCP por líneas hasta que se cierre la entrada.
 ///
-/// El motor vive en su propio hilo (UI Automation es COM): este hilo sigue
+/// El motor vive en su propio hilo (UI Automation es COM; AT-SPI, su propio
+/// runtime de D-Bus): este hilo sigue
 /// leyendo mientras una acción tarda, para atender `ping`, la lista de
 /// herramientas y las cancelaciones. Una llamada cancelada no responde.
 pub fn serve_with<E, F>(factory: F, mode: &str, keyboard: bool, input: impl BufRead, output: impl Write + Send + 'static) -> Result<()>
@@ -419,7 +448,18 @@ where
 
 /// El motor de esta plataforma, si Trex lo tiene.
 pub fn available() -> bool {
-    cfg!(windows)
+    cfg!(any(windows, target_os = "linux"))
+}
+
+/// Por qué el motor no se puede usar ahora en este equipo, o None si se puede.
+/// No abre aplicaciones ni lee la pantalla.
+pub fn unavailable_reason() -> Option<&'static str> {
+    #[cfg(windows)]
+    return None;
+    #[cfg(target_os = "linux")]
+    return atspi::probe();
+    #[cfg(not(any(windows, target_os = "linux")))]
+    return Some("unsupportedPlatform");
 }
 
 pub fn serve(mode: &str, keyboard: bool) -> Result<()> {
@@ -429,8 +469,13 @@ pub fn serve(mode: &str, keyboard: bool) -> Result<()> {
         let stdin = std::io::stdin();
         serve_with(move || uia::UiaEngine::new(keyboard), mode, keyboard, stdin.lock(), std::io::stdout())
     }
-    #[cfg(not(windows))]
-    anyhow::bail!("the Trex accessibility engine is only available on Windows")
+    #[cfg(target_os = "linux")]
+    {
+        let stdin = std::io::stdin();
+        serve_with(move || atspi::AtspiEngine::new(keyboard), mode, keyboard, stdin.lock(), std::io::stdout())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    anyhow::bail!("the Trex accessibility engine is only available on Windows and Linux")
 }
 
 #[cfg(test)]

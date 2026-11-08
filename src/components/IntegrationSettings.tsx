@@ -45,9 +45,11 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
     return () => { current = false; };
   }, [cwd, revision]);
   const guide = (url: string) => void openUrl(url).catch(reason => setError(formatError(reason)));
-  // El motor de accesibilidad va dentro de Trex (Windows): no hay nada que instalar.
+  // El motor de accesibilidad va dentro de Trex (Windows y Linux): no hay nada que instalar.
   const engineReady = a11y?.available === true;
-  const engineLabel = !a11y && !a11yError ? "Comprobando…" : engineReady ? "Motor de Trex listo" : a11yError ? "Revisar instalación" : "Solo en Windows";
+  const linux = a11y?.platform === "linux";
+  const engineLabel = !a11y && !a11yError ? "Comprobando…" : engineReady ? "Motor de Trex listo" : a11yError ? "Revisar instalación"
+    : a11y?.reason === "a11yBusUnavailable" || a11y?.reason === "sessionBusUnavailable" ? "Bus de accesibilidad no disponible" : "Solo en Windows y Linux";
   const checkGithub = async () => {
     setCheckingGithub(true); setError(null);
     try { setGithub(await githubConnectionStatus()); }
@@ -72,9 +74,12 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
       <div className="browser-settings-heading"><div><h4>Control por accesibilidad <span className="integration-badge">Experimental</span></h4><p>Tus agentes manejan las apps sin tu ratón ni tu teclado</p></div>
         <span className={`browser-settings-status${engineReady ? " is-ready" : ""}`} role="status">{engineLabel}</span></div>
       <label className="browser-settings-toggle"><span><strong>Usar en nuevos chats</strong><small>Independiente del control de computadora: activa el que quieras usar. Planificar solo permite leer.</small></span><input type="checkbox" role="switch" aria-label="Activar el control por accesibilidad para los agentes" checked={a11yEnabled} onChange={event => onA11yChange(event.currentTarget.checked)} /></label>
-      <label className="browser-settings-toggle integration-keyboard"><span><strong>Permitir atajos de teclado</strong><small>Para lo que no tiene botón ni menú (Ctrl+S, F5…). Solo si no estás tecleando: trae la ventana al frente un instante, pulsa y te devuelve el foco.</small></span><input type="checkbox" role="switch" aria-label="Permitir atajos de teclado en el control por accesibilidad" checked={a11yKeyboard} onChange={event => onA11yKeyboardChange(event.currentTarget.checked)} /></label>
+      <label className="browser-settings-toggle integration-keyboard"><span><strong>Permitir atajos de teclado</strong><small>{linux
+        ? "Para lo que no tiene botón ni menú (Ctrl+S, F5…). Solo si no estás tecleando y solo en la ventana que ya está activa (Linux no deja traer ventanas al frente); la primera vez el escritorio te pide permiso."
+        : "Para lo que no tiene botón ni menú (Ctrl+S, F5…). Solo si no estás tecleando: trae la ventana al frente un instante, pulsa y te devuelve el foco."}</small></span><input type="checkbox" role="switch" aria-label="Permitir atajos de teclado en el control por accesibilidad" checked={a11yKeyboard} onChange={event => onA11yKeyboardChange(event.currentTarget.checked)} /></label>
       {a11yError && <p className="browser-settings-error" role="alert">{a11yError}</p>}
-      <p className="browser-settings-note">Claude, Codex, Trex CLI y Antigravity leen el árbol de accesibilidad de las ventanas y actúan sobre sus elementos (pulsar, escribir, elegir, desplegar) sin mover el ratón, así puedes seguir trabajando. Un marco naranja muestra dónde actúa, cada acción se comprueba releyendo el control, y si estás usando esa misma ventana el agente espera; en un equipo, cada agente trabaja en su propia ventana. Lo que leen, incluido el texto visible de los documentos, llega al proveedor del modelo; los campos de contraseña nunca se leen. El motor de Trex no guarda nada en disco y, salvo los atajos de teclado, nunca trae ventanas al frente. Puedes detenerlo con «Detener» o Esc.</p>
+      {a11y && !engineReady && linux && <p className="browser-settings-note">No se pudo usar el bus de accesibilidad (AT-SPI). Instala at-spi2-core e inicia sesión en un escritorio gráfico, y vuelve a comprobar.</p>}
+      <p className="browser-settings-note">Claude, Codex, Trex CLI y Antigravity leen el árbol de accesibilidad de las ventanas y actúan sobre sus elementos (pulsar, escribir, elegir, desplegar) sin mover el ratón, así puedes seguir trabajando. {linux ? "En Linux usa AT-SPI (GNOME, KDE…) y, mientras lo usa, pide a las apps Chromium, Electron, Firefox y Qt que publiquen su árbol; no hay marco en pantalla. Cada" : "Un marco naranja muestra dónde actúa, cada"} acción se comprueba releyendo el control, y si estás usando esa misma ventana el agente espera; en un equipo, cada agente trabaja en su propia ventana. Lo que leen, incluido el texto visible de los documentos, llega al proveedor del modelo; los campos de contraseña nunca se leen. El motor de Trex no guarda nada en disco y, salvo los atajos de teclado, nunca trae ventanas al frente. Puedes detenerlo con «Detener» o Esc.</p>
     </div>
     <div className="browser-settings-card"><div className="browser-settings-heading"><div><h4>Aplicaciones</h4><p>Elige qué aplicaciones se anuncian a tus agentes.</p></div><button type="button" className="btn btn-small" onClick={() => setRevision(value => value + 1)}>Volver a comprobar</button></div>
       <div className="integration-apps">{apps.map(app => <div className={`integration-app${integrations[app.id] ? " is-enabled" : ""}`} key={app.id}>

@@ -105,7 +105,7 @@ export const githubConnectionStatus = (): Promise<GitHubConnectionStatus> => inv
 export type DesktopStatus = { available: boolean; backend: string; coordinateSpace: string; reason: string | null; monitors: { id: number; name: string; primary: boolean; x: number; y: number; width: number; height: number; scaleFactor: number }[] };
 export const desktopStatus = (): Promise<DesktopStatus> => invoke("trex_desktop_status");
 /** Motor propio del control por accesibilidad (experimental, Windows). No abre ni lee aplicaciones. */
-export type A11yStatus = { available: boolean; engine: "trex"; reason: "unsupportedPlatform" | null };
+export type A11yStatus = { available: boolean; engine: "trex"; platform?: string; reason: "unsupportedPlatform" | "sessionBusUnavailable" | "a11yBusUnavailable" | null };
 export const a11yStatus = (): Promise<A11yStatus> => invoke("trex_a11y_status");
 
 export const saveConfig = (config: AppConfig): Promise<AppConfig> =>

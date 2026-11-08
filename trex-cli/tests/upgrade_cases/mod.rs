@@ -474,6 +474,13 @@ pub(super) fn mcp_binary() -> &'static Path {
         .1
 }
 
+/// El motor propio existe en este sistema y puede arrancar aquí: Windows, o Linux
+/// con bus de accesibilidad (sin escritorio, como en CI, no lo hay).
+fn accessibility_engine_here() -> bool {
+    let output = Command::new(env!("CARGO_BIN_EXE_trex-agent")).args(["a11y-doctor", "--json"]).output().unwrap();
+    serde_json::from_slice::<Value>(&output.stdout).unwrap()["available"] == true
+}
+
 #[test]
 fn accessibility_sessions_publish_reads_in_plan_and_accept_old_settings() {
     for mode in ["plan", "ask"] {
@@ -481,8 +488,8 @@ fn accessibility_sessions_publish_reads_in_plan_and_accept_old_settings() {
         let mut agent = Agent::spawn_command(command(f.home.path()), "TREX1");
         // Configuraciones guardadas que pedían agent-desktop: arrancan con el motor propio.
         let started = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":mode,"accessibility":"agent-desktop"}));
-        if !cfg!(windows) {
-            assert_eq!(started["accessibilityEnabled"], false, "only Windows has the built-in engine");
+        if !accessibility_engine_here() {
+            assert_eq!(started["accessibilityEnabled"], false, "no engine (or no accessibility bus) here");
             assert!(started["unavailableMcpServers"].as_array().unwrap().contains(&json!("trex_a11y")));
             continue;
         }
@@ -516,8 +523,8 @@ fn the_builtin_accessibility_engine_needs_no_external_tool() {
     let f = Fixture::new();
     let mut agent = Agent::spawn_command(command(f.home.path()), "TREX1");
     let started = agent.rpc("session/start", json!({"cwd":f.workspace.path(),"mode":"ask","accessibility":{"keyboard":true}}));
-    if !cfg!(windows) {
-        assert_eq!(started["accessibilityEnabled"], false, "only Windows has the built-in engine");
+    if !accessibility_engine_here() {
+        assert_eq!(started["accessibilityEnabled"], false, "no engine (or no accessibility bus) here");
         return;
     }
     assert_eq!(started["accessibilityEnabled"], true);
@@ -540,7 +547,8 @@ fn the_builtin_accessibility_engine_needs_no_external_tool() {
     request.completion(calls(vec![tool("native-status", &status, json!({}))]), "tool_calls");
     let next = f.api.chat();
     let output = tool_output(&next, "native-status").to_string();
-    assert!(output.contains("engine: trex (Windows UI Automation)"), "{output}");
+    let engine = if cfg!(windows) { "engine: trex (Windows UI Automation)" } else { "engine: trex (Linux AT-SPI)" };
+    assert!(output.contains(engine), "{output}");
     next.final_text("The built-in engine answered");
     agent.completed("native", "completed");
     f.api.assert_quiet();

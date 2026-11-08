@@ -803,10 +803,14 @@ pub async fn trex_a11y_mcp_config(app: tauri::AppHandle, mode: String) -> Result
 /// Si el motor propio se puede usar aquí, o por qué no.
 fn a11y_ready(status: &serde_json::Value) -> Result<(), String> {
     if status["available"] == true {
-        Ok(())
-    } else {
-        Err("El control por accesibilidad solo está disponible en Windows.".into())
+        return Ok(());
     }
+    Err(match status["reason"].as_str() {
+        Some("a11yBusUnavailable") | Some("sessionBusUnavailable") => {
+            "El bus de accesibilidad (AT-SPI) no responde: instala at-spi2-core e inicia sesión en un escritorio gráfico.".into()
+        }
+        _ => "El control por accesibilidad solo está disponible en Windows y Linux.".into(),
+    })
 }
 
 #[cfg(test)]
@@ -817,7 +821,8 @@ mod a11y_engine_tests {
     #[test]
     fn the_builtin_engine_is_used_where_it_exists() {
         assert_eq!(a11y_ready(&json!({"available": true, "engine": "trex"})), Ok(()));
-        assert!(a11y_ready(&json!({"available": false, "engine": "trex", "reason": "unsupportedPlatform"})).unwrap_err().contains("solo está disponible en Windows"));
+        assert!(a11y_ready(&json!({"available": false, "engine": "trex", "reason": "unsupportedPlatform"})).unwrap_err().contains("solo está disponible en Windows y Linux"));
+        assert!(a11y_ready(&json!({"available": false, "engine": "trex", "platform": "linux", "reason": "a11yBusUnavailable"})).unwrap_err().contains("AT-SPI"));
         // Un Trex CLI anterior respondía con otro formato: no se da por disponible.
         assert!(a11y_ready(&json!({"native": {"available": true}})).is_err());
     }

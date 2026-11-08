@@ -66,9 +66,54 @@ pub fn parse(text: &str) -> Result<Combo, String> {
     Ok(Combo { modifiers, key, label: labels.join("+") })
 }
 
+/// Keysym de X11 de una tecla de `parse` (para el teclado de Linux, que va por keysyms).
+pub fn keysym(code: u16) -> Option<u32> {
+    let symbol = match code {
+        SHIFT => 0xffe1,
+        CONTROL => 0xffe3,
+        ALT => 0xffe9,
+        0x0D => 0xff0d,
+        0x09 => 0xff09,
+        0x1B => 0xff1b,
+        0x20 => 0x20,
+        0x08 => 0xff08,
+        0x2E => 0xffff,
+        0x2D => 0xff63,
+        0x24 => 0xff50,
+        0x23 => 0xff57,
+        0x21 => 0xff55,
+        0x22 => 0xff56,
+        0x25 => 0xff51,
+        0x26 => 0xff52,
+        0x27 => 0xff53,
+        0x28 => 0xff54,
+        // Letras: el keysym en minúscula (Mayús ya va como modificador).
+        0x41..=0x5A => u32::from(code) + 0x20,
+        0x30..=0x39 => u32::from(code),
+        0x70..=0x87 => 0xffbe + u32::from(code - 0x70),
+        _ => return None,
+    };
+    Some(symbol)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_parsed_key_has_a_keysym() {
+        let ctrl_s = parse("ctrl+shift+s").unwrap();
+        assert_eq!(ctrl_s.modifiers.iter().map(|code| keysym(*code).unwrap()).collect::<Vec<_>>(), [0xffe3, 0xffe1]);
+        assert_eq!(keysym(ctrl_s.key), Some(u32::from(b's')));
+        assert_eq!(keysym(parse("f5").unwrap().key), Some(0xffc2));
+        assert_eq!(keysym(parse("f24").unwrap().key), Some(0xffd5));
+        assert_eq!(keysym(parse("enter").unwrap().key), Some(0xff0d));
+        assert_eq!(keysym(parse("7").unwrap().key), Some(u32::from(b'7')));
+        for name in ["tab", "esc", "space", "backspace", "delete", "insert", "home", "end", "pageup", "pagedown", "up", "down", "left", "right", "alt+a"] {
+            let combo = parse(name).unwrap();
+            assert!(keysym(combo.key).is_some() && combo.modifiers.iter().all(|code| keysym(*code).is_some()), "{name}");
+        }
+    }
 
     #[test]
     fn combinations_are_parsed_and_labelled() {

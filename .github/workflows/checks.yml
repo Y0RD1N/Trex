@@ -67,6 +67,8 @@ jobs:
       - name: Fedora prerequisites
         run: |
           dnf install -y git rust cargo gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel gtk3-devel librsvg2-devel libappindicator-gtk3-devel libxdo-devel dbus-devel rpm-build patchelf file tar xz unzip findutils
+          # Motor de accesibilidad de Linux contra apps GTK reales, en un escritorio virtual.
+          dnf install -y xorg-x11-server-Xvfb xorg-x11-xauth dbus-daemon at-spi2-core zenity
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -88,6 +90,9 @@ jobs:
           cargo test --locked --manifest-path trex-browser/Cargo.toml
           npm ci --prefix trex-browser --ignore-scripts --no-audit --no-fund
           node --test trex-browser/tests/security.test.mjs trex-browser/tests/availability.test.mjs trex-browser/tests/mcp-compatibility.test.mjs
+      - name: Accessibility engine with real GTK 3 and GTK 4 apps (isolated virtual desktop)
+        working-directory: /tmp/trex-fedora-ci
+        run: scripts/a11y-linux-session.sh
       - name: Native app tests
         working-directory: /tmp/trex-fedora-ci
         run: |
