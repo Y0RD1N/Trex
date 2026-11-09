@@ -37,8 +37,11 @@ jobs:
         run: npm test
       - name: Build frontend
         run: npm run build
+      # Several tests start PowerShell or wait on short deadlines. With four running at once, the Windows runner
+      # was seen stalling for seconds, and a different one of them timed out on each failed run. Two at a time
+      # is a mitigation, not a proven cause: if it still flakes, look at the stalls themselves.
       - name: Trex CLI tests
-        run: cargo +stable test --locked --manifest-path trex-cli/Cargo.toml -- --test-threads=4
+        run: cargo +stable test --locked --manifest-path trex-cli/Cargo.toml -- --test-threads=${{ runner.os == 'Windows' && 2 || 4 }}
       - name: Browser launcher tests
         run: cargo +stable test --locked --manifest-path trex-browser/Cargo.toml
       - name: Browser worker dependencies

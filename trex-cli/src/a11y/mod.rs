@@ -345,6 +345,19 @@ where
     E: Engine,
     F: FnOnce() -> Result<E> + Send + 'static,
 {
+    serve_with_grace(factory, mode, keyboard, input, output, SHUTDOWN_GRACE)
+}
+
+/// Lo que espera el servidor, al cerrarse la entrada, a que el hilo del motor termine lo pendiente.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+
+/// `serve_with` con la espera de cierre explícita. Solo dura tanto como haga falta: sale en cuanto
+/// el hilo del motor termina; las pruebas la alargan para que una máquina saturada no les pierda respuestas.
+fn serve_with_grace<E, F>(factory: F, mode: &str, keyboard: bool, input: impl BufRead, output: impl Write + Send + 'static, grace: Duration) -> Result<()>
+where
+    E: Engine,
+    F: FnOnce() -> Result<E> + Send + 'static,
+{
     let output = Arc::new(Mutex::new(output));
     let flight = Arc::new(Mutex::new(Flight::default()));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -439,7 +452,7 @@ where
     // Entrada cerrada: lo pendiente termina (o se abandona si sigue bloqueado al salir).
     drop(jobs);
     cancel.store(true, Ordering::SeqCst);
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + grace;
     while !worker.is_finished() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -517,7 +530,9 @@ mod tests {
         let output = Shared::default();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let engine_calls = calls.clone();
-        serve_with(move || Ok(Echo(engine_calls)), mode, keyboard, input.as_bytes(), output.clone()).unwrap();
+        // The server stops waiting for its engine thread after a grace period; a CI runner that freezes
+        // for seconds must not make it give up before the replies of the requests above are written.
+        serve_with_grace(move || Ok(Echo(engine_calls)), mode, keyboard, input.as_bytes(), output.clone(), Duration::from_secs(60)).unwrap();
         let text = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
         let mut replies: Vec<Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
         replies.sort_by_key(|reply| reply["id"].to_string());
