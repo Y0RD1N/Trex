@@ -7,13 +7,15 @@ import { sessionTitle } from "../sessionTitle";
 
 type Props = {
   tab: TabState;
+  /** Número de orden de la sesión dentro del proyecto (1 es la primera que se abrió). */
+  number: number;
   active: boolean;
   onSelect: () => void;
   onClose: (trigger: HTMLButtonElement) => void;
   onRename: (name: string) => void;
 };
 
-export default function SessionItem({ tab, active, onSelect, onClose, onRename }: Props) {
+export default function SessionItem({ tab, number, active, onSelect, onClose, onRename }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const { label, nativeIndicator } = sessionTitle(tab);
@@ -54,6 +56,7 @@ export default function SessionItem({ tab, active, onSelect, onClose, onRename }
           <span className="session-kind" aria-hidden="true">
             <AgentIcon kind={tab.kind} size={14} activity={activity} nativeIndicator={nativeIndicator} />
           </span>
+          <span className="session-no" aria-hidden="true">{String(number).padStart(2, "0")}</span>
           <span className="session-label">{label}</span>
           {tab.exited && <span className="session-ended" aria-label="Proceso finalizado" />}
         </button>

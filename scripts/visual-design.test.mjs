@@ -8,15 +8,15 @@ const pureModule = async path => {
   const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 };
-const { normalizeDesign, matchingFrame, reducedMotion, glassActive } = await pureModule("../src/visualDesign.ts");
-const { PALETTES, paletteFor, paletteTokens } = await pureModule("../src/palettes.ts");
+const { normalizeDesign, matchingFrame, reducedMotion, glassActive, matchingTone, TONE_PRESETS, DEFAULT_SURFACE_HUE, DEFAULT_SURFACE_TINT } = await pureModule("../src/visualDesign.ts");
+const { PALETTES, MONOCHROME_UI, BASE_TONE, paletteFor, paletteTokens, toneUi, contrastRatio, accentSurfaces } = await pureModule("../src/palettes.ts");
 const { projectSections } = await pureModule("../src/sidebarGroups.ts");
 
 test("old and malformed preferences preserve a usable terminal frame", () => {
-  assert.deepEqual(normalizeDesign({}), { colorScheme:"trex",terminalRadius:22,terminalMargin:12,terminalBorder:true,motion:"system",glass:true,windowBackdrop:"solid",materialTint:60 });
+  assert.deepEqual(normalizeDesign({}), { colorScheme:"trex",terminalRadius:22,terminalMargin:12,terminalBorder:true,motion:"system",glass:false,windowBackdrop:"solid",materialTint:60,surfaceHue:40,surfaceTint:100 });
   for (const value of [null, "12", NaN, Infinity]) {
     const settings = normalizeDesign({ terminalRadius:value,terminalMargin:value,colorScheme:value,terminalBorder:value,motion:value,glass:value,windowBackdrop:value,materialTint:value });
-    assert.equal(settings.glass,true);
+    assert.equal(settings.glass,false);
     assert.equal(settings.windowBackdrop,"solid");
     assert.equal(settings.materialTint,60);
     assert.equal(settings.terminalRadius,22);
@@ -29,7 +29,7 @@ test("old and malformed preferences preserve a usable terminal frame", () => {
   assert.equal(normalizeDesign({terminalRadius:100}).terminalRadius,36);
   assert.equal(matchingFrame(normalizeDesign({})),"comfortable");
   assert.equal(matchingFrame(normalizeDesign({terminalRadius:0})),null);
-  assert.equal(normalizeDesign({glass:false}).glass,false);
+  assert.equal(normalizeDesign({glass:true}).glass,true);
   for (const backdrop of ["solid","mica","mica-alt","acrylic"]) assert.equal(normalizeDesign({windowBackdrop:backdrop}).windowBackdrop,backdrop);
   assert.equal(normalizeDesign({windowMaterial:"mica-alt"}).windowBackdrop,"solid","the old key never brings back the material");
   assert.equal(normalizeDesign({materialTint:5}).materialTint,20,"never fully see-through");
@@ -64,15 +64,15 @@ test("every palette has readable text and meaningful ANSI colors in light and da
   assert.equal(paletteFor("unknown").id,"trex");
 });
 
-test("stored palette choices keep a neutral interface and distinct terminal colors", () => {
+test("stored palette choices keep a warm earth interface and distinct terminal colors", () => {
   assert.deepEqual(PALETTES.map(palette => palette.id), ["trex", "ocean", "forest", "rose"]);
   for (const mode of ["light", "dark"]) {
     const expected = PALETTES[0][mode].ui;
     for (const palette of PALETTES) {
       assert.deepEqual(palette[mode].ui, expected, `${palette.id}: a terminal preset cannot tint the interface`);
       for (const [token, value] of Object.entries(palette[mode].ui)) {
-        const channels = value.slice(1).match(/../g);
-        assert.equal(new Set(channels).size, 1, `${palette.id}/${mode}/${token} must remain neutral`);
+        const [r, g, b] = value.slice(1).match(/../g).map(channel => parseInt(channel, 16));
+        assert.ok(r >= g && g >= b, `${palette.id}/${mode}/${token} must remain a warm earth tone (red >= green >= blue)`);
       }
     }
     assert.equal(new Set(PALETTES.map(palette => palette[mode].terminal.red)).size, 4, "ANSI preset choices remain available");
@@ -219,4 +219,63 @@ test("reduced motion respects both the app preference and the operating system",
   assert.equal(reducedMotion("system",true),true);
   assert.equal(reducedMotion("reduced",false),true);
   assert.equal(reducedMotion("reduced",true),true);
+});
+
+test("the interface tone keeps its defaults, clamps bad values and recognises each combination", () => {
+  assert.equal(BASE_TONE.hue, DEFAULT_SURFACE_HUE, "palettes.ts and visualDesign.ts agree on the base tone");
+  assert.equal(BASE_TONE.tint, DEFAULT_SURFACE_TINT);
+  for (const value of [null, "40", NaN, Infinity, undefined]) {
+    const settings = normalizeDesign({ surfaceHue:value, surfaceTint:value });
+    assert.equal(settings.surfaceHue, 40);
+    assert.equal(settings.surfaceTint, 100);
+  }
+  assert.equal(normalizeDesign({ surfaceHue:-5 }).surfaceHue, 0);
+  assert.equal(normalizeDesign({ surfaceHue:999 }).surfaceHue, 360);
+  assert.equal(normalizeDesign({ surfaceTint:-1 }).surfaceTint, 0);
+  assert.equal(normalizeDesign({ surfaceTint:250 }).surfaceTint, 100);
+  assert.equal(matchingTone(normalizeDesign({})), "sedimento");
+  for (const preset of TONE_PRESETS) assert.equal(matchingTone({ surfaceHue:preset.hue, surfaceTint:preset.tint }), preset.id);
+  assert.equal(matchingTone({ surfaceHue:41, surfaceTint:100 }), null, "a hand-made tone is a custom one");
+  assert.deepEqual(new Set(TONE_PRESETS.map(preset => preset.id)).size, TONE_PRESETS.length);
+  for (const preset of TONE_PRESETS) assert.match(preset.accent, /^#[0-9a-f]{6}$/i, preset.id);
+});
+
+test("every tone, hue and intensity keeps the contrast of the base tone", () => {
+  const surfaces = ["app", "sidebar", "surface", "elevated", "inset", "selected"];
+  const texts = ["text", "muted", "dim"];
+  for (const mode of ["dark", "light"]) {
+    assert.deepEqual(toneUi(mode, BASE_TONE), MONOCHROME_UI[mode], "the base tone is the original palette, untouched");
+    const base = MONOCHROME_UI[mode];
+    for (let hue = 0; hue < 360; hue += 15) for (const tint of [0, 25, 50, 75, 100]) {
+      const ui = toneUi(mode, { hue, tint });
+      for (const key of Object.keys(base)) assert.match(ui[key], /^#[0-9a-f]{6}$/, `${mode}/${hue}/${tint}/${key}`);
+      for (const text of texts) for (const surface of surfaces) {
+        const wanted = contrastRatio(base[text], base[surface]);
+        // Los canales son enteros de 8 bits: un color muy oscuro puede desviarse un par de puntos de luminancia.
+        assert.ok(Math.abs(contrastRatio(ui[text], ui[surface]) - wanted) / wanted < 0.045, `${mode} hue ${hue} tint ${tint}: ${text} on ${surface} drifted from ${wanted.toFixed(2)}`);
+      }
+      assert.ok(contrastRatio(ui.dim, ui.inset) >= 4.4 || mode === "light" && contrastRatio(ui.dim, ui.selected) >= 4.4, `${mode} hue ${hue} tint ${tint}: captions stay readable`);
+    }
+  }
+  const gray = toneUi("dark", { hue: 200, tint: 0 });
+  for (const [token, value] of Object.entries(gray)) assert.equal(new Set(value.slice(1).match(/../g)).size, 1, `intensity 0 gives pure grays (${token})`);
+});
+
+test("terminal colors stay readable on every tone and the accent floor is the worst surface", () => {
+  const semantic = ["red","green","yellow","blue","magenta","cyan","brightRed","brightGreen","brightYellow","brightBlue","brightMagenta","brightCyan"];
+  for (const palette of PALETTES) for (const mode of ["dark", "light"]) for (const hue of [0, 60, 120, 180, 240, 300]) for (const tint of [0, 100]) {
+    const background = toneUi(mode, { hue, tint }).app;
+    for (const color of semantic) assert.ok(contrastRatio(palette[mode].terminal[color], background) >= 4.4, `${palette.id}/${mode} hue ${hue} tint ${tint}: ${color}`);
+  }
+  for (const mode of ["dark", "light"]) for (const hue of [0, 90, 200, 300]) {
+    const ui = toneUi(mode, { hue, tint: 80 });
+    const { app, floor } = accentSurfaces(mode, ui);
+    assert.equal(app, ui.app);
+    for (const surface of [ui.sidebar, ui.surface, ui.elevated, ui.inset, ui.selected]) {
+      assert.ok(mode === "dark" ? contrastRatio("#ffffff", floor) <= contrastRatio("#ffffff", surface) + 1e-9 : contrastRatio("#000000", floor) <= contrastRatio("#000000", surface) + 1e-9, `${mode} hue ${hue}: the floor is the hardest surface to read on`);
+    }
+  }
+  const tokens = paletteTokens(PALETTES[0].dark, toneUi("dark", { hue: 215, tint: 70 }));
+  assert.equal(tokens["--term-bg"], tokens["--bg-app"], "the terminal follows the tone");
+  assert.equal(tokens["--term-fg"], tokens["--text"]);
 });

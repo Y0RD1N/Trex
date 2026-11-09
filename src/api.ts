@@ -229,6 +229,11 @@ export const listenAgentExit = (id: string, callback: (code: number | null) => v
 export const DEFAULT_FONT_FAMILY =
   '"JetBrains Mono Variable", "Hack Nerd Font Mono", "Noto Sans Symbols 2", "Noto Color Emoji", ui-monospace, "Cascadia Mono", monospace';
 
+/** Acento por defecto: rosa «cinta de señalización», el color con el que se marcan los hallazgos en campo. */
+export const DEFAULT_ACCENT = "#f06a8d";
+/** Revisión del lenguaje visual de la configuración guardada (ver `normalizeConfig`). */
+const DESIGN_REV = 2;
+
 export const DEFAULT_SETTINGS: Settings = {
   timeFormat: "24h",
   integrations: { ...DEFAULT_INTEGRATIONS },
@@ -258,7 +263,7 @@ export const DEFAULT_SETTINGS: Settings = {
   confirmCloseTab: true,
   restoreOnStart: true,
   launchMode: "arg",
-  theme: "#e8834a",
+  theme: DEFAULT_ACCENT,
   appearance: "dark",
   ...normalizeDesign({}),
 };
@@ -272,6 +277,7 @@ const DEFAULT_UI: UiStateExtended = {
   notificationSound: true,
   autoHideTopBar: true,
   splitLayouts: {},
+  designRev: DESIGN_REV,
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -283,24 +289,24 @@ export const DEFAULT_CONFIG: AppConfig = {
 
 /** Colores disponibles para los proyectos nuevos (se asignan en ciclo). */
 export const PROJECT_COLORS: ReadonlyArray<string> = [
-  "#e8834a",
-  "#8b7ef8",
-  "#4cc2b0",
-  "#e0af68",
-  "#f7768e",
-  "#7aa2f7",
-  "#9ece6a",
-  "#bb9af7",
+  "#b5651d",
+  "#c9a227",
+  "#6b7f4e",
+  "#7c8794",
+  "#8c3b2a",
+  "#a0764a",
+  "#5d6f78",
+  "#d8cfb4",
 ];
 
 /** Presets de color de acento del panel de ajustes. */
 export const ACCENT_PRESETS: ReadonlyArray<{ name: string; value: string }> = [
-  { name: "Naranja", value: "#e8834a" },
+  { name: "Cinta", value: DEFAULT_ACCENT },
+  { name: "Ocre", value: "#dcaa4a" },
+  { name: "Pátina", value: "#4fb8a3" },
+  { name: "Óxido", value: "#e0793f" },
+  { name: "Pizarra", value: "#84a3c8" },
   { name: "Violeta", value: "#8b7ef8" },
-  { name: "Azul", value: "#7aa2f7" },
-  { name: "Verde", value: "#4cc2b0" },
-  { name: "Rosa", value: "#f7768e" },
-  { name: "Ámbar", value: "#e0af68" },
 ];
 
 /** Comandos de instalación de Claude Code por plataforma. */
@@ -366,16 +372,22 @@ const toCss = (rgb: Rgb): string => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 const toRgba = (rgb: Rgb, alpha: number): string =>
   `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
 
+/** Fondos por defecto (tono «sedimento») cuando no se indican los del tono elegido. */
+const DEFAULT_ACCENT_SURFACES = {
+  light: { app: [242, 237, 224] as Rgb, floor: [221, 213, 191] as Rgb },
+  dark: { app: [22, 19, 14] as Rgb, floor: [41, 36, 27] as Rgb },
+};
+
 /**
- * Oscurece el acento lo justo para que se lea sobre blanco (AA 4.5:1).
- * Así el acento sigue reconociéndose aunque el preset sea claro (ámbar).
+ * Acerca un color a `toward` (blanco o negro) lo justo para que contraste `minimum` con `bg`.
+ * `start` es la mezcla inicial. Cualquier color elegido, muy oscuro o muy claro, acaba legible.
  */
-const readableOnLight = (rgb: Rgb): Rgb => {
-  let amount = 0.26;
-  let result = mixRgb(rgb, BLACK, amount);
-  while (contrast(result, WHITE) < 4.5 && amount < 1) {
+const nudge = (rgb: Rgb, bg: Rgb, minimum: number, toward: Rgb, start = 0): Rgb => {
+  let amount = start;
+  let result = start > 0 ? mixRgb(rgb, toward, start) : rgb;
+  while (contrast(result, bg) < minimum && amount < 1) {
     amount = Math.min(1, amount + 0.04);
-    result = mixRgb(rgb, BLACK, amount);
+    result = mixRgb(rgb, toward, amount);
   }
   return result;
 };
@@ -397,12 +409,21 @@ const inkOver = (background: Rgb): string =>
  *   --accent-dim      bordes y separadores teñidos
  *   --accent-glow     halo decorativo (bienvenida)
  */
-export const applyAccent = (color: string): void => {
-  const rgb = hexToRgb(color || DEFAULT_SETTINGS.theme);
+export const applyAccent = (color: string, surfaces?: { app: string; floor: string }): void => {
+  const chosen = hexToRgb(color || DEFAULT_SETTINGS.theme);
   const isLight = document.documentElement.dataset.theme === "light";
   const root = document.documentElement;
 
-  const strong = isLight ? readableOnLight(rgb) : mixRgb(rgb, WHITE, 0.12);
+  // `app` es el fondo general y `floor` el peor caso de texto (la superficie más clara en oscuro, la más
+  // oscura en claro). Salen del tono elegido; sin ellos, los del tono por defecto.
+  const defaults = isLight ? DEFAULT_ACCENT_SURFACES.light : DEFAULT_ACCENT_SURFACES.dark;
+  const app = surfaces ? hexToRgb(surfaces.app) : defaults.app;
+  const floor = surfaces ? hexToRgb(surfaces.floor) : defaults.floor;
+  const toward = isLight ? BLACK : WHITE;
+  // Un acento casi del color del fondo no se vería ni como relleno: se acerca al blanco o al negro.
+  const rgb = nudge(chosen, app, 2, toward);
+  // Texto e iconos con AA (4.5:1) sobre cualquier superficie del tono.
+  const strong = nudge(rgb, floor, 4.5, toward, isLight ? 0.26 : 0.12);
 
   root.style.setProperty("--accent", toCss(rgb));
   root.style.setProperty("--accent-rgb", `${rgb[0]}, ${rgb[1]}, ${rgb[2]}`);
@@ -575,7 +596,16 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     ),
     lastTabs,
     splitLayouts,
+    designRev: Math.round(asNumber(uiRaw.designRev, 0)),
   };
+  // Cambio de lenguaje visual (retícula + excavación): las configuraciones guardadas antes
+  // conservan lo que eligió quien las usa, salvo los valores que eran el predeterminado de
+  // entonces (acento naranja y cristal). Se hace una sola vez.
+  if (ui.designRev < DESIGN_REV) {
+    if (settings.theme.toLowerCase() === "#e8834a") settings.theme = DEFAULT_ACCENT;
+    settings.glass = false;
+    ui.designRev = DESIGN_REV;
+  }
   const chatModes = asRecord(uiRaw.chatModes);
   for (const provider of ["claude", "codex", "trex", "antigravity"] as const) {
     const mode = chatMode(provider, chatModes?.[provider]);
@@ -609,6 +639,8 @@ export type BrowserEngineChoice = "auto" | "trex" | "chrome";
 /** Read (or set) which browser opens for agents: Trex Browser or the system Chrome. */
 export const trexBrowserEngine = (engine?: BrowserEngineChoice): Promise<{engine: BrowserEngineChoice; engines: {trex: boolean; chrome: boolean}; active: string | null}> =>
   invoke("trex_browser_engine", {engine: engine ?? null});
+/** Gives Trex Browser the app's resolved look (tone, accent, light/dark); it follows it live. */
+export const trexBrowserTheme = (theme: import("./browserTheme").BrowserTheme): Promise<boolean> => invoke("trex_browser_theme", {theme});
 /** Folders (besides the project) where full-mode agents may save downloads. */
 export const trexBrowserSaveFolders = (action: "list" | "add" | "remove" = "list", folder?: string): Promise<{folders: string[]}> =>
   invoke("trex_browser_save_folders", {action, folder: folder ?? null});

@@ -1,6 +1,6 @@
 # Trex Browser shell
 
-Our own browser for agent spaces: a frameless glass window in "full view" (the
+Our own browser for agent spaces: a frameless window in "full view" (the
 page fills the window), with floating controls and an **agents center**. Built
 with Electron 45 (Chromium 156) for Windows, Linux and macOS.
 
@@ -42,14 +42,32 @@ patch existing controls so focus, pressed buttons and CSS animations survive.
 
 | Piece | View | Notes |
 |---|---|---|
-| Glass frame + agents center | full-window `WebContentsView` (`ui/index.html`) | Tinted orange while an agent acts, amber while paused |
+| Frame + agents center | full-window `WebContentsView` (`ui/index.html`) | Solid bezel; flat accent tint while an agent acts, amber while paused |
 | Top bar: tabs + toolbar | full-width overlay at the top (`overlay.html?part=island`) | Hidden in full view: a transparent 12 px strip along the top edge reveals it on hover, and it hides again when the pointer leaves. It stays pinned while typing an address and on the new tab page; `Ctrl+L` / `Ctrl+T` reveal it focused. Horizontal tabs (middle click closes), `+`, and window controls; empty tab-row space drags the window and a double click maximizes. |
-| Activity dock | overlay (`part=dock`) | Visible only while the agent is working or paused; Pause / Take control |
+| Activity dock | overlay (`part=dock`) | Visible only while the agent is working or paused; Pause / Take control. Each button waits for the worker's confirmation: it rests meanwhile and the dock explains a failure |
+
+The agent chip on the top bar is a button too: it opens the agents center. With
+more tabs than fit, the strip scrolls sideways (mouse wheel, or by selecting a
+tab); it never widens the bar.
 
 Overlays are separate views because pages are native layers that HTML cannot
 draw over. Their CSS `backdrop-filter` therefore cannot blur the page below, so
-overlays use a dense tinted glass. The agents center uses a blurred capture of
-the page as its backdrop.
+overlays use solid surfaces with a soft shadow, like the app's menus. The agents
+center is a flat surface too. The look is the app's (IBM Plex, rounded corners, the
+trex loader and per-agent strata cores), and so are its **tone, accent and
+light/dark mode**; `ui/theme.css` holds the built-in dark theme.
+
+**Theme sync.** trex resolves its palette (`src/browserTheme.ts` reads the final colours
+from the document) and sends it through the `trex_browser_theme` command to
+`trex-browser theme set`, which stores `theme.json` in the private Browser home, next to
+`engine.json`. The shell (`theme.mjs`) validates it again (14 `#rrggbb` colours and a mode,
+at most 4 KiB, no links) and turns it into the CSS custom properties of `theme.css`; the
+status colours come from the mode. UI documents load it as `theme-vars.css`, the new tab and
+error pages get it inline (pages never reach `theme-vars.css`), and open documents take a
+change live through an inserted stylesheet, so nothing restarts. The shell polls the file once
+a second and re-reads when its window gains focus (a directory watch aborts the whole process
+on Windows with 8.3 short paths). Without a `theme.json`, or with an invalid one, it keeps the
+built-in dark theme; an older Trex Browser simply ignores the app's attempts to send one.
 
 **Desktop blur:** real behind-window blur exists on macOS (`vibrancy`) and
 Windows 11 (`backgroundMaterial: 'acrylic'`). On Linux the window is translucent
@@ -84,13 +102,20 @@ npm install            # the repo uses npm lockfiles (bypass a pnpm alias with `
 npx electron --version # downloads the Electron binary
 npm run link-dev       # resources/app -> this folder, and tightens dist permissions for the guard
 npm run spike          # Playwright-over-pipe checks against the shell
-npm run capture        # renders the UI states to PNG (TREX_SHELL_DEV composition)
+npm run capture        # renders the UI states to PNG (TREX_SHELL_DEV composition); docs/design/shell-*.png come from here
 node spike/e2e-worker.mjs /tmp/out   # real BrowserService, two spaces, agents center
 node spike/token-audit.mjs           # tokens each tool result costs an agent
 ```
 
 With `TREX_BROWSER_DEV=1`, the worker prefers this development binary.
 `TREX_BROWSER_ENGINE=chrome` forces the installed Chrome/Chromium.
+
+To see the app's theme in a development shell, point `TREX_BROWSER_HOME` at a scratch
+folder and put a `theme.json` there (the shell follows it live; the same shape `trex-browser
+theme set --stdin-json` stores). `spike/capture.mjs` takes `TREX_ELECTRON`, `TREX_BROWSER_HOME`,
+`TREX_CAPTURE_SUFFIX` and `TREX_CAPTURE_ONLY`, which is how the `-pizarra-claro` and `-vino`
+variants in `docs/design` were made. `docs/design/real-*.png` and `trex-browser-*.png`
+are older records (real desktop captures and the first mock-up) and still show the previous look.
 
 Headless runs (`TREX_BROWSER_HEADLESS=1`, used by the integration tests) keep the
 window hidden and, on Linux, use XWayland. Electron parents JS dialogs to the

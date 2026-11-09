@@ -16,56 +16,57 @@
   :root[data-theme="dark"] {
     color-scheme: dark;
 
-    /* Superficies (las reescribe palettes.ts con MONOCHROME_UI). */
-    --bg-app: #161616;
-    --bg-sidebar: #111111;
-    --bg-surface: #1c1c1c;
-    --bg-elevated: #212121;
-    --bg-inset: #262626;
-    --term-bg: #161616;
-    --term-fg: #ebebeb;
-    --border: #2c2c2c;
-    --border-strong: #404040;
-    --text: #ebebeb;
-    --text-muted: #a8a8a8;
-    --text-dim: #8e8e8e;
-    --session-selected: #2b2b2b;
+    /* Superficies (las reescribe palettes.ts con MONOCHROME_UI): sedimento. */
+    --bg-app: #16130e;
+    --bg-sidebar: #110f0b;
+    --bg-surface: #1c1913;
+    --bg-elevated: #221e17;
+    --bg-inset: #29241b;
+    --term-bg: #16130e;
+    --term-fg: #e8e0cc;
+    --border: #342f24;
+    --border-strong: #4b4434;
+    --text: #e8e0cc;
+    --text-muted: #b0a791;
+    --text-dim: #968e7a;
+    --session-selected: #2a251c;
 
-    --hover: rgb(255 255 255 / .045);
-    --active: rgb(255 255 255 / .075);
-    --border-subtle: rgb(255 255 255 / .06);
-    --scrim: rgb(0 0 0 / .5);
+    /* Translúcidos derivados del texto y de la barra lateral: siguen al tono elegido (palettes.ts). */
+    --hover: color-mix(in srgb, var(--text) 5%, transparent);
+    --active: color-mix(in srgb, var(--text) 8%, transparent);
+    --border-subtle: color-mix(in srgb, var(--text) 7%, transparent);
+    --scrim: color-mix(in srgb, var(--bg-sidebar) 72%, transparent);
     /* Capa del área de trabajo sobre el material de Windows 11 (glass.css):
        apenas la distingue de la barra lateral. */
-    --material-layer: rgb(255 255 255 / .025);
+    --material-layer: color-mix(in srgb, var(--text) 2.5%, transparent);
 
-    /* Estados: apagados y legibles sobre las superficies oscuras. */
-    --ok: #6fbf8b;
-    --ok-text: #93d3a9;
-    --ok-bg: rgb(111 191 139 / .1);
-    --ok-border: rgb(111 191 139 / .3);
-    --warn: #d6aa45;
-    --warn-text: #e3c072;
-    --warn-bg: rgb(214 170 69 / .1);
-    --warn-border: rgb(214 170 69 / .32);
-    --danger: #ea7b7b;
-    --danger-text: #f19c9c;
-    --danger-bg: rgb(234 123 123 / .1);
-    --danger-border: rgb(234 123 123 / .32);
-    --danger-solid: #c44646;
+    /* Estados: tierra apagada, legible sobre el sedimento. Nunca son el acento. */
+    --ok: #7db58f;
+    --ok-text: #98cba8;
+    --ok-bg: rgb(125 181 143 / .1);
+    --ok-border: rgb(125 181 143 / .3);
+    --warn: #d9a23f;
+    --warn-text: #e6bd6a;
+    --warn-bg: rgb(217 162 63 / .1);
+    --warn-border: rgb(217 162 63 / .32);
+    --danger: #e0674f;
+    --danger-text: #ec8a77;
+    --danger-bg: rgb(224 103 79 / .1);
+    --danger-border: rgb(224 103 79 / .32);
+    --danger-solid: #b8442f;
     --danger-ink: #ffffff;
-    --info: #7fa9de;
-    --info-text: #a2c1e8;
-    --info-bg: rgb(127 169 222 / .1);
-    --info-border: rgb(127 169 222 / .3);
+    --info: #84a3c8;
+    --info-text: #a3bddb;
+    --info-bg: rgb(132 163 200 / .1);
+    --info-border: rgb(132 163 200 / .3);
 
     /* Diffs: semánticos e independientes del acento. */
-    --diff-add-text: #74d38f;
-    --diff-add-bg: rgb(80 200 120 / .12);
-    --diff-add-edge: rgb(116 211 143 / .55);
-    --diff-del-text: #f08a8a;
-    --diff-del-bg: rgb(240 100 100 / .12);
-    --diff-del-edge: rgb(240 138 138 / .55);
+    --diff-add-text: #8cc59b;
+    --diff-add-bg: rgb(125 181 143 / .12);
+    --diff-add-edge: rgb(140 197 155 / .55);
+    --diff-del-text: #e58a78;
+    --diff-del-bg: rgb(224 103 79 / .12);
+    --diff-del-edge: rgb(229 138 120 / .55);
 
     /* Elevación: cuatro niveles, sombras cortas y baratas de pintar. */
     --shadow-1: 0 1px 2px rgb(0 0 0 / .32);
@@ -73,109 +74,109 @@
     --shadow-3: 0 14px 32px -12px rgb(0 0 0 / .7), 0 2px 6px rgb(0 0 0 / .32);
     --shadow-4: 0 26px 64px -20px rgb(0 0 0 / .8), 0 4px 12px rgb(0 0 0 / .4);
 
-    /* Código: fondo propio, apenas distinto del chat, y sintaxis One Dark. */
-    --code-bg: #111111;
-    --code-text: #d9dce2;
-    --code-edge: rgb(255 255 255 / .07);
-    --hl-comment: #7a8191;
-    --hl-keyword: #c792ea;
-    --hl-string: #a5d6a7;
-    --hl-number: #f6a072;
-    --hl-title: #82aaff;
-    --hl-type: #ffcb6b;
-    --hl-attr: #89ddff;
-    --hl-tag: #f07178;
-    --hl-punct: #9aa3b5;
+    /* Código: fondo propio, apenas distinto del chat, y sintaxis de tierra. */
+    --code-bg: var(--bg-sidebar);
+    --code-text: color-mix(in srgb, var(--text) 94%, var(--bg-app));
+    --code-edge: color-mix(in srgb, var(--text) 8%, transparent);
+    --hl-comment: #837b66;
+    --hl-keyword: #cf8a6e;
+    --hl-string: #a3ba80;
+    --hl-number: #d9a23f;
+    --hl-title: #88a7cb;
+    --hl-type: #d8b66c;
+    --hl-attr: #80b7a8;
+    --hl-tag: #dc7a65;
+    --hl-punct: #a39b86;
 
-    /* Reserva del acento: el JS las reescribe con el color elegido. */
-    --accent: #e8834a;
-    --accent-rgb: 232, 131, 74;
-    --accent-hover: #ea8e59;
-    --accent-strong: #f0955f;
-    --accent-contrast: #0b0e13;
-    --accent-soft: rgb(232 131 74 / .16);
-    --accent-soft-strong: rgb(232 131 74 / .26);
-    --accent-dim: rgb(232 131 74 / .5);
-    --accent-glow: rgb(232 131 74 / .35);
+    /* Reserva del acento (cinta rosa): el JS las reescribe con el color elegido. */
+    --accent: #f06a8d;
+    --accent-rgb: 240, 106, 141;
+    --accent-hover: #f27d9b;
+    --accent-strong: #f47f9d;
+    --accent-contrast: #16130e;
+    --accent-soft: rgb(240 106 141 / .16);
+    --accent-soft-strong: rgb(240 106 141 / .26);
+    --accent-dim: rgb(240 106 141 / .5);
+    --accent-glow: rgb(240 106 141 / .35);
   }
 
   /* --- Color: modo claro ------------------------------------------------- */
   :root[data-theme="light"] {
     color-scheme: light;
 
-    --bg-app: #ffffff;
-    --bg-sidebar: #f6f6f6;
-    --bg-surface: #ffffff;
-    --bg-elevated: #ffffff;
-    --bg-inset: #f3f3f3;
-    --term-bg: #ffffff;
-    --term-fg: #171717;
-    --border: #e6e6e6;
-    --border-strong: #d2d2d2;
-    --text: #171717;
-    --text-muted: #5e5e5e;
-    --text-dim: #6e6e6e;
-    --session-selected: #ececec;
+    --bg-app: #f2ede0;
+    --bg-sidebar: #eae4d2;
+    --bg-surface: #f7f3e8;
+    --bg-elevated: #faf7ee;
+    --bg-inset: #e5decb;
+    --term-bg: #f2ede0;
+    --term-fg: #1e1a13;
+    --border: #d4ccb5;
+    --border-strong: #b4aa8f;
+    --text: #1e1a13;
+    --text-muted: #5a5345;
+    --text-dim: #615948;
+    --session-selected: #ddd5bf;
 
-    --hover: rgb(0 0 0 / .04);
-    --active: rgb(0 0 0 / .07);
-    --border-subtle: rgb(0 0 0 / .06);
-    --scrim: rgb(0 0 0 / .28);
-    --material-layer: rgb(255 255 255 / .5);
+    --hover: color-mix(in srgb, var(--text) 5%, transparent);
+    --active: color-mix(in srgb, var(--text) 8%, transparent);
+    --border-subtle: color-mix(in srgb, var(--text) 8%, transparent);
+    --scrim: color-mix(in srgb, var(--text) 34%, transparent);
+    --material-layer: color-mix(in srgb, var(--bg-surface) 50%, transparent);
 
-    --ok: #2f8150;
-    --ok-text: #24693f;
-    --ok-bg: rgb(47 129 80 / .08);
-    --ok-border: rgb(47 129 80 / .26);
-    --warn: #a36f06;
-    --warn-text: #845703;
-    --warn-bg: rgb(163 111 6 / .08);
-    --warn-border: rgb(163 111 6 / .28);
-    --danger: #c23a3a;
-    --danger-text: #a52f2f;
-    --danger-bg: rgb(194 58 58 / .07);
-    --danger-border: rgb(194 58 58 / .26);
-    --danger-solid: #b83131;
+    --ok: #2c6c45;
+    --ok-text: #24593a;
+    --ok-bg: rgb(44 108 69 / .09);
+    --ok-border: rgb(44 108 69 / .28);
+    --warn: #8a6208;
+    --warn-text: #735008;
+    --warn-bg: rgb(138 98 8 / .09);
+    --warn-border: rgb(138 98 8 / .3);
+    --danger: #a8402c;
+    --danger-text: #8f3322;
+    --danger-bg: rgb(168 64 44 / .08);
+    --danger-border: rgb(168 64 44 / .28);
+    --danger-solid: #a8402c;
     --danger-ink: #ffffff;
-    --info: #2f68b3;
-    --info-text: #265898;
-    --info-bg: rgb(47 104 179 / .07);
-    --info-border: rgb(47 104 179 / .24);
+    --info: #345f93;
+    --info-text: #284d7a;
+    --info-bg: rgb(52 95 147 / .08);
+    --info-border: rgb(52 95 147 / .26);
 
-    --diff-add-text: #11703a;
-    --diff-add-bg: rgb(34 160 90 / .09);
-    --diff-add-edge: rgb(17 112 58 / .45);
-    --diff-del-text: #b42335;
-    --diff-del-bg: rgb(220 60 70 / .08);
-    --diff-del-edge: rgb(180 35 53 / .45);
+    --diff-add-text: #26663f;
+    --diff-add-bg: rgb(44 108 69 / .1);
+    --diff-add-edge: rgb(38 102 63 / .45);
+    --diff-del-text: #a3392a;
+    --diff-del-bg: rgb(168 64 44 / .09);
+    --diff-del-edge: rgb(163 57 42 / .45);
 
-    --shadow-1: 0 1px 2px rgb(0 0 0 / .05);
-    --shadow-2: 0 4px 14px -6px rgb(0 0 0 / .12), 0 1px 2px rgb(0 0 0 / .04);
-    --shadow-3: 0 12px 32px -12px rgb(0 0 0 / .18), 0 2px 6px rgb(0 0 0 / .05);
-    --shadow-4: 0 24px 60px -18px rgb(0 0 0 / .24), 0 4px 12px rgb(0 0 0 / .06);
+    --shadow-1: 0 1px 2px color-mix(in srgb, var(--text) 6%, transparent);
+    --shadow-2: 0 4px 14px -6px color-mix(in srgb, var(--text) 14%, transparent), 0 1px 2px color-mix(in srgb, var(--text) 5%, transparent);
+    --shadow-3: 0 12px 32px -12px color-mix(in srgb, var(--text) 20%, transparent), 0 2px 6px color-mix(in srgb, var(--text) 6%, transparent);
+    --shadow-4: 0 24px 60px -18px color-mix(in srgb, var(--text) 26%, transparent), 0 4px 12px color-mix(in srgb, var(--text) 7%, transparent);
 
-    --code-bg: #f7f7f7;
-    --code-text: #24292f;
-    --code-edge: rgb(0 0 0 / .07);
-    --hl-comment: #6e7781;
-    --hl-keyword: #cf222e;
-    --hl-string: #0a3069;
-    --hl-number: #0550ae;
-    --hl-title: #8250df;
-    --hl-type: #953800;
-    --hl-attr: #0550ae;
-    --hl-tag: #116329;
-    --hl-punct: #57606a;
+    --code-bg: color-mix(in srgb, var(--bg-app) 55%, var(--bg-inset));
+    --code-text: color-mix(in srgb, var(--text) 92%, var(--bg-app));
+    --code-edge: color-mix(in srgb, var(--text) 8%, transparent);
+    --hl-comment: #7a725d;
+    --hl-keyword: #9a4a2e;
+    --hl-string: #4a6a2a;
+    --hl-number: #8a5a08;
+    --hl-title: #2f5d8f;
+    --hl-type: #7a5a10;
+    --hl-attr: #1f6b5c;
+    --hl-tag: #a33a28;
+    --hl-punct: #5e5748;
 
-    --accent: #e8834a;
-    --accent-rgb: 232, 131, 74;
-    --accent-hover: #d57943;
-    --accent-strong: #b95f2c;
-    --accent-contrast: #0b0e13;
-    --accent-soft: rgb(232 131 74 / .1);
-    --accent-soft-strong: rgb(232 131 74 / .18);
-    --accent-dim: rgb(232 131 74 / .42);
-    --accent-glow: rgb(232 131 74 / .16);
+    --accent: #f06a8d;
+    --accent-rgb: 240, 106, 141;
+    --accent-hover: #c7406a;
+    --accent-strong: #a8305a;
+    --accent-contrast: #16130e;
+    --accent-soft: rgb(240 106 141 / .12);
+    --accent-soft-strong: rgb(240 106 141 / .2);
+    --accent-dim: rgb(240 106 141 / .45);
+    --accent-glow: rgb(240 106 141 / .16);
   }
 
   /* --- Escalas independientes del modo ---------------------------------- */
@@ -190,10 +191,16 @@
     --focus-color: var(--accent-strong);
 
     /* Tipografía */
-    --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
+    /* Plex Sans para leer (respuestas, descripciones); Plex Mono para la
+       estructura: etiquetas, números, estados. El terminal conserva JetBrains Mono. */
+    --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", -apple-system, BlinkMacSystemFont,
       "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-    --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Mono",
+    --font-mono: "IBM Plex Mono", "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Mono",
       Consolas, monospace;
+    --font-term: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+    /* Retícula: una celda es el ancho y el alto de un carácter de Plex Mono a 13px. */
+    --cell-w: 8px;
+    --cell-h: 20px;
     --font-ui: var(--font-sans);
     --fs-xs: 11px;
     --fs-sm: 12px;
@@ -212,7 +219,7 @@
     --fw-semibold: 600;
     --tracking-tight: -0.01em;
     --tracking-title: -0.02em;
-    --tracking-caps: 0.06em;
+    --tracking-caps: 0;
 
     /* Espaciado: rejilla de 4 px con medios pasos para controles densos. */
     --sp-0-5: 2px;
@@ -230,7 +237,8 @@
     --sp-10: 40px;
     --sp-12: 48px;
 
-    /* Radios: una sola escala. */
+    /* Radios: una sola escala, de esquinas redondeadas. La retícula manda en el ritmo
+       (alineación y alturas), no en la forma: nada de ángulos rectos por sistema. */
     --radius-2xs: 2px;
     --radius-xs: 4px;
     --radius-sm: 6px;

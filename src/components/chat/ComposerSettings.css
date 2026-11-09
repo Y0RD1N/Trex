@@ -61,7 +61,7 @@
 .chat-composer-settings-close:hover { background: var(--hover); color: var(--text); }
 .chat-composer-settings-section { padding: var(--sp-3) var(--sp-1); }
 .chat-composer-settings-section + .chat-composer-settings-section { border-top: 1px solid var(--border); }
-.chat-composer-settings-section h3 { margin: 0 0 var(--sp-2); color: var(--text-dim); font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.chat-composer-settings-section h3 { margin: 0 0 var(--sp-2); color: var(--text-dim); font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: var(--tracking-caps); text-transform: none; }
 .chat-composer-settings-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
 .chat-composer-settings-mode {
   display: flex;

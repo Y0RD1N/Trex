@@ -24,6 +24,7 @@ import { projectSections } from "../sidebarGroups";
 import type { CliStatus } from "../hooks/useCliUpdates";
 import type { CliId } from "../cliUpdates";
 import AgentIcon from "./AgentIcon";
+import BrandMark from "./BrandMark";
 import { AlertIcon, CloseIcon, FolderPlusIcon, GaugeIcon, MoonIcon, PanelIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
@@ -202,11 +203,13 @@ export default function Sidebar({
         <div className="sidebar-top" data-tauri-drag-region="deep">
           <header className="sidebar-header" data-tauri-drag-region>
             <span className="sidebar-brand" aria-hidden="true" data-tauri-drag-region>
-              ✳
+              <BrandMark size={28} />
             </span>
             <span className="sidebar-identity" data-tauri-drag-region>
               <span className="sidebar-name" data-tauri-drag-region>trex</span>
-              <span className="sidebar-caption" data-tauri-drag-region>Espacio de trabajo</span>
+              <span className="sidebar-caption" data-tauri-drag-region>
+                {allProjects.length === 0 ? "sin proyectos" : `${allProjects.length} ${allProjects.length === 1 ? "proyecto" : "proyectos"}`}
+              </span>
             </span>
             <button type="button" className="icon-btn sidebar-collapse tip tip-below"
               aria-label={peek ? "Fijar barra lateral" : "Ocultar barra lateral"}
@@ -298,6 +301,7 @@ export default function Sidebar({
                       <SessionItem
                         key={tab.id}
                         tab={tab}
+                        number={sessions.indexOf(tab) + 1}
                         active={tab.id === activeTabId && project.id === activeProjectId}
                         onSelect={() => {
                           onSelectSession(project.id, tab.id);

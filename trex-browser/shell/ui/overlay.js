@@ -1,4 +1,4 @@
-import { icons, esc, favicon, fixFavicons, hostOf, ACTIVITY } from './icons.js';
+import { icons, esc, favicon, fixFavicons, hostOf, core, ACTIVITY } from './icons.js';
 import { patchMarkup } from './patch-dom.js';
 
 const part = new URLSearchParams(location.search).get('part');
@@ -10,7 +10,8 @@ let state = null;
 function agentChip(a) {
   const cls = a.state === 'working' ? '' : a.state === 'paused' ? 'paused' : 'idle';
   const label = a.state === 'working' ? (ACTIVITY[a.tool] || 'Trabajando') : a.state === 'paused' ? 'En pausa' : 'Disponible';
-  return `<div class="agentchip ${cls}" title="${esc(a.model ? `${a.label} · ${a.model}` : a.label)}"><span class="av">${esc((a.label[0] || 'A').toUpperCase())}</span><span class="name">${esc(a.label)}</span>${a.model ? `<em class="model">${esc(a.model)}</em>` : ''}${a.state === 'working' ? '<span class="pulse"></span>' : ''}<small>${esc(label)}</small></div>`;
+  // A button: it opens the agents centre, where the agent's spaces and controls live.
+  return `<button class="agentchip ${cls}" data-c="center" title="${esc(a.model ? `${a.label} · ${a.model}` : a.label)} — ver el centro de agentes"><span class="av">${core(a.clientId || a.label)}</span><span class="name">${esc(a.label)}</span>${a.model ? `<em class="model">${esc(a.model)}</em>` : ''}${a.state === 'working' ? '<span class="pulse"></span>' : ''}<small>${esc(label)}</small></button>`;
 }
 const bytes = n => !n ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
 
@@ -102,6 +103,14 @@ function downloadsPanel(s) {
   return `<div class="row panelhead" data-key="downloads-heading"><b>Descargas</b><button class="link" data-c="dlclear">Limpiar</button></div><div class="dllist">${s.downloads.map(item).join('')}</div>`;
 }
 
+// Scroll only the tab strip. (scrollIntoView also scrolls the overflow:hidden page behind it, which
+// once slid the whole bar out of the view.)
+function showActiveTab() {
+  const strip = root.querySelector('.tabs'), pill = strip?.querySelector('.tabpill.on'); if (!strip || !pill) return;
+  const a = pill.getBoundingClientRect(), b = strip.getBoundingClientRect();
+  if (a.left < b.left) strip.scrollLeft += a.left - b.left - 4; else if (a.right > b.right) strip.scrollLeft += a.right - b.right + 4;
+}
+
 let wasPinned = false, lastActiveTab = null;
 function renderIsland(s) {
   const pin = pinned();
@@ -139,22 +148,39 @@ function renderIsland(s) {
     ${googleSignIn(s) ? `<div class="row notice" data-key="google-signin"><span class="msg">Google bloquea el acceso desde navegadores integrados. Continúa en tu navegador del sistema; su sesión se conserva allí.</span><button class="btn primary" data-c="external">Abrir navegador</button></div>` : ''}
     ${findRow(s.find)}${promptRows(s)}${downloadsPanel(s)}
   </div>`);
-  if (lastActiveTab !== s.activeTab) root.querySelector('.tabpill.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (lastActiveTab !== s.activeTab) showActiveTab();
   lastActiveTab = s.activeTab;
   applyFocus();
 }
 
+// A dock button is a request the worker must confirm: while it waits the buttons rest, and if it
+// fails the person reads why instead of wondering whether the click did anything.
+let dockControl = null, dockErrorTimer = null;
+async function runControl(action) {
+  if (dockControl?.pending) return;
+  clearTimeout(dockErrorTimer); dockControl = { pending: true }; render(state, true);
+  try { await cmd('control', { action }); dockControl = null; }
+  catch (error) {
+    const reason = String(error?.message || '').replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '').trim();
+    dockControl = { error: reason || 'No se pudo aplicar la acción.' };
+    dockErrorTimer = setTimeout(() => { dockControl = null; render(state, true); }, 7000);
+  }
+  render(state, true);
+}
+
 function renderDock(s) {
-  const a = s.agent;
+  const a = s.agent, busy = !!dockControl?.pending;
   // An uncertain action (review) halts the agent like a pause: only Reanudar applies, not Pausar.
   const paused = a.state === 'paused' || a.state === 'review';
   const doing = a.state === 'review' ? 'tiene una acción incierta' : paused ? 'está en pausa' : `${(ACTIVITY[a.tool] || 'está trabajando').toLowerCase()}`;
+  const off = busy ? ' disabled' : '';
   patchMarkup(root, `<div class="dock glass ${paused ? 'paused' : ''}">
     <span class="pulse"></span>
     <span class="msg"><b>${esc(a.label)}</b> ${esc(doing)}${a.detail ? ` <b>“${esc(a.detail)}”</b>` : ''}</span>
-    ${a.tool ? `<code>${esc(a.tool)}${a.step ? ' · ' + esc(a.step) : ''}</code>` : ''}
-    ${paused ? `<button class="btn primary" data-k="resume">${icons.play}Reanudar</button>`
-             : `<button class="btn" data-k="pause">${icons.pause}Pausar</button><button class="btn primary" data-k="takeover">${icons.takeover}Tomar control</button>`}
+    ${dockControl?.error ? `<span class="err" role="alert" title="${esc(dockControl.error)}">${esc(dockControl.error)}</span>`
+      : a.tool ? `<code>${esc(a.tool)}${a.step ? ' · ' + esc(a.step) : ''}</code>` : ''}
+    ${paused ? `<button class="btn primary" data-k="resume"${off}>${icons.play}Reanudar</button>`
+             : `<button class="btn" data-k="pause"${off}>${icons.pause}Pausar</button><button class="btn primary" data-k="takeover"${off}>${icons.takeover}Tomar control</button>`}
   </div>`);
 }
 
@@ -175,7 +201,7 @@ function render(s, force = false) {
   const visible = part === 'island' ? { tabs: s.tabs, activeTab: s.activeTab, canGoBack: s.canGoBack, canGoForward: s.canGoForward,
     zoom: s.zoom, find: s.find, prompts: s.prompts, downloads: s.downloads, platform: s.platform, centerOpen: s.centerOpen,
     agent: { label: s.agent.label, model: s.agent.model, state: s.agent.state } } : part === 'cursor' ? s.agent.label : s.agent;
-  const signature = JSON.stringify([visible, revealed, leaving, panel, focusPending, entering]);
+  const signature = JSON.stringify([visible, revealed, leaving, panel, focusPending, entering, part === 'dock' ? dockControl : null]);
   if (!force && signature === lastRender) return;
   lastRender = signature;
   if (part === 'island') renderIsland(s); else if (part === 'cursor') renderCursor(s); else renderDock(s);
@@ -200,7 +226,7 @@ root.addEventListener('click', e => {
   const t = e.target.closest('button,[data-tab],[data-c]'); if (!t) return;
   if (t.dataset.close) { e.stopPropagation(); return cmd('closeTab', { id: t.dataset.close }); }
   if (t.dataset.w) return cmd('window', { action: t.dataset.w });
-  if (t.dataset.k) return cmd('control', { action: t.dataset.k });
+  if (t.dataset.k) return runControl(t.dataset.k);
   if (t.dataset.perm) return cmd('permission', { id: t.dataset.perm, allow: t.dataset.allow === '1' });
   if (t.dataset.dl) return cmd({ open: 'downloadOpen', show: 'downloadShow', cancel: 'downloadCancel' }[t.dataset.dl], { id: t.dataset.id });
   if (t.dataset.tab) return cmd('selectTab', { id: t.dataset.tab });
@@ -222,6 +248,12 @@ root.addEventListener('auxclick', e => { // middle click closes a tab
   const t = e.button === 1 && e.target.closest('[data-tab]'); if (t) { e.preventDefault(); cmd('closeTab', { id: t.dataset.tab }); }
 });
 root.addEventListener('dblclick', e => { if (e.target.closest('.dragspace')) cmd('window', { action: 'maximize' }); });
+// With more tabs than fit, the wheel over the strip scrolls it sideways so every tab stays reachable.
+root.addEventListener('wheel', e => {
+  const strip = e.target.closest('.tabs');
+  if (!strip || strip.scrollWidth <= strip.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  strip.scrollLeft += e.deltaY; e.preventDefault();
+}, { passive: false });
 
 document.body.dataset.part = part;
 if (part === 'island') {

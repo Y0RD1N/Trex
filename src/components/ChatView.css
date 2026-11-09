@@ -105,22 +105,30 @@
 }
 
 /* --- Mensajes ------------------------------------------------------------ */
+/* Lo que escribes va tras un «›», como en una línea de órdenes, y cada turno se abre con una
+   regla fina: el hilo se lee como un registro, no como una conversación de burbujas. */
 .chat-user {
-  align-self: flex-end;
-  max-width: min(82%, 620px);
-  margin: var(--sp-3-5) 0 var(--sp-1-5);
-  padding: var(--sp-3) var(--sp-4);
+  position: relative;
+  align-self: stretch;
+  max-width: none;
+  margin: var(--sp-5) 0 var(--sp-1-5);
+  padding: var(--sp-4) 0 0 var(--sp-6);
   border: 0;
-  border-radius: var(--radius-xl) var(--radius-xl) var(--radius-xs) var(--radius-xl);
-  background: var(--bg-inset);
+  border-top: 1px solid var(--border);
+  background: none;
+  font-weight: var(--fw-medium);
   line-height: var(--lh-relaxed);
 }
+.chat-user::before { content: "›"; position: absolute; top: var(--sp-4); left: var(--sp-1); color: var(--accent-strong); font-family: var(--font-mono); font-weight: var(--fw-semibold); }
 .chat-enter {
   animation: chat-rise var(--dur-slow) var(--ease-out) backwards;
 }
 .chat-thread > .chat-user:first-child {
   margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
+.chat-thread > .chat-user:first-child::before { top: 0; }
 .chat-user-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -235,22 +243,16 @@
   border-bottom: 1px solid var(--md-rule);
   font-size: 1.45em;
 }
-/* Los apartados llevan una barrita del color de acento. */
+/* Los apartados son un rótulo con regla («Cambios ────────»), no una barrita lateral. */
 .chat-markdown h2 {
-  position: relative;
-  padding-left: var(--sp-3);
-  font-size: 1.2em;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  letter-spacing: 0;
 }
-.chat-markdown h2::before {
-  content: "";
-  position: absolute;
-  top: 0.18em;
-  bottom: 0.18em;
-  left: 0;
-  width: 3px;
-  border-radius: var(--radius-2xs);
-  background: var(--border-strong);
-}
+.chat-markdown h2::after { content: ""; flex: 1; border-top: 1px solid var(--md-rule); }
 .chat-markdown h3 { color: var(--md-strong); font-size: 1.07em; }
 .chat-markdown h4,
 .chat-markdown h5,
@@ -753,6 +755,23 @@
 .chat-tool-row > .chat-diff-count,
 .chat-tool-row > .chat-spinner,
 .chat-tool-row > .chat-status { flex-shrink: 0; }
+
+/* Las llamadas a herramientas forman un árbol: «├─ ✓ Leyó src/tokens.css». El glifo de estado
+   sustituye al icono (✓ hecho, ⠋ en curso, ✕ con error) y la última rama cierra con «└─». */
+.chat-tool { position: relative; padding-left: 30px; }
+.chat-tool::before { content: "├─"; position: absolute; top: 5px; left: 2px; color: var(--border-strong); font: var(--fs-sm) / 20px var(--font-mono); }
+/* Cada herramienta llega envuelta en su propia fila del hilo: la última de una racha cierra el árbol. */
+.chat-thread > :has(> .chat-tool):not(:has(+ * > .chat-tool)) > .chat-tool::before { content: "└─"; }
+.chat-thread > :has(> .chat-tool):has(+ * > .chat-tool) { margin-bottom: -8px; }
+.chat-tool-row { font-family: var(--font-mono); font-size: var(--fs-sm); }
+.chat-tool-icon { flex-basis: 14px; color: var(--ok); font: var(--fs-sm) / 1 var(--font-mono); }
+.chat-tool-icon > svg { display: none; }
+.chat-tool-icon::before { content: "✓"; }
+.chat-tool[data-status="running"] .chat-tool-icon::before { content: ""; display: block; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--loader-mask) center / contain no-repeat; mask: var(--loader-mask) center / contain no-repeat; }
+.chat-tool[data-status="running"] .chat-tool-icon { color: var(--accent-strong); }
+.chat-tool[data-status="error"] .chat-tool-icon::before { content: "✕"; }
+/* Las marcas del final (rueda y círculo) sobran: el estado ya está en el glifo; siguen para lectores de pantalla. */
+.chat-tool-row > .chat-spinner, .chat-tool-row > .chat-status.error { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .chat-diff-count {
   display: inline-flex;
   gap: var(--sp-1-5);
@@ -768,17 +787,6 @@
   border-radius: 50%;
   background: var(--danger-bg);
   color: var(--danger);
-}
-.chat-spinner {
-  display: inline-block;
-  flex: 0 0 auto;
-  width: 13px;
-  height: 13px;
-  aspect-ratio: 1;
-  border: 1.6px solid var(--accent-dim);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: chat-spin 0.8s linear infinite;
 }
 
 .chat-tool-detail {
@@ -930,7 +938,6 @@
   margin: var(--sp-1-5) 0;
   padding: var(--sp-3-5) var(--sp-4);
   border: 1px solid var(--warn-border);
-  border-left: 3px solid var(--warn);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
   box-shadow: var(--shadow-1);
@@ -940,15 +947,10 @@
   display: flex;
   gap: var(--sp-2-5);
 }
-.chat-permission-icon {
-  display: grid;
-  flex: 0 0 28px;
-  place-items: center;
-  height: 28px;
-  border-radius: var(--radius-md);
-  background: var(--warn-bg);
-  color: var(--warn);
-}
+/* El aviso lleva un glifo de texto, no un icono dentro de un recuadro de color. */
+.chat-permission-icon { display: grid; flex: 0 0 18px; place-items: center; height: 28px; color: var(--warn); }
+.chat-permission-icon > svg { display: none; }
+.chat-permission-icon::before { content: "▲"; font: var(--fs-md) / 1 var(--font-mono); }
 .chat-permission-title {
   font-weight: 600;
   line-height: 28px;
@@ -1051,25 +1053,9 @@
 /* Indicadores de trabajo: solo transformaciones y opacidad, que la GPU anima sin
    volver a dibujar. Un halo de sombra o un degradado que recorre el texto obligaban
    a repintar en cada fotograma mientras el asistente trabajaba (≈ 20 % de CPU). */
-.chat-working-dot {
-  position: relative;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-.chat-working-dot::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: chat-pulse 1.8s var(--ease-out) infinite;
-}
-.chat-working-label {
-  color: var(--text);
-  animation: chat-breathe 2.8s var(--ease-in-out) infinite;
-}
+/* El indicador es el loader de trex (la «t» en estratos), no un punto que late: ver `--loader-mask` en styles.css. */
+.chat-working-dot { width: 16px; height: 16px; }
+.chat-working-label { color: var(--text); }
 .chat-working-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .chat-working-since { color: var(--text-dim); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 .chat-working-hint { margin-left: auto; color: var(--text-dim); font-size: var(--fs-xs); }
@@ -1606,7 +1592,7 @@ pre.chat-ask-preview-body {
   color: var(--accent-strong);
   font-size: var(--fs-xs);
   font-weight: 600;
-  text-transform: uppercase;
+  text-transform: none;
   letter-spacing: 0.03em;
 }
 
@@ -1659,6 +1645,17 @@ pre.chat-ask-preview-body {
   bottom: 0;
   left: 0;
   padding: 0 var(--sp-6) var(--sp-4);
+  pointer-events: none;
+}
+/* El hilo se desvanece sobre la caja de mensaje, como bajo la cabecera: sin este velo el
+   texto llegaba cortado al borde de la caja y chocaba con «Ir al final». Una capa fija
+   y sin desenfoque; deja libre la barra de desplazamiento (12px). */
+.chat-composer-wrap::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: calc(var(--sp-6) * -1) 12px 0 0;
+  background: linear-gradient(transparent, var(--bg-app) var(--sp-6));
   pointer-events: none;
 }
 /* Una sola superficie opaca: escritura arriba y una repisa de controles. La
@@ -1858,23 +1855,29 @@ pre.chat-ask-preview-body {
   gap: var(--sp-1-5);
   width: auto;
   min-width: 0;
+  position: relative;
   height: var(--hit-min);
-  padding: 0 var(--sp-2-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  padding: 0 var(--sp-1-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
   box-shadow: none;
   color: var(--text-muted);
   font: inherit;
+  font-family: var(--font-mono);
   font-size: var(--fs-sm);
   cursor: pointer;
-  transition: background-color var(--t), color var(--t);
+  transition: color var(--t);
 }
+/* Línea de estado de la caja: «opus · pregunta · navegador», sin píldoras ni recuadros. */
+.chat-tray .chat-tray-chip + .chat-tray-chip::before { content: "·"; position: absolute; left: -9px; top: 50%; translate: 0 -50%; color: var(--text-dim); }
+.chat-tray { gap: var(--sp-3-5); }
 .chat-tray .chat-tray-chip:hover,
 .chat-tray .chat-tray-chip[aria-expanded="true"] {
-  border-color: var(--border-strong);
-  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-dim);
+  text-underline-offset: 4px;
 }
 .chat-tray .chat-tray-chip:focus-visible { outline: 2px solid var(--focus-color); outline-offset: -2px; }
 .chat-tray .chat-tray-chip:disabled { opacity: .45; cursor: default; }
@@ -1990,7 +1993,7 @@ pre.chat-ask-preview-body {
   font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.05em;
-  text-transform: uppercase;
+  text-transform: none;
 }
 .chat-suggest-item {
   display: flex;
@@ -2074,7 +2077,7 @@ pre.chat-ask-preview-body {
   font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  text-transform: none;
 }
 .chat-menu-empty { padding: var(--sp-1-5) var(--sp-2-5) var(--sp-2-5); color: var(--text-muted); font-size: var(--fs-sm); }
 .chat-menu-option {

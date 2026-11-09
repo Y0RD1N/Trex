@@ -9,7 +9,7 @@ const available = detected.available && !detected.shell;
 const ui = new URL('../shell/ui/', import.meta.url);
 const html = fs.readFileSync(new URL('index.html', ui), 'utf8').replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '').replace(/<link[^>]*>/g, '').replace(/<script[^>]*>[\s\S]*?<\/script>/g, '');
 const theme = fs.readFileSync(new URL('theme.css', ui), 'utf8').replace(/^@import[^;]+;/m, '');
-const fonts = [['Inter Variable', 'inter'], ['JetBrains Mono Variable', 'jetbrains-mono']].map(([name, file]) => `@font-face{font-family:"${name}";font-weight:100 900;src:url(data:font/woff2;base64,${fs.readFileSync(new URL(`fonts/${file}-latin-wght-normal.woff2`, ui)).toString('base64')})}`).join('\n');
+const fonts = [['IBM Plex Sans Variable', 'ibm-plex-sans-latin-wght-normal', '100 700'], ...[400, 500, 600].map(weight => ['IBM Plex Mono', `ibm-plex-mono-latin-${weight}-normal`, String(weight)])].map(([name, file, weight]) => `@font-face{font-family:"${name}";font-weight:${weight};src:url(data:font/woff2;base64,${fs.readFileSync(new URL(`fonts/${file}.woff2`, ui)).toString('base64')})}`).join('\n');
 const icons = fs.readFileSync(new URL('icons.js', ui), 'utf8').replace(/^export /gm, '');
 const script = fs.readFileSync(new URL('index.js', ui), 'utf8').replace(/^import[^;]+;/m, '');
 let browser;

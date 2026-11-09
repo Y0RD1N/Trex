@@ -1,4 +1,4 @@
-import { icons, esc, initial, favicon, fixFavicons, STATE_LABEL } from './icons.js';
+import { icons, esc, initial, favicon, fixFavicons, core, STATE_LABEL } from './icons.js';
 
 const shell = window.trexShell;
 const $ = id => document.getElementById(id);
@@ -9,8 +9,6 @@ const feed = [];          // [{at, label, tool, detail, color}]
 const cards = new Map(), controls = new Map(), activityRows = new Map();
 let lastAgentKey = '';
 
-const COLORS = ['#e8834a', '#7d6bff', '#38b6c9', '#e7c35a', '#ef7d7d', '#5fd08a', '#d36bd0'];
-const colorFor = key => COLORS[[...String(key)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % COLORS.length];
 const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 3 ? 'ahora' : s < 60 ? `${s}s` : `${Math.round(s / 60)}m`; };
 
 /** Saved/reserved profiles are not open browser instances. */
@@ -38,7 +36,7 @@ function card(sp, backdrop) {
     <div class="thumb" style="${thumb ? `background-image:url('${esc(thumb)}')` : ''}">${thumb ? '' : st === 'closed' ? 'Sin abrir' : 'Sin vista previa'}
       ${live ? '<span class="badge"><i></i>EN VIVO</span>' : ''}${sp.tabCount ? `<span class="tabs-mini">${sp.tabCount} ${sp.tabCount === 1 ? 'pestaña' : 'pestañas'}</span>` : ''}</div>
     <div class="meta">
-      <div class="row"><span class="av" style="--c:${colorFor(sp.clientId)}">${initial(sp.label)}</span><span class="name" title="${esc(sp.project ? `${sp.label} · ${sp.project}` : sp.label)}">${esc(sp.project ? `${sp.label} · ${sp.project}` : sp.label)}</span><span class="model" title="${esc(sp.model || sp.profile || '')}">${esc(sp.model || sp.profile || '')}</span><span class="pill ${esc(st)}"><em></em>${esc(STATE_LABEL[st] || st)}</span></div>
+      <div class="row"><span class="av">${core(sp.clientId || sp.label)}</span><span class="name" title="${esc(sp.project ? `${sp.label} · ${sp.project}` : sp.label)}">${esc(sp.project ? `${sp.label} · ${sp.project}` : sp.label)}</span><span class="model" title="${esc(sp.model || sp.profile || '')}">${esc(sp.model || sp.profile || '')}</span><span class="pill ${esc(st)}"><em></em>${esc(STATE_LABEL[st] || st)}</span></div>
       <div class="tool" title="${esc(sp.tool || sp.detail || '')}">${tool}</div>
       <div class="cur">${favicon({ url: sp.url || '', title: sp.title || sp.profile || '' })}<div><strong title="${esc(sp.title || sp.profile || '')}">${esc(sp.title || sp.profile || 'Sin página')}</strong><small title="${esc(sp.url || '')}">${esc(sp.url || 'perfil persistente')}</small></div></div>
     </div>
@@ -92,7 +90,7 @@ function renderFeed() {
     const key = event.id ?? JSON.stringify([event.at, event.label, event.tool, event.detail]); used.add(key);
     let row = activityRows.get(key);
     if (!row) { const node = document.createElement('div'); node.className = 'ev'; node.dataset.event = key; row = { node }; activityRows.set(key, row); }
-    const markup = `<span class="av" style="--c:${event.color}">${initial(event.label)}</span><p><b>${esc(event.label)}</b> <code>${esc(event.tool)}</code>${event.detail ? ` “${esc(event.detail)}”` : ''}</p><time>${ago(event.at)}</time>`;
+    const markup = `<span class="av">${core(event.clientId || event.label)}</span><p><b>${esc(event.label)}</b> <code>${esc(event.tool)}</code>${event.detail ? ` “${esc(event.detail)}”` : ''}</p><time>${ago(event.at)}</time>`;
     if (row.markup !== markup) { row.node.innerHTML = markup; row.markup = markup; }
     if (list.children[index] !== row.node) list.insertBefore(row.node, list.children[index] ?? null);
   });
@@ -133,9 +131,9 @@ function render(s) {
   // Without a worker inventory the shell logs its own agent; once the worker
   // sends spaces (with their own event ids) those local entries are dropped.
   if (s.spaces.length) { for (let i = feed.length - 1; i >= 0; i--) if (feed[i].local) feed.splice(i, 1); }
-  else if (a.state === 'working' && a.tool && key !== lastAgentKey) feed.unshift({ local: true, at: Date.now(), label: a.label, tool: a.tool, detail: a.detail, color: colorFor('self') });
+  else if (a.state === 'working' && a.tool && key !== lastAgentKey) feed.unshift({ local: true, at: Date.now(), label: a.label, tool: a.tool, detail: a.detail, clientId: 'self' });
   lastAgentKey = key;
-  for (const sp of s.spaces) for (const e of sp.events ?? []) if (!feed.some(f => f.id === e.id)) feed.push({ ...e, label: sp.label, color: colorFor(sp.clientId) });
+  for (const sp of s.spaces) for (const e of sp.events ?? []) if (!feed.some(f => f.id === e.id)) feed.push({ ...e, label: sp.label, clientId: sp.clientId });
   feed.sort((x, y) => y.at - x.at); feed.length = Math.min(feed.length, 80);
   renderCenter();
 }

@@ -62,6 +62,7 @@ import TerminalTabs from "./components/TerminalTabs";
 import TerminalView from "./components/TerminalView";
 import ChatView, { type ChatViewProps } from "./components/ChatView";
 import AgentRoomView from "./components/AgentRoomView";
+import ErrorBoundary from "./components/ErrorBoundary";
 import Toast from "./components/Toast";
 import TooltipProvider from "./components/TooltipProvider";
 import ImageViewerProvider from "./components/ImageViewer";
@@ -73,6 +74,7 @@ import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, profilesForInstallation, restoreLaunch } from "./profiles";
 import { applyDesign } from "./visualDesign";
 import { syncWindowMaterial } from "./windowMaterial";
+import { syncBrowserTheme } from "./browserThemeSync";
 import { applyTimeFormat } from "./timeFormat";
 import { defaultAgentPermission, validAgentPermission } from "./agentPermissions";
 import type { ClipboardContent } from "./paste";
@@ -149,7 +151,9 @@ function SessionChat({ room, agentTeam, onTeamChange, onRoomChange, trexInstalle
   if (!trexInstalled && (props.provider === "trex" || room?.planner.agent.provider === "trex" || room?.executor.agent.provider === "trex" || agentTeam?.workers.some(member => member.agent.provider === "trex"))) {
     return <div className="project-home"><div className="project-home-content"><h2>Este chat utiliza Trex CLI</h2><p>Activa «Instalar Trex CLI» en el instalador para recuperar sus conexiones API. El historial y los perfiles se conservan. Puedes abrir Claude o Codex desde Nueva sesión.</p></div></div>;
   }
-  return agentTeam ? <AgentTeamView {...props} team={agentTeam} onTeamChange={onTeamChange} /> : room ? <AgentRoomView {...props} room={room} onRoomChange={onRoomChange} /> : <ChatView {...props} />;
+  return <ErrorBoundary scope="view">
+    {agentTeam ? <AgentTeamView {...props} team={agentTeam} onTeamChange={onTeamChange} /> : room ? <AgentRoomView {...props} room={room} onRoomChange={onRoomChange} /> : <ChatView {...props} />}
+  </ErrorBoundary>;
 }
 
 const usesChatView = (tab: TabState): tab is TabState & { kind: AgentProvider } =>
@@ -288,6 +292,7 @@ function AppShell() {
         normalized.settings.appearance,
         normalized.settings.theme || DEFAULT_SETTINGS.theme,
         normalized.settings.colorScheme,
+        { hue: normalized.settings.surfaceHue, tint: normalized.settings.surfaceTint },
       );
       applyDesign(normalized.settings);
       applyTimeFormat(normalized.settings.timeFormat);
@@ -406,8 +411,11 @@ function AppShell() {
   useEffect(() => { if (config) applyTimeFormat(config.settings.timeFormat); }, [config?.settings.timeFormat]);
   useEffect(() => {
     if (!config) return;
-    applyTheme(config.settings.appearance, config.settings.theme || DEFAULT_SETTINGS.theme, config.settings.colorScheme);
-  }, [config?.settings.appearance, config?.settings.theme, config?.settings.colorScheme]);
+    applyTheme(config.settings.appearance, config.settings.theme || DEFAULT_SETTINGS.theme, config.settings.colorScheme,
+      { hue: config.settings.surfaceHue, tint: config.settings.surfaceTint });
+  }, [config?.settings.appearance, config?.settings.theme, config?.settings.colorScheme, config?.settings.surfaceHue, config?.settings.surfaceTint]);
+  // Trex Browser lleva el mismo tono, acento y modo; se engancha una vez, con el tema ya aplicado.
+  useEffect(() => { if (config) syncBrowserTheme(); }, [!!config]);
   useEffect(() => {
     if (config) applyDesign(config.settings);
   }, [config?.settings.terminalRadius, config?.settings.terminalMargin, config?.settings.terminalBorder, config?.settings.motion, config?.settings.glass, config?.settings.materialTint]);
@@ -1713,9 +1721,9 @@ export default function App() {
 function Splash() {
   return (
     <div className="splash">
-      <div className="splash-logo">✳</div>
+      <div className="splash-logo"><span className="loader loader-lg" aria-hidden="true" /></div>
       <div className="splash-name">trex</div>
-      <div className="splash-sub">Cargando configuración…</div>
+      <div className="splash-sub" role="status">Cargando configuración…</div>
     </div>
   );
 }

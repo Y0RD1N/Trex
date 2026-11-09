@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { CLAUDE_INSTALL_COMMANDS } from "../api";
 import { MOD_LABEL } from "../platform";
 import type { AppInfo, ClaudeInfo } from "../types";
+import BrandMark from "./BrandMark";
 
 type WelcomeProps = {
   claudeInfo: ClaudeInfo | null;
@@ -22,26 +23,45 @@ export default function WelcomeScreen({
   onOpenSettings,
   onRedetect,
 }: WelcomeProps) {
+  // Sin héroe centrado: un texto alineado a la izquierda, como un mensaje del sistema, con los tres
+  // pasos para empezar y el estado de los asistentes detectados.
+  const assistants = [{ name: "Claude Code", info: claudeInfo }, { name: "Codex", info: codexInfo }];
   return (
     <div className="welcome">
-      <div className="welcome-glow" aria-hidden="true" />
       <div className="welcome-inner">
-        <div className="welcome-logo">✳</div>
-        <h1 className="welcome-title">trex</h1>
-        <p className="welcome-sub">Tus proyectos, Claude Code y Codex en un solo espacio</p>
-        <button type="button" className="btn btn-primary btn-big" onClick={onAddProject}>
-          + Añadir proyecto
-        </button>
-        <section className="claude-card">
-          <p className="claude-card-text">Crea perfiles para tus comandos y cuentas en Ajustes → Asistentes.</p>
-          <div className="claude-rows">
-            {[{ name: "Claude Code", info: claudeInfo }, { name: "Codex", info: codexInfo }].map(({ name, info }) => <div key={name} className="claude-row"><span>{name}</span><span>{!info ? "Comprobando…" : info.found ? "Disponible" : "No detectado"}</span></div>)}
-          </div>
-          <button type="button" className="btn btn-small" onClick={onRedetect}>Volver a comprobar</button>
-        </section>
-        <button type="button" className="link-btn" onClick={onOpenSettings}>
-          Configurar asistentes ({MOD_LABEL} ,)
-        </button>
+        <BrandMark size={56} className="welcome-mark" />
+        <h1 className="welcome-title">Aquí empieza el primer yacimiento.</h1>
+        <p className="welcome-sub">
+          Un proyecto es una carpeta. trex abre en ella sesiones de Claude Code, Codex o un shell, y las guarda numeradas para que nunca pierdas el hilo.
+        </p>
+        <ol className="welcome-steps">
+          <li>
+            <span className="welcome-step-no" aria-hidden="true">1</span>
+            <span>Añade una carpeta</span>
+            <button type="button" className="btn btn-primary btn-small" onClick={onAddProject}>Añadir proyecto</button>
+          </li>
+          <li>
+            <span className="welcome-step-no" aria-hidden="true">2</span>
+            <span>Elige con qué asistente trabajar</span>
+            <button type="button" className="welcome-action" onClick={onOpenSettings}>Ajustes › Asistentes ({MOD_LABEL} ,)</button>
+          </li>
+          <li>
+            <span className="welcome-step-no" aria-hidden="true">3</span>
+            <span>Abre la primera sesión</span>
+            <span className="welcome-note">№ 01</span>
+          </li>
+        </ol>
+        <div className="welcome-rule"><span>Asistentes detectados</span></div>
+        <ul className="welcome-assistants">
+          {assistants.map(({ name, info }) => (
+            <li key={name} className={!info ? "checking" : info.found ? "found" : "missing"}>
+              <span>{name}</span>
+              <span>{!info ? <><span className="loader" aria-hidden="true" /> comprobando</> : info.found ? "● disponible" : "○ no detectado"}</span>
+              <span className="welcome-note">{info?.found ? (info.version ?? "") : ""}</span>
+            </li>
+          ))}
+        </ul>
+        <button type="button" className="welcome-action" onClick={onRedetect}>Volver a comprobar</button>
       </div>
     </div>
   );

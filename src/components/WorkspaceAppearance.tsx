@@ -1,10 +1,11 @@
 import { useId, type CSSProperties } from "react";
 import type { Settings } from "../types";
 import { FRAME_PRESETS, WINDOW_MATERIALS, matchingFrame } from "../visualDesign";
-import { PALETTES, paletteFor } from "../palettes";
+import { PALETTES, paletteFor, toneUi } from "../palettes";
 import { resolveThemeMode } from "../theme";
 import { CheckIcon } from "./Icons";
 import { IS_WINDOWS } from "../platform";
+import TonePicker from "./TonePicker";
 
 type Props = { settings: Settings; onChange: (patch: Partial<Settings>) => void };
 
@@ -13,18 +14,22 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
   const id = useId();
   const mode = resolveThemeMode(settings.appearance);
   const selected = paletteFor(settings.colorScheme)[mode];
+  // Las superficies salen del tono elegido; la paleta solo aporta los colores ANSI.
+  const ui = toneUi(mode, { hue: settings.surfaceHue, tint: settings.surfaceTint });
   const preset = matchingFrame(settings);
   const previewStyle = {
-    "--preview-bg": selected.ui.sidebar,
-    "--preview-term": selected.terminal.background,
-    "--preview-fg": selected.terminal.foreground,
-    "--preview-border": settings.terminalBorder ? selected.ui.borderStrong : "transparent",
+    "--preview-bg": ui.sidebar,
+    "--preview-term": ui.app,
+    "--preview-fg": ui.text,
+    "--preview-border": settings.terminalBorder ? ui.borderStrong : "transparent",
     "--preview-radius": `${settings.terminalRadius}px`,
     "--preview-gap": `${settings.terminalMargin}px`,
     "--preview-selection": selected.terminal.selectionBackground,
   } as CSSProperties;
 
   return <>
+    <TonePicker settings={settings} onChange={onChange} />
+
     <div className="settings-block">
       <h4 id={`${id}-palettes`}>Colores del terminal</h4>
       <div className="design-palette-grid" role="group" aria-labelledby={`${id}-palettes`}>
@@ -32,10 +37,10 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
           const variant = palette[mode];
           return <button key={palette.id} type="button" className={`design-palette${settings.colorScheme === palette.id ? " selected" : ""}`}
             aria-pressed={settings.colorScheme === palette.id} aria-label={`Paleta ${palette.name}`}
-            onClick={() => onChange({ colorScheme: palette.id, theme: palette.accent })}>
-            <span className="design-palette-sample" aria-hidden="true" style={{ background: variant.ui.sidebar }}>
-              <span style={{ background: variant.terminal.background, borderColor: variant.ui.border }}>
-                <i style={{ background: variant.terminal.foreground }} />
+            onClick={() => onChange({ colorScheme: palette.id })}>
+            <span className="design-palette-sample" aria-hidden="true" style={{ background: ui.sidebar }}>
+              <span style={{ background: ui.app, borderColor: ui.border }}>
+                <i style={{ background: ui.text }} />
                 <span>{(["red", "green", "yellow", "blue", "magenta", "cyan"] as const).map(color => <i key={color} style={{ background: variant.terminal[color] }} />)}</span>
               </span>
             </span>
@@ -44,7 +49,7 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
           </button>;
         })}
       </div>
-      <p className="settings-note">La interfaz mantiene sus tonos neutros y un único acento. Estas paletas conservan los colores ANSI del terminal, en claro y oscuro.</p>
+      <p className="settings-note">Estas paletas solo cambian los colores ANSI del terminal, en claro y oscuro; el tono y el acento los eliges arriba y abajo.</p>
     </div>
 
     <div className="settings-block">

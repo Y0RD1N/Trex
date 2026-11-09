@@ -380,6 +380,7 @@ pub fn run() {
             trex_browser::trex_browser_list_spaces,
             trex_browser::trex_browser_focus,
             trex_browser::trex_browser_engine,
+            trex_browser::trex_browser_theme,
             trex_browser::trex_browser_save_folders,
             trex_browser::trex_browser_mcp_session,
             trex_browser::trex_browser_open,

@@ -27,7 +27,7 @@ export const hostOf = url => { try { return new URL(url).host; } catch { return 
 export function favicon(tab) {
   const host = hostOf(tab.url);
   if (tab.favicon && /^(https?|data):/.test(tab.favicon)) return `<span class="fav" data-letter="${initial(host.replace(/^www\./, '') || tab.title)}"><img src="${esc(tab.favicon)}" alt=""></span>`;
-  return `<span class="fav" style="--f:${host ? '#3a3a3e' : 'rgba(255,255,255,.08)'}">${initial(host.replace(/^www\./, '') || tab.title)}</span>`;
+  return `<span class="fav" style="--f:${host ? 'color-mix(in srgb,var(--text) 14%,var(--inset))' : 'var(--hover)'}">${initial(host.replace(/^www\./, '') || tab.title)}</span>`;
 }
 export const ACTIVITY = {
   browser_navigate: 'Abriendo página', browser_navigate_back: 'Volviendo', browser_reload: 'Recargando', browser_snapshot: 'Inspeccionando',
@@ -44,4 +44,19 @@ export function fixFavicons(root) {
     const fallback = () => { const fav = img.parentElement; if (fav) fav.textContent = fav.dataset.letter || '·'; };
     if (img.complete && !img.naturalWidth) fallback(); else img.addEventListener('error', fallback, { once: true });
   }
+}
+
+// ---- Núcleo de estratos: la identidad de un agente (igual que el de cada proyecto en la app) ----
+const EARTH = ['#b5651d', '#c9a227', '#6b7f4e', '#7c8794', '#8c3b2a', '#d8cfb4', '#4c3d2e', '#a0764a', '#5d6f78'];
+const hash32 = text => { let h = 2166136261; for (const c of String(text)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
+const xorshift = seed => { let x = seed || 1; return () => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return x / 4294967296; }; };
+export function core(seed, width = 12, height = 20) {
+  const next = xorshift(hash32(seed)), count = 4 + Math.floor(next() * 2);
+  let left = height, y = 0, rects = '';
+  for (let i = 0; i < count; i++) {
+    const last = i === count - 1, room = left - 2 * (count - 1 - i);
+    const h = last ? left : Math.max(2, Math.min(room, Math.round(height / count + (next() - 0.5) * (height / 4))));
+    rects += `<rect x="0" y="${y}" width="${width}" height="${h}" fill="${EARTH[Math.floor(next() * EARTH.length)]}"/>`; y += h; left -= h;
+  }
+  return `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
 }

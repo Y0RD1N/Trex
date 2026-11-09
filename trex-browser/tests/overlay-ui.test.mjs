@@ -107,4 +107,66 @@ describe('stable browser overlays during agent work', { skip: !detected.availabl
       await page.locator('[data-k=pause]').click(); assert.equal((await page.evaluate(() => window.calls.filter(call => call.name === 'control'))).length, 1);
     } finally { await page.close(); }
   });
+
+  it('rests the dock buttons while a control is pending and says why one failed', async () => {
+    const page = await fixture('dock');
+    try {
+      await page.evaluate(() => {
+        window.trexShell.command = (name, args) => { window.calls.push({ name, args }); return new Promise((resolve, reject) => { window.settle = { resolve, reject }; }); };
+      });
+      const buttons = () => page.evaluate(() => [...document.querySelectorAll('.dock button')].map(button => button.disabled));
+      await page.locator('[data-k=pause]').click();
+      assert.deepEqual(await buttons(), [true, true]);
+      assert.equal((await page.evaluate(() => window.calls.filter(call => call.name === 'control'))).length, 1);
+      await page.evaluate(() => window.settle.reject(new Error("Error invoking remote method 'shell:command': Error: El navegador no confirmó la acción.")));
+      await page.locator('.dock .err').waitFor();
+      assert.equal(await page.locator('.dock .err').textContent(), 'El navegador no confirmó la acción.');
+      assert.deepEqual(await buttons(), [false, false]);
+      // Trying again clears the message; a confirmed control leaves the dock as it was.
+      await page.locator('[data-k=takeover]').click();
+      assert.equal(await page.locator('.dock .err').count(), 0);
+      await page.evaluate(() => window.settle.resolve({ ok: true }));
+      await page.waitForFunction(() => [...document.querySelectorAll('.dock button')].every(button => !button.disabled));
+      assert.equal(await page.locator('.dock .err').count(), 0);
+    } finally { await page.close(); }
+  });
+
+  it('makes the agent chip a button that opens the agents centre', async () => {
+    const page = await fixture();
+    try {
+      assert.equal(await page.locator('.agentchip').evaluate(chip => chip.tagName), 'BUTTON');
+      await page.locator('.agentchip').click();
+      assert.equal((await page.evaluate(() => window.calls.filter(call => call.name === 'toggleCenter'))).length, 1);
+    } finally { await page.close(); }
+  });
+
+  it('keeps the whole bar inside the window with many tabs and scrolls only the tab strip', async () => {
+    const page = await fixture();
+    try {
+      await page.evaluate(() => {
+        for (let i = 2; i <= 24; i++) window.fixture.tabs.push({ id: `t${i}`, url: `https://fixture.test/${i}`, title: `Resumen de la cuenta ${i} — Acme Corporation`, loading: false });
+        window.pushState(window.fixture);
+        window.fixture.activeTab = 't24'; window.pushState(window.fixture);
+      });
+      const geometry = () => page.evaluate(() => {
+        const box = selector => { const rect = document.querySelector(selector).getBoundingClientRect(); return { left: rect.left, right: rect.right }; };
+        const strip = document.querySelector('.tabs'), active = box('.tabpill.on'), tabs = box('.tabs');
+        return { width: innerWidth, bar: box('.topbar'), newTab: box('[data-c=newtab]'), controls: box('.wc'), pageScroll: document.scrollingElement.scrollLeft,
+          scrolls: strip.scrollWidth > strip.clientWidth, offset: strip.scrollLeft, activeVisible: active.left >= tabs.left - 1 && active.right <= tabs.right + 1 };
+      });
+      const first = await geometry();
+      assert.ok(first.bar.left >= 0 && first.bar.right <= first.width, 'the bar stays inside the window');
+      assert.ok(first.newTab.right <= first.bar.right && first.controls.right <= first.bar.right, 'the new-tab and window buttons stay on the bar');
+      assert.equal(first.pageScroll, 0, 'the page behind the bar never scrolls');
+      assert.ok(first.scrolls && first.offset > 0 && first.activeVisible, 'the strip scrolls to the selected tab');
+      const strip = await page.locator('.tabs').boundingBox();
+      await page.mouse.move(strip.x + strip.width / 2, strip.y + strip.height / 2);
+      await page.mouse.wheel(0, -300);
+      await page.waitForFunction(before => document.querySelector('.tabs').scrollLeft < before, first.offset);
+      assert.equal((await geometry()).pageScroll, 0);
+      await page.locator('[data-tab=t2]').scrollIntoViewIfNeeded();
+      await page.locator('[data-tab=t2]').click();
+      assert.equal((await page.evaluate(() => window.calls.filter(call => call.name === 'selectTab' && call.args.id === 't2'))).length, 1);
+    } finally { await page.close(); }
+  });
 });

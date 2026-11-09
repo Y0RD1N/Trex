@@ -102,7 +102,7 @@ export type Settings = {
   confirmCloseTab: boolean;
   restoreOnStart: boolean;
   launchMode: string;
-  /** Color de acento en hex (por ejemplo "#e8834a"). */
+  /** Color de acento en hex (por ejemplo "#f06a8d"). */
   theme: string;
   /** Apariencia de la interfaz: "dark" | "light" | "system". */
   appearance: string;
@@ -117,6 +117,10 @@ export type Settings = {
   windowBackdrop: WindowMaterial;
   /** Opacidad del gris grafito sobre el material (20–90). */
   materialTint: number;
+  /** Matiz (0–360°) del tono de la interfaz; 40 es el marrón «sedimento». */
+  surfaceHue: number;
+  /** Intensidad (0–100 %) del tono; 0 es un gris puro. */
+  surfaceTint: number;
 };
 
 export type UiState = {
@@ -140,6 +144,8 @@ export type UiStateExtended = UiState & {
   /** La barra superior se esconde sola y reaparece al acercar el cursor al borde. */
   autoHideTopBar: boolean;
   splitLayouts: Record<string,SplitLayout>;
+  /** Revisión del lenguaje visual con la que se guardó la configuración. */
+  designRev: number;
   /** Último modo de permisos elegido en un chat de cada asistente: lo heredan los chats nuevos. */
   chatModes?: Partial<Record<AgentProvider, string>>;
 };

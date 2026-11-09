@@ -10,6 +10,7 @@ import type { AgentActivity, LauncherProfile, Project } from "../types";
 import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, MapIcon, PencilIcon, StarIcon, TerminalIcon, TrashIcon } from "./Icons";
 import DropdownMenu from "./DropdownMenu";
 import ProfileMenuItems from "./ProfileMenuItems";
+import ProjectCore from "./ProjectCore";
 import { useProjectIcon } from "../projectIcons";
 
 type Props = {
@@ -103,9 +104,11 @@ export default function ProjectItem({
         </button>
       ) : <span className="project-disclosure-placeholder" />}
       <span className={`project-icon${logo && logo !== brokenLogo ? " has-logo" : ""}`} aria-hidden="true" title={activityText || undefined}>
+        {/* El icono detectado del proyecto se conserva siempre; el núcleo de estratos lo acompaña como
+            un lomo fino, así se reconoce por icono y por estratos. Sin icono, el núcleo va completo. */}
         {logo && logo !== brokenLogo
-          ? <img src={logo} alt="" draggable={false} onError={() => setBrokenLogo(logo)} />
-          : <FolderIcon size={16} />}
+          ? <><ProjectCore seed={project.id} width={3} height={16} /><img src={logo} alt="" draggable={false} onError={() => setBrokenLogo(logo)} /></>
+          : <ProjectCore seed={project.id} />}
         {activity !== "idle" && <span className={`project-activity is-${activity}`} />}
       </span>
       <span id={activityId} className="sr-only">{activityText}</span>

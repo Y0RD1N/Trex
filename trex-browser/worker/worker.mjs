@@ -11,6 +11,7 @@ import { privateHome, privateHomePath, readPrivate, writePrivate, jsonRead, cont
 import { BrowserService, detectBrowser, isObservation } from './browser.mjs';
 import { ensureSpaces, listSpaces } from './spaces.mjs';
 import { ENGINES, readEngine, detectShell } from './shell.mjs';
+import { readTheme, saveTheme } from './browser-theme.mjs';
 import { VERSION, PROTOCOL, tools, MODES, mcpInitialization, modelView, agentText, batchFailureText } from './tools.mjs';
 
 const entry=fileURLToPath(import.meta.url);
@@ -205,6 +206,12 @@ async function main(){const args=argMap(process.argv.slice(2));const command=arg
     let engine=readEngine(privateHomePath());
     if(args._[1]==='set'){const value=args._[2];if(!ENGINES.includes(value))throw new Error('engine must be auto|trex|chrome');const home=privateHome();writePrivate(path.join(home,'engine.json'),JSON.stringify({engine:value}));engine=value;}
     emit({engine,engines:{trex:!!detectShell('auto'),chrome:detectBrowser('chrome').available},active:detectBrowser(engine).channel||null});return;
+  }
+  if(command==='theme'){
+    // Host setting: the app's look (tone, accent, light/dark) for the browser window; the shell follows theme.json live.
+    if(args._[1]!=='set'){emit({theme:readTheme(privateHomePath())});return;}
+    if(!args['stdin-json'])throw new Error('theme set requires --stdin-json {"mode":"dark|light","colors":{...}}');
+    emit({theme:saveTheme(privateHome(),await stdinJson())});return;
   }
   if(command==='save-folders'){
     // Host setting: folders (besides the project) where full-mode agents may save downloads.

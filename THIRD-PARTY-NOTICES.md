@@ -20,7 +20,7 @@ es FFmpeg (ver la tabla).
 | [xterm.js](https://xtermjs.org) y addons | 6.x | MIT | Terminal | Compilado en la interfaz |
 | [React](https://react.dev) | 19.x | MIT | Interfaz | Compilado en la interfaz |
 | [highlight.js](https://highlightjs.org) | 11.x | BSD-3-Clause | Resaltado de código | Compilado en la interfaz |
-| [Inter](https://rsms.me/inter/) y [JetBrains Mono](https://www.jetbrains.com/lp/mono/) (vía Fontsource) | 5.x | SIL OFL 1.1 | Tipografías | Interfaz de trex y de Trex Browser |
+| [IBM Plex Sans y IBM Plex Mono](https://www.ibm.com/plex/) y [JetBrains Mono](https://www.jetbrains.com/lp/mono/) (vía Fontsource) | 5.x | SIL OFL 1.1 | Tipografías | Interfaz de trex y de Trex Browser (Plex); terminal de trex (JetBrains Mono) |
 | [`jpeg-decoder`](https://crates.io/crates/jpeg-decoder) 0.3.2, **con un parche local** | 0.3.2 | MIT o Apache-2.0 | Validar capturas JPEG en Trex CLI | [`trex-cli/vendor/jpeg-decoder`](trex-cli/vendor/jpeg-decoder) (licencias y [descripción del parche](trex-cli/vendor/jpeg-decoder/TREX-PATCH.md)) |
 | [Node.js](https://nodejs.org) | 24.22.1 | MIT (con licencias de sus propios componentes) | Runtime privado de Trex Browser | Su `LICENSE` completo se copia a `trex-browser-runtime/NODE_LICENSE` |
 | [Playwright](https://playwright.dev) | 1.64.1 | Apache-2.0 | Automatización de Trex Browser | `node_modules/playwright*` dentro del runtime, con los avisos de licencia del paquete |

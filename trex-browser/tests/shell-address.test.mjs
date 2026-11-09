@@ -3,11 +3,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { themeCss, normalizeTheme } from '../shell/theme.mjs';
 
 const source = fs.readFileSync(new URL('../shell/main.mjs', import.meta.url), 'utf8');
 const grab = pattern => { const match = pattern.exec(source); assert.ok(match, `not found in main.mjs: ${pattern}`); return match[0]; };
 const normalizeAddress = new Function(`${grab(/function normalizeAddress\(input\) \{[\s\S]*?\n\}/)};return normalizeAddress;`)();
-const errorPage = new Function(`${grab(/const NET_ERRORS = \{[\s\S]*?\n\};/)}\n${grab(/const escapeHtml = [^\n]+/)}\n${grab(/function errorPage\(url\) \{[\s\S]*?\n\}/)}\nreturn errorPage;`)();
+// errorPage reads the shell's current theme (a module variable) and themeCss; each instance here fixes one theme.
+const errorPageSource = `${grab(/const NET_ERRORS = \{[\s\S]*?\n\};/)}\n${grab(/const escapeHtml = [^\n]+/)}\n${grab(/function errorPage\(url\) \{[\s\S]*?\n\}/)}\nreturn errorPage;`;
+const errorPageFor = theme => new Function('theme', 'themeCss', errorPageSource)(theme, themeCss);
+const errorPage = errorPageFor(null);
 
 test('web addresses, development hosts and searches are told apart', () => {
   assert.equal(normalizeAddress('example.com'), 'https://example.com');
@@ -45,6 +49,18 @@ test('the error page explains the failure in Spanish and offers a retry for web 
   assert.match(crash, /La pestaña se cerró inesperadamente/);
   const noRetry = await errorPage(new URL('trex://error/?code=ERR_BLOCKED_BY_CLIENT&url=' + encodeURIComponent('file:///etc/passwd'))).text();
   assert.doesNotMatch(noRetry, /class="btn"/);
+});
+
+test('the error page wears the app theme when there is one and keeps its dark colours otherwise', async () => {
+  const url = new URL('trex://error/?code=ERR_NAME_NOT_RESOLVED&url=' + encodeURIComponent('http://no-existe.invalid/'));
+  const plain = await errorPage(url).text();
+  assert.doesNotMatch(plain, /:root\{/, 'no stored theme: nothing injected');
+  assert.match(plain, /background:var\(--bg,#16130e\)/);
+  const colors = { app: '#eaeef3', sidebar: '#dfe5ec', surface: '#f0f3f8', elevated: '#f5f7fb', inset: '#d9dfe7', selected: '#cfd6e0', border: '#c5cdd7', borderStrong: '#a2abb9', text: '#171b20', muted: '#4e545e', dim: '#535a66', accent: '#4fb8a3', accentText: '#2b6358', accentInk: '#0b0e13' };
+  const themed = await errorPageFor(normalizeTheme({ mode: 'light', colors }))(url).text();
+  assert.match(themed, /:root\{--bg:#eaeef3;/);
+  assert.match(themed, /--accent:#4fb8a3/);
+  assert.match(themed, /color-scheme:light/);
 });
 
 test('nothing in the error page URL can inject markup', async () => {

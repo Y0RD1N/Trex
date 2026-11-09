@@ -2,7 +2,8 @@ import BrowserSettings from "./BrowserSettings";
 import IntegrationSettings from "./IntegrationSettings";
 /** Ajustes por tema, con cambios en borrador y opciones técnicas desplegables. */
 import { Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ACCENT_PRESETS, DEFAULT_FONT_FAMILY, clamp } from "../api";
+import { DEFAULT_FONT_FAMILY, clamp } from "../api";
+import AccentPicker from "./AccentPicker";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
@@ -19,6 +20,7 @@ import { bindingError } from "../shortcuts";
 import ShortcutSettings from "./ShortcutSettings";
 import NotificationsSettings from "./NotificationsSettings";
 import AgentIcon from "./AgentIcon";
+import BrandMark from "./BrandMark";
 import type { CliUpdates } from "../hooks/useCliUpdates";
 import type { CliId } from "../cliUpdates";
 import "./SettingsPanel.css";
@@ -92,12 +94,12 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
     };
   }, [leaving]);
 
-  useEffect(() => { applyTheme(draft.appearance, draft.theme, draft.colorScheme); }, [draft.appearance, draft.theme, draft.colorScheme]);
+  useEffect(() => { applyTheme(draft.appearance, draft.theme, draft.colorScheme, { hue: draft.surfaceHue, tint: draft.surfaceTint }); }, [draft.appearance, draft.theme, draft.colorScheme, draft.surfaceHue, draft.surfaceTint]);
   useEffect(() => { applyDesign(draft); }, [draft.terminalRadius, draft.terminalMargin, draft.terminalBorder, draft.motion, draft.glass, draft.materialTint]);
   useEffect(() => { syncWindowMaterial(draft.glass, draft.windowBackdrop); }, [draft.glass, draft.windowBackdrop]);
   useEffect(() => () => {
     const saved = savedThemeRef.current;
-    applyTheme(saved.appearance, saved.theme, saved.colorScheme);
+    applyTheme(saved.appearance, saved.theme, saved.colorScheme, { hue: saved.surfaceHue, tint: saved.surfaceTint });
     applyDesign(saved);
     syncWindowMaterial(saved.glass, saved.windowBackdrop);
     window.clearTimeout(copyTimer.current);
@@ -262,13 +264,8 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 </div>
                 <div className="settings-block">
                   <h4 id={`${id}-accent`}>Color de acento</h4>
-                  <div className="settings-accents" role="group" aria-labelledby={`${id}-accent`}>
-                    {ACCENT_PRESETS.map(preset => <button key={preset.value} type="button" className={`settings-accent${draft.theme === preset.value ? " selected" : ""}`}
-                      aria-label={preset.name} aria-pressed={draft.theme === preset.value} title={preset.name} onClick={() => patch({ theme: preset.value })}>
-                      <span style={{ backgroundColor: preset.value }}>{draft.theme === preset.value && <CheckIcon size={14} />}</span>
-                    </button>)}
-                  </div>
-                  <p className="settings-note">Un toque de color para los controles y el cursor del terminal.</p>
+                  <AccentPicker value={draft.theme} labelledBy={`${id}-accent`} onChange={theme => patch({ theme })} />
+                  <p className="settings-note">Un toque de color para los controles y el cursor del terminal. Si el color elegido se confunde con el fondo, trex lo acerca al blanco o al negro lo justo para que se lea.</p>
                 </div>
                 <p className="settings-preview-note">Los cambios de apariencia se previsualizan al instante. Guarda para conservarlos.</p>
               </>}
@@ -328,7 +325,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
               </div>}
 
               {item.id === "about" && <>
-                <div className="settings-about-brand"><span aria-hidden="true">✳</span><div><strong>trex</strong><span>Tu espacio para crear con Claude Code y Codex.</span></div></div>
+                <div className="settings-about-brand"><BrandMark size={48} /><div><strong>trex</strong><span>Tu espacio para crear con Claude Code y Codex.</span></div></div>
                 <dl className="settings-details">
                   <div><dt>Versión</dt><dd>{appInfo?.version ?? "No disponible"}</dd></div>
                   <div><dt>Plataforma</dt><dd>{appInfo?.platform ?? "No disponible"}</dd></div>

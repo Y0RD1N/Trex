@@ -10,13 +10,17 @@
  * duplicados.
  */
 import ReactDOM from "react-dom/client";
-import "@fontsource-variable/inter";
+import "@fontsource-variable/ibm-plex-sans";
+import "@fontsource/ibm-plex-mono/400.css";
+import "@fontsource/ibm-plex-mono/500.css";
+import "@fontsource/ibm-plex-mono/600.css";
 import "@fontsource-variable/jetbrains-mono";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 // Transparencias (Mica y cristal): reglas aparte, activas solo con su atributo.
 import "./glass.css";
 import App from "./App";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { IS_WINDOWS } from "./platform";
 
 // Windows 11 redondea la ventana sin bordes y le pone su borde y su sombra: el
@@ -24,4 +28,4 @@ import { IS_WINDOWS } from "./platform";
 // pintado, para que tampoco la pantalla de carga muestre esquinas de más.
 if (IS_WINDOWS) document.documentElement.dataset.platform = "windows";
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<App />);
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<ErrorBoundary scope="app"><App /></ErrorBoundary>);

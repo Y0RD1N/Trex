@@ -70,13 +70,20 @@ Todo lo que puede hacer trex, con detalle. Si es tu primera vez, empieza por el
 - **Cursor personalizable**: en Ajustes → Cursor puedes elegir estilos predefinidos,
   bloque, subrayado o barra vertical de 1 a 6 píxeles, y activar el parpadeo.
 - **Modo claro y oscuro**: tema claro, oscuro o el del sistema, con color de acento configurable (y el terminal a juego).
-- **Diseño monocromo**: superficies blancas y negras con grises neutros y un único
-  acento configurable, tanto en claro como en oscuro. Los controles, menús, chat,
-  tareas, equipos, ajustes y notificaciones comparten el mismo lenguaje visual.
+- **Tono y acento a tu gusto**: en Ajustes → Apariencia elige una combinación de un
+  clic (Sedimento, Grafito, Pizarra, Bosque, Tinta o Vino; cada una trae su acento) o
+  ajusta el tono (matiz de 0 a 360° e intensidad; con intensidad 0 la interfaz es de
+  grises puros). El acento admite cualquier color propio: usa el selector del sistema
+  o escribe el hex. El contraste del texto es el mismo en todos los tonos, y si el
+  acento elegido se confundiera con el fondo, trex lo acerca al blanco o al negro lo
+  justo para que se lea. Los controles, menús, chat, tareas, equipos, ajustes y
+  notificaciones comparten el mismo lenguaje visual. La ventana de Trex Browser
+  lleva también tu tono, acento y modo claro u oscuro, y los sigue en cuanto los
+  cambias (con una versión anterior del navegador conserva su tema oscuro).
 - **Colores del terminal con vista previa**: Grafito, Océano, Bosque y Ciruela
-  conservan los colores ANSI sin teñir la interfaz. El código, los diffs y los
-  errores mantienen sus colores informativos. Las preferencias guardadas siguen
-  siendo compatibles.
+  cambian solo los colores ANSI del terminal; el tono de la interfaz y el acento se
+  eligen aparte. El código, los diffs y los errores mantienen sus colores
+  informativos. Las preferencias guardadas siguen siendo compatibles.
 - **Marco personalizable**: en Ajustes → Apariencia elige Compacto, Cómodo o
   Minimalista, o ajusta el redondeado, el margen y el borde. Los cambios se
   previsualizan en las terminales abiertas y se conservan al guardar.

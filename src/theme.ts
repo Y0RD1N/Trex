@@ -12,8 +12,8 @@
  */
 import type { ITheme } from "@xterm/xterm";
 import { applyAccent } from "./api";
-import { paletteFor, paletteTokens } from "./palettes";
-import { normalizeDesign, type ColorScheme } from "./visualDesign";
+import { accentSurfaces, paletteFor, paletteTokens, toneUi, type Tone } from "./palettes";
+import { DEFAULT_SURFACE_HUE, DEFAULT_SURFACE_TINT, normalizeDesign, type ColorScheme } from "./visualDesign";
 
 export type ThemeMode = "dark" | "light";
 export type Appearance = "dark" | "light" | "system";
@@ -54,6 +54,7 @@ const listeners = new Set<ThemeListener>();
 let currentAppearance: Appearance = "dark";
 let currentAccent = "";
 let currentScheme: ColorScheme = "trex";
+let currentTone: Tone = { hue: DEFAULT_SURFACE_HUE, tint: DEFAULT_SURFACE_TINT };
 let systemBound = false;
 
 /** Se suscribe a los cambios de modo. Devuelve la función para darse de baja. */
@@ -100,10 +101,14 @@ const beginThemeTransition = (): void => {
  * Aplica la apariencia (y, si se indica, el acento) al documento.
  * Devuelve el modo resuelto para poder sincronizar el estado de React.
  */
-export const applyTheme = (appearance: string, accent?: string, colorScheme?: ColorScheme): ThemeMode => {
+export const applyTheme = (appearance: string, accent?: string, colorScheme?: ColorScheme, tone?: Partial<Tone>): ThemeMode => {
   currentAppearance = normalizeAppearance(appearance);
   if (accent) currentAccent = accent;
   if (colorScheme) currentScheme = normalizeDesign({ colorScheme }).colorScheme;
+  if (tone) {
+    const clean = normalizeDesign({ surfaceHue: tone.hue, surfaceTint: tone.tint });
+    currentTone = { hue: clean.surfaceHue, tint: clean.surfaceTint };
+  }
   bindSystemListener();
 
   const mode = resolveThemeMode(currentAppearance);
@@ -116,10 +121,12 @@ export const applyTheme = (appearance: string, accent?: string, colorScheme?: Co
   if (previousMode && (previousMode !== mode || previousScheme !== currentScheme)) beginThemeTransition();
   root.dataset.appearance = currentAppearance;
   root.dataset.colorScheme = currentScheme;
-  for (const [token, value] of Object.entries(paletteTokens(paletteFor(currentScheme)[mode]))) root.style.setProperty(token, value);
+  // Las superficies salen del tono elegido; la paleta solo aporta los colores ANSI del terminal.
+  const ui = toneUi(mode, currentTone);
+  for (const [token, value] of Object.entries(paletteTokens(paletteFor(currentScheme)[mode], ui))) root.style.setProperty(token, value);
   if (currentAccent) {
     root.dataset.accent = currentAccent;
-    applyAccent(currentAccent);
+    applyAccent(currentAccent, accentSurfaces(mode, ui));
   }
 
   for (const listener of listeners) {
@@ -148,15 +155,16 @@ export const getTerminalTheme = (mode: ThemeMode): ITheme => {
   const palette = paletteFor(currentScheme)[mode].terminal;
   const cursor =
     mode === "light"
-      ? cssVar("--accent-strong", "#b3541f")
-      : cssVar("--accent", "#e8834a");
+      ? cssVar("--accent-strong", "#a8305a")
+      : cssVar("--accent", "#f06a8d");
   const background = cssVar("--term-bg", palette.background ?? "#121212");
-  return { ...palette, background, cursorAccent: background, cursor };
+  const foreground = cssVar("--term-fg", palette.foreground ?? "#e4e7ec");
+  return { ...palette, background, foreground, cursorAccent: background, cursor };
 };
 
 /** Decoraciones de la búsqueda (coherentes con el modo activo). */
 export const getSearchDecorations = (mode: ThemeMode) => {
-  const accent = mode === "light" ? cssVar("--accent-strong", "#b3541f") : cssVar("--accent", "#e8834a");
+  const accent = mode === "light" ? cssVar("--accent-strong", "#a8305a") : cssVar("--accent", "#f06a8d");
   const palette = paletteFor(currentScheme)[mode].terminal;
   return {
     matchBackground: palette.selectionBackground!,

@@ -12,6 +12,7 @@ import { scopePath } from './scope-path.mjs';
 import { humanControls } from './human-controls.mjs';
 import { storageCommand, scopedDownload, grantedPermission } from './scope-storage.mjs';
 import { setBounds, setVisible, keepOnTop } from './view-layout.mjs';
+import { readTheme, watchTheme, themeCss, BUILTIN_THEME } from './theme.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI_ROOT = path.join(here, 'ui');
@@ -20,14 +21,19 @@ const FRAME = 7;                 // visible glass frame around the page
 const RADIUS = 12;
 const OVERLAY_PAD = 16;          // matches #root padding in ui/overlay.html
 
-/** Opened from the desktop icon / app menu (no profile given): the person's own
- * profile, the same one trex opens with "Abrir Trex Browser personal".
+/** The private Browser home (engine.json, theme.json, the profiles).
  * Mirrors privateHomePath() in worker/security.mjs. */
-function personalProfile() {
+function privateRoot() {
   const env = process.env, home = app.getPath('home');
   const state = env.XDG_STATE_HOME && path.isAbsolute(env.XDG_STATE_HOME) ? env.XDG_STATE_HOME : path.join(home, '.local', 'state');
-  const root = path.resolve(env.TREX_BROWSER_HOME || (process.platform === 'linux' ? path.join(state, 'trex-browser')
+  return path.resolve(env.TREX_BROWSER_HOME || (process.platform === 'linux' ? path.join(state, 'trex-browser')
     : path.join(env.LOCALAPPDATA || home, process.platform === 'win32' ? 'TrexBrowser' : '.trex-browser')));
+}
+
+/** Opened from the desktop icon / app menu (no profile given): the person's own
+ * profile, the same one trex opens with "Abrir Trex Browser personal". */
+function personalProfile() {
+  const root = privateRoot();
   try {
     if (!fs.existsSync(root)) {
       // On Windows only the native launcher may create the private home (it sets its ACL).
@@ -80,7 +86,12 @@ app.on('second-instance', (_e, _argv, _cwd, data) => {
   win.show(); win.focus();
   if (data?.url && /^https?:\/\//.test(data.url)) createTab(data.url);
 });
-nativeTheme.themeSource = 'dark';
+// The app's look (theme.mjs), read from the private Browser home and followed live. Without one the shell
+// keeps its built-in dark theme.
+const THEME_ROOT = SHARED_ROOT || privateRoot();
+let theme = readTheme(THEME_ROOT), themeWatch = null;
+nativeTheme.themeSource = theme?.mode ?? 'dark';
+const baseBackground = () => theme?.colors.app ?? '#16130e';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'trex', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
@@ -109,6 +120,8 @@ function serveFrom(hosts) {
     const url = new URL(request.url);
     if (!hosts.includes(url.host)) return new Response('not found', { status: 404 });
     const name = url.host === 'newtab' && url.pathname === '/' ? '/newtab.html' : decodeURIComponent(url.pathname);
+    // The app's colours for our own UI documents; pages never get this route (see servePage).
+    if (url.host === 'ui' && name === '/theme-vars.css') return new Response(theme ? themeCss(theme) : '', { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store' } });
     const file = path.normalize(path.join(UI_ROOT, name));
     if (!file.startsWith(UI_ROOT + path.sep)) return new Response('forbidden', { status: 403 });
     return net.fetch(pathToFileURL(file).toString());
@@ -141,10 +154,11 @@ function errorPage(url) {
   const [title, detail] = NET_ERRORS[code] || ['No se pudo cargar la página', 'Ocurrió un error al abrir esta dirección.'];
   const retry = /^https?:\/\//i.test(shown) ? `<a class="btn" href="${escapeHtml(shown)}">Reintentar</a>` : '';
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
-    html,body{height:100%;margin:0;background:#121212;color:#e8e8ea;font:15px/1.5 system-ui,sans-serif}
+    ${theme ? themeCss(theme) : ''}
+    html,body{height:100%;margin:0;background:var(--bg,#16130e);color:var(--text,#e8e0cc);font:15px/1.5 system-ui,sans-serif}
     main{max-width:560px;margin:0 auto;padding:16vh 28px 0}h1{font-size:22px;font-weight:600;margin:0 0 8px}
-    p{color:#b6b6bd;margin:6px 0}code{color:#9a9aa3;font-size:12px;overflow-wrap:anywhere}
-    .btn{display:inline-block;margin-top:18px;padding:8px 16px;border-radius:10px;background:#e8834a;color:#171717;text-decoration:none;font-weight:600}
+    p{color:var(--muted,#b0a791);margin:6px 0}code{color:var(--dim,#968e7a);font-size:12px;overflow-wrap:anywhere}
+    .btn{display:inline-block;margin-top:18px;padding:8px 16px;border-radius:8px;background:var(--accent,#f06a8d);color:var(--accent-ink,#16130e);text-decoration:none;font-weight:600}
   </style></head><body><main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>${shown ? `<p><code>${escapeHtml(shown)}</code></p>` : ''}${code && code !== 'CRASHED' ? `<p><code>${escapeHtml(code)}</code></p>` : ''}${retry}</main></body></html>`;
   return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
 }
@@ -153,7 +167,37 @@ function servePage(request) {
   const url = new URL(request.url);
   if (url.host === 'error') return errorPage(url);
   if (url.host !== 'newtab') return Response.error();
+  if (theme && (url.pathname === '/' || url.pathname === '/newtab.html')) return themedNewTab();
   return serveFrom(['newtab'])(request);
+}
+// The new tab page wears the app's colours from its first paint (it has no preload to ask for them).
+async function themedNewTab() {
+  const html = await fs.promises.readFile(path.join(UI_ROOT, 'newtab.html'), 'utf8');
+  return new Response(html.replace('</head>', () => `<style>${themeCss(theme)}</style></head>`), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+}
+// Documents that are already open take a theme change as an extra stylesheet that replaces the last one.
+const painted = new WeakMap();
+let paintRun = 0;
+function paintTheme(wc) {
+  if (!wc || wc.isDestroyed()) return;
+  const run = paintRun, old = painted.get(wc);
+  painted.delete(wc);
+  if (old) wc.removeInsertedCSS(old).catch(() => {});
+  // Without a stored theme the built-in one is put back explicitly: the document still holds the old one.
+  wc.insertCSS(themeCss(theme ?? BUILTIN_THEME, { important: true })).then(key => {
+    if (run === paintRun && !painted.has(wc) && !wc.isDestroyed()) painted.set(wc, key); else wc.removeInsertedCSS(key).catch(() => {});
+  }).catch(() => {});
+}
+function themeChanged(next) {
+  theme = next; paintRun++;
+  nativeTheme.themeSource = theme?.mode ?? 'dark';
+  for (const view of [chromeView, ...[...overlays.values()].map(o => o.view)]) paintTheme(view?.webContents);
+  for (const tab of tabs.values()) {
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed() || !/^trex:/i.test(wc.getURL())) continue;
+    tab.view.setBackgroundColor(baseBackground());
+    paintTheme(wc);
+  }
 }
 function serveUi() {
   session.fromPartition(UI_PARTITION).protocol.handle('trex', serveFrom(['ui', 'newtab']));
@@ -417,7 +461,7 @@ function createTab(url = NEW_TAB, { activate = true, profile = tabs.get(activeTa
   view.setBorderRadius(RADIUS);
   // The base colour shows through every page that paints no background of its own: dark for our
   // pages, white for the web (black text on a dark base made plain pages unreadable).
-  const baseColor = address => /^trex:/i.test(address) ? '#121212' : '#ffffff';
+  const baseColor = address => /^trex:/i.test(address) ? baseBackground() : '#ffffff';
   view.setBackgroundColor(baseColor(url));
   const tab = { id, view, title: 'Nueva pestaña', url, favicon: null, loading: true, profile };
   tabs.set(id, tab);
@@ -757,6 +801,9 @@ app.whenReady().then(() => {
   // Start with the keyboard on the page, not on our UI.
   tabs.get(activeTab)?.view.webContents.once('did-finish-load', () => { if (!tabs.get(activeTab)?.url.startsWith('trex://newtab')) tabs.get(activeTab)?.view.webContents.focus(); });
   win.on('resize', layout);
+  // The app writes the theme while this window may be in the background: a directory watch can miss that on some systems.
+  themeWatch = watchTheme(THEME_ROOT, themeChanged);
+  win.on('focus', () => themeWatch.check());
   win.on('maximize', broadcast); win.on('unmaximize', broadcast);
   win.on('close', () => { saveSession(true); closing = true; });
   win.on('closed', () => { closing = true; controls.close(); });
@@ -810,7 +857,7 @@ const SCROLLBAR_CSS = `
 ::-webkit-scrollbar-button{display:none;width:0;height:0}
 ::-webkit-scrollbar-thumb{background:rgba(140,140,150,.5);background-clip:padding-box;border:3px solid transparent;border-radius:12px;min-height:36px;min-width:36px}
 ::-webkit-scrollbar-thumb:hover{background-color:rgba(150,150,160,.66);border-width:2px}
-::-webkit-scrollbar-thumb:active{background-color:rgba(232,131,74,.85);border-width:2px}`;
+::-webkit-scrollbar-thumb:active{background-color:rgba(240,106,141,.85);border-width:2px}`;
 app.on('web-contents-created', (_e, wc) => {
   wc.on('dom-ready', () => { if (!isUi(wc) && !wc.getURL().startsWith('devtools:')) wc.insertCSS(SCROLLBAR_CSS, { cssOrigin: 'user' }).catch(() => {}); });
   if (process.env.TREX_SHELL_DEBUG === '1') wc.on('input-event', (_ev, input) => { if (/mouseDown|keyDown|mouseEnter/.test(input.type)) debug('input', input.type, wc.getURL().slice(0, 50), input.x ?? '', input.y ?? '', input.key ?? ''); });

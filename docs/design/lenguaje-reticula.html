@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="es" data-mode="dark" data-accent="cinta">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>trex · lenguaje de diseño: retícula + excavación</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ===== Lenguaje: retícula + excavación =====================================
+   Idea: el arqueólogo tiende una cuadrícula sobre el yacimiento, numera cada
+   hallazgo y lo anota por estratos. En trex: un proyecto es un yacimiento, una
+   sesión es un hallazgo numerado y la interfaz se apoya en celdas de carácter. */
+:root {
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  --cell-w: 8px; --cell-h: 20px;
+}
+:root[data-mode="dark"] {
+  --bg: #16130e; --side: #110f0b; --surface: #1c1913; --inset: #231f17;
+  --line: #342f24; --line-strong: #4b4434;
+  --ink: #e8e0cc; --muted: #aaa18a; --dim: #8c8471;
+  --ok: #7db58f; --warn: #d9a23f; --danger: #e0674f; --info: #84a3c8;
+  --add: #8cc59b; --del: #e58a78;
+  color-scheme: dark;
+}
+:root[data-mode="light"] {
+  --bg: #f2ede0; --side: #eae4d2; --surface: #f7f3e8; --inset: #e5decb;
+  --line: #d4ccb5; --line-strong: #b4aa8f;
+  --ink: #1e1a13; --muted: #5a5345; --dim: #6b6352;
+  --ok: #2c6c45; --warn: #8a6208; --danger: #a8402c; --info: #345f93;
+  --add: #26663f; --del: #a3392a;
+  color-scheme: light;
+}
+:root[data-mode="dark"][data-accent="cinta"] { --accent: #f06a8d; }
+:root[data-mode="light"][data-accent="cinta"] { --accent: #b3315a; }
+:root[data-mode="dark"][data-accent="ocre"] { --accent: #dcaa4a; }
+:root[data-mode="light"][data-accent="ocre"] { --accent: #85600e; }
+:root[data-mode="dark"][data-accent="patina"] { --accent: #4fb8a3; }
+:root[data-mode="light"][data-accent="patina"] { --accent: #1b6f60; }
+:root[data-mode="dark"][data-accent="oxido"] { --accent: #e5834a; }
+:root[data-mode="light"][data-accent="oxido"] { --accent: #9c4a1a; }
+.tone-row { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; width: 100%; padding-top: 8px; border-top: 1px solid var(--line); }
+.tone-row label { display: inline-flex; gap: 8px; align-items: center; color: var(--dim); }
+.tone-row input[type=range] { width: 150px; accent-color: var(--accent); }
+.tone-row output { color: var(--muted); min-width: 4ch; }
+.combo { display: inline-flex; gap: 8px; align-items: center; }
+.combo i { display: inline-block; width: 28px; height: 16px; border: 1px solid var(--line-strong); border-radius: 4px; background: linear-gradient(90deg, var(--c1) 0 50%, var(--c2) 50% 78%, var(--c3) 78%); }
+
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; color: var(--ink); font: 13px/20px var(--mono); }
+.page { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
+h1, h2, h3, p { margin: 0; font-weight: 500; }
+.rule { display: flex; align-items: center; gap: 12px; color: var(--dim); font-size: 12px; }
+.rule::after { content: ""; flex: 1; border-top: 1px solid var(--line); order: 1; }
+.rule .n { order: 2; }
+section { margin-top: 56px; }
+section > .rule { margin-bottom: 20px; }
+.lead { max-width: 70ch; color: var(--muted); font: 15px/1.65 var(--sans); }
+.kbd { border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 6px; font-size: 11.5px; color: var(--muted); }
+.accent { color: var(--accent); }
+.dim { color: var(--dim); }
+
+/* barra de control de la maqueta */
+.bar { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; padding: 10px 24px; background: var(--side); border-bottom: 1px solid var(--line); font-size: 12px; }
+.bar button { font: inherit; color: var(--muted); background: none; border: 0; border-bottom: 1px solid transparent; padding: 0 2px; cursor: pointer; }
+.bar button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.bar b { font-weight: 500; color: var(--dim); margin-right: 8px; }
+
+/* marca */
+.mark { fill: currentColor; display: block; }
+.head { display: flex; gap: 28px; align-items: flex-end; margin-top: 12px; }
+.head .mark { width: 88px; height: 88px; color: var(--ink); flex: none; }
+.head h1 { font-size: 30px; line-height: 36px; letter-spacing: -.01em; }
+.head p { margin-top: 8px; }
+
+/* paleta */
+.sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.sw div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 0 0 8px; }
+.sw i { display: block; height: 52px; border-bottom: 1px solid var(--line); }
+.sw b { display: block; padding: 6px 10px 0; font-weight: 500; }
+.sw span { display: block; padding: 0 10px; color: var(--dim); font-size: 12px; }
+
+/* tipografía */
+.type { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.type > div { padding: 16px 20px 20px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.type small { display: block; color: var(--dim); font-size: 12px; margin-bottom: 8px; }
+.type .big { font-size: 26px; line-height: 32px; }
+.type .prose { font: 15px/1.65 var(--sans); max-width: 52ch; }
+
+/* retícula */
+.cells { position: relative; height: 140px; border: 1px solid var(--line-strong);
+  background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 8px 20px; }
+.cells figcaption, .cells span { position: absolute; background: var(--bg); padding: 0 6px; font-size: 12px; }
+
+/* estratos */
+.strata { display: flex; flex-wrap: wrap; gap: 32px 36px; }
+.strata div { display: grid; gap: 10px; justify-items: start; font-size: 12px; color: var(--muted); }
+.core { display: block; }
+
+/* escenas */
+.frame { border: 1px solid var(--line-strong); border-radius: 14px; overflow: hidden; }
+.app { display: grid; grid-template-columns: 288px 1fr; height: 640px; background: var(--bg); }
+.side { display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; }
+.brand { display: flex; gap: 14px; align-items: center; padding: 16px; }
+.brand .mark { width: 32px; height: 32px; color: var(--ink); }
+.brand b { display: block; font-size: 15px; font-weight: 600; line-height: 20px; }
+.brand small { color: var(--dim); font-size: 12px; }
+.search { display: flex; justify-content: space-between; margin: 0 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--dim); }
+.side .rule { margin: 20px 16px 4px; }
+.proj { display: flex; align-items: center; gap: 10px; height: 40px; margin: 0 8px; padding: 0 8px; border-radius: 8px; }
+.proj .caret { width: 8px; color: var(--accent); text-align: center; }
+.proj .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj .ct { color: var(--dim); font-size: 12px; }
+.proj.on { background: var(--inset); }
+.sess { display: block; padding: 0 16px 0 52px; height: 40px; }
+.sess b { display: block; font-weight: 400; }
+.sess small { display: block; color: var(--dim); font-size: 12px; }
+.sess.on b { color: var(--ink); }
+.side .foot { margin-top: auto; border-top: 1px solid var(--line); display: flex; justify-content: space-between; padding: 10px 16px; color: var(--dim); font-size: 12px; }
+
+.main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.crumbs { display: flex; justify-content: space-between; align-items: center; height: 40px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+.crumbs b { color: var(--ink); font-weight: 500; }
+.work { flex: 1; display: grid; grid-template-columns: 1fr 232px; min-height: 0; }
+.thread { overflow: hidden; padding: 20px 24px 0 24px; }
+.col { max-width: 640px; }
+.u { display: flex; gap: 12px; margin-bottom: 20px; font-weight: 500; }
+.u i { color: var(--accent); font-style: normal; }
+.prose { font: 14.5px/1.65 var(--sans); color: var(--ink); margin: 0 0 14px; }
+.prose code { font: 12.5px var(--mono); background: var(--inset); padding: 0 5px; border-radius: 4px; }
+.h { display: flex; gap: 10px; align-items: center; font: 600 12.5px/20px var(--mono); margin: 18px 0 8px; }
+.h::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.tools { margin: 0 0 14px; font-size: 12.5px; color: var(--muted); }
+.tools div { display: flex; gap: 10px; }
+.tools .t { color: var(--line-strong); }
+.tools .ok { color: var(--ok); }
+.tools b { font-weight: 500; color: var(--ink); }
+.add { color: var(--add); } .del { color: var(--del); }
+.table { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 0 0 14px; font-size: 12.5px; }
+.table div { display: grid; grid-template-columns: 1fr 90px 70px; padding: 0 12px; height: 28px; align-items: center; border-top: 1px solid var(--line); }
+.table div:first-child { border-top: 0; color: var(--dim); }
+.plate { position: relative; border: 1px solid var(--line-strong); border-radius: 10px; padding: 12px 16px; margin: 4px 0 0; background: var(--surface); }
+.plate p { margin: 0; }
+.cmd { margin: 8px 0 12px; padding: 6px 10px; border-radius: 6px; background: var(--inset); color: var(--ink); }
+.btns { display: flex; gap: 20px; }
+.btn { font: inherit; background: none; border: 0; color: var(--ink); padding: 0; cursor: pointer; }
+.btn:hover { color: var(--accent); }
+.btn.pri { color: var(--accent); }
+.btn kbd { font: inherit; font-size: 11.5px; color: var(--dim); margin-left: 6px; }
+.tasks { border-left: 1px solid var(--line); padding: 16px 16px; overflow: hidden; font-size: 12.5px; }
+.tasks .rule { margin-bottom: 12px; }
+.bar-p { letter-spacing: 0; color: var(--accent); }
+.tk { display: flex; gap: 10px; margin: 0 0 8px; color: var(--muted); }
+.tk b { font-weight: 400; color: var(--dim); }
+.tk.run { color: var(--ink); }
+.tk.run b { color: var(--accent); }
+.tk.done b { color: var(--ok); }
+.compose { margin: 0 24px 16px; border: 1px solid var(--line-strong); border-radius: 14px; overflow: hidden; background: var(--surface); }
+.compose .in { display: flex; gap: 12px; padding: 10px 14px; color: var(--dim); }
+.compose .in i { font-style: normal; color: var(--accent); }
+.compose .st { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding: 0 14px; height: 30px; align-items: center; font-size: 12px; color: var(--muted); }
+.compose .st > div { display: flex; gap: 16px; }
+.empty { padding: 56px 56px; max-width: 700px; }
+.empty .mark { width: 56px; height: 56px; color: var(--ink); margin-bottom: 28px; }
+.empty h2 { font-size: 20px; line-height: 28px; margin-bottom: 8px; }
+.empty .list { margin: 24px 0; border-top: 1px solid var(--line); }
+.empty .list div { display: grid; grid-template-columns: 32px 1fr auto; height: 40px; align-items: center; border-bottom: 1px solid var(--line); }
+.empty .list div > :first-child { color: var(--accent); }
+.empty .list div > :last-child { color: var(--dim); font-size: 12px; }
+.status { display: grid; grid-template-columns: 120px 140px 1fr; row-gap: 0; }
+.ok-t { color: var(--ok); }
+.comps { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.comps > div { padding: 18px 20px 22px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.comps small { display: block; color: var(--dim); font-size: 12px; margin-bottom: 12px; }
+.comps .row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+.tog { display: inline-flex; gap: 8px; align-items: center; }
+.tog b { font-weight: 500; }
+.field { border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; width: 100%; color: var(--dim); }
+.field:focus-within, .field.focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <span><b>modo</b><button data-mode="dark" aria-pressed="true">sedimento (oscuro)</button> <button data-mode="light" aria-pressed="false">hueso (claro)</button></span>
+  <span><b>acento</b><button data-accent="cinta" aria-pressed="true">cinta rosa</button> <button data-accent="ocre" aria-pressed="false">ocre</button> <button data-accent="patina" aria-pressed="false">pátina</button> <button data-accent="oxido" aria-pressed="false">óxido</button></span>
+  <div class="tone-row">
+    <b style="font-weight:500;color:var(--dim)">combinaciones</b>
+    <span id="combos"></span>
+    <label>tono <input id="hue" type="range" min="0" max="360" value="40"><output id="hueOut">40°</output></label>
+    <label>intensidad <input id="tint" type="range" min="0" max="100" value="100"><output id="tintOut">100%</output></label>
+    <label>color propio <input id="customAccent" type="color" value="#f06a8d" style="width:34px;height:24px;padding:0;border:1px solid var(--line-strong);border-radius:6px;background:none;cursor:pointer"><output id="customHex">#f06a8d</output></label>
+    <span id="contrast" class="dim"></span>
+  </div>
+</div>
+
+<div class="page">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <symbol id="t" viewBox="272 248 480 480"><path d="M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z"/></symbol>
+  </defs></svg>
+
+  <div class="head">
+    <svg class="mark" aria-label="trex"><use href="#t"/></svg>
+    <div>
+      <h1>Retícula + excavación</h1>
+      <p class="lead">Un lenguaje visual para trex. Se apoya en dos ideas: la interfaz está construida sobre celdas de carácter, como la terminal que es, y el trabajo se ordena como en un yacimiento, con proyectos que son sitios, sesiones que son hallazgos numerados y estratos que dicen de un vistazo dónde estás.</p>
+    </div>
+  </div>
+
+  <section>
+    <div class="rule"><span>01 · Marca</span><span class="n">T</span></div>
+    <p class="lead">La marca es la T que ya tiene trex, sin el recuadro redondeado. Es una pieza sola, de borde recto, que se asienta sobre la retícula. El ✳ deja de ser el logo: se queda únicamente como icono de Claude Code, que es suyo.</p>
+  </section>
+
+  <section>
+    <div class="rule"><span>02 · Paleta: tierra, hueso y tinta</span><span class="n">sin zinc</span></div>
+    <div class="sw" id="sw"></div>
+  </section>
+
+  <section>
+    <div class="rule"><span>03 · Tipografía</span><span class="n">IBM Plex</span></div>
+    <div class="type">
+      <div><small>Plex Mono · estructura, etiquetas, números, ejecución</small><div class="big">№ 014 · Revisar contraste</div><p class="dim" style="margin-top:8px">0123456789 · ¿Qué hay de nuevo? áéíóúñ ¡ok!</p></div>
+      <div><small>Plex Sans · lectura larga, las respuestas del asistente</small><p class="prose">He revisado el sistema de estilos y ajustado el contraste del acento. La prosa va en Plex Sans para leerse cómoda; todo lo demás lleva la voz de la terminal.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="rule"><span>04 · Retícula</span><span class="n">8 × 20 px</span></div>
+    <p class="lead" style="margin-bottom:20px">Una celda mide 8 × 20 px, el ancho y el alto de un carácter de Plex Mono a 13 px. Anchos, alturas de fila y márgenes son múltiplos de la celda: la barra lateral mide 36 celdas, una fila de proyecto 2. La retícula manda en el ritmo, no en la forma: las esquinas son redondeadas (4 a 14 px) y las sombras, suaves.</p>
+    <div class="cells"><span style="left:24px;top:20px">36 celdas · barra lateral</span><span style="left:24px;top:80px">fila = 2 celdas (40 px)</span><span style="right:24px;top:20px">línea = 1 px · esquinas redondeadas</span></div>
+  </section>
+
+  <section>
+    <div class="rule"><span>05 · Estratos: la identidad de cada proyecto</span><span class="n">núcleo de sondeo</span></div>
+    <p class="lead" style="margin-bottom:24px">En lugar de una carpeta gris o un punto de color, cada proyecto lleva su propio núcleo de sondeo: una columna de estratos que se calcula del nombre. Siempre es la misma para el mismo proyecto y no se repite entre dos.</p>
+    <div class="strata" id="strata"></div>
+  </section>
+
+  <section>
+    <div class="rule"><span>06 · La aplicación</span><span class="n">escena 1</span></div>
+    <div class="frame"><div class="app">
+      <aside class="side">
+        <div class="brand"><svg class="mark"><use href="#t"/></svg><div><b>trex</b><small>4 yacimientos</small></div></div>
+        <div class="search"><span>⌕ Buscar…</span><span>Ctrl+Shift+K</span></div>
+        <div class="rule"><span>Favoritos</span><span class="n">1</span></div>
+        <div class="proj on"><span class="caret">›</span><span class="core" data-core="trex"></span><span class="name">trex</span><span class="ct">3</span></div>
+        <a class="sess on"><b>№ 03 Revisar contraste</b><small>Claude Code · en curso <span class="accent" data-spin>⠋</span></small></a>
+        <a class="sess"><b>№ 02 Panel de pagos</b><small>Claude Code · espera <span class="accent">▲</span></small></a>
+        <a class="sess"><b>№ 01 Shell</b><small>pwsh · inactiva ○</small></a>
+        <div class="rule"><span>Proyectos</span><span class="n">3</span></div>
+        <div class="proj"><span class="caret"></span><span class="core" data-core="api-pagos"></span><span class="name">api-pagos</span><span class="ct">1</span></div>
+        <div class="proj"><span class="caret"></span><span class="core" data-core="landing-web"></span><span class="name">landing-web</span></div>
+        <div class="proj"><span class="caret"></span><span class="core" data-core="experimentos-ml"></span><span class="name">experimentos-ml</span></div>
+        <div class="foot"><span>+ Nuevo proyecto</span><span>uso · ajustes</span></div>
+      </aside>
+      <div class="main">
+        <div class="crumbs"><span>trex <span class="dim">/</span> <b>№ 03 Revisar contraste</b></span><span>[Tareas 1/3]</span></div>
+        <div class="work">
+          <div class="thread"><div class="col">
+            <div class="u"><i>›</i><span>Revisa el contraste del acento y ajusta la barra lateral</span></div>
+            <p class="prose">Voy a revisar los estilos del acento y la barra lateral.</p>
+            <div class="tools">
+              <div><span class="t">├─</span><span class="ok">✓</span><span>Leyó <b>src/tokens.css</b></span></div>
+              <div><span class="t">├─</span><span class="ok">✓</span><span>Editó <b>src/tokens.css</b> <span class="add">+1</span> <span class="del">−1</span></span></div>
+              <div><span class="t">└─</span><span class="accent" data-spin>⠋</span><span>Actualizó las tareas</span></div>
+            </div>
+            <div class="h"><span>Cambios</span></div>
+            <p class="prose">El acento pasa a un tono con mejor contraste sobre las superficies claras y la fila activa usa <code>--accent-soft</code>.</p>
+            <div class="table"><div><span>Archivo</span><span>Líneas</span><span>Estado</span></div><div><span>src/tokens.css</span><span>+6 −2</span><span class="ok-t">listo</span></div><div><span>src/components/Sidebar.tsx</span><span>+3 −1</span><span class="ok-t">listo</span></div></div>
+            <div class="plate">
+              <p><b style="font-weight:500">Claude pide ejecutar un comando</b></p>
+              <p class="cmd">$ npm test</p>
+              <div class="btns"><button class="btn pri">[ Permitir<kbd>y</kbd> ]</button><button class="btn">[ Denegar<kbd>n</kbd> ]</button></div>
+            </div>
+          </div></div>
+          <aside class="tasks">
+            <div class="rule"><span>Tareas</span><span class="n">1/3</span></div>
+            <p style="margin-bottom:14px"><span class="bar-p">████</span><span class="dim">░░░░░░░░</span> 33%</p>
+            <p class="tk done"><b>[x]</b><span>Revisar tokens del acento</span></p>
+            <p class="tk run"><b>[~]</b><span>Ajustar la fila activa de la barra lateral</span></p>
+            <p class="tk"><b>[ ]</b><span>Probar el modo claro</span></p>
+          </aside>
+        </div>
+        <div class="compose"><div class="in"><i>›</i><span>Escribe un mensaje…</span></div><div class="st"><div><span>opus</span><span class="dim">·</span><span>pregunta, con aprobación</span><span class="dim">·</span><span>navegador</span></div><div><span>/ comandos</span><span>$ skills</span><span>@ archivos</span><span class="accent">⏎ enviar</span></div></div></div>
+      </div>
+    </div></div>
+  </section>
+
+  <section>
+    <div class="rule"><span>07 · Primer arranque</span><span class="n">escena 2</span></div>
+    <div class="frame"><div class="app">
+      <aside class="side">
+        <div class="brand"><svg class="mark"><use href="#t"/></svg><div><b>trex</b><small>sin yacimientos</small></div></div>
+        <div class="search"><span>⌕ Buscar…</span><span>Ctrl+Shift+K</span></div>
+        <div class="rule"><span>Proyectos</span><span class="n">0</span></div>
+        <p class="dim" style="padding:8px 16px;font-size:12px">Todavía no has añadido ninguno.</p>
+        <div class="foot"><span>+ Nuevo proyecto</span><span>uso · ajustes</span></div>
+      </aside>
+      <div class="main"><div class="empty">
+        <svg class="mark"><use href="#t"/></svg>
+        <h2>Aquí empieza el primer yacimiento.</h2>
+        <p class="lead" style="font-size:14.5px">Un proyecto es una carpeta. trex abre en ella sesiones de Claude Code, Codex o un shell, y las guarda numeradas para que nunca pierdas el hilo.</p>
+        <div class="list">
+          <div><span>1</span><span>Añade una carpeta</span><span class="kbd">Ctrl+O</span></div>
+          <div><span>2</span><span>Elige con qué asistente trabajar</span><span>Ajustes › Asistentes</span></div>
+          <div><span>3</span><span>Abre la primera sesión</span><span>№ 01</span></div>
+        </div>
+        <div class="rule" style="margin-bottom:8px"><span>Asistentes detectados</span></div>
+        <div class="status">
+          <span>Claude Code</span><span class="ok-t">● disponible</span><span class="dim">v2.1.0</span>
+          <span>Codex</span><span class="dim">○ no detectado</span><span class="dim">—</span>
+        </div>
+      </div></div>
+    </div></div>
+  </section>
+
+  <section>
+    <div class="rule"><span>08 · Piezas</span><span class="n">esquinas redondeadas</span></div>
+    <div class="comps">
+      <div><small>Acciones</small><div class="row"><button class="btn pri">[ Aceptar ]</button><button class="btn">[ Cancelar ]</button><button class="btn dim">[ Omitir ]</button></div></div>
+      <div><small>Campo, con foco</small><div class="field focus">› nombre del proyecto</div></div>
+      <div><small>Estados: texto y glifo, nunca solo color</small><div class="row"><span class="ok-t">● disponible</span><span style="color:var(--warn)">▲ te espera</span><span style="color:var(--danger)">✕ falló</span><span class="dim">○ inactiva</span><span class="accent" data-spin>⠋</span><span>en curso</span></div></div>
+      <div><small>Interruptores</small><div class="row"><span class="tog"><b class="accent">[■]</b> reducir animaciones</span><span class="tog"><b class="dim">[ ]</b> copiar al seleccionar</span></div></div>
+      <div><small>Título de sección con regla</small><div class="rule"><span>Asistentes</span><span class="n">3</span></div></div>
+      <div><small>Recuadro de decisión</small><div class="plate" style="margin:6px 0 0"><p>¿Borrar el yacimiento «landing-web»?</p><p class="dim" style="font-size:12px">Los archivos de la carpeta no se tocan.</p></div></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const root = document.documentElement;
+const EARTH = ["#b5651d", "#c9a227", "#6b7f4e", "#7c8794", "#8c3b2a", "#d8cfb4", "#4c3d2e", "#a0764a", "#5d6f78"];
+function hash(s) { let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+function rng(seed) { let x = seed || 1; return () => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return x / 4294967296; }; }
+function core(name, w, h) {
+  const r = rng(hash(name)); const bands = []; let left = h; const n = 4 + Math.floor(r() * 2);
+  for (let i = 0; i < n; i++) { const ph = i === n - 1 ? left : Math.max(2, Math.min(left - 2 * (n - 1 - i), Math.round(h / n + (r() - .5) * h / 4))); bands.push({ h: ph, c: EARTH[Math.floor(r() * EARTH.length)] }); left -= ph; }
+  let y = 0; const rects = bands.map(b => { const e = `<rect x="0" y="${y}" width="${w}" height="${b.h}" fill="${b.c}"/>`; y += b.h; return e; }).join("");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="núcleo de ${name}">${rects}</svg>`;
+}
+document.querySelectorAll("[data-core]").forEach(el => el.innerHTML = core(el.dataset.core, 10, 20));
+const names = ["trex", "api-pagos", "landing-web", "experimentos-ml", "docs", "infra", "mobile", "datos"];
+document.getElementById("strata").innerHTML = names.map(n => `<div>${core(n, 36, 80)}<span>${n}</span></div>`).join("");
+
+const swatches = [["Sedimento", "--bg"], ["Barra lateral", "--side"], ["Superficie", "--surface"], ["Hundido", "--inset"], ["Línea", "--line"], ["Línea fuerte", "--line-strong"], ["Tinta", "--ink"], ["Apagado", "--muted"], ["Tenue", "--dim"], ["Acento", "--accent"], ["OK", "--ok"], ["Aviso", "--warn"], ["Peligro", "--danger"], ["Info", "--info"]];
+function drawSwatches() { const cs = getComputedStyle(root); document.getElementById("sw").innerHTML = swatches.map(([n, v]) => `<div><i style="background:var(${v})"></i><b>${n}</b><span>${cs.getPropertyValue(v).trim()}</span></div>`).join("") + EARTH.map((c, i) => `<div><i style="background:${c}"></i><b>Estrato ${i + 1}</b><span>${c}</span></div>`).join(""); }
+drawSwatches();
+
+/* ===== Tono de la interfaz: generador por luminancia =======================
+   Cada superficie y cada texto tiene una luminancia relativa fija (la del tono
+   «sedimento»). Dado un tono (0-360°) y una intensidad (0-100 %), se busca el
+   color de esa luminancia con ese matiz: así el contraste es idéntico para
+   cualquier combinación y nada se vuelve ilegible. */
+const BASE = {
+  dark: { bg: "#16130e", side: "#110f0b", surface: "#1c1913", inset: "#29241b", line: "#342f24", "line-strong": "#4b4434", ink: "#e8e0cc", muted: "#b0a791", dim: "#968e7a" },
+  light: { bg: "#f2ede0", side: "#eae4d2", surface: "#f7f3e8", inset: "#e5decb", line: "#d4ccb5", "line-strong": "#b4aa8f", ink: "#1e1a13", muted: "#5a5345", dim: "#615948" },
+};
+const lin = v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; };
+const lumY = ([r, g, b]) => .2126 * lin(r) + .7152 * lin(g) + .0722 * lin(b);
+const toRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const toHex = rgb => "#" + rgb.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
+function toHsl([r, g, b]) { r /= 255; g /= 255; b /= 255; const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn; const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1)); return { s, l }; }
+function fromHsl(h, s, l) { const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2; const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x]; return [(r + m) * 255, (g + m) * 255, (b + m) * 255]; }
+function solve(h, s, y) { let lo = 0, hi = 1; for (let i = 0; i < 26; i++) { const mid = (lo + hi) / 2; if (lumY(fromHsl(h, s, mid)) < y) lo = mid; else hi = mid; } return fromHsl(h, s, (lo + hi) / 2); }
+const contrastOf = (a, b) => { const [x, y] = [lumY(a), lumY(b)].sort((p, q) => q - p); return (x + .05) / (y + .05); };
+function tonePalette(mode, hue, tint) {
+  const out = {};
+  for (const [name, hex] of Object.entries(BASE[mode])) { const rgb = toRgb(hex); out[name] = solve(hue, toHsl(rgb).s * tint / 100, lumY(rgb)); }
+  return out;
+}
+let tone = null;
+function applyTone() {
+  const names = Object.keys(BASE.dark);
+  if (!tone) { names.forEach(n => root.style.removeProperty("--" + n)); return; }
+  const pal = tonePalette(root.dataset.mode, tone.hue, tone.tint);
+  names.forEach(n => root.style.setProperty("--" + n, toHex(pal[n])));
+  applyCustomAccent();
+  const min = k => Math.min(...["bg", "side", "surface", "inset"].map(s => contrastOf(pal[k], pal[s]))).toFixed(1);
+  document.getElementById("contrast").textContent = "contraste mínimo · tinta " + min("ink") + " · apagado " + min("muted") + " · tenue " + min("dim");
+  drawSwatches();
+}
+const COMBOS = [
+  { id: "sedimento", name: "Sedimento", hue: 40, tint: 100, accent: "cinta", c: ["#16130e", "#e8e0cc", "#f06a8d"] },
+  { id: "grafito", name: "Grafito", hue: 0, tint: 0, accent: "ocre", c: ["#141414", "#e6e6e6", "#dcaa4a"] },
+  { id: "pizarra", name: "Pizarra", hue: 215, tint: 70, accent: "patina", c: ["#12161b", "#dfe5ec", "#4fb8a3"] },
+  { id: "bosque", name: "Bosque", hue: 150, tint: 60, accent: "oxido", c: ["#121712", "#dfe8df", "#e5834a"] },
+  { id: "tinta", name: "Tinta", hue: 235, tint: 85, accent: "cinta", c: ["#10121b", "#dfe1ee", "#f06a8d"] },
+  { id: "vino", name: "Vino", hue: 350, tint: 55, accent: "ocre", c: ["#1a1214", "#ecdfe1", "#dcaa4a"] },
+];
+const hueIn = document.getElementById("hue"), tintIn = document.getElementById("tint");
+function setTone(hue, tint) { tone = { hue, tint }; hueIn.value = hue; tintIn.value = tint; document.getElementById("hueOut").textContent = hue + "°"; document.getElementById("tintOut").textContent = tint + "%"; applyTone(); }
+let customAccent = null;
+function applyCustomAccent() {
+  if (!customAccent) { root.style.removeProperty("--accent"); return; }
+  const dark = root.dataset.mode === "dark";
+  const base = getComputedStyle(root).getPropertyValue("--inset").trim();
+  const bg = base.startsWith("#") ? toRgb(base) : (dark ? [41, 36, 27] : [229, 222, 203]);
+  const start = toRgb(customAccent), target = dark ? [255, 255, 255] : [0, 0, 0];
+  let t = 0, rgb = start;
+  while (t < 1 && contrastOf(rgb, bg) < 4.5) { t += .02; rgb = start.map((v, i) => v + (target[i] - v) * t); }
+  root.style.setProperty("--accent", toHex(rgb));
+  document.getElementById("customHex").textContent = customAccent + " → " + toHex(rgb) + " (" + contrastOf(rgb, bg).toFixed(1) + ":1)";
+}
+document.getElementById("customAccent").oninput = e => { customAccent = e.target.value; root.dataset.accent = "custom"; document.querySelectorAll("[data-accent]").forEach(x => x.setAttribute("aria-pressed", false)); applyCustomAccent(); drawSwatches(); };
+function setAccent(a) { customAccent = null; root.style.removeProperty("--accent"); root.dataset.accent = a; document.querySelectorAll("[data-accent]").forEach(x => x.setAttribute("aria-pressed", x.dataset.accent === a)); drawSwatches(); }
+document.getElementById("combos").innerHTML = COMBOS.map(c => '<button data-combo="' + c.id + '" aria-pressed="' + (c.id === "sedimento") + '"><span class="combo"><i style="--c1:' + c.c[0] + ';--c2:' + c.c[1] + ';--c3:' + c.c[2] + '"></i>' + c.name + '</span></button>').join(" ");
+document.querySelectorAll("[data-combo]").forEach(b => b.onclick = () => { const c = COMBOS.find(x => x.id === b.dataset.combo); document.querySelectorAll("[data-combo]").forEach(x => x.setAttribute("aria-pressed", x === b)); setTone(c.hue, c.tint); setAccent(c.accent); });
+hueIn.oninput = () => { document.querySelectorAll("[data-combo]").forEach(x => x.setAttribute("aria-pressed", false)); setTone(+hueIn.value, +tintIn.value); };
+tintIn.oninput = hueIn.oninput;
+
+document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { root.dataset.mode = b.dataset.mode; document.querySelectorAll("[data-mode]").forEach(x => x.setAttribute("aria-pressed", x === b)); if (tone) applyTone(); else { applyCustomAccent(); drawSwatches(); } });
+document.querySelectorAll("[data-accent]").forEach(b => b.onclick = () => setAccent(b.dataset.accent));
+
+const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]; let i = 0;
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) setInterval(() => { i = (i + 1) % frames.length; document.querySelectorAll("[data-spin]").forEach(e => e.textContent = frames[i]); }, 90);
+</script>
+</body>
+</html>

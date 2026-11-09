@@ -37,6 +37,7 @@ function harness({ peek = false, profiles = [] } = {}) {
   const actions = [], icons = new Proxy({}, { get: (_, key) => String(key) }); let hides = 0;
   const modules = { ...helpers, react, "react/jsx-runtime": { jsx, jsxs: jsx }, "./Icons": icons,
     "./AgentIcon": { __esModule: true, default: "AgentIcon" }, "./SessionItem": { __esModule: true, default: "SessionItem" },
+    "./BrandMark": { __esModule: true, default: "BrandMark" }, "./ProjectCore": { __esModule: true, default: "ProjectCore" },
     "./DropdownMenu": { __esModule: true, default: "DropdownMenu" }, "./ProfileMenuItems": { __esModule: true, default: "ProfileMenuItems" },
     "./ProjectFilter": { __esModule: true, default: "ProjectFilter" },
     "../projectIcons": { useProjectIcon: () => null },

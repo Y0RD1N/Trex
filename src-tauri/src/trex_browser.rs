@@ -631,6 +631,31 @@ pub async fn trex_browser_engine(engine: Option<String>) -> Result<BrowserEngine
     }).await
 }
 
+/// The colours the app shares with Trex Browser's window (tone, accent, light/dark), already resolved.
+/// Must match THEME_COLORS in trex-browser/worker/browser-theme.mjs.
+const THEME_COLORS: [&str; 14] = ["app", "sidebar", "surface", "elevated", "inset", "selected", "border", "borderStrong", "text", "muted", "dim", "accent", "accentText", "accentInk"];
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct BrowserTheme { pub mode: String, pub colors: std::collections::BTreeMap<String, String> }
+
+fn valid_theme(theme: &BrowserTheme) -> bool {
+    let hex = |value: &str| value.len() == 7 && value.starts_with('#') && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit());
+    matches!(theme.mode.as_str(), "dark" | "light") && theme.colors.len() == THEME_COLORS.len()
+        && THEME_COLORS.iter().all(|key| theme.colors.get(*key).is_some_and(|value| hex(value)))
+}
+
+/// Gives Trex Browser the app's look so both windows read as one product. The browser follows the stored
+/// colours live; an older Trex Browser without this command just keeps its own theme (the error is harmless).
+#[tauri::command]
+pub async fn trex_browser_theme(theme: BrowserTheme) -> Result<bool, String> {
+    crate::blocking(move || {
+        if !valid_theme(&theme) { return Err(INVALID.into()); }
+        let bytes = serde_json::to_vec(&theme).map_err(|_| FAILED.to_string())?;
+        invoke_at(&installed_browser_path()?, &["theme", "set", "--stdin-json"], Some(bytes), PROBE_TIMEOUT, PROBE_LIMIT)?;
+        Ok(true)
+    }).await
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct BrowserSaveFolders { pub folders: Vec<String> }
 
@@ -781,6 +806,23 @@ mod tests {
         for bytes in [b"".as_slice(), b"not json".as_slice(), br#"{"engine":"auto"}"#.as_slice()] { assert_eq!(worker_failure(bytes), FAILED); }
         // Without structuredContent the first text block is the message.
         assert!(worker_failure(br#"{"content":[{"type":"text","text":"Tab not found"}],"isError":true}"#).contains("pestaña"));
+    }
+
+    #[test]
+    fn only_a_complete_theme_of_hex_colours_reaches_the_browser() {
+        let theme = |mode: &str, edit: &dyn Fn(&mut std::collections::BTreeMap<String, String>)| {
+            let mut colors: std::collections::BTreeMap<String, String> = THEME_COLORS.iter().map(|key| (key.to_string(), "#16130e".to_string())).collect();
+            edit(&mut colors);
+            BrowserTheme { mode: mode.into(), colors }
+        };
+        assert!(valid_theme(&theme("dark", &|_| {})));
+        assert!(valid_theme(&theme("light", &|colors| { colors.insert("accent".into(), "#F06A8D".into()); })));
+        assert!(!valid_theme(&theme("sepia", &|_| {})), "unknown mode");
+        assert!(!valid_theme(&theme("dark", &|colors| { colors.remove("text"); })), "a colour is missing");
+        assert!(!valid_theme(&theme("dark", &|colors| { colors.insert("extra".into(), "#000000".into()); })), "an unknown colour");
+        for bad in ["#fff", "red", "rgb(1, 2, 3)", "#16130e;}", "url(x)", "#16130g", ""] {
+            assert!(!valid_theme(&theme("dark", &|colors| { colors.insert("app".into(), bad.into()); })), "{bad}");
+        }
     }
 
     #[cfg(unix)]

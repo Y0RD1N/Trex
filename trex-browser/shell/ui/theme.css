@@ -1,31 +1,49 @@
 @import url("./fonts/fonts.css");
+/* Trex Browser comparte el lenguaje visual de la app: tierra «sedimento», acento rosa «cinta», Plex y
+   esquinas redondeadas, sin cristal, degradados ni resplandores. Las páginas son capas nativas y el
+   overlay no puede desenfocar lo que tiene debajo, así que las superficies son sólidas. */
 :root{
-  --accent:#e8834a; --accent-rgb:232,131,74; --accent-ink:#1a0d05; --accent-text:#f3b38b;
-  --text:#ececec; --muted:#a5a5a5; --dim:#7d7d7d;
-  --glass:rgba(24,24,27,.86); --glass-soft:rgba(255,255,255,.05);
-  --edge:rgba(255,255,255,.11); --edge-strong:rgba(255,255,255,.18);
-  --hi:inset 0 1px 0 rgba(255,255,255,.08);
-  --sans:"Inter Variable",Inter,system-ui,sans-serif; --mono:"JetBrains Mono Variable","JetBrains Mono",ui-monospace,monospace;
-  --ok:#5fd08a; --warn:#e7c35a; --danger:#ef7d7d;
+  --bg:#16130e; --bg-side:#110f0b; --surface:#1c1913; --elevated:#221e17; --inset:#29241b; --selected:#2a251c;
+  --accent:#f06a8d; --accent-rgb:240,106,141; --accent-ink:#16130e; --accent-text:#f47f9d;
+  --text:#e8e0cc; --muted:#b0a791; --dim:#968e7a;
+  --edge:#342f24; --edge-strong:#4b4434;
+  --hover:color-mix(in srgb,var(--text) 6%,transparent); --active:color-mix(in srgb,var(--text) 10%,transparent);
+  --glass:var(--surface); --glass-soft:var(--hover); --hi:none;
+  --sans:"IBM Plex Sans Variable","IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --ok:#7db58f; --warn:#d9a23f; --danger:#e0674f;
+  --warn-bg:rgba(217,162,63,.1); --warn-border:rgba(217,162,63,.32); --ok-bg:rgba(125,181,143,.12);
+  --pop-shadow:0 8px 24px rgba(0,0,0,.38),0 1px 2px rgba(0,0,0,.3);
+  color-scheme:dark;
+  /* Everything above is the built-in dark theme. When the app shares its own (tone, accent, light/dark), the shell
+     adds theme-vars.css after this file, with the same names (see ../theme.mjs). */
+  /* Loader de trex: la «t» cortada en cuatro estratos que se iluminan de arriba abajo (igual que en la app). */
+  --loader-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='240 248 544 544'%3E%3Cstyle%3E.b{animation:d 1.4s ease-in-out infinite;opacity:.25}.b2{animation-delay:.14s}.b3{animation-delay:.28s}.b4{animation-delay:.42s}@keyframes d{0%,100%{opacity:.25}35%,55%{opacity:1}}@media (prefers-reduced-motion:reduce){.b{animation:none;opacity:1}}%3C/style%3E%3Cdefs%3E%3CclipPath id='t'%3E%3Cpath d='M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z'/%3E%3C/clipPath%3E%3C/defs%3E%3Cg clip-path='url(%23t)'%3E%3Crect class='b b1' x='240' y='248' width='544' height='104'/%3E%3Crect class='b b2' x='240' y='360' width='544' height='104'/%3E%3Crect class='b b3' x='240' y='472' width='544' height='152'/%3E%3Crect class='b b4' x='240' y='632' width='544' height='160'/%3E%3C/g%3E%3C/svg%3E");
+  --loader-mask-still:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='240 248 544 544'%3E%3Cstyle%3E.b{opacity:1}%3C/style%3E%3Cdefs%3E%3CclipPath id='t'%3E%3Cpath d='M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z'/%3E%3C/clipPath%3E%3C/defs%3E%3Cg clip-path='url(%23t)'%3E%3Crect class='b b1' x='240' y='248' width='544' height='104'/%3E%3Crect class='b b2' x='240' y='360' width='544' height='104'/%3E%3Crect class='b b3' x='240' y='472' width='544' height='152'/%3E%3Crect class='b b4' x='240' y='632' width='544' height='160'/%3E%3C/g%3E%3C/svg%3E");
 }
 *{box-sizing:border-box;margin:0}
 html,body{background:transparent;color:var(--text);font:13px/1.4 var(--sans);-webkit-font-smoothing:antialiased;user-select:none;white-space:nowrap}
 button{font:inherit;color:inherit;background:none;border:0;cursor:default}
+/* Keyboard focus is always visible on a control (the pointer never draws it). */
+button:focus-visible,[data-tab]:focus-visible{outline:2px solid var(--accent-text);outline-offset:1px}
+button:disabled{cursor:default}
 input{font:inherit;color:inherit;background:none;border:0;outline:0}
-.glass{background:var(--glass);border:1px solid var(--edge);box-shadow:var(--hi),0 10px 30px rgba(0,0,0,.35);
-  -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%)}
-.ib{width:30px;height:30px;display:grid;place-items:center;border-radius:9px;color:var(--muted);flex:none}
-.ib:hover:not(:disabled),.ib.on{background:rgba(255,255,255,.08);color:var(--text)}
+.glass{background:var(--surface);border:1px solid var(--edge)}
+.ib{width:30px;height:30px;display:grid;place-items:center;border-radius:8px;color:var(--muted);flex:none}
+.ib:hover:not(:disabled),.ib.on{background:var(--active);color:var(--text)}
 .ib:disabled{opacity:.35}
 .ib svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.btn{height:30px;padding:0 12px;border-radius:9px;border:1px solid var(--edge);background:rgba(255,255,255,.06);color:var(--text);font:550 12px var(--sans);display:inline-flex;align-items:center;justify-content:center;gap:6px}
-.btn:hover{background:rgba(255,255,255,.1)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--edge-strong);background:var(--inset);color:var(--text);font:500 12px var(--sans);display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn:hover{background:var(--selected)}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
-.btn.primary:hover{background:#ee9361}
+.btn.primary:hover{background:color-mix(in srgb,var(--accent) 86%,white)}
 .btn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
-.av{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font:700 10px var(--sans);color:var(--accent-ink);background:var(--c,var(--accent));flex:none}
-.pulse{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none;animation:pulse 1.6s infinite}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),.6)}70%{box-shadow:0 0 0 7px rgba(var(--accent-rgb),0)}100%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),0)}}
-.fav{width:18px;height:18px;border-radius:5px;flex:none;background:var(--f,#3a3a3e);display:grid;place-items:center;font:700 9px var(--sans);color:#fff;overflow:hidden}
+/* Identidad de un agente: su núcleo de estratos (ver icons.js). */
+.av{width:12px;height:20px;border-radius:3px;overflow:hidden;flex:none;display:block;font-size:0}
+.av svg{display:block;width:100%;height:100%}
+/* Trabajando: el loader de trex, no un punto que late. */
+.pulse,.loader{width:14px;height:14px;flex:none;background:var(--accent);-webkit-mask:var(--loader-mask) center/contain no-repeat;mask:var(--loader-mask) center/contain no-repeat}
+:root[data-motion="reduced"] .pulse,:root[data-motion="reduced"] .loader{-webkit-mask-image:var(--loader-mask-still);mask-image:var(--loader-mask-still)}
+.fav{width:18px;height:18px;border-radius:4px;flex:none;background:var(--f,var(--inset));display:grid;place-items:center;font:600 9px var(--mono);color:var(--muted);overflow:hidden}
 .fav img{width:100%;height:100%;object-fit:cover}
+@media (prefers-reduced-motion:reduce){.pulse,.loader{-webkit-mask-image:var(--loader-mask-still);mask-image:var(--loader-mask-still)}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}

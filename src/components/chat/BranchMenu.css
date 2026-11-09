@@ -32,7 +32,7 @@
 .chat-branch-list { flex: 1 1 285px; height: 285px; min-height: 0; max-height: 285px; overflow-y: auto; overscroll-behavior: contain; }
 .chat-branch-menu > :not(.chat-branch-list) { flex-shrink: 0; }
 .chat-branch-list > .chat-branch-empty:only-child { height: 100%; }
-.chat-branch-section { padding: var(--sp-2) var(--sp-2-5) var(--sp-1); color: var(--text-dim); font-size: var(--fs-xs); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.chat-branch-section { padding: var(--sp-2) var(--sp-2-5) var(--sp-1); color: var(--text-dim); font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0; text-transform: none; }
 .chat-branch-option { gap: var(--sp-2); min-height: 38px; margin: 1px 0; }
 .chat-branch-option > svg { flex-shrink: 0; color: var(--text-dim); }
 .chat-branch-option.current { background: color-mix(in srgb, var(--accent) 8%, transparent); }

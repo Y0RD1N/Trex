@@ -178,6 +178,8 @@ const COMPOSER_HINTS = [
 ] as const;
 const SIDE_STORE = "trex.chat-side";
 const SIDE_MEMORY = 100;
+/** Ancho del chat a partir del cual el panel lateral va junto al hilo; con menos, flota encima (ver `@container chat` en ChatView.css). */
+const SIDE_DOCK_MIN_WIDTH = 760;
 /** Pestaña recordada para este chat; sin almacenamiento disponible, ninguna. */
 function storedSide(sessionId: string): SideTab | "closed" | undefined {
   try {
@@ -296,6 +298,15 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const mirrorRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Sin preferencia guardada, las tareas se abren solas solo si caben junto al hilo: en un chat
+  // de ancho medio o estrecho el panel flotaría sobre las respuestas y taparía parte del texto.
+  // No se guarda como decisión del usuario: el mismo chat, abierto luego con más espacio, las abre.
+  useLayoutEffect(() => {
+    if (sideTab !== "tasks" || storedSide(sessionId)) return;
+    if ((rootRef.current?.clientWidth ?? Infinity) > SIDE_DOCK_MIN_WIDTH) return;
+    storedSideRef.current = null;
+    setSideTab(null);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- solo al montar el chat
   const composerRef = useRef<HTMLDivElement | null>(null);
 
   // Una pestaña oculta no repinta su hilo: conserva lo último que se vio y se
@@ -1059,7 +1070,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
   const busy = workflowLocked || preparing > 0 || handoffPending || hasQueued || !session.queue.ready;
   const tasks = useMemo(() => props.taskPlan ?? chatTasks(deferredItems, props.profileName ?? agent.name), [props.taskPlan, deferredItems, props.profileName, agent.name]);
   useEffect(() => {
-    if (tasks.length && !hadTasks.current) setTasksOpen(true);
+    // Al aparecer las primeras tareas el panel se abre solo si cabe junto al hilo; en un chat
+    // más estrecho flotaría sobre la respuesta. El botón «Tareas» con su recuento sigue a la vista.
+    if (tasks.length && !hadTasks.current && (rootRef.current?.clientWidth ?? Infinity) > SIDE_DOCK_MIN_WIDTH) setTasksOpen(true);
     hadTasks.current = tasks.length > 0;
   }, [tasks.length]);
   const revealTask = (task: ChatTask): void => {
@@ -1071,7 +1084,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
     revealingTask.current = true;
     const index = threadItems.indexOf(target);
     if (index < threadStart) setAnchorId(target.id);
-    if ((rootRef.current?.clientWidth ?? Infinity) <= 760) {
+    if ((rootRef.current?.clientWidth ?? Infinity) <= SIDE_DOCK_MIN_WIDTH) {
       setTasksOpen(false);
       taskToggle.current?.focus({ preventScroll: true });
     }
