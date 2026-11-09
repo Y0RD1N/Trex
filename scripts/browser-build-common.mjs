@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmodSync as _chmod, copyFileSync as _copy, cpSync as _cp, existsSync as _exists, lstatSync as _lstat, mkdirSync as _mkdir, readFileSync as _read, readdirSync as _readdir, rmSync as _rm, writeFileSync as _write } from 'node:fs';
 import { join as _join, relative as _relative } from 'node:path';
+import { renameSync as _rename } from 'node:fs';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const NODE_VERSION = '24.22.1';
 export const NODE_ARCHIVES = Object.freeze({
@@ -60,6 +61,22 @@ export function assertBrowserMcpHandshake(output) {
       || !Array.isArray(inventory?.result?.tools)
       || !['browser_navigate', 'browser_snapshot', 'browser_status'].every(name => inventory.result.tools.some(tool => tool.name === name))) {
     throw new Error('Assembled Browser payload did not negotiate the Codex MCP protocol and navigation tools.');
+  }
+}
+
+/**
+ * Renames a path, trying again while Windows reports it in use (EPERM or EBUSY). A virus scanner, the
+ * indexer or a child process that is still exiting can hold a file of a freshly built tree for a moment,
+ * and a directory cannot be renamed meanwhile. Any other error, and the last failure, is thrown as is.
+ * The waits grow (250 ms, 500 ms, ...), about 7 s in all with the defaults.
+ */
+export async function renameWithRetry(from, to, { rename = _rename, attempts = 8, delayMs = 250, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return rename(from, to); }
+    catch (error) {
+      if (attempt >= attempts || !['EPERM', 'EBUSY'].includes(error?.code)) throw error;
+      await sleep(delayMs * attempt);
+    }
   }
 }
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { NODE_VERSION, NODE_ARCHIVES, verifyNodeArchive, assertPinnedLock, buildBrowser, cleanBuildEnvironment, assertBrowserMcpHandshake } from './build-trex-browser.mjs';
+import { renameWithRetry } from './browser-build-common.mjs';
 
 test('private Node archives require both the pinned digest and official manifest', () => {
   assert.match(NODE_VERSION, /^24\.\d+\.\d+$/);
@@ -58,4 +59,33 @@ test('packaging requires the real Codex MCP version and navigation inventory, be
   const frames=[{id:1,result:{protocolVersion:'2025-06-18'}},{id:2,result:{tools:['browser_navigate','browser_snapshot','browser_status'].map(name=>({name}))}}];
   assert.doesNotThrow(()=>assertBrowserMcpHandshake(frames.map(JSON.stringify).join('\n')));
   for(const broken of [ [{id:1,error:{code:-32602,message:'Unsupported protocol'}}], [{id:1,result:{protocolVersion:'2025-11-25'}},frames[1]], [frames[0],{id:2,result:{tools:[]}}] ])assert.throws(()=>assertBrowserMcpHandshake(broken.map(JSON.stringify).join('\n')),/MCP protocol/);
+});
+
+test('a rename that Windows reports busy is retried with growing waits; other errors and the last failure are not', async () => {
+  const failure = code => Object.assign(new Error(`rename failed: ${code}`), { code });
+  const waits = [], sleep = async ms => { waits.push(ms); };
+  let calls = 0;
+  await renameWithRetry('from', 'to', { sleep, delayMs: 100, rename: () => { calls += 1; if (calls < 3) throw failure(calls === 1 ? 'EPERM' : 'EBUSY'); } });
+  assert.equal(calls, 3, 'it succeeds on the third try');
+  assert.deepEqual(waits, [100, 200]);
+  // Anything that is not "in use" is the caller's problem at once.
+  calls = 0; waits.length = 0;
+  await assert.rejects(renameWithRetry('from', 'to', { sleep, rename: () => { calls += 1; throw failure('ENOENT'); } }), /ENOENT/);
+  assert.deepEqual([calls, waits.length], [1, 0]);
+  // A lock that never lets go ends with the real error after the allowed attempts, not an endless wait.
+  calls = 0; waits.length = 0;
+  await assert.rejects(renameWithRetry('from', 'to', { sleep, attempts: 4, delayMs: 10, rename: () => { calls += 1; throw failure('EPERM'); } }), /EPERM/);
+  assert.deepEqual([calls, waits], [4, [10, 20, 30]]);
+  // The default waits add up to a few seconds: enough for a scanner or an exiting child, short enough to fail clearly.
+  calls = 0; waits.length = 0;
+  await assert.rejects(renameWithRetry('from', 'to', { sleep, rename: () => { calls += 1; throw failure('EBUSY'); } }), /EBUSY/);
+  assert.equal(calls, 8);
+  assert.equal(waits.reduce((sum, ms) => sum + ms, 0), 7000);
+});
+
+test('the browser payload is promoted with retries, never by a bare rename', () => {
+  const source = readFileSync(new URL('./build-trex-browser.mjs', import.meta.url), 'utf8');
+  assert.match(source, /await renameWithRetry\(payload, destination\)/);
+  assert.match(source, /await renameWithRetry\(destination, previous\)/);
+  assert.doesNotMatch(source, /(?<!\w)renameSync\((payload|destination)\b/, 'the payload directory is never renamed without the retry');
 });

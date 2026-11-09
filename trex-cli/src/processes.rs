@@ -736,7 +736,9 @@ mod tests {
             )
             .unwrap();
         let started = std::time::Instant::now();
-        let finished = tokio::time::timeout(Duration::from_secs(15), async {
+        // A loaded CI runner can take many seconds to start PowerShell at all (a run once showed
+        // 0 bytes after 15 s); the wait only lasts that long when something is really stuck.
+        let finished = tokio::time::timeout(Duration::from_secs(60), async {
             while manager.read("output").unwrap()["status"] == "running" {
                 tokio::time::sleep(Duration::from_millis(30)).await;
             }

@@ -2610,7 +2610,10 @@ mod tests {
             // The shell must start two PowerShells and write the PID before its
             // timeout: allow a slow, busy machine. Cancel and drop stop it as
             // soon as the PID appears, so their timeout must never fire first.
-            let timeout = if mode == "timeout" { 5000 } else { 60_000 };
+            // In "timeout" mode the shell waits for its descendant, so the timeout is what ends it
+            // (the test needs it to fire, after the PID is written): 15 s covers two cold PowerShell
+            // starts on a loaded CI runner, where 5 s was missed by 0.3 s.
+            let timeout = if mode == "timeout" { 15_000 } else { 60_000 };
             let cancel = CancellationToken::new();
             let child_cancel = cancel.clone();
             let task = tokio::spawn(async move {

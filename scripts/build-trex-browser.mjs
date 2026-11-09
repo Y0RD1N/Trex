@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 // Build-time downloads only. Installed execution uses these private assets,
 // never npm, npx, PATH Node, or an unpinned package resolution.
-import { NODE_VERSION, NODE_ARCHIVES, verifyNodeArchive, assertPinnedLock, cleanBuildEnvironment, assertBrowserMcpHandshake, packageShell } from './browser-build-common.mjs';
+import { NODE_VERSION, NODE_ARCHIVES, verifyNodeArchive, assertPinnedLock, cleanBuildEnvironment, assertBrowserMcpHandshake, packageShell, renameWithRetry } from './browser-build-common.mjs';
 export { NODE_VERSION, NODE_ARCHIVES, verifyNodeArchive, assertPinnedLock, cleanBuildEnvironment, assertBrowserMcpHandshake };
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -190,10 +190,11 @@ export async function buildBrowser(argv = process.argv.slice(2)) {
     const previous = join(work, 'previous');
     if (existsSync(destination)) {
       if (lstatSync(destination).isSymbolicLink() || !lstatSync(destination).isDirectory()) throw new Error('Payload destination is not an ordinary directory.');
-      renameSync(destination, previous);
+      await renameWithRetry(destination, previous);
     }
-    try { renameSync(payload, destination); }
-    catch (error) { if (existsSync(previous)) renameSync(previous, destination); throw error; }
+    // Windows can keep the freshly verified tree busy for a moment (scanner, a child still exiting): wait it out.
+    try { await renameWithRetry(payload, destination); }
+    catch (error) { if (existsSync(previous)) await renameWithRetry(previous, destination); throw error; }
     promoted = true;
     if (debug) {
       // This single checkout-local layout is the only development fallback.
