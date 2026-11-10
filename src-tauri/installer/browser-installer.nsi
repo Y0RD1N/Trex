@@ -17,7 +17,7 @@ SetCompressor /SOLID lzma
   !error "Pass /DTREX_BROWSER_OUTFILE=<absolute setup.exe output path>"
 !endif
 !ifndef TREX_BROWSER_VERSION
-  !define TREX_BROWSER_VERSION "0.4.0"
+  !define TREX_BROWSER_VERSION "0.4.1"
 !endif
 !ifndef TREX_BROWSER_PRODUCT_NAME
   !define TREX_BROWSER_PRODUCT_NAME "Trex Browser"

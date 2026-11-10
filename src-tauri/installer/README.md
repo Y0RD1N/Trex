@@ -1,6 +1,6 @@
 # Optional Trex CLI and Browser installers
 
-Windows bundles use NSIS. The base application has the version in `tauri.conf.json` (`0.4.0`) and
+Windows bundles use NSIS. The base application has the version in `tauri.conf.json` (`0.4.1`) and
 identifier `com.trex.app`; the Windows configuration adds resources and installer
 customization for independently optional CLI and Browser components. Claude Code
 and Codex work without the CLI component.
@@ -75,12 +75,12 @@ PATH changes or `launcher.env`. Invoke `makensis.exe` with these definitions:
 ```powershell
 makensis.exe "/DTREX_BROWSER_PAYLOAD_DIR=D:\staging\browser" `
   "/DTREX_BROWSER_OUTFILE=D:\output\trex-browser-setup.exe" `
-  /DTREX_BROWSER_VERSION=0.4.0 src-tauri/installer/browser-installer.nsi
+  /DTREX_BROWSER_VERSION=0.4.1 src-tauri/installer/browser-installer.nsi
 ```
 
 The payload directory must contain the actual `trex-browser.exe` and complete
 `trex-browser-runtime/` tree. Both path definitions are required; version defaults
-to `0.4.0`. Missing payload inputs fail compilation; the template contains no
+to `0.4.1`. Missing payload inputs fail compilation; the template contains no
 placeholder payload or download step. The default installation directory is
 `$LOCALAPPDATA\Programs\Trex Browser`; NSIS `/D=` chooses another absolute path.
 The installer writes 64-bit HKCU

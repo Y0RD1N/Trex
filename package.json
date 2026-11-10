@@ -2,7 +2,7 @@
   "name": "trex",
   "private": true,
   "license": "MIT",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "scripts": {
     "test": "node --test scripts/*.test.mjs",
