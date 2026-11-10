@@ -311,8 +311,17 @@ async fn app_info(app: AppHandle) -> Result<AppInfo, String> {
 }
 
 #[tauri::command]
-async fn load_config(app: AppHandle) -> Result<AppConfig, String> {
-    blocking(move || Ok(config::load(&app))).await
+async fn load_config(app: AppHandle) -> Result<AppConfig, config::LoadFailure> {
+    // Un fallo de lectura llega al frontend tal cual: no se sustituye por los valores por defecto.
+    tauri::async_runtime::spawn_blocking(move || config::load(&app)).await.unwrap_or_else(|error| Err(config::LoadFailure {
+        kind: "unreadable", message: format!("No se pudo cargar la configuración: {error}"), backup: None, previous: false,
+    }))
+}
+
+/// La copia del último arranque correcto, cuando el archivo actual está dañado. No escribe nada.
+#[tauri::command]
+async fn restore_config_backup(app: AppHandle) -> Result<AppConfig, String> {
+    blocking(move || config::restore_previous(&app)).await
 }
 
 #[tauri::command]
@@ -396,6 +405,7 @@ pub fn run() {
             trex_cli::trex_cli_conversations,
             app_info,
             load_config,
+            restore_config_backup,
             save_config,
             clipboard::read_clipboard,
             clipboard::write_clipboard,

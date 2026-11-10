@@ -97,7 +97,10 @@ export const normalizeText = (value: string): string =>
 
 // --- Comandos del backend ---------------------------------------------------
 
+/** Rechaza con un `ConfigFailure` (ver configRecovery.ts) si el archivo existe y no se pudo leer o no es válido. */
 export const loadConfig = (): Promise<AppConfig> => invoke<AppConfig>("load_config");
+/** La copia del último arranque correcto; no escribe nada. */
+export const restoreConfigBackup = (): Promise<AppConfig> => invoke<AppConfig>("restore_config_backup");
 
 export type IntegrationDependencies = { blender: boolean; hyperframes: boolean; hyperframesLocal: boolean; githubCli: boolean; node: boolean; ffmpeg: boolean };
 export const integrationDependencies = (cwd?: string): Promise<IntegrationDependencies> => invoke("integration_dependencies", { cwd: cwd ?? null });

@@ -5,7 +5,11 @@
 // El campo `ui` se mantiene como JSON libre para que el frontend pueda añadir
 // estado propio (por ejemplo las pestañas de la última sesión) sin tocar Rust.
 use std::fs;
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -292,33 +296,277 @@ pub fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
-/// Carga la configuración; si no existe o está corrupta devuelve los valores por defecto.
-pub fn load(app: &AppHandle) -> AppConfig {
-    let path = match config_path(app) {
-        Ok(p) => p,
-        Err(_) => return AppConfig::default(),
+/// Por qué no se pudo cargar la configuración. Nunca se sustituye por los
+/// valores por defecto en silencio: quien llama decide, y mientras tanto no
+/// debe guardar nada encima.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadFailure {
+    /// "unreadable": el archivo existe pero no se pudo leer (bloqueado, sin permiso).
+    /// "corrupt": se leyó y no es una configuración válida.
+    pub kind: &'static str,
+    pub message: String,
+    /// Copia que se hizo del archivo dañado.
+    pub backup: Option<String>,
+    /// Hay una copia válida del último arranque correcto que se puede restaurar.
+    pub previous: bool,
+}
+
+/// Copia de la configuración tal como estaba en el último arranque correcto.
+fn previous_path(path: &Path) -> PathBuf {
+    path.with_extension("json.bak")
+}
+
+fn read_previous(path: &Path) -> Option<AppConfig> {
+    serde_json::from_slice(&fs::read(previous_path(path)).ok()?).ok()
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0)
+}
+
+/// Lee la configuración de `path`. Solo un archivo que no existe (primer
+/// arranque) da los valores por defecto; cualquier otro fallo se devuelve.
+pub fn load_from(path: &Path) -> Result<AppConfig, LoadFailure> {
+    let raw = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(AppConfig::default()),
+        Err(error) => {
+            return Err(LoadFailure {
+                kind: "unreadable",
+                message: format!("No se pudo leer «{}»: {error}", path.display()),
+                backup: None,
+                previous: read_previous(path).is_some(),
+            })
+        }
     };
-    let raw = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(_) => return AppConfig::default(),
-    };
-    serde_json::from_str::<AppConfig>(&raw).unwrap_or_else(|_| {
-        // Copia de seguridad del archivo ilegible para no perder datos del usuario.
-        let backup = path.with_extension("json.corrupto");
-        let _ = fs::copy(&path, backup);
-        AppConfig::default()
+    serde_json::from_slice::<AppConfig>(&raw).map_err(|error| {
+        // El archivo dañado se conserva aparte: guardar después no lo destruye.
+        let backup = path.with_extension(format!("json.corrupto-{}", unix_seconds()));
+        let copied = fs::write(&backup, &raw).is_ok();
+        LoadFailure {
+            kind: "corrupt",
+            message: format!("«{}» no es una configuración válida: {error}", path.display()),
+            backup: copied.then(|| backup.to_string_lossy().into_owned()),
+            previous: read_previous(path).is_some(),
+        }
     })
 }
 
-/// Guarda la configuración de forma atómica (archivo temporal + rename).
-pub fn save(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
-    let path = config_path(app)?;
+/// Tras un arranque correcto guarda una copia para poder volver a ella. Una
+/// configuración sin proyectos no sustituye a una copia que sí los tiene: así
+/// un vaciado accidental no borra también la copia.
+fn remember_previous(path: &Path, config: &AppConfig) {
+    if !path.exists() {
+        return;
+    }
+    if config.projects.is_empty() && read_previous(path).is_some_and(|previous| !previous.projects.is_empty()) {
+        return;
+    }
+    if let Ok(bytes) = fs::read(path) {
+        let _ = write_atomic(&previous_path(path), &bytes);
+    }
+}
+
+/// Temporales que dejó un cierre brusco; los recientes pueden ser de otra ventana que está guardando.
+fn sweep_temporaries(path: &Path) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|name| name.to_str())) else { return };
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let Some(file) = file.to_str() else { continue };
+        let stale = entry.metadata().and_then(|meta| meta.modified()).ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age.as_secs() > 60);
+        if stale && file.starts_with(name) && file.ends_with(".tmp") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Carga la configuración de la app y recuerda la copia del arranque correcto.
+pub fn load(app: &AppHandle) -> Result<AppConfig, LoadFailure> {
+    let path = config_path(app).map_err(|message| LoadFailure { kind: "unreadable", message, backup: None, previous: false })?;
+    sweep_temporaries(&path);
+    let config = load_from(&path)?;
+    remember_previous(&path, &config);
+    Ok(config)
+}
+
+/// Ajustes para el propio backend; si no se pueden leer, los de por defecto (nada se escribe).
+pub fn load_settings(app: &AppHandle) -> Settings {
+    config_path(app).ok().and_then(|path| load_from(&path).ok()).map(|config| config.settings).unwrap_or_default()
+}
+
+/// La copia del último arranque correcto, para restaurarla cuando el archivo actual está dañado.
+pub fn restore_previous(app: &AppHandle) -> Result<AppConfig, String> {
+    read_previous(&config_path(app)?).ok_or_else(|| "No hay una copia anterior de la configuración que se pueda restaurar.".to_string())
+}
+
+/// Dos guardados a la vez no deben pisarse el temporal ni dejar el archivo a medias.
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
+static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Escribe `bytes` en `path` sin dejarlo nunca a medias: temporal propio,
+/// volcado a disco y sustitución. Otra instancia que guarde a la vez usa otro
+/// temporal, así que gana la última entera.
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("config.json");
+    let temporary = path.with_file_name(format!("{name}.{}-{}.tmp", std::process::id(), TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+    let written = (|| {
+        let mut file = fs::File::create(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        // En Windows un antivirus o un indexador pueden tener abierto el destino un instante.
+        let mut attempt = 0;
+        loop {
+            match fs::rename(&temporary, path) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied && attempt < 5 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(40 * attempt));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
+}
+
+pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), String> {
     let text = serde_json::to_string_pretty(config)
         .map_err(|e| format!("No se pudo serializar la configuración: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, text).map_err(|e| format!("No se pudo escribir la configuración: {e}"))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("No se pudo guardar la configuración: {e}"))?;
-    Ok(())
+    write_atomic(path, text.as_bytes()).map_err(|e| format!("No se pudo guardar la configuración: {e}"))
+}
+
+/// Guarda la configuración de forma atómica (temporal propio, volcado a disco y sustitución).
+pub fn save(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
+    save_to(&config_path(app)?, config)
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    /// Carpeta propia de cada prueba; se borra al terminar.
+    struct Folder(PathBuf);
+    impl Folder {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("trex-config-{name}-{}-{}", std::process::id(), TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn config(&self) -> PathBuf { self.0.join("config.json") }
+        fn names(&self) -> Vec<String> {
+            let mut names: Vec<_> = fs::read_dir(&self.0).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        }
+    }
+    impl Drop for Folder { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+
+    fn with_project(name: &str) -> AppConfig {
+        serde_json::from_value(serde_json::json!({"projects":[{"id":name,"name":name,"path":"/work/project"}]})).unwrap()
+    }
+
+    #[test]
+    fn only_a_missing_file_starts_from_defaults() {
+        let folder = Folder::new("missing");
+        let config = load_from(&folder.config()).unwrap();
+        assert!(config.projects.is_empty());
+        assert!(folder.names().is_empty(), "loading a first run writes nothing");
+    }
+
+    #[test]
+    fn a_damaged_file_is_reported_and_kept_instead_of_becoming_defaults() {
+        let folder = Folder::new("corrupt");
+        for damaged in [&b"{\"projects\": [{\"id\""[..], &b""[..], &[0xff, 0xfe, 0x00][..]] {
+            fs::write(folder.config(), damaged).unwrap();
+            let failure = load_from(&folder.config()).unwrap_err();
+            assert_eq!(failure.kind, "corrupt");
+            assert!(!failure.previous);
+            assert_eq!(fs::read(failure.backup.as_deref().unwrap()).unwrap(), damaged, "the damaged bytes are kept aside");
+            assert_eq!(fs::read(folder.config()).unwrap(), damaged, "the original is left as it was");
+        }
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_not_treated_as_a_first_run() {
+        let folder = Folder::new("unreadable");
+        // A directory in the file's place fails to read on every platform without being "not found".
+        fs::create_dir(folder.config()).unwrap();
+        let failure = load_from(&folder.config()).unwrap_err();
+        assert_eq!(failure.kind, "unreadable");
+        assert_eq!(failure.backup, None);
+    }
+
+    #[test]
+    fn saving_replaces_the_file_whole_and_leaves_no_temporary_behind() {
+        let folder = Folder::new("save");
+        save_to(&folder.config(), &with_project("uno")).unwrap();
+        save_to(&folder.config(), &with_project("dos")).unwrap();
+        assert_eq!(load_from(&folder.config()).unwrap().projects[0].id, "dos");
+        assert_eq!(folder.names(), ["config.json"]);
+        // Many writers at once: every save lands whole and the file always parses.
+        let path = folder.config();
+        let writers: Vec<_> = (0..8).map(|index| { let path = path.clone(); std::thread::spawn(move || {
+            for round in 0..10 { save_to(&path, &with_project(&format!("p{index}-{round}"))).unwrap(); }
+        }) }).collect();
+        for writer in writers { writer.join().unwrap(); }
+        assert_eq!(load_from(&path).unwrap().projects.len(), 1);
+        assert_eq!(folder.names(), ["config.json"]);
+    }
+
+    #[test]
+    fn the_copy_of_the_last_good_start_can_be_restored_after_damage() {
+        let folder = Folder::new("previous");
+        let path = folder.config();
+        save_to(&path, &with_project("bueno")).unwrap();
+        remember_previous(&path, &load_from(&path).unwrap());
+        fs::write(&path, b"{ roto").unwrap();
+        let failure = load_from(&path).unwrap_err();
+        assert_eq!(failure.kind, "corrupt");
+        assert!(failure.previous, "the frontend can offer the earlier copy");
+        assert_eq!(read_previous(&path).unwrap().projects[0].id, "bueno");
+    }
+
+    #[test]
+    fn an_emptied_configuration_does_not_replace_a_copy_that_has_projects() {
+        let folder = Folder::new("emptied");
+        let path = folder.config();
+        save_to(&path, &with_project("bueno")).unwrap();
+        remember_previous(&path, &load_from(&path).unwrap());
+        save_to(&path, &AppConfig::default()).unwrap();
+        remember_previous(&path, &load_from(&path).unwrap());
+        assert_eq!(read_previous(&path).unwrap().projects[0].id, "bueno");
+        // A later configuration with projects does move the copy forward.
+        save_to(&path, &with_project("nuevo")).unwrap();
+        remember_previous(&path, &load_from(&path).unwrap());
+        assert_eq!(read_previous(&path).unwrap().projects[0].id, "nuevo");
+    }
+
+    #[test]
+    fn only_old_temporaries_of_the_configuration_are_swept() {
+        let folder = Folder::new("sweep");
+        let (old, recent, other) = (folder.0.join("config.json.1-1.tmp"), folder.0.join("config.json.2-2.tmp"), folder.0.join("notas.tmp"));
+        for file in [&old, &recent, &other] { fs::write(file, b"x").unwrap(); }
+        let past = SystemTime::now() - std::time::Duration::from_secs(600);
+        fs::File::options().write(true).open(&old).unwrap().set_modified(past).unwrap();
+        fs::File::options().write(true).open(&other).unwrap().set_modified(past).unwrap();
+        sweep_temporaries(&folder.config());
+        assert_eq!(folder.names(), ["config.json.2-2.tmp", "notas.tmp"]);
+    }
+
+    #[test]
+    fn a_load_failure_reaches_the_frontend_with_its_fields() {
+        let failure = LoadFailure { kind: "corrupt", message: "m".into(), backup: Some("b".into()), previous: true };
+        assert_eq!(serde_json::to_value(failure).unwrap(), serde_json::json!({"kind":"corrupt","message":"m","backup":"b","previous":true}));
+    }
 }
 
 #[cfg(test)]

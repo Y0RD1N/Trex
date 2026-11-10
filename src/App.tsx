@@ -23,6 +23,7 @@ import {
   formatError,
   getAppInfo,
   loadConfig,
+  restoreConfigBackup,
   newProjectId,
   newSessionId,
   normalizePath,
@@ -56,6 +57,7 @@ import type {
 } from "./types";
 import ClaudeBanner from "./components/ClaudeBanner";
 import DialogProvider, { useDialog } from "./components/DialogProvider";
+import { configFailure, recoverConfig } from "./configRecovery";
 import { lazyComponent } from "./lazyComponent";
 import Sidebar from "./components/Sidebar";
 import TerminalTabs from "./components/TerminalTabs";
@@ -248,6 +250,8 @@ function AppShell() {
   activeTabIdRef.current = activeTabId;
 
   const loadedRef = useRef(false);
+  /** Falso cuando la configuración no se pudo leer y la persona eligió no escribir nada encima. */
+  const saveAllowedRef = useRef(true);
   const restoredRef = useRef(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const toastIdRef = useRef(0);
@@ -275,17 +279,20 @@ function AppShell() {
     let cancelled = false;
 
     void (async () => {
-      let loaded: AppConfig;
-      let failed = false;
+      let loaded: AppConfig | null;
       try {
         loaded = await loadConfig();
       } catch (error) {
         console.warn("load_config falló:", formatError(error));
-        loaded = DEFAULT_CONFIG;
-        failed = true;
+        // La app espera sin configuración (y sin guardar nada) hasta que la persona decide.
+        const recovery = await recoverConfig(configFailure(error), { confirm: dialog.confirm, load: loadConfig, restore: restoreConfigBackup });
+        if (cancelled) return;
+        loaded = recovery.config;
+        saveAllowedRef.current = recovery.save;
+        if (!recovery.save) showToast("Esta sesión no guardará cambios en la configuración.");
       }
       if (cancelled) return;
-      const normalized = normalizeConfig(failed ? DEFAULT_CONFIG : loaded);
+      const normalized = normalizeConfig(loaded ?? DEFAULT_CONFIG);
       setConfig(normalized);
       loadedRef.current = true;
       applyTheme(
@@ -296,7 +303,6 @@ function AppShell() {
       );
       applyDesign(normalized.settings);
       applyTimeFormat(normalized.settings.timeFormat);
-      if (failed) showToast("No se pudo cargar la configuración; se usarán valores por defecto.");
     })();
 
     void (async () => {
@@ -381,7 +387,7 @@ function AppShell() {
       shell: tab.shell, launchMode: tab.launchMode, env: tab.env },
   })));
   useEffect(() => {
-    if (!config || !loadedRef.current || !restoredRef.current) return;
+    if (!config || !loadedRef.current || !restoredRef.current || !saveAllowedRef.current) return;
     const payload: AppConfig = {
       ...config,
       ui: {

@@ -786,7 +786,7 @@ pub async fn trex_a11y_mcp_config(app: tauri::AppHandle, mode: String) -> Result
         "qa" | "full" => "full",
         _ => return Err("Modo de control por accesibilidad no válido.".into()),
     };
-    let settings = crate::config::load(&app).settings;
+    let settings = crate::config::load_settings(&app);
     let status: serde_json::Value = crate::blocking(|| parse_json(&invoke_cli(&["a11y-doctor", "--json"], None)?)).await
         .map_err(|_| "Actualiza Trex CLI para usar el control por accesibilidad.".to_string())?;
     a11y_ready(&status)?;
