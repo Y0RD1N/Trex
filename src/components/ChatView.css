@@ -105,30 +105,62 @@
 }
 
 /* --- Mensajes ------------------------------------------------------------ */
-/* Lo que escribes va tras un «›», como en una línea de órdenes, y cada turno se abre con una
-   regla fina: el hilo se lee como un registro, no como una conversación de burbujas. */
-.chat-user {
-  position: relative;
-  align-self: stretch;
-  max-width: none;
-  margin: var(--sp-5) 0 var(--sp-1-5);
-  padding: var(--sp-4) 0 0 var(--sp-6);
-  border: 0;
-  border-top: 1px solid var(--border);
-  background: none;
-  font-weight: var(--fw-medium);
-  line-height: var(--lh-relaxed);
+/* Cada turno tuyo es una banda a todo el ancho del chat: «TÚ», la hora y tu mensaje sobre un tinte del
+   acento. Se distingue de la respuesta al primer vistazo y, como solo usa tokens, sigue el tema, el tono
+   de la interfaz y el acento elegido. La banda sale de la columna de lectura con un `border-image` (un
+   degradado vertical: regla, relleno, regla) cuyo `outset` horizontal lo extiende hasta los bordes. No mide
+   ningún ancho —sirve igual con el panel lateral abierto— y un `outset` es solo pintura: no añade
+   desbordamiento al área de desplazamiento. */
+.chat-user-group {
+  --user-band: color-mix(in srgb, var(--accent) 7%, var(--bg-surface));
+  --user-band-edge: color-mix(in srgb, var(--accent) 22%, var(--border));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1-5);
+  margin: var(--sp-4) 0 var(--sp-2);
+  padding: var(--sp-3) 0 var(--sp-3-5);
+  background: var(--user-band);
+  border-image: linear-gradient(to bottom, var(--user-band-edge) 0 1px, var(--user-band) 1px calc(100% - 1px), var(--user-band-edge) calc(100% - 1px)) 0 fill / 0 / 0 100vmax;
 }
-.chat-user::before { content: "›"; position: absolute; top: var(--sp-4); left: var(--sp-1); color: var(--accent-strong); font-family: var(--font-mono); font-weight: var(--fw-semibold); }
+/* En contraste forzado los colores del autor se ignoran: la banda se queda con sus dos reglas. */
+@media (forced-colors: active) {
+  .chat-user-group { border-block: 1px solid CanvasText; border-image: none; }
+}
+.chat-thread > .chat-user-group:first-child { margin-top: 0; }
+.chat-user-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: 20px;
+  font: var(--fs-xs) var(--font-mono);
+}
+.chat-user-who {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chat-user-time,
+.chat-user-head .chat-queue-read {
+  min-width: 0;
+  overflow: hidden;
+  /* Sobre el tinte, --text-dim no llega a 4.5:1 con todos los acentos y tonos: un punto más claro. */
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-user-time::before,
+.chat-user-head .chat-queue-read::before { content: "·"; margin-right: var(--sp-2); }
 .chat-enter {
   animation: chat-rise var(--dur-slow) var(--ease-out) backwards;
 }
-.chat-thread > .chat-user:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
+.chat-user {
+  min-width: 0;
+  line-height: var(--lh-relaxed);
 }
-.chat-thread > .chat-user:first-child::before { top: 0; }
 .chat-user-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -325,7 +357,7 @@
 .chat-queue-edit-help.is-conflict { color: var(--text-muted); }
 .chat-queue-dispatch { display: grid; justify-items: start; gap: var(--sp-1-5); }
 .chat-queue-error, .chat-queue > p { margin: var(--sp-1-5) 0 0; color: var(--danger); font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
-.chat-queue-read { color: var(--text-dim); font-size: var(--fs-xs); align-self: flex-end; }
+.chat-queue-read { color: var(--text-dim); font-size: var(--fs-xs); }
 .chat-queue-announcement { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @container (max-width: 420px) {
   .chat-queue { padding: var(--sp-2-5); }
@@ -1115,22 +1147,11 @@
 .chat-to-bottom:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 3px; }
 
 /* --- Imágenes ------------------------------------------------------------ */
-.chat-user-group {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--sp-1-5);
-  margin: var(--sp-3-5) 0 var(--sp-1-5);
-}
-.chat-thread > .chat-user-group:first-child { margin-top: 0; }
-.chat-user-group > .chat-user { margin: 0; }
 .chat-user-gallery {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  justify-content: flex-end;
   gap: var(--sp-1-5);
-  max-width: min(82%, 620px);
 }
 .chat-user-thumb {
   position: relative;
@@ -1292,9 +1313,7 @@
 .chat-user-files {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
   gap: var(--sp-1-5);
-  max-width: min(82%, 620px);
 }
 .chat-user-file {
   display: flex;
@@ -2367,7 +2386,7 @@ pre.chat-ask-preview-body {
 :root[data-motion="reduced"] .chat-working-dot::after,
 :root[data-motion="reduced"] .chat-working-label,
 :root[data-motion="reduced"] .chat-empty,
-:root[data-motion="reduced"] .chat-user,
+:root[data-motion="reduced"] .chat-user-group,
 :root[data-motion="reduced"] .chat-permission,
 :root[data-motion="reduced"] .chat-ask,
 :root[data-motion="reduced"] .chat-side.is-open { animation: none; }

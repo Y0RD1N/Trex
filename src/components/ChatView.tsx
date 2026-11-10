@@ -1125,7 +1125,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       const animate = threadStart + offset >= enterFrom;
       const next = threadItems[threadStart + offset + 1];
       switch (item.kind) {
-        case "user": return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews}
+        case "user": return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews} at={item.at}
           onEdit={beginEdit} onResend={resendMessage} editing={editingId === item.id} editable={canEdit(item)} fromQueue={item.fromQueue}
           disabled={props.historyReadOnly || running || submittingEdit || busy} animate={animate} />;
         case "text": {

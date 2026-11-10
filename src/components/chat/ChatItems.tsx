@@ -17,17 +17,20 @@ import { KIND_LABELS, fileKind, openFile } from "../../sharedFiles";
 import { useImageViewer } from "../ImageViewer";
 import { useMessageEntry } from "./useMessageEntry";
 import { brokerArtifactId, type BrowserArtifact } from "../../browser";
+import { formatClock, formatDateTime } from "../../timeFormat";
+import { useTimeFormat } from "../../hooks/useTimeFormat";
 
 const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
   read: <FileIcon />, edit: <PencilIcon size={15} />, run: <TerminalIcon size={15} />, search: <SearchIcon size={15} />,
   web: <GlobeIcon />, task: <SparkIcon />, todo: <ListIcon />, plan: <MapIcon />, question: <QuestionIcon />, tool: <WrenchIcon />,
 };
 
-export const UserMessage = memo(function UserMessage({ id, text, images, previews, onEdit, onResend, disabled, editing, editable = true, animate = false, fromQueue = false }: {
-  id: string; text: string; images: number; previews: string[]; onEdit: (id: string) => void; onResend: (id: string) => void;
+export const UserMessage = memo(function UserMessage({ id, text, images, previews, at, onEdit, onResend, disabled, editing, editable = true, animate = false, fromQueue = false }: {
+  id: string; text: string; images: number; previews: string[]; at?: number; onEdit: (id: string) => void; onResend: (id: string) => void;
   disabled: boolean; editing: boolean; editable?: boolean; animate?: boolean; fromQueue?: boolean;
 }) {
   const entry = useMessageEntry(animate);
+  const timeFormat = useTimeFormat();
   const viewer = useImageViewer();
   const label = (index: number): string => `Imagen ${index + 1}`;
   const available = images === previews.length;
@@ -38,7 +41,20 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
   const open = (path: string): void => { void openFile(path).catch(() => undefined); };
   const parts = useMemo(() => referenceParts(body, { Imagen: images, Archivo: files.length }), [body, images, files.length]);
   return <div ref={entry.ref} className={`chat-user-group${editing ? " is-editing" : ""}${entry.entering ? " chat-enter" : ""}`}>
-    {fromQueue && <small className="chat-queue-read">Leído desde la cola</small>}
+    {/* Cada turno del usuario es una banda: quién habla, a qué hora y, a la derecha, qué se puede hacer con él. */}
+    <div className="chat-user-head">
+      <span className="chat-user-who">Tú</span>
+      {at !== undefined && Number.isFinite(at) && <time className="chat-user-time tip" data-tip={formatDateTime(at, timeFormat)}
+        dateTime={new Date(at).toISOString()}>{formatClock(at, timeFormat)}</time>}
+      {fromQueue && <small className="chat-queue-read">Leído desde la cola</small>}
+      <div className="chat-user-actions" role="group" aria-label="Acciones del mensaje">
+        <button type="button" className="chat-copy tip" aria-label="Editar mensaje" data-tip={editHint}
+          aria-pressed={editing} disabled={disabled || !available || !editable} onClick={() => onEdit(id)}><PencilIcon size={14} /></button>
+        <button type="button" className="chat-copy tip" aria-label="Reenviar mensaje" data-tip={available ? "Reenviar mensaje" : editHint}
+          disabled={disabled || !available} onClick={() => onResend(id)}><RotateIcon size={14} /></button>
+        <CopyButton text={body} label="Copiar mensaje" />
+      </div>
+    </div>
     {previews.length > 0 && <div className="chat-user-gallery">
       {previews.map((preview, index) => <button key={index} type="button" className="chat-user-thumb" aria-label={`Ver imagen ${index + 1}`}
         title={`Imagen ${index + 1}`} onClick={() => showImage(index)}>
@@ -76,13 +92,6 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
       {images > 0 && !previews.length && <div className="chat-user-images"><ImageIcon size={14} />
         {images === 1 ? "1 imagen adjunta" : `${images} imágenes adjuntas`}</div>}
     </div>}
-    <div className="chat-user-actions" role="group" aria-label="Acciones del mensaje">
-      <button type="button" className="chat-copy tip" aria-label="Editar mensaje" data-tip={editHint}
-        aria-pressed={editing} disabled={disabled || !available || !editable} onClick={() => onEdit(id)}><PencilIcon size={14} /></button>
-      <button type="button" className="chat-copy tip" aria-label="Reenviar mensaje" data-tip={available ? "Reenviar mensaje" : editHint}
-        disabled={disabled || !available} onClick={() => onResend(id)}><RotateIcon size={14} /></button>
-      <CopyButton text={body} label="Copiar mensaje" />
-    </div>
   </div>;
 });
 
