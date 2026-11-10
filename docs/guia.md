@@ -598,6 +598,8 @@ Trex Browser se instala por separado y también puede seleccionarse en el instal
 
 En **Ajustes → Navegador** puedes comprobar la instalación, crear perfiles y permitir el navegador en nuevas conversaciones. Claude Code, Codex y Trex API reciben sus herramientas automáticamente cuando el componente está disponible. El planificador usa observación; los permisos de implementación determinan el acceso de pruebas o completo.
 
+**Permisos de los sitios en Trex Browser.** Notificaciones, ubicación, portapapeles y MIDI se recuerdan por sitio cuando los permites. Cámara, micrófono y abrir aplicaciones externas valen solo hasta que cierras el navegador. Compartir pantalla no se recuerda nunca: cada vez que un sitio lo pide, eliges tú qué pantalla o ventana ve, y solo puede pedirlo la pestaña que tienes delante. Para deshacer lo que hayas decidido en un sitio, clic derecho en la página → **Olvidar permisos de este sitio**.
+
 El control **Navegador** del chat permite abrir una dirección, tomar capturas, grabar/detener vídeo y pausar la automatización para revisar la página. Las capturas y vídeos generados aparecen como archivos locales. Los agentes también pueden usar consola, red, trazas, perfiles de CPU y memoria, y mediciones de rendimiento.
 
 Trex prepara el servicio del navegador desde la app antes de conectar Claude o Codex, sin abrir Chrome todavía. Así puede utilizarlo un agente cuyo proceso MCP está restringido por Windows. La ventana se abre automáticamente en la primera navegación. Codex comprueba las herramientas del chat antes de enviar el primer turno; una conexión fallida no se presenta como un navegador conectado. Los chats abiertos antes de actualizar deben reiniciarse para cargar la nueva conexión.

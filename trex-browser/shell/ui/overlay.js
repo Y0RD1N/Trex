@@ -86,7 +86,7 @@ function findRow(f) {
 
 function promptRows(s) {
   return s.prompts.map(p => `<div class="row notice" data-key="permission-${p.id}">${icons.shield}<span class="msg"><b>${esc(hostOf(p.origin) || p.origin)}</b> quiere ${esc(p.label)}</span>
-    <button class="btn" data-perm="${p.id}" data-allow="0">Bloquear</button><button class="btn primary" data-perm="${p.id}" data-allow="1">Permitir</button></div>`).join('');
+    <button class="btn" data-perm="${p.id}" data-allow="0">Bloquear</button><button class="btn primary" data-perm="${p.id}" data-allow="1">${p.session ? 'Permitir esta sesión' : 'Permitir'}</button></div>`).join('');
 }
 
 function downloadsPanel(s) {

@@ -2,7 +2,7 @@
 // The worker launches this executable the same way it launched Chrome
 // (Playwright launchPersistentContext over --remote-debugging-pipe), so no
 // debugging port is opened. Personal tabs and automated spaces share one application window.
-import { app, BaseWindow, WebContentsView, ipcMain, protocol, net, session, nativeTheme, Menu, clipboard, desktopCapturer, shell as desktop } from 'electron';
+import { app, BaseWindow, WebContentsView, webContents, ipcMain, protocol, net, session, nativeTheme, Menu, clipboard, dialog, desktopCapturer, shell as desktop } from 'electron';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +13,7 @@ import { humanControls } from './human-controls.mjs';
 import { storageCommand, scopedDownload, grantedPermission } from './scope-storage.mjs';
 import { setBounds, setVisible, keepOnTop } from './view-layout.mjs';
 import { readTheme, watchTheme, themeCss, BUILTIN_THEME } from './theme.mjs';
+import { PERSISTABLE, permissionKey, permissionState, decisionFor, isGranted, recordDecision, chooserCancelled, chooserAnswered, hasSiteDecisions, forgetSite } from './site-permissions.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI_ROOT = path.join(here, 'ui');
@@ -334,55 +335,107 @@ function contextMenu(tab, p) {
     items.push({ label: 'Buscar en la página…', click: () => commands.findOpen() }); sep();
   }
   if (/^https?:\/\//i.test(wc.getURL())) items.push({ label: 'Abrir en navegador del sistema', click: () => desktop.openExternal(wc.getURL()) });
+  const site = originOf(wc.getURL());
+  if (hasSiteDecisions(loadDecisions(), tab.profile, site)) items.push({ label: 'Olvidar permisos de este sitio', click: () => { if (forgetSite(loadDecisions(), tab.profile, site)) saveDecisions(); } });
   items.push({ label: 'Inspeccionar', click: () => { if (!wc.isDevToolsOpened()) wc.openDevTools({ mode: 'detach' }); wc.inspectElement(p.x, p.y); } });
   Menu.buildFromTemplate(items).popup({ window: win });
 }
 
 // ---- Site permissions ----------------------------------------------------
 // Prompted permissions are remembered per origin in this profile; anything not
-// listed is denied. CDP grants from the worker bypass this handler.
+// listed is denied. CDP grants from the worker bypass this handler. What may be remembered, and for how
+// long, is decided in site-permissions.mjs: only low-risk allows reach the file; camera, microphone and
+// external apps last until the browser restarts; the screen is asked for every time.
 const PROMPTED = { media: 'usar tu cámara o micrófono', geolocation: 'conocer tu ubicación', notifications: 'mostrar notificaciones',
   'clipboard-read': 'leer tu portapapeles', midi: 'usar dispositivos MIDI', 'display-capture': 'compartir tu pantalla', openExternal: 'abrir una aplicación externa' };
 const SILENT = new Set(['clipboard-sanitized-write', 'fullscreen', 'pointerLock']);
-let decisions = null;
-const blockedThisSession = new Set();
+let decisions = null;                                // {saved: the file, granted/blocked/cancels: this run only}
 const decisionsFile = () => path.join(app.getPath('userData'), 'trex-permissions.json');
-function loadDecisions() { if (decisions) return decisions; try { decisions = JSON.parse(fs.readFileSync(decisionsFile(), 'utf8')); } catch { decisions = {}; } return decisions; }
-function saveDecisions() { try { fs.writeFileSync(decisionsFile(), JSON.stringify(decisions), { mode: 0o600 }); } catch (error) { debug('no se pudieron guardar los permisos', error?.message); } }
+function loadDecisions() {
+  if (decisions) return decisions;
+  let raw; try { raw = JSON.parse(fs.readFileSync(decisionsFile(), 'utf8')); } catch {}
+  decisions = permissionState(raw);
+  // Older versions also saved screen, camera, microphone and external-app allows: gone as soon as the file is read.
+  if (decisions.dropped) saveDecisions();
+  return decisions;
+}
+function saveDecisions() { try { fs.writeFileSync(decisionsFile(), JSON.stringify(loadDecisions().saved), { mode: 0o600 }); } catch (error) { debug('no se pudieron guardar los permisos', error?.message); } }
 const originOf = url => { try { return new URL(url).origin; } catch { return ''; } };
+const hostOf = origin => { try { return new URL(origin).host || origin; } catch { return origin; } };
 function permissionLabel(permission, details) {
   if (permission === 'media') { const t = details?.mediaTypes ?? []; return t.includes('video') && t.includes('audio') ? 'usar tu cámara y micrófono' : t.includes('video') ? 'usar tu cámara' : 'usar tu micrófono'; }
   return PROMPTED[permission];
 }
-// getDisplayMedia fails for every site unless the session answers the request itself, even after the
-// person allowed screen sharing in the bar: share the first screen (or window) the system offers.
-function displayMedia(_request, callback) {
-  desktopCapturer.getSources({ types: ['screen', 'window'] }).then(sources => callback(sources[0] ? { video: sources[0] } : {})).catch(() => callback({}));
+// Screen sharing has no bar prompt and is never remembered: every request opens the chooser, and picking a source is
+// the consent. Electron asks for 'display-capture' first and, for getDisplayMedia, calls displayMedia() while
+// done(true) is still running, so the chosen source waits in `sharing` for that one call and nothing else can use it.
+// The older getUserMedia({ video: { mandatory: { chromeMediaSource: 'desktop' } } }) arrives as the same permission
+// request but, once allowed, picks its own source and never reaches displayMedia(): its renderers are stopped at once.
+let sharing = null, choosing = null;
+function displayMedia(request, callback) {
+  const share = sharing; sharing = null;
+  const wc = request.frame ? webContents.fromFrame(request.frame) : null;
+  callback(share && wc === share.wc && originOf(request.securityOrigin) === share.origin ? { video: share.source } : null);
+}
+/** The source the person picks, null when they cancel, undefined when there was nothing to ask. */
+async function pickSource(host, signal) {
+  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } });
+  const screens = sources.filter(s => s.id.startsWith('screen:')), windows = sources.filter(s => s.id.startsWith('window:') && s.name.trim()).slice(0, 8);
+  const offered = [...screens, ...windows];
+  if (!offered.length || signal.aborted) return undefined;
+  const titled = name => { const text = name.replace(/\s+/g, ' ').trim(), short = text.length > 60 ? `${text.slice(0, 59)}…` : text; return process.platform === 'win32' ? short.replaceAll('&', '&&') : short; };
+  const { response } = await dialog.showMessageBox(win, { type: 'question', title: `${host} quiere ver tu pantalla`, message: `¿Qué quieres compartir con ${host}?`,
+    detail: 'El sitio verá lo que elijas hasta que dejes de compartir o cierres la pestaña.',
+    buttons: [...screens.map((_s, i) => `Pantalla ${i + 1}`), ...windows.map(w => `Ventana: ${titled(w.name)}`), 'Cancelar'], defaultId: offered.length, cancelId: offered.length, signal });
+  return signal.aborted ? undefined : offered[response] ?? null;
+}
+async function shareScreen(tab, origin, done) {
+  const answer = allow => { try { done(allow); } catch {} };
+  const state = loadDecisions(), key = tab && permissionKey(tab.profile, origin, 'display-capture');
+  // One chooser at a time, only for the tab the person is looking at, and never for a site that kept asking.
+  if (!tab || !origin || HEADLESS || choosing || tab.id !== activeTab || !win || win.isDestroyed() || decisionFor(state, key) === false) return answer(false);
+  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 120_000);
+  choosing = { tabId: tab.id, abort };
+  let source;
+  try { source = await pickSource(hostOf(origin), abort.signal); } catch (error) { debug('no se pudo elegir qué compartir', error?.message); }
+  clearTimeout(timer); choosing = null;
+  const wc = tab.view.webContents;
+  if (!source || abort.signal.aborted || tabs.get(tab.id) !== tab || wc.isDestroyed()) { if (source === null) chooserCancelled(state, key); return answer(false); }
+  chooserAnswered(state, key);
+  sharing = { wc, origin, source };
+  answer(true);
+  if (!sharing) return;
+  // Allowed, yet displayMedia() was not asked: the request chose its own source. No frame may reach that page.
+  sharing = null; debug('captura de pantalla sin selector, se detiene la página', origin);
+  try { for (const pid of new Set(wc.mainFrame.framesInSubtree.map(frame => frame.osProcessId))) if (pid > 0 && pid !== process.pid) process.kill(pid, 'SIGKILL'); } catch {}
 }
 function requestPermission(wc, permission, done, details) {
   if (SILENT.has(permission)) return done(true);
   const tab = [...tabs.values()].find(t => t.view.webContents === wc);
   const origin = originOf(details?.requestingUrl || wc.getURL());
+  if (permission === 'display-capture') return void shareScreen(tab, origin, done);
   if (tab && grantedPermission(scopes.get(tab.profile), permission, origin)) return done(true);
   if (!tab || !PROMPTED[permission] || !origin || HEADLESS) return done(false);
-  const key = `${tab.profile ? tab.profile + '|' : ''}${origin}|${permission}`, saved = loadDecisions()[key];
-  if (saved !== undefined) return done(saved);
-  if (blockedThisSession.has(key)) return done(false);
+  const key = permissionKey(tab.profile, origin, permission), decided = decisionFor(loadDecisions(), key);
+  if (decided !== undefined) return done(decided);
   const id = nextId++;
   const timer = setTimeout(() => resolvePrompt(id, false, false), 120_000);
-  prompts.set(id, { id, tabId: tab.id, origin, permission, label: permissionLabel(permission, details), done, timer, key });
+  prompts.set(id, { id, tabId: tab.id, origin, permission, label: permissionLabel(permission, details), done, timer, key, session: !PERSISTABLE.has(permission) });
   broadcast(); revealBar(false);
 }
 function resolvePrompt(id, allow, remember) {
   const p = prompts.get(id); if (!p) return;
   prompts.delete(id); clearTimeout(p.timer);
-  // An allow is saved; a block is kept only until the browser restarts, because there is no site
-  // settings page to undo a saved one and a wrong click would silence that site for good.
-  if (remember) { if (allow) { loadDecisions()[p.key] = true; saveDecisions(); } else blockedThisSession.add(p.key); }
+  // Only a low-risk allow is saved. Camera, microphone and external-app allows, and every block, are kept until the
+  // browser restarts. "Olvidar permisos de este sitio" in the page menu undoes any of them, saved or not.
+  if (remember && recordDecision(loadDecisions(), p.key, allow)) saveDecisions();
   try { p.done(allow); } catch {}
   broadcast();
 }
-function denyPrompts(tabId) { for (const p of [...prompts.values()]) if (p.tabId === tabId) resolvePrompt(p.id, false, false); }
+function denyPrompts(tabId) {
+  if (choosing?.tabId === tabId) choosing.abort.abort();
+  for (const p of [...prompts.values()]) if (p.tabId === tabId) resolvePrompt(p.id, false, false);
+}
 
 // ---- Downloads -----------------------------------------------------------
 // When the worker drives the browser, Playwright owns download paths
@@ -680,7 +733,7 @@ const workerApi = {
       ses.protocol.handle('trex', servePage);
       ses.setPermissionRequestHandler(requestPermission);
       ses.setDisplayMediaRequestHandler(displayMedia);
-      ses.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || grantedPermission(scopes.get(profile), permission, originOf(origin)) || loadDecisions()[`${profile}|${originOf(origin)}|${permission}`] === true);
+      ses.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || grantedPermission(scopes.get(profile), permission, originOf(origin)) || isGranted(loadDecisions(), permissionKey(profile, originOf(origin), permission)));
       scope = { profile, session: ses, personal: profile === 'personal' }; scopes.set(profile, scope);
       ses.on('will-download', (event, item, wc) => {
         if (!scope.personal) scopedDownload(scope, item, wc, path.join(SHARED_ROOT, 'artifacts'), targetIdOf, emitToWorker);
@@ -778,9 +831,10 @@ const controls = humanControls(emitToWorker);
 // are handled through the person's system browser, not a spoofed user agent.
 app.whenReady().then(() => {
   serveUi();
+  loadDecisions();                                   // cleans risky allows out of an older trex-permissions.json now, not at the first request
   session.defaultSession.setPermissionRequestHandler(requestPermission);
   session.defaultSession.setDisplayMediaRequestHandler(displayMedia);
-  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || loadDecisions()[`${originOf(origin)}|${permission}`] === true);
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => SILENT.has(permission) || isGranted(loadDecisions(), permissionKey(undefined, originOf(origin), permission)));
   session.defaultSession.on('will-download', trackDownload);
   win = new BaseWindow({
     width: 1360, height: 860, minWidth: 720, minHeight: 480,
