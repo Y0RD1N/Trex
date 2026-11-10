@@ -579,6 +579,17 @@ como pegado alternativo. `Ctrl+C`, `Ctrl+D` y `Ctrl+Z` se reservan para el shell
   - Windows (PowerShell): `irm https://claude.ai/install.ps1 | iex`
   - Linux/macOS: `curl -fsSL https://claude.ai/install.sh | bash`
   - Alternativa: `npm install -g @anthropic-ai/claude-code`
+- **Si la configuración no se puede leer**, trex no empieza de cero por su cuenta
+  ni guarda nada encima. Te pregunta qué hacer: reintentar (cuando otro programa
+  tiene el archivo abierto), restaurar la copia del último arranque correcto
+  (`config.json.bak`), empezar de cero o seguir sin guardar en esa sesión. Un
+  archivo dañado se conserva junto al original como `config.json.corrupto-…`.
+  La ruta está en **Ajustes → Acerca de trex**.
+- **Abrir un archivo** desde el chat nunca ejecuta programas: los ejecutables,
+  instaladores, accesos directos y guiones (`.exe`, `.bat`, `.lnk`, `.py`,
+  `.sh`…) se muestran en su carpeta, y decides tú desde allí.
+- En Windows, si trex se cierra de forma inesperada, el sistema cierra también
+  los asistentes que tenía abiertos y los procesos que hubieran lanzado.
 
 
 ## Navegador opcional para los agentes

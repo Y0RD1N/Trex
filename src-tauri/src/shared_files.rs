@@ -46,6 +46,35 @@ pub async fn file_info(paths: Vec<String>) -> Vec<FileInfo> {
         .unwrap_or_default()
 }
 
+/// Tipos que el sistema ejecuta (o instala) al «abrirlos» en vez de mostrarlos.
+const RUNNABLE_EXTENSIONS: &[&str] = &[
+    // Windows: programas, instaladores, guiones del sistema y accesos directos.
+    "exe", "com", "scr", "pif", "cpl", "msi", "msp", "mst", "bat", "cmd", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta",
+    "lnk", "url", "scf", "reg", "msc", "jar", "chm", "appref-ms", "application", "diagcab", "settingcontent-ms", "library-ms",
+    // Intérpretes que suelen quedar asociados al doble clic.
+    "py", "pyw", "rb", "pl",
+    // macOS y Linux.
+    "app", "command", "pkg", "dmg", "workflow", "action", "desktop", "appimage", "run", "sh",
+];
+
+/// La ruta la propone el asistente: «abrir» nunca debe poner en marcha un programa.
+fn runs_when_opened(path: &Path) -> bool {
+    // Windows ignora puntos y espacios finales: «factura.pdf.exe.» es un .exe.
+    let name = path.file_name().map(|name| name.to_string_lossy().trim_end_matches(['.', ' ']).to_ascii_lowercase()).unwrap_or_default();
+    if name.rsplit_once('.').is_some_and(|(_, extension)| RUNNABLE_EXTENSIONS.contains(&extension)) {
+        return true;
+    }
+    // En Unix un archivo sin extensión con permiso de ejecución también es un programa.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if !name.contains('.') && std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0) {
+            return true;
+        }
+    }
+    false
+}
+
 // Un comando síncrono corre en el hilo de la ventana: abrir con el sistema
 // puede tardar, así que estos van aparte.
 #[tauri::command]
@@ -54,6 +83,10 @@ pub async fn open_file(path: String) -> Result<(), String> {
         let path = expand(&path);
         if !path.exists() {
             return Err(format!("«{}» ya no existe.", path.display()));
+        }
+        // Un programa o un guion se enseña en su carpeta: ejecutarlo lo decide la persona desde allí.
+        if !path.is_dir() && runs_when_opened(&path) {
+            return tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| format!("No se pudo mostrar «{}»: {e}", path.display()));
         }
         tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| format!("No se pudo abrir «{}»: {e}", path.display()))
     })
@@ -130,6 +163,17 @@ pub async fn save_file_data(to: String, data: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_never_launches_a_program_or_script() {
+        for name in ["instalar.exe", "Factura.PDF.EXE", "arreglo.bat", "tarea.cmd", "macro.vbs", "pagina.hta", "acceso.lnk", "sitio.url",
+            "ajuste.reg", "paquete.msi", "guion.py", "build.sh", "Herramienta.app", "lanzador.desktop", "programa.AppImage", "truco.exe.", "truco.exe  "] {
+            assert!(runs_when_opened(Path::new(name)), "{name} would run");
+        }
+        for name in ["informe.pdf", "notas.md", "datos.csv", "foto.png", "index.html", "main.rs", "App.tsx", "config.json", "script.ps1", "LEEME", "archivo.exe.txt", ".gitignore"] {
+            assert!(!runs_when_opened(Path::new(name)), "{name} is only shown");
+        }
+    }
 
     #[test]
     fn files_are_described_and_copied() {

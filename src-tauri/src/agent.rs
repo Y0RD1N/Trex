@@ -297,6 +297,8 @@ impl AgentState {
             .spawn()
             .map_err(|e| format!("No se pudo iniciar «{}»: {e}", req.command.trim()))?;
         let pid = child.id();
+        // Si trex termina sin pasar por el cierre ordenado, el sistema cierra también este proceso.
+        crate::process_lifetime::adopt(&child);
         let stdout = child.stdout.take().ok_or("No se pudo leer la salida del asistente.")?;
         let stderr = child.stderr.take().ok_or("No se pudo leer los errores del asistente.")?;
         let stdin = Arc::new(Mutex::new(child.stdin.take()));

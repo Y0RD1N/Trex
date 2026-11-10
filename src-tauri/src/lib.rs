@@ -22,6 +22,7 @@ mod handoff;
 mod integrations;
 mod message_queue;
 mod queue_mcp;
+mod process_lifetime;
 mod project_icon;
 mod shared_files;
 mod terminal_env;
