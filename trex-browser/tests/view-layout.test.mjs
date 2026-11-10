@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import { setBounds, setVisible, keepOnTop } from '../shell/view-layout.mjs';
+import { setBounds, setVisible, keepOnTop, usableArea } from '../shell/view-layout.mjs';
+
+it('a minimized or empty client area is never used to lay views out', () => {
+  assert.equal(usableArea({ width: 1361, height: 862 }, false), true);
+  assert.equal(usableArea({ width: 1361, height: 862 }, true), false);
+  assert.equal(usableArea({ width: 0, height: 0 }, false), false);
+  assert.equal(usableArea({ width: 1361, height: 0 }, false), false);
+});
 
 it('repeated activity preserves native bounds and visibility until they actually change', () => {
   const calls = [], view = { bounds: { x: 7, y: 7, width: 1280, height: 800 }, visible: true,

@@ -10,6 +10,11 @@ export function setVisible(view, visible) {
   if (view.getVisible() !== visible) view.setVisible(visible);
 }
 
+/** Whether the window's client area can be laid out: a minimized window on Windows reports 0x0. */
+export function usableArea({ width, height }, minimized) {
+  return !minimized && width > 0 && height > 0;
+}
+
 /** Reorder attached views in place, only when the foreground actually changes. */
 export function keepOnTop(parent, views) {
   const children = parent.children, offset = children.length - views.length;

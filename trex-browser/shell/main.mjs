@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { scopePath } from './scope-path.mjs';
 import { humanControls } from './human-controls.mjs';
 import { storageCommand, scopedDownload, grantedPermission } from './scope-storage.mjs';
-import { setBounds, setVisible, keepOnTop } from './view-layout.mjs';
+import { setBounds, setVisible, keepOnTop, usableArea } from './view-layout.mjs';
 import { readTheme, watchTheme, themeCss, BUILTIN_THEME } from './theme.mjs';
 import { PERSISTABLE, permissionKey, permissionState, decisionFor, isGranted, recordDecision, chooserCancelled, chooserAnswered, hasSiteDecisions, forgetSite } from './site-permissions.mjs';
 
@@ -242,24 +242,29 @@ function layout() {
   if (!win || win.isDestroyed()) return;
   if (SHARED_ROOT) snapshot();
   const { width, height } = win.getContentBounds();
-  setBounds(chromeView, { x: 0, y: 0, width, height });
+  // Agents keep working while the window is minimized, and Windows reports a 0x0 client area then. Views
+  // laid out at that size stayed empty once restored, because a restore emits no resize: the window came
+  // back as bare glass. Sizes wait for a real area; visibility and order still follow, and 'restore' lays out again.
+  const sized = usableArea({ width, height }, win.isMinimized());
+  if (sized) setBounds(chromeView, { x: 0, y: 0, width, height });
   const page = { x: FRAME, y: FRAME, width: Math.max(0, width - FRAME * 2), height: Math.max(0, height - FRAME * 2) };
   for (const t of tabs.values()) {
     // Background agent tabs must keep a live input/render surface. Their views
     // stay underneath the selected page instead of being hidden by Electron.
     setVisible(t.view, SHARED_ROOT ? true : t.id === activeTab && !centerOpen);
-    setBounds(t.view, page);
+    if (sized) setBounds(t.view, page);
   }
   const front = centerOpen ? chromeView : tabs.get(activeTab)?.view;
   keepOnTop(win.contentView, centerOpen ? [chromeView] : [front, ...[...overlays.values()].map(o => o.view)].filter(Boolean));
   for (const [part, o] of overlays) {
     const r = o.rect; if (!r) continue;
     let x, y;
-    // Overlay documents keep OVERLAY_PAD px of transparent room for their shadow.
+    // Overlay documents keep OVERLAY_PAD px of transparent room for their shadow. Without a real area they
+    // keep their last place.
     const inset = FRAME + 10 - OVERLAY_PAD;
-    if (part === 'island') { // full-width strip at the top; the bar is centred inside it
+    if (sized && part === 'island') { // full-width strip at the top; the bar is centred inside it
       setBounds(o.view, { x: 0, y: 0, width, height: r.height });
-    } else {
+    } else if (sized) {
       x = Math.round(width / 2 - r.width / 2); y = height - inset - r.height;
       setBounds(o.view, { x, y, width: r.width, height: r.height });
     }
@@ -483,11 +488,27 @@ function restoreSession() {
 }
 
 const debug = (...a) => { if (process.env.TREX_SHELL_DEBUG === '1') console.log('[shell]', ...a); };
+// Our own documents load again if their renderer dies: without them the window kept no frame, bar or
+// buttons, only the page. A document that keeps dying stops being reloaded (3 times a minute at most).
+function reviveOnCrash(wc, url) {
+  const recent = [];
+  wc.on('render-process-gone', (_e, details) => {
+    if (details.reason === 'clean-exit' || closing || app.isQuitting) return;
+    const now = Date.now();
+    while (recent.length && now - recent[0] > 60_000) recent.shift();
+    if (recent.length >= 3) { debug('ui renderer keeps dying, not reloading', url, details.reason); return; }
+    recent.push(now);
+    debug('ui renderer gone, reloading', url, details.reason);
+    setTimeout(() => { if (!wc.isDestroyed() && !closing) wc.loadURL(url).catch(() => {}); }, 250);
+  });
+}
 function addOverlay(part) {
   const view = new WebContentsView({ webPreferences: uiPrefs });
   uiContents.add(view.webContents);
   view.setBackgroundColor('#00000000');
-  view.webContents.loadURL(`${UI_ORIGIN}/overlay.html?part=${part}`);
+  const url = `${UI_ORIGIN}/overlay.html?part=${part}`;
+  reviveOnCrash(view.webContents, url);
+  view.webContents.loadURL(url);
   view.webContents.on('console-message', (e) => debug('console', part, e.level, e.message));
   view.webContents.on('did-fail-load', (_e, code, desc) => debug('fail', part, code, desc));
   view.webContents.on('did-finish-load', () => debug('loaded', part));
@@ -848,6 +869,7 @@ app.whenReady().then(() => {
   uiContents.add(chromeView.webContents);
   chromeView.setBackgroundColor('#00000000');
   win.contentView.addChildView(chromeView);
+  reviveOnCrash(chromeView.webContents, `${UI_ORIGIN}/index.html`);
   chromeView.webContents.loadURL(`${UI_ORIGIN}/index.html`);
   for (const part of ['cursor', 'island', 'dock']) addOverlay(part);
   const initial = process.argv.slice(1).find(a => /^https?:\/\//.test(a));
@@ -855,6 +877,8 @@ app.whenReady().then(() => {
   // Start with the keyboard on the page, not on our UI.
   tabs.get(activeTab)?.view.webContents.once('did-finish-load', () => { if (!tabs.get(activeTab)?.url.startsWith('trex://newtab')) tabs.get(activeTab)?.view.webContents.focus(); });
   win.on('resize', layout);
+  // Restoring a minimized window emits no resize (see layout).
+  win.on('restore', layout); win.on('show', layout);
   // The app writes the theme while this window may be in the background: a directory watch can miss that on some systems.
   themeWatch = watchTheme(THEME_ROOT, themeChanged);
   win.on('focus', () => themeWatch.check());
