@@ -585,6 +585,7 @@ async fn execute_configured(
                 let obj=fields(&input,&["path","destination"],&["path","destination"])?;
                 let from=ws.resolve(string(obj,"path")?,false)?;let to=ws.resolve(string(obj,"destination")?,true)?;
                 ws.policy.require(&from)?;ws.policy.require(&to)?;ensure!(!to.exists(),"destination already exists");
+                let _refresh=ws.refresh_policy_after([from.as_path(),to.as_path()].into_iter());
                 let before=ws.before(&from,&cancel)?;ensure!(existing_text(&from,&cancel)?==before,"rename source changed since the checkpoint");
                 // Creating a hard link is no-replace on both Windows and Unix.
                 // Remove the original only after publishing succeeds.
@@ -592,7 +593,7 @@ async fn execute_configured(
                 fs::remove_file(&from).map_err(|e|anyhow::Error::new(e).context(ToolExecutionUncertain("Rename published its destination but could not remove the original; inspect both files".into())))?;
                 Ok(json!({"renamed":true}))
             },
-            "remove_file"=>{let obj=fields(&input,&["path"],&["path"])?;let path=ws.resolve(string(obj,"path")?,false)?;ws.policy.require(&path)?;let before=ws.before(&path,&cancel)?;ensure!(existing_text(&path,&cancel)?==before,"remove target changed since the checkpoint");fs::remove_file(path)?;Ok(json!({"removed":true}))},
+            "remove_file"=>{let obj=fields(&input,&["path"],&["path"])?;let path=ws.resolve(string(obj,"path")?,false)?;ws.policy.require(&path)?;let _refresh=ws.refresh_policy_after(std::iter::once(path.as_path()));let before=ws.before(&path,&cancel)?;ensure!(existing_text(&path,&cancel)?==before,"remove target changed since the checkpoint");fs::remove_file(path)?;Ok(json!({"removed":true}))},
             _ => unreachable!(),
         }
     })
@@ -649,6 +650,12 @@ pub(crate) struct Workspace {
     policy: crate::project::Policy,
     expected: Option<Vec<crate::changes::FileChange>>,
 }
+struct PolicyRefresh<'a>(&'a Path);
+impl Drop for PolicyRefresh<'_> {
+    fn drop(&mut self) {
+        crate::project::Policy::invalidate(self.0);
+    }
+}
 impl Workspace {
     fn new(cwd: &Path) -> Result<Self> {
         Self::configured(cwd, crate::settings::PrivacySettings::default())
@@ -666,12 +673,28 @@ impl Workspace {
                 "only local drive workspaces are supported; UNC/device workspaces are forbidden"
             );
         }
-        let policy = crate::project::Policy::new(&root, privacy)?;
+        // Every tool call builds a Workspace; the cached policy spares each one
+        // a walk of the whole tree.
+        let policy = crate::project::Policy::cached(&root, privacy)?;
         Ok(Self {
             root,
             policy,
             expected: None,
         })
+    }
+
+    /// A file tool about to write, rename or remove an ignore file changes the
+    /// privacy rules themselves. The returned guard drops the cached policy
+    /// when it goes out of scope, failure included (a failed commit may have
+    /// published part of its files), so the next call sees the agent's edit
+    /// instead of waiting for the cache to expire.
+    fn refresh_policy_after<'p>(
+        &self,
+        mut paths: impl Iterator<Item = &'p Path>,
+    ) -> Option<PolicyRefresh<'_>> {
+        paths
+            .any(crate::project::is_ignore_file)
+            .then(|| PolicyRefresh(&self.root))
     }
 
     fn before(&self, path: &Path, cancel: &CancellationToken) -> Result<Option<String>> {
@@ -1377,6 +1400,7 @@ fn create_staging_file(path: &Path, descriptor: Option<&[u32]>) -> std::io::Resu
     Ok(unsafe { File::from_raw_handle(raw) })
 }
 fn commit(ws: &Workspace, changes: &[Change], cancel: &CancellationToken) -> Result<()> {
+    let _refresh = ws.refresh_policy_after(changes.iter().map(|c| c.path.as_path()));
     for change in changes {
         check_cancel(cancel)?;
         ws.resolve(&ws.display(&change.path), true)?;
