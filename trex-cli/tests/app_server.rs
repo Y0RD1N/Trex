@@ -1701,5 +1701,7 @@ fn the_prompt_prefix_only_changes_where_old_tool_results_are_archived_in_batches
 mod browser_cases;
 #[path = "team_cases/mod.rs"]
 mod team_cases;
+#[path = "coordination_cases/mod.rs"]
+mod coordination_cases;
 #[path = "upgrade_cases/mod.rs"]
 mod upgrade_cases;

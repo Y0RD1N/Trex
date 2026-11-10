@@ -9,13 +9,14 @@ import { initialChatState, list, record, text, type Json, type OutgoingImage, ty
 import { connectBrowser } from "../browserConnection";
 import { detectedIntegrations, integrationContext, integrationInstructions } from "../integrations";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
+import { PEER_INSTRUCTIONS } from "../coordination";
 import { INBOX_WAKE, messageQueueId, type QueueReceipt } from "../messageQueue";
 import { useMessageQueue } from "./useMessageQueue";
 import { localId, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { withChatTimes } from "../chatTimes";
 const timedAntigravityReducer = withChatTimes(antigravityReducer);
 
-const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} For multi-step work, in ordinary chats too, publish and update the chat task list with trex_update_tasks (trex_inbox MCP server; plan:[{step,status}], at most one in_progress); mark work completed only after verifying it. Messages the user types while you work are queued by trex and delivered as the next user turn with their attachments; do not poll an inbox or claim an attachment that was not delivered.`;
+const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} For multi-step work, in ordinary chats too, publish and update the chat task list with trex_update_tasks (trex_inbox MCP server; plan:[{step,status}], at most one in_progress); mark work completed only after verifying it. Messages the user types while you work are queued by trex and delivered as the next user turn with their attachments; do not poll an inbox or claim an attachment that was not delivered. ${PEER_INSTRUCTIONS}`;
 type Approval = { id: string | number; params: Json; turn: string };
 type Active = { id: string; done: Promise<void>; cancelled: boolean };
 export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
@@ -139,7 +140,8 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       // Experimental: where the accessibility engine cannot run, the session starts without it, with a notice.
       const a11y = current.a11yEnabled ? await accessibilityServer("full", message => notice("warn", message)) : null;
       tools.current = { browser: !!browser, available: detection instanceof Promise ? await detection : detection, a11y: !!a11y };
-      const tasks = await messageQueueMcpConfig(messageQueueId(current.queueId ?? current.sessionId), true);
+      const tasks = await messageQueueMcpConfig(messageQueueId(current.queueId ?? current.sessionId), true,
+        { session: current.queueId ?? current.sessionId, project: current.cwd });
       const servers = [acpMcpServer("trex_inbox", { command: text(tasks["mcp_servers.trex_inbox.command"]), args: tasks["mcp_servers.trex_inbox.args"] as string[] }),
         ...(browser ? [acpMcpServer("trex_browser", browser)] : []), ...(current.desktopEnabled ? [acpMcpServer("trex_desktop", await trexDesktopMcpConfig("full"))] : []),
         ...(a11y ? [acpMcpServer(A11Y_SERVER, a11y)] : [])];

@@ -253,7 +253,7 @@ fn unique_id() -> String {
 }
 
 #[cfg(windows)]
-fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     extern "system" {
@@ -276,7 +276,7 @@ fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(windows))]
-fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(source, destination)
 }
 

@@ -1,56 +1,10 @@
-/* --- Uso de las cuentas -------------------------------------------------------------
-   Una superficie continua: cada cuenta es una sección separada por una línea.
-   Las barras son neutras; alto (aviso) y crítico (peligro) usan color de estado. */
-.modal.feature-dialog.usage-dialog { width: min(760px, calc(100vw - 40px)); max-width: 760px; max-height: min(900px, calc(100dvh - 40px)); }
-.modal.feature-dialog.usage-dialog > .modal-header { gap: var(--sp-4); padding: var(--sp-6) var(--sp-7) var(--sp-2); border: 0; }
-.modal.feature-dialog.usage-dialog .modal-title { color: var(--text); font-size: var(--fs-2xl); font-weight: var(--fw-semibold); line-height: var(--lh-snug); letter-spacing: var(--tracking-title); }
-.modal.feature-dialog.usage-dialog > .feature-content { min-height: 0; padding: 0 var(--sp-7) var(--sp-5); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.usage-dialog .usage-intro { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin: 0 0 var(--sp-3); }
-.usage-dialog .usage-intro > div { display: flex; flex-direction: column; gap: var(--sp-1-5); min-width: 0; }
-.usage-dialog .usage-intro p { margin: 0; color: var(--text-muted); font-size: var(--fs-md); }
-.usage-dialog .usage-count { color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal); }
-.usage-dialog .usage-accounts { display: grid; gap: 0; }
-.usage-dialog .usage-account { --usage-color: var(--text-muted); position: relative; min-width: 0; padding: var(--sp-5) 0; border: 0; border-radius: 0; background: transparent; }
-.usage-dialog .usage-account + .usage-account { border-top: 1px solid var(--border); }
-.usage-dialog .usage-account-head { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); min-width: 0; }
-.usage-dialog .usage-account-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md); background: var(--bg-inset); color: var(--text-muted); }
-.usage-dialog .usage-account-icon .agent-icon { color: inherit; }
-.usage-dialog .usage-account-identity { min-width: 0; }
-.usage-dialog .usage-account-identity h3 { margin: 0; color: var(--text); font-size: var(--fs-base); font-weight: var(--fw-semibold); line-height: var(--lh-normal); letter-spacing: var(--tracking-tight); overflow-wrap: anywhere; }
-.usage-dialog .usage-account-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-2); margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal); }
-.usage-dialog .usage-provider { color: var(--text-muted); }
-.usage-dialog .usage-command { margin: 0; color: var(--text-dim); font: var(--fs-xs)/1.6 var(--font-mono); overflow-wrap: anywhere; }
-.usage-dialog .usage-plan { display: inline-flex; align-items: center; gap: var(--sp-1-5); justify-self: end; max-width: 140px; padding: var(--sp-1) var(--sp-2); border-radius: var(--radius-sm); background: var(--bg-inset); color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-semibold); line-height: var(--lh-normal); overflow-wrap: anywhere; }
-.usage-dialog .usage-plan > span { flex-shrink: 0; width: 4px; height: 4px; border-radius: 50%; background: var(--text-dim); }
-.usage-dialog .usage-account .plan-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2-5) var(--sp-6); margin: var(--sp-4) 0 0; padding: 0; border: 0; list-style: none; }
-.usage-dialog .usage-account .plan-windows:has(> .plan-window:only-child) { grid-template-columns: minmax(0, 1fr); }
-.usage-dialog .usage-account .plan-windows:empty { display: none; }
-.usage-dialog .usage-account .plan-window { display: grid; align-content: start; gap: var(--sp-2); min-width: 0; padding: var(--sp-2) 0; border: 0; border-radius: 0; background: transparent; }
-.usage-dialog .usage-account .plan-window-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--sp-1-5) var(--sp-2-5); color: var(--text-muted); font-size: var(--fs-sm); line-height: var(--lh-normal); }
-.usage-dialog .usage-account .plan-window-head > span { min-width: 0; overflow-wrap: anywhere; }
-.usage-dialog .usage-account .plan-window-head b { color: var(--text); font: var(--fw-medium) var(--fs-2xl)/1.2 var(--font-sans); letter-spacing: var(--tracking-title); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.usage-dialog .usage-account .plan-window.warning .plan-window-head b { color: var(--warn-text); }
-.usage-dialog .usage-account .plan-window.critical .plan-window-head b { color: var(--danger-text); }
-.usage-dialog .usage-account .plan-window-bar { height: 4px; overflow: hidden; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text) 10%, transparent); }
-.usage-dialog .usage-account .plan-window small { color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal); overflow-wrap: anywhere; }
-.usage-dialog .usage-account .plan-note, .usage-dialog .usage-empty { margin: var(--sp-4) 0 0; padding: 0; border: 0; color: var(--text-muted); font-size: var(--fs-sm); line-height: var(--lh-relaxed); overflow-wrap: anywhere; }
-.usage-dialog .usage-empty { display: flex; align-items: flex-start; gap: var(--sp-2); }
-.usage-dialog .usage-empty.error { color: var(--danger-text); }
-.usage-dialog .usage-empty .chat-spinner { flex-shrink: 0; margin-top: 5px; }
-.usage-dialog .usage-no-accounts { padding: var(--sp-8) var(--sp-5); border-radius: var(--radius-lg); background: var(--bg-inset); text-align: center; }
-.usage-dialog .usage-no-accounts h3 { margin: 0; font-size: var(--fs-base); }
-.usage-dialog .usage-no-accounts p { margin: var(--sp-2) 0 0; color: var(--text-muted); font-size: var(--fs-sm); }
-.usage-dialog .usage-caption { display: flex; align-items: flex-start; gap: var(--sp-2); margin: var(--sp-4) 2px 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-relaxed); }
-.usage-dialog .usage-caption svg { flex-shrink: 0; margin-top: 2px; }
-.modal.feature-dialog.usage-dialog .usage-refresh { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: var(--sp-2); height: var(--control-h); padding: 0 var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-medium); cursor: pointer; }
-.modal.feature-dialog.usage-dialog .usage-refresh:hover:not([aria-disabled="true"]) { background: var(--hover); color: var(--text); }
-.modal.feature-dialog.usage-dialog .usage-refresh[aria-disabled="true"] { opacity: .6; cursor: default; }
+/* --- Uso de las cuentas en una ventana -----------------------------------------
+   El panel de órbitas (AccountUsage.css) en una ventana estrecha, como la columna
+   del chat: solo se usa cuando no hay un chat a la vista. */
+.modal.feature-dialog.usage-dialog { width: min(400px, calc(100vw - 40px)); max-width: 400px; max-height: min(860px, calc(100dvh - 40px)); }
+.modal.feature-dialog.usage-dialog > .modal-header { padding: var(--sp-5) var(--sp-5) var(--sp-1); border: 0; }
+.modal.feature-dialog.usage-dialog .modal-title { color: var(--text); font-size: var(--fs-xl); font-weight: var(--fw-semibold); letter-spacing: var(--tracking-title); }
+.modal.feature-dialog.usage-dialog > .feature-content { min-height: 0; padding: 0 var(--sp-2) var(--sp-2); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 @media (max-width: 560px) {
   .modal.feature-dialog.usage-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
-  .modal.feature-dialog.usage-dialog > .modal-header { padding: var(--sp-5) var(--sp-4) var(--sp-2-5); }
-  .modal.feature-dialog.usage-dialog > .feature-content { padding: 0 var(--sp-4) var(--sp-4); }
-  .usage-dialog .usage-intro { align-items: flex-start; }
-  .usage-dialog .usage-account-head { grid-template-columns: 32px minmax(0, 1fr); gap: var(--sp-2-5); }
-  .usage-dialog .usage-plan { grid-column: 2; justify-self: start; max-width: 100%; }
-  .usage-dialog .usage-account .plan-windows { grid-template-columns: minmax(0, 1fr); }
 }

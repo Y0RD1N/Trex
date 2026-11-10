@@ -2203,7 +2203,7 @@ pre.chat-ask-preview-body {
 .chat-context-note.error { color: var(--danger-text); }
 /* --- Uso del plan ---------------------------------------------------------
    Medidor en la bandeja y, al pulsarlo, cada ventana (5 horas, semana…) con
-   su barra y su reinicio. Las mismas filas se usan en «Uso de las cuentas».
+   su barra y su reinicio.
    Normal: neutro · Alto: aviso · Crítico: peligro. */
 .plan-windows {
   display: grid;
@@ -2254,43 +2254,6 @@ pre.chat-ask-preview-body {
 }
 .context-item.chat-plan-all { min-height: 34px; padding: var(--sp-1-5) var(--sp-2-5); font-size: var(--fs-sm); }
 
-/* Ventana «Uso de las cuentas»: una tarjeta por perfil. */
-.usage-accounts { display: grid; gap: var(--sp-3); }
-.usage-account {
-  padding: var(--sp-3) var(--sp-3-5) var(--sp-0-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-}
-.usage-account-head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-}
-.usage-account-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-plan {
-  padding: 1px var(--sp-2);
-  border-radius: var(--radius-xs);
-  background: var(--bg-inset);
-  color: var(--text-muted);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-}
-.usage-command { margin-left: auto; color: var(--text-dim); font: var(--fs-xs) var(--font-mono); }
-.usage-account .plan-windows { padding: var(--sp-3) 0; }
-.usage-account .plan-note { margin: 0 calc(var(--sp-3-5) * -1); padding: var(--sp-2) var(--sp-3-5) var(--sp-2-5); border-top-color: var(--border); }
-.usage-empty {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin: 0;
-  padding: var(--sp-3) 0 var(--sp-3-5);
-  color: var(--text-muted);
-  font-size: var(--fs-sm);
-}
-.usage-empty.error { color: var(--danger-text); overflow-wrap: anywhere; }
-.usage-dialog .modal-footer .btn { gap: var(--sp-1-5); }
 
 .context-item.chat-context-compact { justify-content: space-between; min-height: 34px; padding: var(--sp-1-5) var(--sp-2-5); font-size: var(--fs-sm); }
 .chat-context-compact small { color: var(--text-dim); font: var(--fs-xs) var(--font-mono); }

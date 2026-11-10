@@ -43,7 +43,8 @@ export function parseAntigravityUsage(report: string, tier: string | null = null
     const reset = utcReset(row[3]);
     const percent = Math.round((100 - remaining) * 100) / 100;
     windows.push({ id, label: `${period} · ${group}`, percent, resetsAt: reset,
-      severity: percent >= 90 ? "critical" : percent >= 75 ? "warning" : "normal", headline: false });
+      severity: percent >= 90 ? "critical" : percent >= 75 ? "warning" : "normal", headline: false,
+      durationMs: period === "Semana" ? 7 * 24 * 3_600_000 : period === "Sesión (5 h)" ? 5 * 3_600_000 : null });
   }
   if (windows.length) windows.reduce((a, b) => b.percent > a.percent ? b : a).headline = true;
   if (quota?.trim() && !windows.length && !/not available|no quota|unavailable|does not apply/i.test(quota))

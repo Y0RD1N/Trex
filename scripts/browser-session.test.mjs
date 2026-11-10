@@ -354,7 +354,8 @@ for (const [plannerProvider, executorProvider] of [["claude", "codex"], ["codex"
     const forbid = () => assert.fail("Runtime hooks must be mounted through the offline provider harness");
     const module = components.evaluate("room", env, { "../api": components.api, "./ChatView": { ChatPanel },
       "../hooks/useClaudeChat": { useClaudeChat: forbid }, "../hooks/useCodexChat": { useCodexChat: forbid },
-      "../hooks/useAntigravityChat": { useAntigravityChat: forbid }, "../hooks/useTrexChat": { useTrexChat: forbid } });
+      "../hooks/useAntigravityChat": { useAntigravityChat: forbid }, "../hooks/useTrexChat": { useTrexChat: forbid },
+      "../hooks/useCoordination": { useCoordination: () => undefined } });
     const participant = (provider, mode) => ({ agent: { provider, profileId: provider, profileName: provider, model: null,
       effort: null, launch: { command: null, args: null, shell: "powershell", env: null } }, conversationId: null, mode });
     const props = { ...components.baseProps(), settings: { browserEnabled: true, browserProfile: browser.profile },

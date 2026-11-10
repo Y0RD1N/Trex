@@ -1,12 +1,12 @@
 import { useTimeFormat } from "../../hooks/useTimeFormat";
 /**
  * Uso del plan de la cuenta: cada ventana (5 horas, semana…) con su barra y su
- * reinicio. Lo comparten el menú «Uso y contexto» y la ventana de todas las
- * cuentas. Normal es neutro; aviso y peligro llevan su color de estado.
+ * reinicio, en el menú «Uso y contexto». Normal es neutro; aviso y peligro
+ * llevan su color de estado.
  */
 import { extraLabel, resetLabel, type PlanUsage } from "../../planUsage";
 
-/** Filas de uso: nombre, barra y cuándo se reinicia. Las comparte la ventana de todas las cuentas. */
+/** Filas de uso: nombre, barra y cuándo se reinicia. */
 export function PlanWindows({ usage, now }: { usage: PlanUsage; now: number }) {
   const timeFormat = useTimeFormat();
   const extra = extraLabel(usage.extra);

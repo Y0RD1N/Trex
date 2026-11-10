@@ -14,6 +14,7 @@ mod output_flow;
 mod cli_updates;
 mod clipboard;
 mod conversations;
+mod coordination;
 mod codex_models;
 mod files;
 mod git;
@@ -426,6 +427,13 @@ pub fn run() {
             message_queue::message_queue_read,
             message_queue::message_queue_ack,
             queue_mcp::message_queue_mcp_config,
+            coordination::coordination_sync,
+            coordination::coordination_leave,
+            coordination::coordination_record_edits,
+            coordination::coordination_ack_notes,
+            coordination::coordination_release,
+            coordination::coordination_tools,
+            coordination::coordination_call,
             attachments::read_image_file,
             attachments::read_clipboard_image,
             attachments::save_attachment,

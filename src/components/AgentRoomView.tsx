@@ -1,6 +1,7 @@
 import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { browserOptions } from "../browser";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCoordination } from "../hooks/useCoordination";
 import { formatError, loadHandoff, prepareHandoff } from "../api";
 import { mergeRoomItems, roomConversationContext, roomDelivery, roomQueueAddress, roomQueueSnapshot, roomRequestText, routeRoomMessage, type AgentRoom, type RoomRole } from "../agentRoom";
 import { completedWorkflowPlan, IMPLEMENTATION_INSTRUCTION, IMPLEMENTATION_REMINDER, PLANNING_REMINDER, workflowPlanningInstruction, workflowClarifications, workflowPlanContext } from "../agentWorkflow";
@@ -37,21 +38,23 @@ const DELTA_BUDGET = 24 * 1024;
 type Sessions = Partial<Record<RoomRole, ChatSession>>;
 type SendKind = "plan" | "execute" | "message";
 type Issued = { cycle: number; kind: SendKind; previous: string | null; users: Set<string>; accepted: boolean };
-type RuntimeProps = { role: RoomRole; options: ChatSessionOptions; publish: (role: RoomRole, session: ChatSession) => void };
+type RuntimeProps = { role: RoomRole; label: string; options: ChatSessionOptions; publish: (role: RoomRole, session: ChatSession) => void };
 
-function ReportSession({ role, session, publish }: Omit<RuntimeProps, "options"> & { session: ChatSession }) {
+function ReportSession({ role, label, options, session, publish }: RuntimeProps & { session: ChatSession }) {
+  // Cada participante es una sesión más del proyecto: sus ediciones y avisos se coordinan con las demás.
+  useCoordination(session, { id: options.queueId ?? options.sessionId, project: options.cwd, label });
   useLayoutEffect(() => { publish(role, session); });
   return null;
 }
-function ClaudeRuntime({ role, options, publish }: RuntimeProps) {
-  return <ReportSession role={role} session={useClaudeChat(options)} publish={publish} />;
+function ClaudeRuntime(props: RuntimeProps) {
+  return <ReportSession {...props} session={useClaudeChat(props.options)} />;
 }
-function CodexRuntime({ role, options, publish }: RuntimeProps) {
-  return <ReportSession role={role} session={useCodexChat(options)} publish={publish} />;
+function CodexRuntime(props: RuntimeProps) {
+  return <ReportSession {...props} session={useCodexChat(props.options)} />;
 }
-function AntigravityRuntime({ role, options, publish }: RuntimeProps) { return <ReportSession role={role} session={useAntigravityChat(options)} publish={publish} />; }
-function TrexRuntime({ role, options, publish }: RuntimeProps) {
-  return <ReportSession role={role} session={useTrexChat(options)} publish={publish} />;
+function AntigravityRuntime(props: RuntimeProps) { return <ReportSession {...props} session={useAntigravityChat(props.options)} />; }
+function TrexRuntime(props: RuntimeProps) {
+  return <ReportSession {...props} session={useTrexChat(props.options)} />;
 }
 
 const queued = (session?: ChatSession): boolean => !!session && (session.queue.snapshot.messages.length > 0 || !!session.queue.snapshot.receipt || !!session.queue.snapshot.outbox?.length);
@@ -566,7 +569,8 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
         onExit: (_id, code) => { if (ROLES.every(candidate => candidate === role || ["failed", "exited"].includes(sessionsRef.current[candidate]?.state.process ?? "starting"))) latest.current.onExit(latest.current.sessionId, code); },
       };
       const Runtime = participant.agent.provider === "antigravity" ? AntigravityRuntime : participant.agent.provider === "trex" ? TrexRuntime : participant.agent.provider === "claude" ? ClaudeRuntime : CodexRuntime;
-      return <Runtime key={`${room.id}-${role}-${participant.agent.profileId}-${options.planningOnly ? "read" : "write"}`} role={role} options={options} publish={publish} />;
+      return <Runtime key={`${room.id}-${role}-${participant.agent.profileId}-${options.planningOnly ? "read" : "write"}`} role={role} options={options} publish={publish}
+        label={`${participant.agent.profileName ?? participant.agent.provider} · ${role === "planner" ? "planificación" : "ejecución"}`} />;
     })}
     {aggregate ? <ChatPanel {...props} browser={browser} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}
       profileName={room[room.active].agent.profileName} conversationId={room[room.active].conversationId}

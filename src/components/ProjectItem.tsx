@@ -104,10 +104,9 @@ export default function ProjectItem({
         </button>
       ) : <span className="project-disclosure-placeholder" />}
       <span className={`project-icon${logo && logo !== brokenLogo ? " has-logo" : ""}`} aria-hidden="true" title={activityText || undefined}>
-        {/* El icono detectado del proyecto se conserva siempre; el núcleo de estratos lo acompaña como
-            un lomo fino, así se reconoce por icono y por estratos. Sin icono, el núcleo va completo. */}
+        {/* El icono detectado del proyecto va solo; sin icono, la carpeta con sus estratos. */}
         {logo && logo !== brokenLogo
-          ? <><ProjectCore seed={project.id} width={3} height={16} /><img src={logo} alt="" draggable={false} onError={() => setBrokenLogo(logo)} /></>
+          ? <img src={logo} alt="" draggable={false} onError={() => setBrokenLogo(logo)} />
           : <ProjectCore seed={project.id} />}
         {activity !== "idle" && <span className={`project-activity is-${activity}`} />}
       </span>

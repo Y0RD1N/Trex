@@ -21,6 +21,7 @@ import {
 } from "../codexChat";
 import { mentionedSkills } from "../chatCommands";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
+import { PEER_INSTRUCTIONS } from "../coordination";
 import { questionInstructions } from "../chatQuestions";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
@@ -39,7 +40,7 @@ const ANSWERED_IN_CHAT = new Set([
 ]);
 /** Turnos de la conversación recuperada que se muestran al abrirla. */
 const HISTORY_TURNS = 40;
-const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS} ${taskInstructions("codex")}`;
+const CHAT_INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} ${questionInstructions("codex")} ${INBOX_INSTRUCTIONS} ${taskInstructions("codex")} ${PEER_INSTRUCTIONS}`;
 
 /** Approval must not weaken the planner's sandbox, even for a session grant. */
 function planningApprovalAllowed(method: string | undefined, input: Json): boolean {
@@ -526,7 +527,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         // Unknown global/-c permissions get an observe grant until the native thread confirms them.
         let bindingMode = browserMode(choicesRef.current.mode ?? (launch.thread.sandbox ? browserChoice(sandboxBrowserMode(launch.thread.sandbox)) : "read-only"), planningOnly);
         if (callbacks.current.browser?.enabled || callbacks.current.desktopEnabled || callbacks.current.a11yEnabled) browserBindingRef.current = { mode: bindingMode, pending: true };
-        const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId);
+        // The same identity as the chat's coordination hook (useCoordination): queue id or session id.
+        const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId, false, { session: callbacks.current.queueId ?? sessionId, project: cwd });
         if (!isCurrent()) return;
         const detection = detectedIntegrations(cwd);
         availableRef.current = detection instanceof Promise ? await detection : detection;

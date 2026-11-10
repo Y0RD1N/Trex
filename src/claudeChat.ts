@@ -16,6 +16,7 @@ import {
 import { parseClaudeAgents, parseClaudeCommands, parseClaudeSkills } from "./chatCommands";
 import { claudeRateLimitUsage, parseClaudeUsage } from "./planUsage";
 import { FILE_SHARING_INSTRUCTIONS } from "./sharedFiles";
+import { PEER_INSTRUCTIONS, withoutNotes } from "./coordination";
 import { imageReference, withoutImageLabels } from "./imageReferences";
 import { questionInstructions } from "./chatQuestions";
 import { INBOX_INSTRUCTIONS, type InboxPart } from "./messageQueue";
@@ -65,7 +66,7 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
     // ExitPlanMode is withheld, so the report is the final message instead of a plan-mode exit the app denies.
     // Plan mode and its permission checks stay; only the way out of plan mode is removed.
     const rolePolicy = choices.rolePolicy?.replace(/\s+/g, " ").replace(/"/g, "'").trim() || null;
-    flags.push("--append-system-prompt", [FILE_SHARING_INSTRUCTIONS, questionInstructions("claude"), INBOX_INSTRUCTIONS, taskInstructions("claude"),
+    flags.push("--append-system-prompt", [FILE_SHARING_INSTRUCTIONS, questionInstructions("claude"), INBOX_INSTRUCTIONS, taskInstructions("claude"), PEER_INSTRUCTIONS,
       integrationInstructions("claude", choices.integrations), rolePolicy].filter(Boolean).join(" "));
     if (rolePolicy) flags.push("--disallowedTools", "ExitPlanMode");
   }
@@ -229,7 +230,7 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
       if (interruptedText(value)) {
         interrupted = true;
         items = [...items, { kind: "notice", id: `n-${items.length}-${text(event.uuid)}`, tone: "info", text: "Detenido. Puedes seguir escribiendo." }];
-      } else if (fromHistory && !hiddenUserText(value)) typed.push(value);
+      } else if (fromHistory && !hiddenUserText(value)) typed.push(withoutNotes(value));
     } else if (block.type === "image" && fromHistory) images += 1;
   }
   if (typed.length || images) {

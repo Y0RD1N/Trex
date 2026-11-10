@@ -1,5 +1,6 @@
 //! The app executable can also run as a small, newline-delimited MCP server.
 //! Reading claims a durable receipt; only the frontend acknowledges delivery.
+use crate::coordination;
 use crate::message_queue::{list_in, read_in};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -19,11 +20,34 @@ const TOOL_DESCRIPTION: &str = "Lee los mensajes que el usuario dejó en cola du
 // La guía completa va una sola vez en las instrucciones del desarrollador del
 // chat; el servidor solo se presenta (texto estable para la caché del prompt).
 const SERVER_INSTRUCTIONS: &str = "Trex chat tools: trex_update_tasks (visible task list, plan:[{step,status}], metadata only) and, when listed, trex_read_messages (queued user messages).";
+/// Guía de la conexión que solo coordina (Trex CLI ya tiene su buzón y su lista de tareas).
+const PEERS_INSTRUCTIONS: &str = "Other Trex sessions may work in this project at the same time: check trex_peers, reserve what you change with trex_claim and free it with trex_release, and agree via trex_message. Nothing blocks; never wait or poll for a peer: Trex wakes you when a reply arrives.";
+
+/// Qué ofrece una conexión: todo, solo la lista de tareas (más la coordinación si hay
+/// sesión) o solo la coordinación entre sesiones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    All,
+    Tasks,
+    Peers,
+}
 
 struct Launch {
     data_dir: PathBuf,
     queue_id: String,
-    tasks_only: bool,
+    scope: Scope,
+    peer: Option<Peer>,
+}
+
+/// Sesión y proyecto de quien usa el servidor: activan las herramientas de coordinación.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct Peer {
+    pub session: String,
+    pub project: String,
+}
+
+fn is_coordination(name: &Value) -> bool {
+    name.as_str().is_some_and(|name| coordination::TOOLS.contains(&name))
 }
 
 /// Return true for every invocation of this mode, including invalid arguments,
@@ -44,7 +68,8 @@ pub fn run_if_requested() -> bool {
         stdout.lock(),
         &launch.data_dir,
         &launch.queue_id,
-        launch.tasks_only,
+        launch.scope,
+        launch.peer.as_ref(),
     ) {
         eprintln!("trex inbox MCP: {error}");
     }
@@ -55,12 +80,23 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Option<Launch>
     if args.next().as_deref() != Some(std::ffi::OsStr::new(MCP_FLAG)) {
         return Ok(None);
     }
-    let usage = "Uso: --trex-inbox-mcp <appDataDir> <queueId>";
+    let usage = "Uso: --trex-inbox-mcp <appDataDir> <queueId> [--tasks-only | --peers-only] [--peer <sessionId> <projectDir>]";
     let data_dir = args.next().ok_or(usage)?;
     let queue_id = args.next().ok_or(usage)?;
-    let option = args.next();
-    let tasks_only = option.as_deref() == Some(std::ffi::OsStr::new("--tasks-only"));
-    if data_dir.is_empty() || option.is_some() && !tasks_only || args.next().is_some() {
+    let (mut scope, mut peer) = (Scope::All, None);
+    while let Some(option) = args.next() {
+        if option == "--tasks-only" && scope == Scope::All {
+            scope = Scope::Tasks;
+        } else if option == "--peers-only" && scope == Scope::All {
+            scope = Scope::Peers;
+        } else if option == "--peer" && peer.is_none() {
+            let text = |value: Option<OsString>| value.and_then(|value| value.into_string().ok()).filter(|value| !value.is_empty()).ok_or(usage);
+            peer = Some(Peer { session: text(args.next())?, project: text(args.next())? });
+        } else {
+            return Err(usage.into());
+        }
+    }
+    if data_dir.is_empty() || scope == Scope::Peers && peer.is_none() {
         return Err(usage.into());
     }
     let queue_id = queue_id
@@ -69,12 +105,13 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Option<Launch>
     Ok(Some(Launch {
         data_dir: PathBuf::from(data_dir),
         queue_id,
-        tasks_only,
+        scope,
+        peer,
     }))
 }
 
 #[tauri::command]
-pub async fn message_queue_mcp_config(app: AppHandle, queue_id: String, tasks_only: Option<bool>) -> Result<Value, String> {
+pub async fn message_queue_mcp_config(app: AppHandle, queue_id: String, tasks_only: Option<bool>, peer: Option<Peer>, peers_only: Option<bool>) -> Result<Value, String> {
     let data_dir = app
         .path()
         .app_data_dir()
@@ -83,7 +120,22 @@ pub async fn message_queue_mcp_config(app: AppHandle, queue_id: String, tasks_on
         .map_err(|error| format!("No se encontró el ejecutable de la app: {error}"))?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut config = mcp_config(&executable, &data_dir, &queue_id)?;
-        if tasks_only == Some(true) { config["mcp_servers.trex_inbox.args"].as_array_mut().ok_or("Configuración MCP inválida.")?.push(json!("--tasks-only")); }
+        let args = config["mcp_servers.trex_inbox.args"].as_array_mut().ok_or("Configuración MCP inválida.")?;
+        if peers_only == Some(true) {
+            // Trex CLI: solo la coordinación; su buzón y sus tareas son nativos.
+            if peer.is_none() || tasks_only == Some(true) {
+                return Err("La conexión de coordinación necesita la sesión y el proyecto.".into());
+            }
+            args.push(json!("--peers-only"));
+        } else if tasks_only == Some(true) {
+            args.push(json!("--tasks-only"));
+        }
+        if let Some(peer) = peer {
+            if coordination::project_root(&peer.project).is_none() || peer.session.is_empty() {
+                return Err("La sesión y la carpeta del proyecto de la coordinación no son válidas.".into());
+            }
+            args.extend([json!("--peer"), json!(peer.session), json!(peer.project)]);
+        }
         Ok(config)
     })
         .await
@@ -201,14 +253,15 @@ fn serve(
     writer: impl Write,
     data_dir: &Path,
     queue_id: &str,
-) -> Result<(), String> { serve_tools(reader, writer, data_dir, queue_id, false) }
+) -> Result<(), String> { serve_tools(reader, writer, data_dir, queue_id, Scope::All, None) }
 
 fn serve_tools(
     mut reader: impl BufRead,
     mut writer: impl Write,
     data_dir: &Path,
     queue_id: &str,
-    tasks_only: bool,
+    scope: Scope,
+    peer: Option<&Peer>,
 ) -> Result<(), String> {
     // Even initialize must not succeed for an invalid queue. Listing does not
     // create an inbox or claim pending messages.
@@ -226,13 +279,25 @@ fn serve_tools(
             Frame::Json(bytes) => match serde_json::from_slice(&bytes) {
                 Ok(request) => {
                     let request: Value = request;
-                    if tasks_only && request["method"] == "tools/call" && request["params"]["name"] != TASK_TOOL {
+                    // Coordination tools never read the queue, so a tasks-only connection keeps them.
+                    let name = &request["params"]["name"];
+                    let coordination = peer.is_some() && is_coordination(name);
+                    let method = request.get("method").and_then(Value::as_str).unwrap_or_default().to_owned();
+                    if scope == Scope::Tasks && method == "tools/call" && name != TASK_TOOL && !coordination {
                         request.get("id").cloned().map(|id| rpc_error(id, -32601, "Esta conexión solo ofrece trex_update_tasks."))
+                    } else if scope == Scope::Peers && method == "tools/call" && !coordination {
+                        request.get("id").cloned().map(|id| rpc_error(id, -32601, "Esta conexión solo ofrece la coordinación entre sesiones."))
                     } else {
-                        let listing = request.get("method").and_then(Value::as_str) == Some("tools/list");
-                        let mut response = cached_request(request, data_dir, queue_id, &mut replies);
-                        if tasks_only && listing {
-                            if let Some(tools) = response.as_mut().and_then(|r| r.get_mut("result")).and_then(|r| r.get_mut("tools")).and_then(Value::as_array_mut) { tools.retain(|t| t["name"] == TASK_TOOL); }
+                        let mut response = cached_request(request, data_dir, queue_id, peer, &mut replies);
+                        let result = response.as_mut().and_then(|r| r.get_mut("result"));
+                        match (scope, method.as_str(), result) {
+                            (Scope::Tasks | Scope::Peers, "tools/list", Some(result)) => {
+                                if let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) {
+                                    tools.retain(|t| (scope == Scope::Tasks && t["name"] == TASK_TOOL) || is_coordination(&t["name"]));
+                                }
+                            }
+                            (Scope::Peers, "initialize", Some(result)) => result["instructions"] = json!(PEERS_INSTRUCTIONS),
+                            _ => {}
                         }
                         response
                     }
@@ -260,6 +325,7 @@ fn cached_request(
     request: Value,
     data_dir: &Path,
     queue_id: &str,
+    peer: Option<&Peer>,
     replies: &mut HashMap<String, Value>,
 ) -> Option<Value> {
     let key = (request.get("method").and_then(Value::as_str) == Some("tools/call"))
@@ -270,14 +336,14 @@ fn cached_request(
     if let Some(reply) = key.as_ref().and_then(|key| replies.get(key)) {
         return Some(reply.clone());
     }
-    let reply = handle_request(request, data_dir, queue_id);
+    let reply = handle_request(request, data_dir, queue_id, peer);
     if let (Some(key), Some(reply)) = (key, &reply) {
         replies.insert(key, reply.clone());
     }
     reply
 }
 
-fn handle_request(request: Value, data_dir: &Path, queue_id: &str) -> Option<Value> {
+fn handle_request(request: Value, data_dir: &Path, queue_id: &str, peer: Option<&Peer>) -> Option<Value> {
     let Some(object) = request.as_object() else {
         return Some(rpc_error(Value::Null, -32600, "Petición MCP no válida."));
     };
@@ -339,11 +405,17 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str) -> Option<Val
             })
         }
         "ping" => json!({}),
-        "tools/list" => json!({"tools": [{
-            "name": TOOL_NAME,
-            "description": TOOL_DESCRIPTION,
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
-        }, task_tool()]}),
+        "tools/list" => {
+            let mut tools = vec![json!({
+                "name": TOOL_NAME,
+                "description": TOOL_DESCRIPTION,
+                "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
+            }), task_tool()];
+            if peer.is_some() {
+                tools.extend(coordination::tools());
+            }
+            json!({"tools": tools})
+        }
         "tools/call" => {
             let Some(params) = params else {
                 return Some(rpc_error(
@@ -352,6 +424,11 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str) -> Option<Val
                     "Faltan los parámetros de la herramienta.",
                 ));
             };
+            if let Some(peer) = peer.filter(|_| is_coordination(&params["name"])) {
+                let name = params["name"].as_str().unwrap_or_default();
+                let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                return Some(json!({"jsonrpc":"2.0","id":id,"result":coordination::call(data_dir, &peer.project, &peer.session, name, &args)}));
+            }
             if params.get("name").and_then(Value::as_str) == Some(TASK_TOOL) {
                 return Some(match update_tasks(params.get("arguments")) {
                     Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
@@ -426,7 +503,7 @@ mod tests {
     fn server_guidance_is_a_stable_one_liner_and_never_asks_for_a_final_read() {
         let dir = TestDir::new();
         let reply = handle_request(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
-            "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}), &dir.0, QUEUE).unwrap();
+            "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}), &dir.0, QUEUE, None).unwrap();
         let instructions = reply["result"]["instructions"].as_str().unwrap();
         assert_eq!(instructions, SERVER_INSTRUCTIONS);
         assert!(instructions.len() < 200, "the developer instructions carry the full guidance once");
@@ -443,7 +520,7 @@ mod tests {
             json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":TASK_TOOL,"arguments":{"plan":"bad"}}})];
         let input = requests.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
         let mut output = Vec::new();
-        serve_tools(Cursor::new(input), &mut output, &dir.0, QUEUE, true).unwrap();
+        serve_tools(Cursor::new(input), &mut output, &dir.0, QUEUE, Scope::Tasks, None).unwrap();
         let replies: Vec<Value> = output.split(|b| *b == b'\n').filter(|v| !v.is_empty()).map(|v| serde_json::from_slice(v).unwrap()).collect();
         assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 1);
         assert_eq!(replies[0]["result"]["tools"][0]["name"], TASK_TOOL);
@@ -520,6 +597,9 @@ mod tests {
             vec![MCP_FLAG, "data"],
             vec![MCP_FLAG, "data", QUEUE, "extra"],
             vec![MCP_FLAG, "", QUEUE],
+            vec![MCP_FLAG, "data", QUEUE, "--peer", "tab-1"],
+            vec![MCP_FLAG, "data", QUEUE, "--peer", "", "D:\\p"],
+            vec![MCP_FLAG, "data", QUEUE, "--tasks-only", "--tasks-only"],
         ] {
             assert!(parse(&args).is_err());
         }
@@ -528,6 +608,65 @@ mod tests {
             .unwrap();
         assert_eq!(launch.data_dir, PathBuf::from("C:\\App Data\\trex 🦖"));
         assert_eq!(launch.queue_id, QUEUE);
+        assert!(launch.peer.is_none());
+        let launch = parse(&[MCP_FLAG, "data", QUEUE, "--tasks-only", "--peer", "tab-1", "D:\\Mi proyecto"]).unwrap().unwrap();
+        assert_eq!(launch.scope, Scope::Tasks);
+        let peer = launch.peer.unwrap();
+        assert_eq!((peer.session.as_str(), peer.project.as_str()), ("tab-1", "D:\\Mi proyecto"));
+        let launch = parse(&[MCP_FLAG, "data", QUEUE, "--peers-only", "--peer", "tab-1", "D:\\Mi proyecto"]).unwrap().unwrap();
+        assert_eq!(launch.scope, Scope::Peers);
+        assert!(parse(&[MCP_FLAG, "data", QUEUE, "--peers-only"]).is_err(), "coordination needs its session");
+        assert!(parse(&[MCP_FLAG, "data", QUEUE, "--tasks-only", "--peers-only", "--peer", "tab-1", "D:\\p"]).is_err());
+    }
+
+    #[test]
+    fn peer_connections_add_coordination_tools_even_when_tasks_only() {
+        let dir = TestDir::new();
+        let project = if cfg!(windows) { "D:\\Mi proyecto" } else { "/home/ana/Mi proyecto" };
+        let peer = Peer { session: "tab-1".into(), project: project.into() };
+        let requests = [json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trex_claim","arguments":{"resources":["git"]}}}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"trex_peers","arguments":{}}}),
+            call(json!(4))];
+        let lines = |list: &[Value]| list.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
+        let parse = |output: Vec<u8>| -> Vec<Value> { output.split(|b| *b == b'\n').filter(|v| !v.is_empty()).map(|v| serde_json::from_slice(v).unwrap()).collect() };
+        let mut output = Vec::new();
+        serve_tools(Cursor::new(lines(&requests)), &mut output, &dir.0, QUEUE, Scope::Tasks, Some(&peer)).unwrap();
+        let replies = parse(output);
+        let names: Vec<&str> = replies[0]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, [TASK_TOOL, "trex_peers", "trex_claim", "trex_release", "trex_message"]);
+        assert_eq!(replies[1]["result"]["isError"], false, "{}", replies[1]);
+        assert!(replies[1]["result"]["content"][0]["text"].as_str().unwrap().contains("recurso git"));
+        assert!(replies[2]["result"]["content"][0]["text"].as_str().unwrap().contains("Tus reservas: recurso git"));
+        assert_eq!(replies[3]["error"]["code"], -32601, "tasks-only still never reads the queue");
+        // Without a peer the coordination tools are neither listed nor callable.
+        let mut output = Vec::new();
+        serve_tools(Cursor::new(lines(&requests[..2])), &mut output, &dir.0, QUEUE, Scope::All, None).unwrap();
+        let replies = parse(output);
+        assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 2);
+        assert!(replies[1].get("error").is_some());
+    }
+
+    #[test]
+    fn peers_only_connections_offer_just_the_coordination_tools() {
+        let dir = TestDir::new();
+        let project = if cfg!(windows) { "D:\\Mi proyecto" } else { "/home/ana/Mi proyecto" };
+        let peer = Peer { session: "trex-tab".into(), project: project.into() };
+        let requests = [json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"trex-agent","version":"1"}}}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":TASK_TOOL,"arguments":{"plan":[{"step":"x","status":"pending"}]}}}),
+            call(json!(4)),
+            json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"trex_peers","arguments":{}}})];
+        let input = requests.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
+        let mut output = Vec::new();
+        serve_tools(Cursor::new(input), &mut output, &dir.0, QUEUE, Scope::Peers, Some(&peer)).unwrap();
+        let replies: Vec<Value> = output.split(|b| *b == b'\n').filter(|v| !v.is_empty()).map(|v| serde_json::from_slice(v).unwrap()).collect();
+        assert_eq!(replies[0]["result"]["instructions"], PEERS_INSTRUCTIONS);
+        let names: Vec<&str> = replies[1]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["trex_peers", "trex_claim", "trex_release", "trex_message"]);
+        assert_eq!(replies[2]["error"]["code"], -32601, "Trex CLI keeps its own task list");
+        assert_eq!(replies[3]["error"]["code"], -32601, "and its own inbox");
+        assert_eq!(replies[4]["result"]["isError"], false, "{}", replies[4]);
     }
 
     #[test]
@@ -615,16 +754,16 @@ mod tests {
         let dir = TestDir::new();
         let mut cache = HashMap::new();
         enqueue_in(&dir.0, QUEUE, message("first")).unwrap();
-        let first = cached_request(call(json!(7)), &dir.0, QUEUE, &mut cache).unwrap();
+        let first = cached_request(call(json!(7)), &dir.0, QUEUE, None, &mut cache).unwrap();
         let receipt = first["result"]["_meta"]["trex/receiptId"].as_str().unwrap();
         crate::message_queue::ack_in(&dir.0, QUEUE, receipt).unwrap();
         enqueue_in(&dir.0, QUEUE, message("later")).unwrap();
         assert_eq!(
-            cached_request(call(json!(7)), &dir.0, QUEUE, &mut cache).unwrap(),
+            cached_request(call(json!(7)), &dir.0, QUEUE, None, &mut cache).unwrap(),
             first
         );
         assert_eq!(list_in(&dir.0, QUEUE).unwrap().messages[0].id, "later");
-        let distinct = cached_request(call(json!("7")), &dir.0, QUEUE, &mut cache).unwrap();
+        let distinct = cached_request(call(json!("7")), &dir.0, QUEUE, None, &mut cache).unwrap();
         assert_ne!(distinct["result"]["_meta"]["trex/receiptId"], receipt);
         assert_eq!(
             list_in(&dir.0, QUEUE).unwrap().receipt.unwrap().messages[0].id,
@@ -636,10 +775,10 @@ mod tests {
     fn retrying_an_empty_read_does_not_consume_later_arrivals() {
         let dir = TestDir::new();
         let mut cache = HashMap::new();
-        let first = cached_request(call(json!(1)), &dir.0, QUEUE, &mut cache).unwrap();
+        let first = cached_request(call(json!(1)), &dir.0, QUEUE, None, &mut cache).unwrap();
         enqueue_in(&dir.0, QUEUE, message("later")).unwrap();
         assert_eq!(
-            cached_request(call(json!(1)), &dir.0, QUEUE, &mut cache).unwrap(),
+            cached_request(call(json!(1)), &dir.0, QUEUE, None, &mut cache).unwrap(),
             first
         );
         assert_eq!(list_in(&dir.0, QUEUE).unwrap().messages[0].id, "later");

@@ -3,6 +3,7 @@ import { INBOX_SERVER, INBOX_TOOL, inboxContent, inboxTool, type QueueReceipt, t
 import { integrationInstructions, type IntegrationContext } from "./integrations";
 import { taskInstructions } from "./chatTasks";
 import { TASK_TOOL, taskTool, parseTaskPlan } from "./taskTools";
+import { isCoordinationTool, PEER_INSTRUCTIONS } from "./coordination";
 export { MCP_TASK_TOOL } from "./taskTools";
 
 export const claudeInboxInitialize = { subtype: "initialize", sdkMcpServers: [INBOX_SERVER] };
@@ -30,8 +31,11 @@ export const CLAUDE_INBOX_BRIEF = "Trex app tools: trex_read_messages reads queu
  * `appended` says the launch already carries the app instructions; otherwise
  * (a profile with its own system prompt) the server provides the capability guidance.
  */
+/** Herramientas de coordinación entre sesiones del proyecto (las resuelve `coordination.rs`). */
+export type ClaudeCoordination = { tools: () => Promise<Json[]>; call: (name: string, args: unknown) => Promise<Json> };
+
 export async function claudeInboxReply(requestId: string, request: Json, read: () => Promise<QueueSnapshot>, integrations?: IntegrationContext,
-  options: { appended?: boolean } = {}): Promise<{ line: string; receipt: QueueReceipt | null } | null> {
+  options: { appended?: boolean; coordination?: ClaudeCoordination } = {}): Promise<{ line: string; receipt: QueueReceipt | null } | null> {
   if (request.subtype !== "mcp_message" || request.server_name !== INBOX_SERVER) return null;
   const message = record(request.message) ?? {};
   const params = record(message.params) ?? {};
@@ -44,10 +48,17 @@ export async function claudeInboxReply(requestId: string, request: Json, read: (
     result = { protocolVersion: versions.includes(String(params.protocolVersion)) ? params.protocolVersion : versions[versions.length - 1],
       capabilities: { tools: {} }, serverInfo: { name: INBOX_SERVER, version: "1.0.0" },
       instructions: options.appended ? CLAUDE_INBOX_BRIEF
-        : [integrationInstructions("claude", integrations), taskInstructions("claude")].filter(Boolean).join(" ") };
-  } else if (message.method === "tools/list") result = { tools: [inboxTool, taskTool] };
-  else if (message.method === "tools/call") {
-    if (params.name === TASK_TOOL) {
+        : [integrationInstructions("claude", integrations), taskInstructions("claude"), options.coordination ? PEER_INSTRUCTIONS : ""].filter(Boolean).join(" ") };
+  } else if (message.method === "tools/list") {
+    // Sin el registro de coordinación el buzón sigue funcionando: solo faltan esas herramientas.
+    const coordination = options.coordination;
+    const peers: unknown = coordination ? await Promise.resolve().then(() => coordination.tools()).catch(() => []) : [];
+    result = { tools: [inboxTool, taskTool, ...(Array.isArray(peers) ? peers : [])] };
+  } else if (message.method === "tools/call") {
+    if (options.coordination && isCoordinationTool(params.name)) {
+      try { result = await options.coordination.call(String(params.name), params.arguments ?? {}); }
+      catch (reason) { result = { content: [{ type: "text", text: `No se pudo usar la coordinación entre sesiones: ${String(reason)}` }], isError: true }; }
+    } else if (params.name === TASK_TOOL) {
       const plan = parseTaskPlan(params.arguments);
       if (!plan) error = { code: -32602, message: "Expected plan with up to 64 valid steps, at most one in_progress, and at most 32 KiB of JSON." };
       else result = { content: [{ type: "text", text: JSON.stringify(plan) }], structuredContent: plan, isError: false };

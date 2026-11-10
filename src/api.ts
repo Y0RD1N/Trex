@@ -179,8 +179,13 @@ export const agentKill = (id: string): Promise<void> => invoke<void>("agent_kill
 export const agentTerminalOutput = (id: string, taskId: string): Promise<{ text: string; truncated: boolean }> =>
   invoke("agent_terminal_output", { id, taskId });
 
-export const messageQueueMcpConfig = (queueId: string, tasksOnly = false): Promise<Record<string, unknown>> =>
-  invoke("message_queue_mcp_config", { queueId, tasksOnly });
+/**
+ * `peer` adds the coordination tools (trex_peers, trex_claim…) for that session and project;
+ * `peersOnly` leaves only those (Trex CLI has its own inbox and task list).
+ */
+export const messageQueueMcpConfig = (queueId: string, tasksOnly = false, peer?: { session: string; project: string } | null,
+  peersOnly = false): Promise<Record<string, unknown>> =>
+  invoke("message_queue_mcp_config", { queueId, tasksOnly, peer: peer ?? null, peersOnly });
 
 export type AntigravityRuntime = { installed: boolean; command: string | null; version: string | null; flags: string[]; env: Record<string, string> };
 export const antigravityRuntime = (command = "antigravity-acp", configDir = ""): Promise<AntigravityRuntime> => invoke("antigravity_runtime", { command, configDir });

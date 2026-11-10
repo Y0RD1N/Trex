@@ -1,5 +1,6 @@
 import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCoordination } from "../hooks/useCoordination";
 import { agentTeamClaim, agentTeamFinish, agentTeamOpen, agentTeamPause, agentTeamPoll, agentTeamSnapshot, trexBrowserStatus, trexBrowserSpaces, formatError, loadHandoff, prepareHandoff } from "../api";
 import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, mergeTeamItems, teamCombinedState, teamGitSnapshot, teamMemberUsesBrowser, teamPlanningContext, teamReportsPrompt, teamRoleBlock, teamRoleBlockNeeded, teamRoleReminder, teamTaskActive, teamTaskRunnable, permissionChangeNote, withMemberPermission, type AgentTeam, type TaskUsage, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
 import { budgetNote, budgetRefusal, budgetRemaining } from "../teamBudget";
@@ -25,8 +26,10 @@ import "./AgentRoomView.css";
 import "./AgentTeamView.css";
 
 type Props = Omit<ChatViewProps, "workflow" | "planningOnly" | "handoff" | "handoffRestored"> & { team: AgentTeam; onTeamChange: (team: AgentTeam) => void };
-type RuntimeProps = { id: string; epoch: string; options: ChatSessionOptions; publish: (id: string, epoch: string, session: ChatSession) => void };
-function Publish({ id, epoch, session, publish }: Omit<RuntimeProps,"options"> & { session: ChatSession }) {
+type RuntimeProps = { id: string; epoch: string; label: string; options: ChatSessionOptions; publish: (id: string, epoch: string, session: ChatSession) => void };
+function Publish({ id, epoch, label, options, session, publish }: RuntimeProps & { session: ChatSession }) {
+  // Cada miembro es una sesión más del proyecto: sus ediciones y avisos se coordinan con las demás.
+  useCoordination(session, { id: options.queueId ?? options.sessionId, project: options.cwd, label });
   useLayoutEffect(() => publish(id, epoch, session));
   return null;
 }
@@ -539,7 +542,7 @@ export default function AgentTeamView(props: Props) {
         visible:activated.has(member.id) && (openedEpoch===team.epoch || historyOnly && props.visible && !!member.conversationId),
         onRunning:()=>latest.current.onRunning(latest.current.sessionId),onExit:noop};
       const Runtime=member.agent.provider==="antigravity"?AntigravityRuntime:member.agent.provider==="claude"?ClaudeRuntime:member.agent.provider==="codex"?CodexRuntime:TrexRuntime;
-      return <Runtime key={team.epoch+"-"+member.id} id={member.id} epoch={team.epoch} options={options} publish={publish} />;
+      return <Runtime key={team.epoch+"-"+member.id} id={member.id} epoch={team.epoch} label={member.name+" · "+TEAM_ROLES[member.role].name} options={options} publish={publish} />;
     })}
     {aggregate?<ChatPanel {...props} visible={props.visible && !subOpen} focused={props.focused && !subOpen} onOpenSubagent={openSubagent} provider={team.master.agent.provider} session={aggregate} browser={{...browser,clientId:team.id+"-"+team.master.id,label:team.master.name,...spaces.find(space=>space.clientId===team.id+"-"+team.master.id),enabled:browser.enabled}} browserSpaces={spaces.map(space=>({...space,active:(sessions[space.clientId.slice(team.id.length+1)]?.state.pendingTurns??0)>0}))} onStopBrowserAgent={clientId=>{const member=members.find(member=>team.id+"-"+member.id===clientId);if(member){sessionsRef.current[member.id]?.interrupt();stop("Se detuvo a "+member.name+". Revisa su tarea antes de reanudar el equipo.");}}}
       profileId={team.master.agent.profileId} profileName={team.master.agent.profileName} conversationId={team.master.conversationId}

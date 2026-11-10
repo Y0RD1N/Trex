@@ -62,8 +62,26 @@ test("files are described by kind, size and folder", () => {
 });
 
 test("the agents are told how to attach files in a single shell-safe line", () => {
-  assert.ok(!/["\n\r]/.test(files.FILE_SHARING_INSTRUCTIONS));
+  assert.ok(!/["\n\r\\]/.test(files.FILE_SHARING_INSTRUCTIONS));
   assert.match(files.FILE_SHARING_INSTRUCTIONS, /absolute local path on a line of its own/);
+});
+
+test("Windows drives written as Unix paths point to the real file", () => {
+  const windows = "D:\\proyecto", unix = "/home/ana/proyecto";
+  // `/C:/…`: lo que escribe un agente que copia el ejemplo de Unix (y lo que deja `file:///C:/…`).
+  assert.equal(files.localFilePath("/C:/Users/Mi PC/AppData/Local/Temp/r.png", windows), "C:/Users/Mi PC/AppData/Local/Temp/r.png");
+  assert.equal(files.localFilePath("/d:/proyecto/src/app.ts:12", ""), "d:/proyecto/src/app.ts");
+  assert.equal(files.localFilePath("/C:\\Users\\ana\\a.pdf", unix), "C:\\Users\\ana\\a.pdf");
+  // `/c/…`: Git Bash, solo si el proyecto está en Windows; en Unix es una carpeta normal.
+  assert.equal(files.localFilePath("/c/Users/Mi PC/a.png", windows), "C:/Users/Mi PC/a.png");
+  assert.equal(files.localFilePath("/d/proyecto/out/CV.pdf#L3", "D:/proyecto"), "D:/proyecto/out/CV.pdf");
+  assert.equal(files.localFilePath("/c/Users/ana/a.png", unix), "/c/Users/ana/a.png");
+  assert.equal(files.localFilePath("/home/ana/a.png", windows), "/home/ana/a.png");
+  // La respuesta real que pintaba «No se encuentra el archivo».
+  assert.deepEqual(render("[resultado-oscuro.png](</C:/Users/Mi PC/AppData/Local/Temp/trex-iconos/resultado-oscuro.png>)").paragraphs[0],
+    [{ path: "C:/Users/Mi PC/AppData/Local/Temp/trex-iconos/resultado-oscuro.png", label: "resultado-oscuro.png" }]);
+  assert.deepEqual(render("![Captura](</c/Users/Mi PC/captura (1).png>)").paragraphs[0],
+    [{ path: "C:/Users/Mi PC/captura (1).png", label: "Captura" }]);
 });
 
 /**

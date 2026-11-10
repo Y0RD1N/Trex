@@ -187,6 +187,10 @@ pub struct McpServer {
     pub read_only_tools: Vec<String>,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// The app's own coordination server (`crate::coordination`). Never read from
+    /// settings: its tools keep their names and do not touch the workspace.
+    #[serde(skip)]
+    pub app_owned: bool,
 }
 fn yes() -> bool {
     true

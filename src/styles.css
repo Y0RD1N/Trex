@@ -715,8 +715,8 @@ body.dragging-sidebar .sidebar { transition: none; }
 .project-item:hover { background: var(--hover); }
 /* El proyecto activo lleva un «›» en el margen, como el indicador de línea de una terminal. */
 .project-item.active { background: var(--selected); }
-/* El núcleo de sondeo también lleva las esquinas suavizadas. */
-.project-core { display: block; border-radius: var(--radius-xs); }
+/* Carpeta del proyecto con sus estratos (ProjectCore): el contorno sigue al color del icono. */
+.project-core { display: block; }
 .project-item.active::before { content: "›"; position: absolute; left: -9px; top: 50%; translate: 0 -50%; color: var(--accent-strong); font-size: var(--fs-md); line-height: 1; }
 .project-disclosure, .project-disclosure-placeholder {
   flex: 0 0 auto;
@@ -745,13 +745,12 @@ body.dragging-sidebar .sidebar { transition: none; }
   color: var(--text-dim);
   transition: color var(--t);
 }
-/* Con icono detectado: lomo de estratos (3px) y el icono a su lado. */
-.project-icon.has-logo { gap: 4px; }
 .project-item:hover .project-icon { color: var(--text-muted); }
 .project-item.active .project-icon { color: var(--text); }
+/* Con icono detectado va solo, del mismo tamaño que la carpeta. */
 .project-icon.has-logo img {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   object-fit: contain;
   border-radius: var(--radius-xs);
   opacity: .82;

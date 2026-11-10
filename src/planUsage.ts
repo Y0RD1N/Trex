@@ -23,6 +23,8 @@ export type PlanWindow = {
   severity: UsageSeverity;
   /** La ventana que se muestra cuando solo cabe un número. */
   headline: boolean;
+  /** Lo que dura la ventana (5 horas, una semana…), si se sabe: da el ritmo de uso. */
+  durationMs?: number | null;
 };
 
 export type PlanUsage = {
@@ -66,10 +68,26 @@ function withHeadline(windows: PlanWindow[]): PlanWindow[] {
 const CLAUDE_KINDS: Record<string, string> = { session: "Sesión (5 h)", weekly_all: "Semana", five_hour: "Sesión (5 h)", seven_day: "Semana" };
 /** Ventanas de `rate_limit_event` y la fila de `get_usage` que corresponde a cada una. */
 const CLAUDE_EVENT_WINDOWS: Record<string, string> = { five_hour: "session", seven_day: "weekly_all" };
+const HOUR_MS = 3_600_000;
+const FIVE_HOURS_MS = 5 * HOUR_MS;
+const WEEK_MS = 7 * 24 * HOUR_MS;
+
+/** A qué se limita una fila: un nombre suelto o el modelo (`{ model: { display_name: "Fable" } }`). */
+function claudeScope(row: Json): string {
+  const scope = record(row.scope), model = record(scope?.model);
+  return text(scope?.label) || text(scope?.name) || text(model?.display_name) || text(model?.name) || text(model?.id) || text(row.scope);
+}
+
+function claudeDuration(row: Json): number | null {
+  const kind = text(row.kind), group = text(row.group);
+  if (kind === "session" || kind === "five_hour" || group === "session") return FIVE_HOURS_MS;
+  if (group === "weekly" || kind.startsWith("weekly") || kind.startsWith("seven_day")) return WEEK_MS;
+  return null;
+}
 
 function claudeLabel(row: Json): string {
   const kind = text(row.kind);
-  const scope = text(record(row.scope)?.label) || text(record(row.scope)?.name) || text(row.scope);
+  const scope = claudeScope(row);
   if (CLAUDE_KINDS[kind]) return CLAUDE_KINDS[kind];
   const base = text(row.group) === "weekly" || kind.startsWith("weekly") ? "Semana" : text(row.group) === "session" ? "Sesión (5 h)"
     : kind.replace(/_/g, " ");
@@ -86,12 +104,13 @@ export function parseClaudeUsage(raw: unknown): PlanUsage | null {
     const percent = clampPercent(row.percent as number);
     const severity = text(row.severity);
     return {
-      id: [text(row.kind) || `row${index}`, text(record(row.scope)?.label) || text(row.scope)].filter(Boolean).join(":"),
+      id: [text(row.kind) || `row${index}`, claudeScope(row)].filter(Boolean).join(":"),
       label: claudeLabel(row),
       percent,
       resetsAt: isoTime(row.resets_at),
       severity: severity === "warning" || severity === "critical" ? severity : severity === "normal" ? "normal" : severityOf(percent),
       headline: row.is_active === true,
+      durationMs: claudeDuration(row),
     };
   });
   // Un servidor anterior a las filas: solo las ventanas sueltas.
@@ -102,7 +121,7 @@ export function parseClaudeUsage(raw: unknown): PlanUsage | null {
       const percent = clampPercent(window.utilization);
       const scope = key === "seven_day_opus" ? "Opus" : key === "seven_day_sonnet" ? "Sonnet" : "";
       return [{ id: CLAUDE_EVENT_WINDOWS[key] ?? key, label: scope ? `Semana · ${scope}` : CLAUDE_KINDS[key], percent,
-        resetsAt: isoTime(window.resets_at), severity: severityOf(percent), headline: false }];
+        resetsAt: isoTime(window.resets_at), severity: severityOf(percent), headline: false, durationMs: key === "five_hour" ? FIVE_HOURS_MS : WEEK_MS }];
     });
   }
   const extraData = record(limits?.extra_usage);
@@ -128,7 +147,8 @@ export function claudeRateLimitUsage(usage: PlanUsage | null, info: Json): PlanU
     const resetsAt = epochTime(window.resetsAt);
     const index = windows.findIndex(entry => entry.id === id);
     windows = index === -1
-      ? [...windows, { id, label: CLAUDE_KINDS[key] ?? key.replace(/_/g, " "), percent, resetsAt, severity: severityOf(percent), headline: false }]
+      ? [...windows, { id, label: CLAUDE_KINDS[key] ?? key.replace(/_/g, " "), percent, resetsAt, severity: severityOf(percent), headline: false,
+        durationMs: key === "five_hour" ? FIVE_HOURS_MS : key.startsWith("seven_day") ? WEEK_MS : null }]
       : windows.map((entry, position) => position === index
         ? { ...entry, percent, resetsAt: resetsAt ?? entry.resetsAt, severity: percent === entry.percent ? entry.severity : severityOf(percent) } : entry);
   }
@@ -157,7 +177,8 @@ function codexWindows(snapshot: Json, limitId: string, primaryBucket: boolean): 
     const percent = clampPercent(window.usedPercent);
     const label = windowLabel(minutes);
     return [{ id: `${limitId}:${slot}`, label: prefix ? `${prefix} · ${label}` : label, percent,
-      resetsAt: epochTime(window.resetsAt), severity: snapshot.rateLimitReachedType ? "critical" as const : severityOf(percent), headline: false }];
+      resetsAt: epochTime(window.resetsAt), severity: snapshot.rateLimitReachedType ? "critical" as const : severityOf(percent), headline: false,
+      durationMs: minutes ? minutes * 60_000 : null }];
   });
 }
 
@@ -210,6 +231,33 @@ export function accountUsageWindows(usage: PlanUsage | null): { session: PlanWin
     weekly: byId("weekly_all", "seven_day") ?? codexWindow("Semana") ?? null,
   };
 }
+
+/** Uso de una ventana ahora: si ya se reinició, lo guardado ya no cuenta. */
+export const currentPercent = (window: PlanWindow, now: number): number =>
+  window.resetsAt !== null && window.resetsAt <= now ? 0 : window.percent;
+
+export type UsagePace = {
+  /** Parte de la ventana que ya pasó, de 0 a 100. */
+  elapsed: number;
+  /** Cómo va el gasto frente al reloj; null si es pronto para saberlo. */
+  tone: "easy" | "even" | "fast" | null;
+};
+
+/**
+ * Ritmo de una ventana: cuánto tiempo ha pasado frente a cuánto se ha usado.
+ * Si al ritmo actual se llegaría al 100 % antes del reinicio, va rápido.
+ */
+export function windowPace(window: PlanWindow, now: number): UsagePace | null {
+  if (!window.durationMs || window.resetsAt === null) return null;
+  const remaining = window.resetsAt - now;
+  if (remaining <= 0 || remaining > window.durationMs) return null;
+  const elapsed = 1 - remaining / window.durationMs;
+  if (elapsed < 0.1) return { elapsed: Math.round(elapsed * 100), tone: null };
+  const projected = window.percent / elapsed;
+  return { elapsed: Math.round(elapsed * 100), tone: projected >= 100 ? "fast" : projected >= 75 ? "even" : "easy" };
+}
+
+export const PACE_LABELS: Record<NonNullable<UsagePace["tone"]>, string> = { easy: "Holgado", even: "Ritmo justo", fast: "Vas rápido" };
 
 /** Cuándo se reinicia una ventana, en palabras: «en 3 h 20 min», «el jueves a las 18:59». */
 export function resetLabel(resetsAt: number | null, now: number, timeFormat: TimeFormat = getTimeFormat()): string | null {

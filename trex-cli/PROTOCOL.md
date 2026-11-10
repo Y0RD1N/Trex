@@ -421,6 +421,27 @@ and `TREX_HOME` are not forwarded. A restored app team starts paused and uses a
 fresh epoch only after explicit review. No task is dispatched merely by
 restoring the provider conversation.
 
+### Optional session coordination
+
+`session/start` may include immutable `coordination:{command:absolutePath,args:string[]}`
+so the session can work alongside other Trex sessions of the same project. It
+defaults to absent on every process, including restore. The command must be the
+fixed Trex app sibling of this CLI (same rules as the team bridge); args are
+exactly `["--trex-inbox-mcp",absoluteAppDataRoot,queueId,"--peers-only","--peer",
+sessionId,projectDir]`, where `projectDir` must resolve to the session's `cwd`.
+The CLI connects the app's MCP server in its coordination-only mode; success
+includes `coordinationEnabled:true`, and a server that cannot connect reports
+`coordinationEnabled:false` plus `trex_coordination` in `unavailableMcpServers`
+while the session continues without it.
+
+The model gains `trex_peers`, `trex_claim`, `trex_release` and `trex_message`
+under those exact names, with the server's guidance in the system message.
+They only touch the app's coordination registry, never the workspace: they are
+advertised in every mode, including plan, and need no approval in ask. Nothing
+blocks or waits; the app wakes an idle chat when another session writes to it.
+A failed or interrupted coordination call is an ordinary tool error and never
+requires recovery.
+
 ### Background terminals (runtime state)
 
 Authorized `shell` calls may set `background:true` and omit `timeoutMs` to keep

@@ -24,6 +24,7 @@ import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } f
 import { useMessageQueue } from "./useMessageQueue";
 import { deliverInbox, InboxRequests, INBOX_SERVER, INBOX_WAKE } from "../messageQueue";
 import { CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, claudeInboxInitialize, claudeInboxReply } from "../inboxProtocol";
+import { COORDINATION_TOOLS, coordinationCall, coordinationTools } from "../coordination";
 import { IS_WINDOWS } from "../platform";
 import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMode, claudePlanningExitResponse, claudePlanningFlags } from "../workflowSafety";
 import { withChatTimes } from "../chatTimes";
@@ -33,7 +34,9 @@ const timedChatReducer = withChatTimes(chatReducer);
 /** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
 const USAGE_INTERVAL_MS = 60_000;
 // A shell or unknown tool approval can escape plan mode; only known readers may be approved.
-const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
+/** Herramientas de coordinación entre sesiones: solo avisan y reservan en el registro de trex, nunca tocan el proyecto. */
+const CLAUDE_COORDINATION_TOOLS = COORDINATION_TOOLS.map(name => `mcp__${INBOX_SERVER}__${name}`);
+const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, `mcp__${INBOX_SERVER}__trex_peers`, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
 const planningDeniedLine = (requestId: string): string => JSON.stringify({
   type: "control_response", response: { subtype: "success", request_id: requestId,
     response: { behavior: "deny", message: "Esta pestaña de planificación solo permite herramientas de lectura y preguntas; no puede conceder permisos de escritura o ejecución." } },
@@ -352,8 +355,10 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     if (message.type === "control_request" && message.request_id && request?.subtype === "mcp_message" && request.server_name === INBOX_SERVER) {
       void (async () => {
         const guidance = launchGuidanceRef.current;
+        const peer = options.queueId ?? sessionId;
         const reply = await claudeInboxReply(message.request_id!, request,
-          () => inboxRequests.current.read(`${procId}:${message.request_id}`, queue.client.read), guidance.integrations, { appended: guidance.appended });
+          () => inboxRequests.current.read(`${procId}:${message.request_id}`, queue.client.read), guidance.integrations, { appended: guidance.appended,
+            coordination: { tools: coordinationTools, call: (name, args) => coordinationCall(cwd, peer, name, args) } });
         if (!reply || !isCurrentRef.current(procId)) return;
         await writeRef.current(reply.line);
         if (!isCurrentRef.current(procId)) return;
@@ -365,7 +370,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       return;
     }
     // Our inbox/task metadata tools cannot execute commands or modify the workspace.
-    if (message.type === "control_request" && message.request?.subtype === "can_use_tool" && message.request_id && [CLAUDE_INBOX_TOOL, MCP_TASK_TOOL].includes(String(message.request.tool_name))) {
+    if (message.type === "control_request" && message.request?.subtype === "can_use_tool" && message.request_id && [CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, ...CLAUDE_COORDINATION_TOOLS].includes(String(message.request.tool_name))) {
       writeOrReport(permissionLine(message.request_id, true, record(message.request.input) ?? {}));
       return;
     }

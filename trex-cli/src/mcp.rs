@@ -95,6 +95,8 @@ impl Connection {
 pub struct McpProvider {
     /// Nombre del servidor y su guía (`initialize.instructions`), recortada.
     name: String,
+    /// Servidor propio de la app: un fallo es un error normal, no una operación incierta.
+    app_owned: bool,
     instructions: Option<String>,
     connection: Arc<Mutex<Option<Connection>>>,
     tools: Vec<Value>,
@@ -237,7 +239,13 @@ impl McpProvider {
                 .take(24)
                 .collect();
             let hash = crate::changes::hash(original);
-            let name = format!("mcp_{}_{}_{}", config.name, safe, &hash[..8]);
+            // App-owned tools keep their own names (trex_peers…), as every other agent sees them.
+            let name = if config.app_owned {
+                ensure!(original.len() <= 64 && original.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'), "invalid app tool name");
+                original.to_owned()
+            } else {
+                format!("mcp_{}_{}_{}", config.name, safe, &hash[..8])
+            };
             ensure!(!mapping.contains_key(&name), "duplicate MCP tool name");
             ensure!(
                 tool["inputSchema"]["type"] == "object",
@@ -248,13 +256,16 @@ impl McpProvider {
                 schema_bytes <= 512 * 1024,
                 "MCP tool schemas exceed 512 KiB"
             );
-            let read_only = config.read_only_tools.iter().any(|v| v == original)
-                && tool.pointer("/annotations/readOnlyHint") == Some(&json!(true));
-            let description = format!(
-                "External MCP tool from {}. {}",
-                config.name,
-                crate::context::clip(tool["description"].as_str().unwrap_or(""), 2048)
-            );
+            // App-owned tools only touch the app's registry, never the workspace.
+            let read_only = config.app_owned
+                || config.read_only_tools.iter().any(|v| v == original)
+                    && tool.pointer("/annotations/readOnlyHint") == Some(&json!(true));
+            let clipped = crate::context::clip(tool["description"].as_str().unwrap_or(""), 2048);
+            let description = if config.app_owned {
+                clipped.to_owned()
+            } else {
+                format!("External MCP tool from {}. {}", config.name, clipped)
+            };
             tools.push(json!({"type":"function","function":{"name":name,"description":description,"parameters":tool["inputSchema"]}}));
             mapping.insert(name, (original.into(), read_only));
         }
@@ -262,6 +273,7 @@ impl McpProvider {
         let instructions = instructions.filter(|text| !secrets.iter().any(|secret| text.contains(secret)));
         Ok(Self {
             name: config.name.clone(),
+            app_owned: config.app_owned,
             instructions,
             connection: Arc::new(Mutex::new(Some(connection))),
             tools,
@@ -331,6 +343,10 @@ impl ToolProvider for McpProvider {
                 _ => {
                     if let Some(mut connection) = slot.take() {
                         connection.stop().await;
+                    }
+                    // Coordination is advisory: losing it never needs recovery.
+                    if self.app_owned {
+                        anyhow::bail!("{} did not answer; continue without it", self.name);
                     }
                     Err(McpUncertain.into())
                 }

@@ -28,14 +28,17 @@ function harness(t, extra = {}) {
     const p = JSON.parse(raw); writes.push({ process: id, ...p });
     if (p.method === "initialize" && !holdInit) respond(p, { protocolVersion: 1 });
     if (p.method === "models/list") respond(p, { models: [{ id: "deepseek", name: "DeepSeek", efforts: ["high", "max"], contextWindow: 1_000_000 }, { id: "mini", efforts: ["low"], contextWindow: 32_000 }] });
-    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, ...(p.params.accessibility ? { accessibilityEnabled: extra.accessibilityAck ?? true } : {}), instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true, ...(extra.compaction ? { contextManagement: { fullHistoryPreserved: true } } : {}), ...(extra.integrationAck === false ? {} : { applicationIntegrations: { github: true, blender: true, hyperframes: true, ...p.params.settings?.tools } }) });
+    if (p.method === "session/start" && !holdSessionStart) respond(p, { sessionId: "session", mode: p.params.mode, model: p.params.model ?? "deepseek", effort: p.params.effort, items: [], recoveryRequired: extra.recovery, ...(p.params.accessibility ? { accessibilityEnabled: extra.accessibilityAck ?? true } : {}), instructionsApplied: Object.hasOwn(extra,"instructionsAck") ? extra.instructionsAck : true, ...(p.params.coordination && extra.coordinationAck !== null ? { coordinationEnabled: extra.coordinationAck ?? true } : {}), ...(extra.unavailable ? { unavailableMcpServers: extra.unavailable } : {}), ...(extra.compaction ? { contextManagement: { fullHistoryPreserved: true } } : {}), ...(extra.integrationAck === false ? {} : { applicationIntegrations: { github: true, blender: true, hyperframes: true, ...p.params.settings?.tools } }) });
     if (p.method === "turn/start" && !holdTurn) respond(p, { accepted: true });
     if (["turn/interrupt", "permission/respond", "session/recover"].includes(p.method)) respond(p, {});
   };
   const agent = { async spawn(request) { active = `process-${spawns.length + 1}`; spawns.push({ id: active, request }); if (extra.holdSpawn) await spawnReady.promise; return active; }, isCurrent: id => id === active };
   const queue = { ready: true, snapshot: { messages: [], receipt: null }, client: { read: async () => ({ messages: [], receipt }), ack: async (id, guard) => { if (!guard || guard()) acks.push(id); } } };
   const exports = {};
-  compile(name => name === "react" ? hooks : name === "../api" ? { agentWrite: nativeWrite, formatError: e => e.message ?? String(e) }
+  // The app's coordination server for this chat (peers-only), as message_queue_mcp_config returns it.
+  const mcpConfig = extra.mcpConfig ?? (async (queueId, tasksOnly, peer, peersOnly) => ({ "mcp_servers.trex_inbox.command": "C:/Trex/trex.exe",
+    "mcp_servers.trex_inbox.args": ["--trex-inbox-mcp", "C:/Trex/data", queueId, ...(peersOnly ? ["--peers-only"] : tasksOnly ? ["--tasks-only"] : []), "--peer", peer.session, peer.project] }));
+  compile(name => name === "react" ? hooks : name === "../api" ? { agentWrite: nativeWrite, formatError: e => e.message ?? String(e), messageQueueMcpConfig: mcpConfig }
     : name === "./chatSession" ? { useAgentProcess: (_, cb) => { handlers = cb; return agent; }, localId: () => `rpc-${++counter}` }
     : name === "./useMessageQueue" ? { useMessageQueue: () => queue }
     : name === "../accessibility" && extra.accessibility ? { ...deps[name], ...extra.accessibility } : deps[name], exports, { randomUUID: () => `message-${++counter}` });
@@ -228,4 +231,23 @@ test("Trex asks for the accessibility engine only where it can run and reports a
   await off.start();
   assert.equal(off.writes.find(w => w.method === "session/start").params.accessibility, undefined);
   assert.deepEqual(modes, ["full", "full"]);
+});
+
+test("Trex CLI talks with the other sessions through the app's coordination-only server", async t => {
+  const h = harness(t, { queueId: "t-queue" }); await h.start();
+  const start = h.writes.find(w => w.method === "session/start");
+  assert.deepEqual(start.params.coordination, { command: "C:/Trex/trex.exe",
+    args: ["--trex-inbox-mcp", "C:/Trex/data", "t-queue", "--peers-only", "--peer", "t-queue", "D:/project"] }, "the same identity as the chat's coordination");
+  assert.ok(!h.state.items.some(item => item.kind === "notice"));
+  // A server that could not connect: a notice, its own and never the generic MCP one; the chat goes on.
+  const failed = harness(t, { coordinationAck: false, unavailable: ["trex_coordination"] }); await failed.start();
+  const notices = failed.state.items.filter(item => item.kind === "notice").map(item => item.text);
+  assert.deepEqual(notices, ["No se pudo conectar la coordinación con las otras sesiones del proyecto; el chat sigue sin ella."]);
+  assert.equal(await failed.session.send("Sigue", [], []), true);
+  // An older CLI that ignores it, and an app that cannot provide it.
+  const older = harness(t, { coordinationAck: null }); await older.start();
+  assert.ok(older.state.items.some(item => item.kind === "notice" && /no reconoce la coordinación/.test(item.text)));
+  const missing = harness(t, { mcpConfig: async () => { throw new Error("sin datos"); } }); await missing.start();
+  assert.equal(missing.writes.find(w => w.method === "session/start").params.coordination, undefined);
+  assert.ok(missing.state.items.some(item => item.kind === "notice" && /no está disponible en este chat/.test(item.text)));
 });

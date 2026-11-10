@@ -98,6 +98,17 @@
     --accent-soft-strong: rgb(240 106 141 / .26);
     --accent-dim: rgb(240 106 141 / .5);
     --accent-glow: rgb(240 106 141 / .35);
+
+    /* Uso de las cuentas: tono de cada asistente (siempre con su nombre e icono). */
+    --usage-claude: #d06e4c;
+    --usage-claude-2: #e39878;
+    --usage-codex: #3987e5;
+    --usage-codex-2: #78aef0;
+    --usage-agy: #199e70;
+    --usage-agy-2: #4cc296;
+    --usage-moon: #ffffff;
+    --usage-glow: 55%;
+    --usage-stars: 1;
   }
 
   /* --- Color: modo claro ------------------------------------------------- */
@@ -177,6 +188,16 @@
     --accent-soft-strong: rgb(240 106 141 / .2);
     --accent-dim: rgb(240 106 141 / .45);
     --accent-glow: rgb(240 106 141 / .16);
+
+    --usage-claude: #d06e4c;
+    --usage-claude-2: #a9502f;
+    --usage-codex: #3987e5;
+    --usage-codex-2: #2563b8;
+    --usage-agy: #199e70;
+    --usage-agy-2: #10734f;
+    --usage-moon: var(--bg-surface);
+    --usage-glow: 0%;
+    --usage-stars: 0;
   }
 
   /* --- Escalas independientes del modo ---------------------------------- */

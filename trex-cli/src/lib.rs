@@ -6,6 +6,7 @@ pub mod browser;
 pub mod changes;
 pub mod console;
 pub mod context;
+pub mod coordination;
 pub mod desktop;
 pub mod desktop_mcp;
 pub mod diagnostics;

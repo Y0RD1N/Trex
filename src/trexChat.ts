@@ -3,6 +3,7 @@ import { browserArtifacts, browserResultArtifacts } from "./browser";
 import { baseReducer, currentModel, finalize, lastIndexWhere, list, liveCompletion, normalizeEffortChoice, normalizeModelChoice, record, text,
   type BaseChatAction, type ChatItem, type ChatState, type ContextUsage, type Json, type ModelInfo } from "./chatState";
 import { addApiUsage, readApiUsage } from "./tokenUsage";
+import { withoutNotes } from "./coordination";
 
 const tokens = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 const windowSize = (value: unknown): number | null => { const count = tokens(value); return count && count > 0 ? count : null; };
@@ -71,7 +72,8 @@ export function trexReducer(state: ChatState, action: TrexChatAction): ChatState
       const item = record(value);
       return !!item && typeof item.id === "string" && ["user", "text", "thinking", "tool", "permission", "notice", "turn"].includes(text(item.kind));
     }).map(item => item.kind === "tool" ? { ...item, name: trexToolName(item.name), artifacts: browserArtifacts(item.artifacts), input: trexToolInput(item.name, item.input) }
-      : item.kind === "permission" ? { ...item, toolName: trexToolName(item.toolName), input: trexToolInput(item.toolName, item.input) } : item);
+      : item.kind === "permission" ? { ...item, toolName: trexToolName(item.toolName), input: trexToolInput(item.toolName, item.input) }
+      : item.kind === "user" && typeof item.text === "string" ? { ...item, text: withoutNotes(item.text) } : item);
     // La restauración no borra un envío reservado mientras arrancaba el proceso.
     const pending = state.items.filter(item => item.kind === "user" && state.pendingMessageIds.includes(item.id));
     const existing = new Set(items.map(item => item.id));

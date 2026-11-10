@@ -192,6 +192,9 @@ struct Session {
     /// Control por accesibilidad (experimental): None si no se pidió; si se
     /// pidió, si el motor propio llegó a conectarse.
     accessibility: Option<bool>,
+    /// Coordinación con las otras sesiones del proyecto: la conexión pedida y si
+    /// llegó a conectarse.
+    coordination: Option<(crate::coordination::CoordinationConfig, bool)>,
 }
 
 impl Session {
@@ -748,6 +751,7 @@ impl Server {
         let cwd = fs::canonicalize(required(params, "cwd")?)
             .context("cwd must be an existing directory")?;
         ensure!(cwd.is_dir(), "cwd must be a directory");
+        let coordination = crate::coordination::CoordinationConfig::parse(params.get("coordination"), &cwd)?;
         let conversation = optional(params, "conversationId")?;
         let id = match conversation {
             Some(id) => {
@@ -772,6 +776,10 @@ impl Server {
                 "team binding is immutable for this live session; restart the process to change it"
             );
             ensure!(
+                session.coordination.as_ref().map(|(config, _)| config) == coordination.as_ref(),
+                "coordination binding is immutable for this live session; restart the process to change it"
+            );
+            ensure!(
                 session.tools.role_instructions() == &role_instructions,
                 "role instructions are immutable for this live session"
             );
@@ -781,6 +789,9 @@ impl Server {
             summary["instructionsApplied"] = json!(instructions.is_some());
             if let Some(connected) = session.accessibility {
                 summary["accessibilityEnabled"] = json!(connected);
+            }
+            if let Some((_, connected)) = &session.coordination {
+                summary["coordinationEnabled"] = json!(connected);
             }
             if team.is_some() {
                 summary["teamEnabled"] = json!(true);
@@ -909,6 +920,7 @@ impl Server {
                 env: Vec::new(),
                 read_only_tools: crate::a11y::READ_TOOLS.iter().map(|tool| format!("{}{tool}", crate::a11y_mcp::PREFIX)).collect(),
                 enabled: true,
+                app_owned: false,
             };
             match crate::mcp::McpProvider::connect(&config, &data.cwd, &settings.shell).await {
                 Ok(provider) => {
@@ -922,6 +934,20 @@ impl Server {
             }
         } else {
             None
+        };
+        // Coordinación entre sesiones: sin ella el chat sigue igual.
+        let coordination = match coordination {
+            Some(config) => match crate::mcp::McpProvider::connect(&config.server(), &data.cwd, &settings.shell).await {
+                Ok(provider) => {
+                    mcp.push(provider);
+                    Some((config, true))
+                }
+                Err(_) => {
+                    unavailable.push(crate::coordination::SERVER.into());
+                    Some((config, false))
+                }
+            },
+            None => None,
         };
         let session = Arc::new(Session {
             path,
@@ -969,6 +995,7 @@ impl Server {
                 .with_session_instructions(instructions.clone())
                 .with_role_instructions(role_instructions.clone()),
             accessibility,
+            coordination: coordination.clone(),
         });
         session.persist(&mut data)?;
         let notifications = self.output.clone();
@@ -979,6 +1006,9 @@ impl Server {
         summary["instructionsApplied"] = json!(instructions.is_some());
         if let Some(connected) = accessibility {
             summary["accessibilityEnabled"] = json!(connected);
+        }
+        if let Some((_, connected)) = &coordination {
+            summary["coordinationEnabled"] = json!(connected);
         }
         if team.is_some() {
             summary["teamEnabled"] = json!(true);
@@ -3337,6 +3367,7 @@ mod tests {
             active: Mutex::new(None),
             tools: tools::ToolRegistry::new(None),
             accessibility: None,
+            coordination: None,
         });
         let (tx, _rx) = mpsc::unbounded_channel();
         let server = Server::new(profile(), tx);
@@ -3504,6 +3535,7 @@ mod tests {
             })),
             tools: tools::ToolRegistry::new(None),
             accessibility: None,
+            coordination: None,
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
         let server = Server::new(profile(), tx);

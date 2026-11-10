@@ -8,16 +8,24 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { nodeText, type HastNode } from "./chatMarkdown";
+import { IS_WINDOWS } from "./platform";
 
 /**
  * Lo que se añade a las instrucciones del asistente para que sepa adjuntar
- * archivos. Una sola línea y sin comillas dobles: viaja como argumento del CLI.
+ * archivos. Una sola línea, sin comillas dobles ni `\`: viaja como argumento del CLI.
+ * En Windows el ejemplo lleva la unidad; con uno de Unix, los agentes escribían
+ * `/C:/…` o `/c/…` (Git Bash).
  */
 export const FILE_SHARING_INSTRUCTIONS = [
   "You are in trex, a desktop chat app that renders Markdown.",
   "When the user asks for a file or you make one they will want (PDF, image, document, export, asset), attach it:",
-  "a Markdown link to its absolute local path on a line of its own, e.g. [CV.pdf](/home/user/cv/CV.pdf);",
-  "use angle brackets for paths with spaces: [Report.pdf](</home/u/My Files/Report.pdf>).",
+  ...IS_WINDOWS ? [
+    "a Markdown link to its absolute local path on a line of its own, with the drive letter and in angle brackets,",
+    "e.g. [CV.pdf](<C:/Users/me/My Files/CV.pdf>); never /C:/... or Git Bash /c/... paths.",
+  ] : [
+    "a Markdown link to its absolute local path on a line of its own, e.g. [CV.pdf](/home/user/cv/CV.pdf);",
+    "use angle brackets for paths with spaces: [Report.pdf](</home/u/My Files/Report.pdf>).",
+  ],
   "trex shows it as a card to preview, open or save. Attach only useful files.",
 ].join(" ");
 
@@ -78,6 +86,18 @@ const isUncPath = (value: string): boolean => /^\\\\[^\\/]/.test(value);
 export const isLocalFileHref = (url: string): boolean => /^(?:file:|[a-z]:(?:[\\/]|%5c)|(?:\\|%5c){2}[^\\/%])/i.test(url);
 
 /**
+ * Unidad de Windows escrita como ruta de Unix: `/C:/Users/…` (lo que queda de
+ * `file:///C:/…`) o `/c/Users/…` (Git Bash, el terminal de los agentes en
+ * Windows). Windows no encuentra ninguna de las dos, así que se pasan a `C:/Users/…`.
+ * `/c/…` solo se traduce si el proyecto está en Windows: en Unix es una ruta normal.
+ */
+function windowsDrive(value: string, cwd: string): string {
+  if (/^\/[a-z]:[\\/]/i.test(value)) return value.slice(1);
+  const windowsProject = isWindowsPath(cwd) || isUncPath(cwd);
+  return windowsProject && /^\/[a-z]\//i.test(value) ? `${value[1].toUpperCase()}:${value.slice(2)}` : value;
+}
+
+/**
  * Ruta local a la que apunta un enlace, o null si es una web, un ancla u otra
  * cosa. Admite `file://`, rutas absolutas (también de Windows y de red), `~/` y
  * rutas relativas al proyecto; quita las referencias a líneas (`:12`, `:12:3`, `#L12`).
@@ -92,10 +112,10 @@ export function localFilePath(href: string | undefined | null, cwd: string): str
     const host = /^file:\/\/([^/]+)(\/.*)?$/i.exec(value);
     if (host && host[1].toLowerCase() !== "localhost") value = `\\\\${host[1]}${(host[2] ?? "").replace(/\//g, "\\")}`;
     else value = value.replace(/^file:(\/\/[^/]*)?/i, "");
-    if (/^\/[a-z]:[\\/]/i.test(value)) value = value.slice(1);
   } else if (/^[a-z][a-z0-9+.-]*:/i.test(value) && !isWindowsPath(value)) {
     return null;
   }
+  value = windowsDrive(value, cwd);
   value = value.replace(/#L\d+(-L?\d+)?$/i, "").replace(/(\.[a-z0-9]+):\d+(:\d+)?$/i, "$1");
   if (!value) return null;
   if (value.startsWith("/") || value.startsWith("~/") || isWindowsPath(value) || isUncPath(value)) return value;

@@ -53,43 +53,50 @@ impl TeamConfig {
                 "invalid team identity"
             );
         }
-        let binary = fs::canonicalize(&config.command).context("team app bridge is unavailable")?;
-        let sibling = std::env::current_exe()?
-            .parent()
-            .context("missing CLI directory")?
-            .join(if cfg!(windows) { "trex.exe" } else { "trex" });
-        let mut candidates = vec![sibling];
-        #[cfg(debug_assertions)]
-        candidates.push(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("src-tauri/target/debug/trex.exe"),
-        );
-        ensure!(
-            candidates
-                .iter()
-                .any(|p| fs::canonicalize(p).is_ok_and(|p| p == binary)),
-            "team bridge must be the app beside this CLI"
-        );
-        for path in config.command.ancestors() {
-            let meta = fs::symlink_metadata(path)?;
-            ensure!(
-                !meta.file_type().is_symlink(),
-                "team bridge cannot contain links"
-            );
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                ensure!(
-                    meta.file_attributes() & 0x400 == 0,
-                    "team bridge cannot contain reparse points"
-                );
-            }
-        }
-        ensure!(binary.is_file(), "team bridge is not a regular file");
+        app_bridge(&config.command, "team bridge")?;
         Ok(Some(config))
     }
+}
+
+/// The app executable beside this CLI (or the debug build of the app while
+/// developing), without links or reparse points. `what` names it in errors.
+pub(crate) fn app_bridge(command: &Path, what: &str) -> Result<()> {
+    let binary = fs::canonicalize(command).with_context(|| format!("{what} is unavailable"))?;
+    let sibling = std::env::current_exe()?
+        .parent()
+        .context("missing CLI directory")?
+        .join(if cfg!(windows) { "trex.exe" } else { "trex" });
+    let mut candidates = vec![sibling];
+    #[cfg(debug_assertions)]
+    candidates.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("src-tauri/target/debug/trex.exe"),
+    );
+    ensure!(
+        candidates
+            .iter()
+            .any(|p| fs::canonicalize(p).is_ok_and(|p| p == binary)),
+        "{what} must be the app beside this CLI"
+    );
+    for path in command.ancestors() {
+        let meta = fs::symlink_metadata(path)?;
+        ensure!(
+            !meta.file_type().is_symlink(),
+            "{what} cannot contain links"
+        );
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            ensure!(
+                meta.file_attributes() & 0x400 == 0,
+                "{what} cannot contain reparse points"
+            );
+        }
+    }
+    ensure!(binary.is_file(), "{what} is not a regular file");
+    Ok(())
 }
 #[derive(Debug)]
 pub struct DelegationUncertain;

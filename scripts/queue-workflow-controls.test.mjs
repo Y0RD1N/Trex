@@ -7,8 +7,8 @@ import { load } from "./ts-loader.mjs";
 // Run the actual components, workflow/provider hooks and reducers. Only React's
 // scheduler/JSX, DOM surfaces, queue storage and native process IPC are mocked.
 const names = ["agentPermissions", "agentTeam", "timeFormat", "agentRoom", "agentWorkflow", "handoff", "chatState", "chatTimes", "autoCompact", "chatMessages", "chatCommands", "chatQuestions",
-  "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "agentNotices",
-  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations", "accessibility"];
+  "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "accountUsageStore", "agentNotices",
+  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations", "accessibility", "coordination"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));
 const sources = {
   stable: "hooks/useStableCallback.ts", workflow: "hooks/useAgentWorkflow.ts", trex: "hooks/useTrexChat.ts",
@@ -26,6 +26,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 const sameDeps = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
 const forbidden = label => () => { throw new Error(`Unexpected external operation: ${label}`); };
 const noop = () => undefined;
+const offlineCoordination = { useCoordination: () => undefined };
 let currentHost;
 const react = Object.fromEntries(["useRef", "useState", "useReducer", "useMemo", "useCallback", "useEffect", "useLayoutEffect"]
   .map(name => [name, (...args) => currentHost[name](...args)]));
@@ -106,7 +107,7 @@ function uiModule(name) {
 }
 const uiPaths = new Set(["./chat/BrowserMenu","./AgentIcon", "./AgentRoomToolbar", "./Select", "./Icons", "./chat/ChatItems", "./chat/ModelMenu",
   "./chat/ComposerSettings", "./chat/UsageMenu", "./chat/SharedFiles", "./ImageViewer", "./chat/QuestionPanel",
-  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/GitPanel", "./chat/QueuedMessages", "./chat/ComposerPanel", "./chat/BackgroundTerminals", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome"]);
+  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/GitPanel", "./chat/QueuedMessages", "./chat/ComposerPanel", "./chat/BackgroundTerminals", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome", "./AccountUsage", "./chat/PeerSessions"]);
 function environment() {
   let counter = 0;
   const timers = new Map();
@@ -141,9 +142,9 @@ const find = (tree, predicate) => {
 };
 const baseProps = () => ({ sessionId: "offline-tab", projectId: "project", projectName: "Offline project", cwd: "D:/projects/trex",
   conversationId: null, command: null, args: null, shell: "powershell", env: null,
-  settings: { fontSize: 13, motion: "reduced", pasteShortcut: "Ctrl+V" }, visible: false, focused: false,
+  settings: { fontSize: 13, motion: "reduced", pasteShortcut: "Ctrl+V", profiles: [] }, visible: false, focused: false,
   onActivity: noop, onNotice: noop, onConversation: noop, onTitle: noop, onMode: noop, onModel: noop, onEffort: noop,
-  onMessage: noop, onOpenUsage: noop, onRunning: noop, onExit: noop });
+  onMessage: noop, onRunning: noop, onExit: noop });
 const api = { formatError: error => error?.message ?? String(error),
   gitBranch: forbidden("git branch"), listProjectFiles: forbidden("project files"), readClipboard: forbidden("clipboard"),
   loadHandoff: forbidden("handoff read"), prepareHandoff: forbidden("handoff write") };
@@ -155,7 +156,7 @@ function panelModule(env, overrides = {}) {
     "../hooks/useClaudeChat": { useClaudeChat: forbidden("Claude hook") },
     "../hooks/useCodexChat": { useCodexChat: forbidden("Codex hook") },
     "../hooks/useAntigravityChat": { useAntigravityChat: forbidden("Antigravity hook outside its test host") },
-    "../hooks/useTrexChat": { useTrexChat: forbidden("Trex hook outside its mock host") }, ...overrides });
+    "../hooks/useTrexChat": { useTrexChat: forbidden("Trex hook outside its mock host") }, "../hooks/useCoordination": offlineCoordination, ...overrides });
 }
 
 function queueStore(messages = [], trace = []) {
@@ -395,7 +396,7 @@ function roomHarness(t, scenario = {}) {
     "../hooks/useClaudeChat": { useClaudeChat: forbidden("Claude runtime") },
     "../hooks/useCodexChat": { useCodexChat: forbidden("Codex runtime") },
     "../hooks/useAntigravityChat": { useAntigravityChat: forbidden("Antigravity hook outside its test host") },
-    "../hooks/useTrexChat": { useTrexChat: forbidden("Trex runtime") } });
+    "../hooks/useTrexChat": { useTrexChat: forbidden("Trex runtime") }, "../hooks/useCoordination": offlineCoordination });
   const participant = role => ({ agent: { provider: "codex", profileId: `offline-${role}`, profileName: role,
     model: null, effort: null, launch: { command: null, args: null, shell: "powershell", env: null } }, conversationId: null, mode: "plan" });
   let room = { id: "offline-room", active: "planner", phase: "idle", cycle: 1, order: [],
@@ -619,4 +620,90 @@ test("an inherited chat is delivered only to the role that does not resume it", 
   assert.match(planner, /## Contexto anterior del chat\n\nINHERITED_CHAT/);
   assert.doesNotMatch(planner, /STALE_GIT/, "the delivery attaches its own current snapshot");
   assert.equal(h.room.setupContext, null);
+});
+
+// --- Conversación entre sesiones: el chat libre se despierta para contestar ---------------
+const peerCoordination = dependencies["../coordination"];
+let peerProjects = 0;
+function peerHarness(t, { state = {}, notes = [], workflow } = {}) {
+  const env = environment(), panelHost = host(t), sends = [], delivered = [], announced = [];
+  const { ChatPanel } = panelModule(env, { "../api": { ...api, gitBranch: async () => null } });
+  const project = `D:/peers/${++peerProjects}`;
+  const board = { sessions: [{ id: "me" }, { id: "other", label: "Codex · API", working: false }], claims: [], notes };
+  const session = { provider: "codex", state: { ...dependencies["../chatState"].initialChatState(), process: "ready", ...state }, queue: queueStore(),
+    send: async (...args) => { sends.push(args); return true; }, interrupt: noop, runCommand: forbidden("command"), setModel: forbidden("model"),
+    sendNow: forbidden("sendNow"), edit: forbidden("edit"), reset: forbidden("reset"), notice: forbidden("notice"), refreshSkills: forbidden("skills") };
+  const coordination = { session: "me", project, board, pending: async () => [], delivered: ids => delivered.push(ids),
+    announce: (note, text) => announced.push({ id: note.id, text }) };
+  const props = { ...baseProps(), provider: "codex", session, coordination, ...(workflow ? { workflow } : {}) };
+  const h = { sends, delivered, announced, project, props,
+    render: () => panelHost.render(() => ChatPanel(h.props)),
+    set(next) { h.props = { ...h.props, session: { ...h.props.session, state: { ...h.props.session.state, ...next } } }; return h.render(); },
+    board(nextNotes) { h.props = { ...h.props, coordination: { ...coordination, board: { ...board, notes: nextNotes } } }; return h.render(); },
+  };
+  h.render();
+  return h;
+}
+const peerNote = (id, kind = "message", text = "¿Puedo tocar src/api.ts?") =>
+  ({ id, to: "me", from: "other", fromLabel: "Codex · API", kind, path: null, text: kind === "message" ? `Hace 1 min · mensaje de «Codex · API»: ${text}` : `Hace 1 min · ${text}`, at: 1 });
+
+test("a message from another session wakes the idle chat once, shown as that session's message", async t => {
+  const notes = [peerNote("n1"), peerNote("c1", "conflict", "«Codex · API» editó src/a.ts")];
+  const h = peerHarness(t, { notes });
+  await flush();
+  assert.equal(h.sends.length, 1);
+  const [text, images, previews, display] = h.sends[0];
+  assert.equal(text, peerCoordination.withNotes(notes, peerCoordination.PEER_WAKE), "the model gets every pending note and the wake instructions");
+  assert.deepEqual([images, previews], [[], []]);
+  assert.equal(display, peerCoordination.notesBlock(notes), "the thread shows the notes, not the instructions");
+  assert.deepEqual(h.delivered, [["n1", "c1"]]);
+  h.render(); await flush();
+  assert.equal(h.sends.length, 1, "the same notes never wake it twice");
+  // The thread draws that turn as the other session's message, never as one of yours.
+  h.props = { ...h.props, visible: true };
+  const tree = h.set({ items: [{ kind: "user", id: "wake", text: display, images: 0, previews: [] }] });
+  const card = find(tree, node => node.type === "./chat/PeerSessions:PeerMessage");
+  assert.deepEqual(card.props.notes, notes.map(note => note.text));
+  assert.equal([...elements(tree)].some(node => node.type === "./chat/ChatItems:UserMessage"), false);
+});
+
+test("edit conflicts alone, a busy turn or a planning workflow never start an automatic reply", async t => {
+  const conflicts = peerHarness(t, { notes: [peerNote("c1", "conflict", "«Codex · API» editó src/a.ts")] });
+  await flush();
+  assert.equal(conflicts.sends.length, 0, "conflicts travel with the next turn");
+  const busy = peerHarness(t, { notes: [peerNote("n1")], state: { pendingTurns: 1 } });
+  await flush();
+  assert.equal(busy.sends.length, 0, "a working agent reads it when its turn ends");
+  busy.set({ pendingTurns: 0 }); await flush();
+  assert.equal(busy.sends.length, 1);
+  const participant = { provider: "codex", profileId: "offline", profileName: "Offline", model: null };
+  const planning = peerHarness(t, { notes: [peerNote("n1")], workflow: { id: "w", role: "planner", status: "planning", planner: participant, executor: participant } });
+  await flush();
+  assert.equal(planning.sends.length, 0);
+});
+
+test("after a stop the message waits for the person, and it is announced in the thread", async t => {
+  const h = peerHarness(t, { notes: [peerNote("n1")], state: { lastCompletion: { id: "x", status: "interrupted", messageIds: [] } } });
+  await flush();
+  assert.equal(h.sends.length, 0);
+  assert.equal(h.announced.length, 1);
+  assert.match(h.announced[0].text, /¿Puedo tocar src\/api\.ts\?\nLo leerá con tu próximo mensaje\./);
+});
+
+test("six automatic turns in a row pause the agents' conversation until the person steps in", async t => {
+  const h = peerHarness(t);
+  const hub = peerCoordination.coordinationHub;
+  for (let turn = 1; turn <= peerCoordination.WAKE_LIMIT; turn++) {
+    h.board([peerNote(`n${turn}`)]); await flush();
+    h.set({ items: [] }); await flush();
+  }
+  assert.equal(h.sends.length, peerCoordination.WAKE_LIMIT);
+  assert.equal(hub.paused(h.project), true);
+  h.board([peerNote("n7")]); await flush();
+  assert.equal(h.sends.length, peerCoordination.WAKE_LIMIT, "the seventh message waits");
+  assert.match(h.announced.at(-1).text, /en pausa/);
+  hub.resetWakes(h.project);
+  h.board([peerNote("n7")]); await flush(); // the hub's refresh hands every chat a fresh board
+  assert.equal(h.sends.length, peerCoordination.WAKE_LIMIT + 1, "«Dejar que sigan» or a message from the person resumes it");
+  assert.equal(hub.paused(h.project), false);
 });

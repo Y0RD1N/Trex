@@ -105,6 +105,8 @@ import { IS_WINDOWS } from "./platform";
 import type { PaletteCommand } from "./commandPalette";
 import { useNotificationSound } from "./hooks/useNotificationSound";
 import { useCliUpdates } from "./hooks/useCliUpdates";
+import { useAccountUsageUpkeep } from "./hooks/useAccountUsage";
+import { requestUsagePanel } from "./accountUsageStore";
 import type { CliId } from "./cliUpdates";
 // Ajustes, paleta y diálogos poco frecuentes: en su propio fragmento (ver lazyComponent).
 const SettingsPanel = lazyComponent(() => import("./components/SettingsPanel"));
@@ -198,7 +200,8 @@ function AppShell() {
   }, [settingsOpen]);
   const [paletteOpen,setPaletteOpen] = useState(false);
   const [usageOpen,setUsageOpen] = useState(false);
-  const openUsage = useCallback(() => setUsageOpen(true), []);
+  // El uso vive en la pestaña «Uso» del chat; sin un chat a la vista, en su ventana.
+  const openUsage = useCallback(() => { if (!requestUsagePanel()) setUsageOpen(true); }, []);
   const [recoveryOpen,setRecoveryOpen] = useState(false);
   const [handoffDialog, setHandoffDialog] = useState<{ context: HandoffContext; prepared: PreparedHandoff | null; loading: boolean; error: string | null } | null>(null);
   const [handoffSubmitting, setHandoffSubmitting] = useState(false);
@@ -352,6 +355,8 @@ function AppShell() {
     if (codex) setCodexInfo(codex);
   }, []);
   const cliUpdates = useCliUpdates({ claude: claudeInfo, codex: codexInfo }, refreshCliInfo);
+  // El uso de las cuentas se lee en segundo plano: la pestaña «Uso» abre con datos.
+  useAccountUsageUpkeep(config?.settings ?? null, appInfo ? appInfo.homeDir || "/" : null);
   const { update: runCliUpdate, dismiss: dismissCliUpdate } = cliUpdates;
   const updateCli = useCallback((id: CliId) => {
     void runCliUpdate(id).then(showToast, (error: unknown) => showToast(formatError(error)));
@@ -1450,7 +1455,6 @@ function AppShell() {
         onReveal={revealProject}
         onCopyPath={copyPath}
         onOpenSettings={openSettings}
-        onOpenUsage={openUsage}
         onToggleTheme={toggleTheme}
         onToggleSidebar={toggleSidebar}
         onResize={setSidebarWidth}
@@ -1576,7 +1580,6 @@ function AppShell() {
                     onModel={handleChatModel}
                     onEffort={handleChatEffort}
                     onMessage={showToast}
-                    onOpenUsage={openUsage}
                   /> : <TerminalView
                     sessionId={tab.id}
                     cwd={project.path}
@@ -1680,7 +1683,7 @@ function AppShell() {
         entering={handoffPresence.entering} leaving={handoffPresence.leaving} surfaceRef={handoffSurfaceRef} />}
       {palettePresence.value && <Suspense fallback={null}><CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)}
         surfaceRef={paletteSurfaceRef} entering={palettePresence.entering} leaving={palettePresence.leaving} /></Suspense>}
-      {usagePresence.value && <Suspense fallback={null}><UsageDialog settings={config.settings} cwd={appInfo?.homeDir || activeProject?.path || "/"} onClose={()=>setUsageOpen(false)}
+      {usagePresence.value && <Suspense fallback={null}><UsageDialog settings={config.settings} onClose={()=>setUsageOpen(false)}
         surfaceRef={usageSurfaceRef} entering={usagePresence.entering} leaving={usagePresence.leaving} /></Suspense>}
       {recoveryPresence.value && activeProject && <Suspense fallback={null}><RecoverConversations project={activeProject} settings={config.settings} onClose={()=>setRecoveryOpen(false)}
         surfaceRef={recoverySurfaceRef} entering={recoveryPresence.entering} leaving={recoveryPresence.leaving} onResume={(profile,conversation)=>{

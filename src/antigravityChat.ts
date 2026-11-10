@@ -2,6 +2,7 @@
 import { baseReducer, finalize, list, liveCompletion, normalizeEffortChoice, normalizeModelChoice, record, text,
   type BaseChatAction, type ChatItem, type ChatState, type Json, type ModelInfo } from "./chatState";
 import { parseTaskPlan } from "./taskTools";
+import { withoutNotes } from "./coordination";
 import { browserResultArtifacts } from "./browser";
 import { acpContext, antigravityTier } from "./antigravityUsage";
 import { addApiUsage, readApiUsage } from "./tokenUsage";
@@ -55,6 +56,16 @@ export function acpOutputText(raw: unknown): string | null {
     ? result.content.map(value => { const block = record(value); return block?.type === "text" ? text(block.text) : block?.type === "image" ? "[Imagen devuelta por la herramienta]" : ""; }).filter(Boolean).join("\n")
     : JSON.stringify(raw, (_key, value) => record(value)?.type === "image" ? { type: "image", mimeType: record(value)?.mimeType } : value);
   return output.length > 128_000 ? output.slice(0, 128_000) + "\n[Salida truncada]" : output;
+}
+/**
+ * El historial repite cada mensaje en trozos: los avisos de otras sesiones se quitan
+ * cuando el mensaje ya está completo (llega lo siguiente), no a medias.
+ */
+function settleNotes(state: ChatState): ChatState {
+  const last = state.items[state.items.length - 1];
+  if (last?.kind !== "user") return state;
+  const text = withoutNotes(last.text);
+  return text === last.text ? state : { ...state, items: [...state.items.slice(0, -1), { ...last, text }] };
 }
 export type AntigravityAction = BaseChatAction
   | { type: "acpReady"; sessionId: string; result: Json; history?: boolean }
@@ -115,6 +126,7 @@ export function antigravityReducer(state: ChatState, action: AntigravityAction):
   if (action.sessionId !== state.sessionId || !action.replay && (!action.turn || !state.pendingMessageIds.includes(action.turn))
     && !["usage_update", "config_option_update", "current_mode_update", "available_commands_update"].includes(text(action.update.sessionUpdate))) return state;
   const u = action.update, type = text(u.sessionUpdate), namespace = action.replay ? "history" : action.turn!;
+  if (action.replay && type !== "user_message_chunk") state = settleNotes(state);
   if (type === "usage_update") {
     const usage = acpContext(u); if (!usage) return state;
     const cost = record(u.cost);
@@ -140,7 +152,10 @@ export function antigravityReducer(state: ChatState, action: AntigravityAction):
     const explicit = text(u.messageId);
     const id = explicit ? `acp:${namespace}:${explicit}` : previous?.kind === kind && previous.id.startsWith(`acp:${namespace}:`) ? previous.id : `acp:${namespace}:${state.items.length}`;
     const index = state.items.findIndex(i => i.id === id && i.kind === kind), items = [...state.items];
-    if (index >= 0) { const before = items[index]; if (before.kind === "user" || before.kind === "text" || before.kind === "thinking") items[index] = { ...before, text: before.text + content.text }; }
+    if (index >= 0) {
+      const before = items[index];
+      if (before.kind === "user" || before.kind === "text" || before.kind === "thinking") items[index] = { ...before, text: before.text + content.text };
+    }
     else items.push(kind === "user" ? { kind, id, text: content.text, images: 0, previews: [] } : { kind, id, messageId: id, text: content.text, final: action.replay });
     return { ...state, items };
   }

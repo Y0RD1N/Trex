@@ -8,7 +8,7 @@ import { load } from "./ts-loader.mjs";
 // process boundary and both kinds of browser timer are local, offline fakes.
 const dependencies = Object.fromEntries(await Promise.all([
   "chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "trexChat",
-  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility",
+  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "coordination",
 ].map(async name => [`../${name}`, await load(name)])));
 const compiled = Object.fromEntries(await Promise.all(["Trex", "Claude", "Codex"].map(async provider => {
   const source = await readFile(new URL(`../src/hooks/use${provider}Chat.ts`, import.meta.url), "utf8");
@@ -143,7 +143,8 @@ function harness(t, provider, extra = {}) {
       case "skills/list": case "account/rateLimits/read": respond(message, { data: [] }); break;
       case "session/start":
         conversation = `conversation-${++conversationCounter}`;
-        respond(message, { sessionId: conversation, mode: message.params.mode, model: "offline-model", items: [], recoveryRequired: !!extra.recovery, instructionsApplied: extra.instructionsAck !== false });
+        respond(message, { sessionId: conversation, mode: message.params.mode, model: "offline-model", items: [], recoveryRequired: !!extra.recovery, instructionsApplied: extra.instructionsAck !== false,
+          ...(extra.coordinationAck !== undefined ? { coordinationEnabled: extra.coordinationAck } : {}) });
         break;
       case "thread/start": case "thread/resume":
         conversation = `thread-${++conversationCounter}`;
@@ -185,7 +186,7 @@ function harness(t, provider, extra = {}) {
     "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },
     "../api": { agentWrite: nativeWrite, formatError: error => error?.message ?? String(error),
       agentTeamMcpConfig: async binding => { assert.ok(extra.teamConfig, "Unexpected team bridge discovery"); return typeof extra.teamConfig === "function" ? extra.teamConfig(binding) : extra.teamConfig; },
-      codexContextWindows: async () => ({}), messageQueueMcpConfig: async () => ({}), claudeRewindPoint: async () => null },
+      codexContextWindows: async () => ({}), messageQueueMcpConfig: extra.mcpConfig ?? (async () => ({})), claudeRewindPoint: async () => null },
     "../conversations": { readConversation: async () => [] },
     "../platform": { IS_WINDOWS: true },
     "./chatSession": { localId: () => `local-${++counter}`, useAgentProcess: (_id, callbacks) => { handlers = callbacks; return agent; } },

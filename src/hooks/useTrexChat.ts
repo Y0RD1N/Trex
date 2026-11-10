@@ -1,6 +1,6 @@
 /** Trex CLI owns provider HTTP, credentials and tools; React only speaks its versioned protocol. */
 import { useEffect, useReducer, useRef, useState } from "react";
-import { agentWrite, agentTeamMcpConfig, trexBrowserResolveSpace, formatError } from "../api";
+import { agentWrite, agentTeamMcpConfig, messageQueueMcpConfig, trexBrowserResolveSpace, formatError } from "../api";
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
 import { deliverInbox, InboxRequests, TREX_INBOX_INSTRUCTIONS, INBOX_WAKE, type QueueSnapshot } from "../messageQueue";
 import { taskInstructions } from "../chatTasks";
@@ -10,6 +10,19 @@ import { assertIntegrationRestrictions, detectedIntegrations, integrationContext
 import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexChat";
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
+
+/** Name Trex CLI gives the coordination connection (it has its own startup notice). */
+const COORDINATION_SERVER = "trex_coordination";
+
+/**
+ * The app's coordination server for Trex CLI: trex_peers, trex_claim, trex_release and
+ * trex_message for this chat (the same identity as its useCoordination) and project.
+ */
+async function coordinationServer(session: string, project: string): Promise<{ command: string; args: string[] } | null> {
+  const config = await messageQueueMcpConfig(session, false, { session, project }, true);
+  const command = config["mcp_servers.trex_inbox.command"], args = config["mcp_servers.trex_inbox.args"];
+  return typeof command === "string" && Array.isArray(args) && args.every(arg => typeof arg === "string") ? { command, args } : null;
+}
 import { withChatTimes } from "../chatTimes";
 import { autoCompactTokens, trexAutoCompactSettings } from "../autoCompact";
 const timedTrexReducer = withChatTimes(trexReducer);
@@ -166,6 +179,10 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       // Trex CLI starts the engine itself; the app only says whether shortcuts are allowed.
       const accessibility = !a11yConfig ? false : accessibilityKeyboard(a11yConfig) ? { keyboard: true } : true;
       assertStartup(procId);
+      // Without it the chat works as before; a failure is only a notice.
+      const coordination = await coordinationServer(current.queueId ?? current.sessionId, current.cwd).catch(() => null);
+      if (!coordination) startupNotices.push("La coordinación con las otras sesiones del proyecto no está disponible en este chat.");
+      assertStartup(procId);
       // Announce only an attached browser and installed applications; restrictions below still follow the preferences.
       const integrations = integrationContext(current, { browser: browser?.enabled === true, available, a11y: !!accessibility });
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
@@ -173,7 +190,8 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
         // Como Claude y Codex: cómo adjuntar archivos para que el chat los pinte como tarjeta.
         instructions: [FILE_SHARING_INSTRUCTIONS, TREX_INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations)].filter(Boolean).join(" "),
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
-        settings: { ...integrationRestrictions(current.integrations), ...trexAutoCompactSettings(autoCompactAt.current = autoCompactTokens(current.autoCompact, "trex")) }, desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
+        settings: { ...integrationRestrictions(current.integrations), ...trexAutoCompactSettings(autoCompactAt.current = autoCompactTokens(current.autoCompact, "trex")) }, desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}),
+        ...(coordination ? { coordination } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
       assertIntegrationRestrictions(result, current.integrations);
       if (result.instructionsApplied !== true) throw new Error("Trex CLI no confirmó las instrucciones de las herramientas. Actualiza el CLI antes de iniciar esta conversación.");
@@ -181,6 +199,9 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       if (accessibility && result.accessibilityEnabled !== true) startupNotices.push(result.accessibilityEnabled === false
         ? "El control por accesibilidad (experimental) no pudo conectarse; el chat sigue sin él."
         : "Este Trex CLI no reconoce el control por accesibilidad (experimental). Actualízalo para usarlo.");
+      if (coordination && result.coordinationEnabled !== true) startupNotices.push(result.coordinationEnabled === false
+        ? "No se pudo conectar la coordinación con las otras sesiones del proyecto; el chat sigue sin ella."
+        : "Este Trex CLI no reconoce la coordinación entre sesiones. Actualízalo para usarla.");
       if (planningOnly && result.mode !== "plan") throw new Error("Trex CLI no confirmó el modo de planificación de solo lectura.");
       if (team && result.teamEnabled !== true) throw new Error("Este Trex CLI no confirmó la delegación. Actualiza el CLI antes de usarlo como agente principal.");
       if (current.planningInstruction && result.rolePolicyApplied !== true) throw new Error("Este Trex CLI no confirmó las instrucciones de la función. Actualiza el CLI antes de iniciar el equipo.");
@@ -189,8 +210,9 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       agent.bindTerminals?.(nativeConversation.current);
       recovery.current = result.recoveryRequired === true;
       supportsCompact.current = result.contextManagement !== null && typeof result.contextManagement === "object";
-      // The accessibility gateway already has its own notice.
-      const unavailable = Array.isArray(result.unavailableMcpServers) ? result.unavailableMcpServers.filter((value): value is string => typeof value === "string" && value !== "trex_a11y") : [];
+      // The accessibility gateway and the coordination already have their own notices.
+      const unavailable = Array.isArray(result.unavailableMcpServers) ? result.unavailableMcpServers.filter((value): value is string =>
+        typeof value === "string" && value !== "trex_a11y" && value !== COORDINATION_SERVER) : [];
       if (unavailable.length) startupNotices.push(`No se pudieron conectar algunos servidores MCP: ${unavailable.join(", ")}.`);
       if (!models.some(model => model.value === result.model) && typeof result.model === "string") models.unshift({ value: result.model, resolvedModel: result.model, displayName: result.model, description: "Modelo configurado en el perfil", featured: true, efforts: [] });
       dispatch({ type: "trexReady", result, models });

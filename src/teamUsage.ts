@@ -3,7 +3,7 @@
  * empezó el equipo, contexto de cada sesión y cuota de cada cuenta (5 h y
  * semana). Leer la cuota de una cuenta no envía mensajes al modelo.
  */
-import { readAccountUsage } from "./accountUsage";
+import { refreshAccount } from "./accountUsageStore";
 import { teamMemberUsesBrowser, type AgentTeam, type TaskUsage, type TeamMember } from "./agentTeam";
 import { contextPercent, type ChatState } from "./chatState";
 import { accountUsageWindows, type PlanUsage } from "./planUsage";
@@ -27,16 +27,9 @@ export function accountQuota(key: string, label: string, plan: PlanUsage | null 
   return { key, label, fiveHour, week, peak, blocked: peak >= QUOTA_BLOCK };
 }
 
-const recent = new Map<string, { at: number; value: Promise<PlanUsage | null> }>();
-const profileKey = (profile: LauncherProfile): string => [profile.provider, profile.command, profile.args, profile.configDir, profile.shell].join("\u0000");
-/** Lectura de /usage de la cuenta, compartida unos minutos entre el diálogo y el equipo. */
-export function readAccountPlan(profile: LauncherProfile, settings: Settings, cwd: string, now = Date.now()): Promise<PlanUsage | null> {
-  if (profile.provider === "trex") return Promise.resolve(null);
-  const key = profileKey(profile), hit = recent.get(key);
-  if (hit && now - hit.at < 5 * 60_000) return hit.value;
-  const value = readAccountUsage(profile, settings, cwd).catch(() => null);
-  recent.set(key, { at: now, value });
-  return value;
+/** Lectura de /usage de la cuenta, compartida unos minutos con la pestaña «Uso» y los chats. */
+export function readAccountPlan(profile: LauncherProfile, settings: Settings, cwd: string): Promise<PlanUsage | null> {
+  return refreshAccount(profile, { maxAge: 5 * 60_000, read: { settings, cwd } });
 }
 
 export type UsageObservation = { usage: ApiUsage | null; active: boolean };

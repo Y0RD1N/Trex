@@ -163,11 +163,14 @@ export function InfoIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   );
 }
 
+/** Silueta de la carpeta en la caja de 24×24; la comparte la carpeta de cada proyecto (`ProjectCore`). */
+export const FOLDER_PATH = "M3.4 6.6a1.9 1.9 0 0 1 1.9-1.9h3.3l1.7 2.1h8.4a1.9 1.9 0 0 1 1.9 1.9v8.2a1.9 1.9 0 0 1-1.9 1.9H5.3a1.9 1.9 0 0 1-1.9-1.9z";
+
 /** Carpeta: abrir en el explorador. */
 export function FolderIcon({ size = 16, strokeWidth = 1.5 }: IconProps) {
   return (
     <svg {...svgProps(size, strokeWidth)}>
-      <path d="M3.4 6.6a1.9 1.9 0 0 1 1.9-1.9h3.3l1.7 2.1h8.4a1.9 1.9 0 0 1 1.9 1.9v8.2a1.9 1.9 0 0 1-1.9 1.9H5.3a1.9 1.9 0 0 1-1.9-1.9z" />
+      <path d={FOLDER_PATH} />
     </svg>
   );
 }

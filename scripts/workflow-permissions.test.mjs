@@ -5,7 +5,7 @@ import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 
 // Run the actual hooks, protocol encoders and reducers. No process or model is started.
-const modules = ["chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility"];
+const modules = ["chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "coordination"];
 const dependencies = Object.fromEntries(await Promise.all(modules.map(async name => ["../" + name, await load(name)])));
 const compiled = Object.fromEntries(await Promise.all(["Claude", "Codex"].map(async provider => {
   const source = await readFile(new URL(`../src/hooks/use${provider}Chat.ts`, import.meta.url), "utf8");

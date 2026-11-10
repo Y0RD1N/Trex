@@ -1,0 +1,55 @@
+/* --- Sesiones del proyecto ---------------------------------------------------------
+   Comparte el marco del panel de tareas (.chat-task-panel): cabecera, márgenes y
+   tipografía. Aquí solo la lista de sesiones y sus reservas. */
+.peer-list { flex: 1 1 auto; min-height: 60px; margin: 0; padding: 0 var(--sp-2) var(--sp-2); overflow: auto; list-style: none; overscroll-behavior: contain; }
+.peer-list > li { display: grid; gap: var(--sp-1-5, 6px); padding: var(--sp-2-5) var(--sp-2); border-radius: var(--radius-md); }
+.peer-list > li + li { border-top: 1px solid var(--border-subtle); border-radius: 0; }
+.peer-head { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.peer-head strong { flex: 1; min-width: 0; overflow: hidden; font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
+.peer-state { flex-shrink: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+.peer-state.is-working { color: var(--accent-strong); }
+.peer-task { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+
+.peer-claims { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+.peer-claims li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 var(--sp-2);
+  padding: var(--sp-1-5, 6px) var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+.peer-claim-name { min-width: 0; overflow: hidden; font-family: var(--font-mono); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.peer-claim-name em { font-style: normal; color: var(--accent-strong); }
+.peer-claims small { grid-column: 1; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.peer-claims .btn { grid-column: 2; grid-row: 1 / span 2; }
+
+.peer-mine { flex-shrink: 0; display: grid; gap: var(--sp-2); padding: var(--sp-2) var(--sp-4); border-top: 1px solid var(--border-subtle); }
+.peer-mine h3 { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-medium); }
+.peer-error { margin: 0; padding: var(--sp-2) var(--sp-4); color: var(--danger-text); font-size: var(--fs-xs); }
+.peer-hint { flex-shrink: 0; margin: 0; padding: var(--sp-2) var(--sp-4) var(--sp-4); color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal, 1.5); }
+
+.peer-paused { flex-shrink: 0; display: grid; gap: var(--sp-2); justify-items: start; margin: 0 var(--sp-4) var(--sp-2); padding: var(--sp-2-5) var(--sp-3); border-radius: var(--radius-md); background: var(--bg-inset); }
+.peer-paused p { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: var(--lh-normal, 1.5); }
+
+/* --- Mensaje de otra sesión en el hilo ----------------------------------------------
+   Misma banda que un turno tuyo, sin tinte de acento ni acciones: lo escribió otro agente. */
+.chat-peer-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1-5);
+  margin: var(--sp-4) 0 var(--sp-2);
+  padding: var(--sp-3) 0 var(--sp-3-5);
+  background: var(--bg-inset);
+  border-image: linear-gradient(to bottom, var(--border) 0 1px, var(--bg-inset) 1px calc(100% - 1px), var(--border) calc(100% - 1px)) 0 fill / 0 / 0 100vmax;
+}
+@media (forced-colors: active) {
+  .chat-peer-turn { border-block: 1px solid CanvasText; border-image: none; }
+}
+.chat-peer-who { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--sp-1-5); min-width: 0; overflow: hidden; color: var(--text); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.chat-peer-who > svg { flex-shrink: 0; color: var(--text-muted); }
+.chat-peer-notes { display: grid; gap: var(--sp-1-5); margin: 0; padding: 0; list-style: none; line-height: var(--lh-relaxed); }
+.chat-peer-notes li { display: flex; gap: var(--sp-2); min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-peer-notes li.is-conflict { color: var(--text-muted); font-size: var(--fs-sm); }
+.chat-peer-notes li > svg { flex-shrink: 0; margin-top: 0.3em; color: var(--warn-text); }

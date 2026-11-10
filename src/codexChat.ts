@@ -20,6 +20,7 @@ import { parseCodexUsage } from "./planUsage";
 import { imageReference, withoutImageLabels } from "./imageReferences";
 import { codexApiUsage } from "./tokenUsage";
 import type { InboxPart } from "./messageQueue";
+import { withoutNotes } from "./coordination";
 
 export type CodexAction =
   | BaseChatAction
@@ -441,7 +442,7 @@ const reasoningText = (item: Json): string =>
 /** Contenido de un mensaje del usuario guardado en el hilo. */
 function userItem(item: Json): ChatItem | null {
   const content = withoutImageLabels(list(item.content).map(record).filter((part): part is Json => !!part));
-  const typed = content.filter(part => part.type === "text").map(part => text(part.text)).join("\n\n").trim();
+  const typed = withoutNotes(content.filter(part => part.type === "text").map(part => text(part.text)).join("\n\n").trim());
   const images = content.filter(part => part.type === "image" || part.type === "localImage");
   const previews = images.map(part => text(part.url)).filter(url => url.startsWith("data:image/"));
   if (!typed && !images.length) return null;
