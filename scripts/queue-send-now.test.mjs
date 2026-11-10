@@ -7,7 +7,7 @@ import { load } from "./ts-loader.mjs";
 // These are the real provider hooks and reducers. React scheduling, the native
 // process boundary and both kinds of browser timer are local, offline fakes.
 const dependencies = Object.fromEntries(await Promise.all([
-  "chatMessages", "chatCommands", "chatState", "chatTimes", "claudeChat", "codexChat", "trexChat",
+  "chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "trexChat",
   "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility",
 ].map(async name => [`../${name}`, await load(name)])));
 const compiled = Object.fromEntries(await Promise.all(["Trex", "Claude", "Codex"].map(async provider => {

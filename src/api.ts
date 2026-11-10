@@ -1,6 +1,7 @@
 import type { BrowserStatus, BrowserConfig, BrowserCall, BrowserResult, BrowserMode, BrowserProfile, BrowserOptions, BrowserSpace } from "./browser";
 import { validBrowserProfile, browserSpaceLabel } from "./browser";
 import { DEFAULT_INTEGRATIONS, normalizeIntegrations } from "./integrations";
+import { normalizeAutoCompact } from "./autoCompact";
 /**
  * Capa de acceso al backend: envoltorios de `invoke`/`listen` y utilidades
  * compartidas (ids, valores por defecto, normalización y color de acento).
@@ -237,6 +238,7 @@ const DESIGN_REV = 2;
 export const DEFAULT_SETTINGS: Settings = {
   timeFormat: "24h",
   integrations: { ...DEFAULT_INTEGRATIONS },
+  autoCompact: normalizeAutoCompact(null),
   desktopEnabled: false,
   a11yEnabled: false,
   a11yKeyboard: false,
@@ -481,6 +483,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   const settings: Settings = {
     timeFormat: settingsRaw.timeFormat === "12h" ? "12h" : "24h",
     integrations: normalizeIntegrations(settingsRaw.integrations),
+    autoCompact: normalizeAutoCompact(settingsRaw.autoCompact),
     desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
     a11yEnabled: asBool(settingsRaw.a11yEnabled, false),
     a11yKeyboard: asBool(settingsRaw.a11yKeyboard, false),

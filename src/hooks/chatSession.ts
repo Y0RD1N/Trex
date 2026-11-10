@@ -14,6 +14,7 @@ import {
 } from "../api";
 import type { ChatState, OutgoingImage, PermissionItem, QuestionChoice } from "../chatState";
 import type { AgentProvider, ApplicationIntegrations } from "../types";
+import type { AutoCompactSettings } from "../autoCompact";
 import type { ChatMessageQueue } from "./useMessageQueue";
 import { AgentTerminals, type TerminalSession } from "../agentTerminals";
 
@@ -28,6 +29,8 @@ export type ChatSessionOptions = {
   /** Control por accesibilidad (experimental): motor propio de Trex, servidor `trex_a11y`. */
   a11yEnabled?: boolean;
   integrations?: ApplicationIntegrations;
+  /** Resumen automático que la persona activó en Ajustes; se aplica al arrancar el proceso. */
+  autoCompact?: AutoCompactSettings;
   sessionId: string;
   cwd: string;
   command: string | null;
@@ -66,6 +69,8 @@ export type ChatSession = {
   setup?: { busy: boolean; description: string; actions: { label: string; run: () => Promise<void> }[] };
   usageControls?: { loading: boolean; error: string | null; refresh: () => Promise<void> };
   supportsCompact?: boolean;
+  /** Umbral de resumen automático con el que arrancó este proceso (Ajustes); null si usa el del asistente. */
+  autoCompactAt?: number | null;
   /** Arranca el proceso o lo reanuda tras cerrarse. */
   start: () => Promise<void>;
   /** Envía un mensaje; `display` es lo que se ve en el hilo si no es el texto enviado. */

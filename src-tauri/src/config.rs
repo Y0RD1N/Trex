@@ -52,11 +52,21 @@ pub struct LauncherProfile {
 pub struct ApplicationIntegrations { pub github: bool, pub blender: bool, pub hyperframes: bool }
 impl Default for ApplicationIntegrations { fn default()->Self { Self {github:true,blender:true,hyperframes:true} } }
 
+/// Resumen automático del contexto de un asistente. Apagado salvo que la
+/// persona lo active; `tokens` a 0 deja que el frontend proponga el umbral.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AutoCompactRule { pub enabled: bool, pub tokens: u64 }
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AutoCompactSettings { pub claude: AutoCompactRule, pub codex: AutoCompactRule, pub trex: AutoCompactRule }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub time_format: String,
     pub integrations: ApplicationIntegrations,
+    pub auto_compact: AutoCompactSettings,
     pub desktop_enabled: bool,
     /// Control por accesibilidad (experimental, desactivado por defecto).
     pub a11y_enabled: bool,
@@ -111,6 +121,7 @@ impl Default for Settings {
         Self {
             time_format: "24h".into(),
             integrations: ApplicationIntegrations::default(),
+            auto_compact: AutoCompactSettings::default(),
             desktop_enabled: false,
             a11y_enabled: false,
             a11y_keyboard: false,
@@ -210,6 +221,18 @@ mod browser_preference_tests {
         assert_eq!(saved["settings"]["integrations"],serde_json::json!({"github":false,"blender":true,"hyperframes":false}));
         let old:AppConfig=serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
         assert!(old.settings.integrations.github && old.settings.integrations.blender && old.settings.integrations.hyperframes);
+    }
+    #[test]
+    fn automatic_context_summary_is_opt_in_and_roundtrips_per_assistant() {
+        let old: AppConfig = serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
+        assert!(!old.settings.auto_compact.claude.enabled && !old.settings.auto_compact.codex.enabled && !old.settings.auto_compact.trex.enabled);
+        let config: AppConfig = serde_json::from_value(serde_json::json!({"settings":{"autoCompact":{"claude":{"enabled":true,"tokens":400000},"codex":{"tokens":250000}}}})).unwrap();
+        assert!(config.settings.auto_compact.claude.enabled);
+        assert!(!config.settings.auto_compact.codex.enabled, "a saved threshold alone does not turn the option on");
+        let saved = serde_json::to_value(config).unwrap();
+        assert_eq!(saved["settings"]["autoCompact"]["claude"], serde_json::json!({"enabled":true,"tokens":400000}));
+        assert_eq!(saved["settings"]["autoCompact"]["codex"], serde_json::json!({"enabled":false,"tokens":250000}));
+        assert_eq!(saved["settings"]["autoCompact"]["trex"], serde_json::json!({"enabled":false,"tokens":0}));
     }
     #[test]
     fn older_configuration_uses_the_frontend_browser_defaults() {

@@ -11,6 +11,7 @@ import { parseTrexModels, trexReducer, trexRequest, trexResult } from "../trexCh
 import { localId, useAgentProcess, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { useMessageQueue } from "./useMessageQueue";
 import { withChatTimes } from "../chatTimes";
+import { autoCompactTokens, trexAutoCompactSettings } from "../autoCompact";
 const timedTrexReducer = withChatTimes(trexReducer);
 
 /** Una herramienta se cortó sin saber si llegó a actuar: Trex CLI no la repite
@@ -41,6 +42,8 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
   const [usageLoading, setUsageLoading] = useState(false), [usageError, setUsageError] = useState<string | null>(null);
   const usageRead = useRef<object | null>(null);
   const supportsCompact = useRef(false);
+  // Umbral de resumen automático con el que arrancó la sesión en curso.
+  const autoCompactAt = useRef<number | null>(null);
   const sending = useRef<{ id: string; controller: AbortController; issued: boolean; displayed: boolean } | null>(null);
   // El terminal del protocolo confirma que también terminó la cancelación de herramientas.
   const activeTurn = useRef<ActiveTurn | null>(null);
@@ -170,7 +173,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
         // Como Claude y Codex: cómo adjuntar archivos para que el chat los pinte como tarjeta.
         instructions: [FILE_SHARING_INSTRUCTIONS, TREX_INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations)].filter(Boolean).join(" "),
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
-        settings: integrationRestrictions(current.integrations), desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
+        settings: { ...integrationRestrictions(current.integrations), ...trexAutoCompactSettings(autoCompactAt.current = autoCompactTokens(current.autoCompact, "trex")) }, desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
       assertIntegrationRestrictions(result, current.integrations);
       if (result.instructionsApplied !== true) throw new Error("Trex CLI no confirmó las instrucciones de las herramientas. Actualiza el CLI antes de iniciar esta conversación.");
@@ -315,7 +318,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
     } catch (error) { if (mounted.current && generation === startupGeneration.current) setUsageError(formatError(error)); }
     finally { if (usageRead.current === request) { usageRead.current = null; if (mounted.current) setUsageLoading(false); } }
   };
-  return { provider: "trex", state, queue, terminals: agent.terminals, supportsCompact: supportsCompact.current,
+  return { provider: "trex", state, queue, terminals: agent.terminals, supportsCompact: supportsCompact.current, autoCompactAt: autoCompactAt.current,
     usageControls: { loading: usageLoading, error: usageError, refresh: refreshUsage }, start: async () => {
     if (!mounted.current) return;
     cancelDeferred();

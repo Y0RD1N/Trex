@@ -10,6 +10,7 @@ import { useDialog } from "./DialogProvider";
 import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MoonIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon, WrenchIcon } from "./Icons";
 import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
+import AutoCompactSettings from "./AutoCompactSettings";
 import CursorSettings from "./CursorSettings";
 import WorkspaceAppearance from "./WorkspaceAppearance";
 import { applyDesign, normalizeDesign } from "../visualDesign";
@@ -310,6 +311,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 appInfo={appInfo} claudeInfo={claudeInfo} codexInfo={codexInfo} onRedetect={onRedetect}
                 onBusyChange={changeProfileBusy}
                 onChange={(profiles, defaultProfileId) => patch({ profiles, defaultProfileId })} />}
+              {item.id === "profiles" && <AutoCompactSettings value={draft.autoCompact} onChange={autoCompact => patch({ autoCompact })} />}
 
               {item.id === "browser" && section === "browser" && <BrowserSettings settings={draft} cwd={cwd} onChange={patch} />}
               {item.id === "integrations" && section === "integrations" && <IntegrationSettings cwd={cwd} integrations={draft.integrations} onIntegrationsChange={integrations => patch({ integrations })} desktopEnabled={draft.desktopEnabled} onDesktopChange={desktopEnabled => patch({ desktopEnabled })} a11yEnabled={draft.a11yEnabled} onA11yChange={a11yEnabled => patch({ a11yEnabled })} a11yKeyboard={draft.a11yKeyboard} onA11yKeyboardChange={a11yKeyboard => patch({ a11yKeyboard })} />}

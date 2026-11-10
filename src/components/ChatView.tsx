@@ -1434,7 +1434,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession }) {
       </div>
       <div className="chat-composer-meta">
         {(usage || state.plan || state.apiUsage || state.costUsd !== null || provider === "trex" || provider === "antigravity") && <UsageMenu usage={usage} plan={state.plan} apiUsage={state.apiUsage} costUsd={state.costUsd} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
-          controls={session.usageControls} canCompact={session.supportsCompact} showUnavailable={provider === "trex" || provider === "antigravity"}
+          controls={session.usageControls} canCompact={session.supportsCompact} autoCompactAt={session.autoCompactAt} showUnavailable={provider === "trex" || provider === "antigravity"}
           onOpenAll={() => callbacks.current.onOpenUsage()}
           onCompact={() => {
             stickRef.current = true;
@@ -1496,7 +1496,7 @@ function ChatView(input: ChatViewProps) {
   const desktopEnabled = useRef(input.settings.desktopEnabled).current;
   // Experimental; en equipos y salas cada agente reserva las ventanas en las que actúa.
   const a11yEnabled = useRef(input.settings.a11yEnabled === true).current;
-  const props = { ...input, browser, desktopEnabled, a11yEnabled, integrations: input.settings.integrations };
+  const props = { ...input, browser, desktopEnabled, a11yEnabled, integrations: input.settings.integrations, autoCompact: input.settings.autoCompact };
   return props.provider === "antigravity" ? <AntigravityChat {...props} /> : props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
 }
 

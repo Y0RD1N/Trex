@@ -557,7 +557,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       const readOnly = (participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner")) === "plan";
       const options: ChatSessionOptions = {
       // Computer and accessibility control follow the user's settings only for a role that can act.
-      browser: browsers[role], desktopEnabled, a11yEnabled, integrations: props.settings.integrations, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
+      browser: browsers[role], desktopEnabled, a11yEnabled, integrations: props.settings.integrations, autoCompact: props.settings.autoCompact, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort, fast: participant.agent.fast ?? null,
         mode: participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner"),
         planningOnly: readOnly,

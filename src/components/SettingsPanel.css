@@ -231,6 +231,12 @@
 .settings-toggles { display: flex; flex-direction: column; min-width: 0; padding: 0 var(--sp-4); border: 1px solid var(--settings-edge); border-radius: var(--radius-section); background: var(--settings-inset); box-shadow: inset 0 1px 0 var(--settings-highlight); }
 .settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-6); min-width: 0; cursor: pointer; padding: var(--sp-4) 0; }
 .settings-toggles .settings-toggle + .settings-toggle { border-top: 1px solid var(--settings-edge); }
+/* Resumen automático: cada asistente es una fila; su umbral aparece debajo al activarlo. */
+.settings-autocompact-row + .settings-autocompact-row { border-top: 1px solid var(--settings-edge); }
+.settings-autocompact-threshold { padding-bottom: var(--sp-4); }
+.settings-autocompact-input { display: flex; align-items: center; gap: var(--sp-2); }
+.settings-autocompact-input .input { flex: 1 1 auto; width: 0; font-family: var(--font-mono); text-align: right; }
+.settings-autocompact-input span { color: var(--text-dim); font-size: var(--fs-xs); }
 .settings-switch {
   appearance: none;
   -webkit-appearance: none;

@@ -309,6 +309,18 @@ carpeta y argumentos del perfil: `claude -p` con `stream-json`, o
   muestran los **tokens nuevos** (entrada sin caché, salida y escritura de
   caché); las lecturas de caché, mucho más baratas, aparecen aparte junto al
   coste cuando el proveedor lo informa.
+- **Resumen automático (opcional)**: en **Ajustes → Asistentes** puedes activar,
+  por separado para Claude Code, Codex y Trex CLI, que la conversación se resuma
+  sola al llegar a un número de tokens que eliges tú. Está apagado: sin
+  activarlo, cada asistente resume cuando él decide (Claude Code y Codex, cerca
+  del límite del modelo). trex no envía `/compact`: le pasa el umbral al propio
+  asistente, que también actúa a mitad de un turno largo. Se aplica a las
+  conversaciones que abras o reanudes después de guardar, y un umbral escrito
+  en los argumentos del perfil (`--autocompact` en Claude Code,
+  `-c model_auto_compact_token_limit=…` en Codex) tiene prioridad. Claude Code
+  toma el valor como tamaño de la ventana y resume unos 33.000 tokens antes.
+  Resumir antes hace que cada turno relea menos contexto; a cambio, un resumen
+  puede perder detalles.
 - **Modelo y esfuerzo**: el modelo tiene un acceso propio; **Ajustes del agente**
   agrupa permisos, esfuerzo y velocidad. Solo aparecen los niveles que admite
   cada modelo. En Codex se aplican desde el siguiente mensaje.

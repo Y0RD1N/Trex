@@ -73,6 +73,8 @@ export type ApplicationIntegrations = { github: boolean; blender: boolean; hyper
 export type Settings = {
   timeFormat: import("./timeFormat").TimeFormat;
   integrations: ApplicationIntegrations;
+  /** Resumen automático del contexto por asistente; apagado salvo que la persona lo active. */
+  autoCompact: import("./autoCompact").AutoCompactSettings;
   desktopEnabled: boolean;
   /** Control por accesibilidad (experimental). */
   a11yEnabled: boolean;

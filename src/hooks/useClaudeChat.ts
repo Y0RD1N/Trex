@@ -27,6 +27,7 @@ import { CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, claudeInboxInitialize, claudeInboxRep
 import { IS_WINDOWS } from "../platform";
 import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMode, claudePlanningExitResponse, claudePlanningFlags } from "../workflowSafety";
 import { withChatTimes } from "../chatTimes";
+import { claudeAutoCompact, claudeAutoCompactEnv } from "../autoCompact";
 const timedChatReducer = withChatTimes(chatReducer);
 
 /** El uso del plan se pide al servidor de Claude: como mucho una vez por minuto. */
@@ -91,6 +92,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   stateRef.current = state;
   const callbacks = useRef(options);
   callbacks.current = options;
+  // Umbral de resumen automático con el que arrancó el proceso en curso.
+  const autoCompactAt = useRef<number | null>(null);
   const queue = useMessageQueue(options.queueId ?? sessionId);
   const inboxRequests = useRef(new InboxRequests());
   /** What the running process was told: attached tools and whether --append-system-prompt carried it. */
@@ -475,7 +478,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         if (accessEnabled) initialization ??= initializationWait();
         const procId = await whileCurrent(agent.spawn({
           cwd, command: command?.trim() || "claude", profileArgs, shell,
-          env: { ...env, ...browserEnv(browser), ...(teamConfig ? { CLAUDE_AUTO_BACKGROUND_TASKS: "0" } : {}) },
+          env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...browserEnv(browser), ...(teamConfig ? { CLAUDE_AUTO_BACKGROUND_TASKS: "0" } : {}) },
           flags: planningOnly ? claudePlanningFlags(flags) : flags,
         }), startup.signal);
         if (!procId) { initialization?.ready("El arranque de Claude fue sustituido."); return null; }
@@ -647,7 +650,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       startupRef.current?.abort();
       startupRef.current = request;
       readyProcessRef.current = null;
-      const procId = await whileCurrent(agent.spawn({ cwd, command: command?.trim() || "claude", profileArgs, flags, shell, env: { ...env, ...browserEnv(browser) } }), request.signal);
+      const procId = await whileCurrent(agent.spawn({ cwd, command: command?.trim() || "claude", profileArgs, flags, shell,
+        env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...browserEnv(browser) } }), request.signal);
       if (!procId) throw new Error("La sesión se cerró mientras se preparaba la edición.");
       request.signal.throwIfAborted();
       readyProcessRef.current = procId;
@@ -739,6 +743,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
 
   return {
     provider: "claude",
+    autoCompactAt: autoCompactAt.current,
     terminals: agent.terminals,
     state,
     queue,

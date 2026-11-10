@@ -18,10 +18,12 @@ type ContextProps = {
   busy: boolean;
   onCompact: () => void;
   canCompact?: boolean;
+  /** Umbral de resumen automático elegido en Ajustes con el que arrancó la sesión. */
+  autoCompactAt?: number | null;
 };
 
 /** Desglose compartido por el menú de contexto y el diálogo de uso. */
-export function ContextDetails({ usage, product, busy, onCompact, canCompact, inline = false, onClose }: ContextProps & {
+export function ContextDetails({ usage, product, busy, onCompact, canCompact, autoCompactAt, inline = false, onClose }: ContextProps & {
   /** El contenedor ya aporta el título y usa botones normales, como un diálogo. */
   inline?: boolean;
   onClose?: () => void;
@@ -40,11 +42,15 @@ export function ContextDetails({ usage, product, busy, onCompact, canCompact, in
   const free = measured && usage.window ? Math.max(0, usage.window - usage.used - (reserve ?? 0)) : null;
   const share = (tokens: number): string => usage.window ? `${Math.min(100, (tokens / usage.window) * 100)}%` : "0%";
   const supportsCompact = canCompact ?? (product === "Claude Code" || product === "Codex");
+  // El umbral de Ajustes solo cambia algo si queda por debajo del punto en que el asistente resume por sí mismo.
+  const ownLimit = usage.window ? usage.window - (reserve ?? 0) : null;
+  const chosenAt = supportsCompact && autoCompactAt && (ownLimit === null || autoCompactAt < ownLimit) ? autoCompactAt : null;
   const notes = [
     !measured ? "El uso se mostrará cuando el proveedor informe los tokens." : null,
     !usage.window ? "El proveedor no informó el límite de contexto de este modelo." : null,
     measured && product === "Trex CLI" ? "Contexto medido en la última solicitud." : null,
-    supportsCompact && reserve && usage.window ? `Al llegar a ${formatTokens(usage.window - reserve)}, ${product} resume la conversación por sí solo.`
+    chosenAt ? `Al llegar a ${formatTokens(chosenAt)}, ${product} resume la conversación por sí solo: es el umbral que elegiste en Ajustes.`
+      : supportsCompact && reserve && usage.window ? `Al llegar a ${formatTokens(usage.window - reserve)}, ${product} resume la conversación por sí solo.`
       : supportsCompact && usage.window ? `${product} resume la conversación por sí solo cuando se acerca al límite.` : null,
     usage.total ? `${formatTokens(usage.total)} tokens procesados en toda la conversación.` : null,
   ].filter(Boolean);

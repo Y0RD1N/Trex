@@ -30,6 +30,7 @@ import { assertCodexPlanningThread, codexPlanningThread, codexPlanningTurn } fro
 import { taskInstructions } from "../chatTasks";
 import { detectedIntegrations, integrationContext, integrationInstructions, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS, type IntegrationContext } from "../integrations";
 import { withChatTimes } from "../chatTimes";
+import { codexAutoCompact, codexAutoCompactFlags } from "../autoCompact";
 const timedCodexReducer = withChatTimes(codexReducer);
 
 /** Peticiones de Codex que el chat responde con una tarjeta. */
@@ -117,6 +118,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   stateRef.current = state;
   const callbacks = useRef(options);
   callbacks.current = options;
+  // Umbral de resumen automático con el que arrancó el proceso en curso.
+  const autoCompactAt = useRef<number | null>(null);
   const queue = useMessageQueue(options.queueId ?? sessionId);
   const inboxRequests = useRef(new InboxRequests());
   const inboxConfigRef = useRef<Json>({});
@@ -571,7 +574,9 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
             "mcp_servers.trex_team.tool_timeout_sec": 1900, "mcp_servers.trex_team.default_tools_approval_mode": "approve",
           });
         }
-        const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags: launch.flags, shell, env: { ...env, ...browserEnv(browser) } });
+        autoCompactAt.current = codexAutoCompact(callbacks.current.autoCompact, launch.flags);
+        const flags = [...launch.flags, ...codexAutoCompactFlags(autoCompactAt.current)];
+        const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags, shell, env: { ...env, ...browserEnv(browser) } });
         if (!procId || !isCurrent() || !agent.isCurrent(procId)) return;
         readyProcessRef.current = procId;
         dispatch({ type: "spawned" });
@@ -860,6 +865,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
 
   return {
     provider: "codex",
+    autoCompactAt: autoCompactAt.current,
     terminals: agent.terminals,
     state,
     queue,

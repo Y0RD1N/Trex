@@ -22,6 +22,8 @@ type Props = {
   busy: boolean;
   onCompact: () => void;
   canCompact?: boolean;
+  /** Umbral de resumen automático elegido en Ajustes con el que arrancó la sesión. */
+  autoCompactAt?: number | null;
   onOpenAll: () => void;
 };
 
@@ -29,7 +31,7 @@ const severityRank: Record<UsageSeverity, number> = { normal: 0, warning: 1, cri
 const percentLabel = (percent: number): string => percent > 0 && percent < 1 ? "<1 %" : `${Math.round(percent)} %`;
 
 /** Un único acceso al contexto de la conversación y a los límites de la cuenta. */
-export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, busy, controls, showUnavailable, onCompact, canCompact, onOpenAll }: Props) {
+export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, busy, controls, showUnavailable, onCompact, canCompact, autoCompactAt, onOpenAll }: Props) {
   const id = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
@@ -142,7 +144,7 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
       {!usage && showUnavailable && <p className="chat-context-note">El contexto se mostrará cuando el proveedor informe una medición.</p>}
       {usage && <section className={`chat-usage-section chat-context-menu${contextLevel}`} aria-labelledby={`${id}-context`}>
         <h3 id={`${id}-context`} className="chat-menu-label">Contexto</h3>
-        <ContextDetails usage={usage} product={product} busy={busy} canCompact={canCompact} inline onCompact={() => runAction(onCompact)} />
+        <ContextDetails usage={usage} product={product} busy={busy} canCompact={canCompact} autoCompactAt={autoCompactAt} inline onCompact={() => runAction(onCompact)} />
       </section>}
       {plan && <section className="chat-usage-section" aria-labelledby={`${id}-plan`}>
         <h3 id={`${id}-plan`} className="chat-menu-label">Uso del plan</h3>

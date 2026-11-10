@@ -530,7 +530,7 @@ export default function AgentTeamView(props: Props) {
       const space=spaces.find(space=>space.clientId===team.id+"-"+member.id);
       const memberBrowser=space?{enabled:browser.enabled,clientId:space.clientId,profile:space.profile}:{...browser,enabled:false,clientId:team.id+"-"+member.id};
       // Computer and accessibility control follow the user's settings only for members that can act.
-      const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,desktopEnabled: !historyOnly && desktopEnabled, a11yEnabled: !historyOnly && a11yEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
+      const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,autoCompact:props.settings.autoCompact,desktopEnabled: !historyOnly && desktopEnabled, a11yEnabled: !historyOnly && a11yEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
         sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
         conversationId:member.conversationId,mode:readOnly?"plan":member.mode??defaultAgentPermission(member.agent.provider),
         model:member.agent.model,effort:member.agent.effort,fast:member.agent.fast??null,planningOnly:readOnly,
