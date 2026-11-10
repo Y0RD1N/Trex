@@ -146,7 +146,8 @@ for (const [provider, choices] of Object.entries(modes)) for (const mode of choi
     let tree;
     const props = { ...ui.baseProps(), provider, mode, session };
     const render = () => tree = component.render(() => ChatPanel(props));
-    const toggle = () => ui.find(tree, node => node.props.className === "chat-task-toggle");
+    // La pestaña de Tareas, por su nombre accesible (las clases también llevan la del tooltip).
+    const toggle = () => ui.find(tree, node => typeof node.props["aria-label"] === "string" && node.props["aria-label"].startsWith("Tareas"));
     const panels = () => [...ui.elements(tree)].filter(node => node.type === "./chat/TaskPanel:default");
     render();
     assert.equal(toggle().props["aria-expanded"], false);

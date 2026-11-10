@@ -61,6 +61,12 @@ export function ProfilesIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="2" /><path d="M5.5 16a3.5 3.5 0 0 1 7 0M16 9h2M16 13h2" /></svg>;
 }
 
+/** Sesiones que se hablan: dos bocadillos. */
+export function SessionsIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h6A2.5 2.5 0 0 1 15 6.5v3a2.5 2.5 0 0 1-2.5 2.5H9l-3 2.5V12h0A2 2 0 0 1 4 10Z" />
+    <path d="M18 9.5h.5A1.5 1.5 0 0 1 20 11v3.5a2 2 0 0 1-2 2v2.5l-3-2.5h-3a2 2 0 0 1-2-2" /></svg>;
+}
+
 /** Sol: pasar a modo claro. */
 export function SunIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return (

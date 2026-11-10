@@ -7,7 +7,7 @@
 import { memo, useEffect, useId, useState } from "react";
 import { coordinationHub, coordinationRelease, peerNoteParts, peersOf, WAKE_LIMIT, type PeerBoard, type PeerClaim } from "../../coordination";
 import AgentIcon from "../AgentIcon";
-import { AlertIcon, CloseIcon, ProfilesIcon } from "../Icons";
+import { AlertIcon, CloseIcon, ProfilesIcon, SessionsIcon } from "../Icons";
 import { formatClock, formatDateTime } from "../../timeFormat";
 import { useTimeFormat } from "../../hooks/useTimeFormat";
 import type { TabKind } from "../../types";
@@ -48,7 +48,7 @@ export default function PeerSessions({ board, session, project, onClose, panelId
     </li>)}</ul>;
   const mine = claims.filter(claim => claim.session === session);
   return <aside id={panelId} className="chat-task-panel peer-sessions" aria-labelledby={id}>
-    <header><div><h2 id={id}><ProfilesIcon size={16} />Sesiones del proyecto</h2>
+    <header><div><h2 id={id}><SessionsIcon size={16} />Sesiones del proyecto</h2>
       <p>{peers.length === 1 ? "Otra sesión trabaja en esta carpeta" : `${peers.length} sesiones más trabajan en esta carpeta`}</p></div>
       <button type="button" className="icon-btn" onClick={onClose} aria-label="Contraer sesiones del proyecto"><CloseIcon size={14} /></button></header>
     {paused && <div className="peer-paused" role="status">

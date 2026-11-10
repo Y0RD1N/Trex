@@ -238,15 +238,6 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
             {SECTIONS.map(item => <section key={item.id} hidden={section !== item.id} className={`settings-page settings-page-${item.id}${item.id === "terminal" || item.id === "cursor" ? " settings-terminal-page" : ""}`} role="tabpanel" tabIndex={0} id={`${id}-panel-${item.id}`} aria-labelledby={compact ? undefined : `${id}-tab-${item.id}`} aria-label={compact ? item.label : undefined}>
               <div className="settings-page-heading">
                 <div className="settings-page-title"><h3>{item.label}</h3><p>{item.description}</p></div>
-                {section === item.id && (dirty || profileBusy || profileError || shortcutError || !validHistory) && <div className="settings-inline-actions">
-                  <div className="settings-save-status" aria-live="polite">
-                    {profileBusy ? "Guardando la conexión…" : profileError ? <button type="button" className="settings-error-link" onClick={() => setSection("profiles")}>{profileError}</button>
-                      : shortcutError ? <button type="button" className="settings-error-link" onClick={() => setSection("shortcuts")}>{shortcutError}</button>
-                      : !validHistory ? <button type="button" className="settings-error-link" onClick={reviewHistory}>Revisa el historial del terminal</button>
-                      : <><span className="settings-dirty-dot" aria-hidden="true" />Cambios sin guardar</>}
-                  </div>
-                  <button type="button" className="btn btn-primary settings-save" disabled={profileBusy || !dirty || !validHistory || !!profileError || !!shortcutError} onClick={save}><CheckIcon size={15} />Guardar cambios</button>
-                </div>}
               </div>
 
               {item.id === "appearance" && <>
@@ -369,6 +360,18 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 </div>
               </>}
             </section>)}
+            {/* Guardar flota al pie del contenido: se alcanza sin volver arriba, desde cualquier punto de la página. */}
+            {(dirty || profileBusy || profileError || shortcutError || !validHistory) && <div className="settings-savebar">
+              <div className="settings-savebar-inner" role="group" aria-label="Cambios pendientes">
+                <div className="settings-save-status" aria-live="polite">
+                  {profileBusy ? "Guardando la conexión…" : profileError ? <button type="button" className="settings-error-link" onClick={() => setSection("profiles")}>{profileError}</button>
+                    : shortcutError ? <button type="button" className="settings-error-link" onClick={() => setSection("shortcuts")}>{shortcutError}</button>
+                    : !validHistory ? <button type="button" className="settings-error-link" onClick={reviewHistory}>Revisa el historial del terminal</button>
+                    : <><span className="settings-dirty-dot" aria-hidden="true" />Cambios sin guardar</>}
+                </div>
+                <button type="button" className="btn btn-primary settings-save" disabled={profileBusy || !dirty || !validHistory || !!profileError || !!shortcutError} onClick={save}><CheckIcon size={15} />Guardar cambios</button>
+              </div>
+            </div>}
           </div>
         </div>
 

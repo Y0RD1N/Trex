@@ -48,7 +48,7 @@ import { dispatchQueuedMessage, INBOX_WAKE, type QueuedMessage } from "../messag
 import { createHandoffContext, type HandoffContext, type HandoffReference } from "../handoff";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, ListIcon, MapIcon, PaperclipIcon, PencilIcon, ProfilesIcon, RotateIcon, ShieldIcon, StopIcon } from "./Icons";
+import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, ListIcon, MapIcon, PaperclipIcon, PencilIcon, ProfilesIcon, RotateIcon, SessionsIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { ModelMenu } from "./chat/ModelMenu";
 import ComposerSettings, { ComposerMoreMenu, type ComposerAction } from "./chat/ComposerSettings";
@@ -1235,6 +1235,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   const tasksDone = tasks.filter(task => task.status === "completed").length;
   const sideToggle = (tab: SideTab): { current: HTMLButtonElement | null } =>
     tab === "team" ? teamToggle : tab === "git" ? gitToggle : tab === "usage" ? usageToggle : tab === "peers" ? peersToggle : taskToggle;
+  // Con el panel abierto, las pestañas que no se ven quedan en icono: su nombre va en el tooltip.
+  const sideTip = (tab: SideTab, text: string): string | undefined => activeSide && activeSide !== tab ? text : undefined;
   const closeSide = (focus: { current: HTMLButtonElement | null }): void => {
     setSideTab(null);
     focus.current?.focus({ preventScroll: true });
@@ -1522,23 +1524,24 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         closeSide(sideToggle(activeSide));
       }}>
       <div className="chat-side-tabs" role="group" aria-label="Paneles del chat">
-        {props.toolbar && <button ref={teamToggle} type="button" className="chat-side-tab chat-team-toggle" aria-label="Equipo"
-          aria-expanded={activeSide === "team"} aria-controls={activeSide === "team" ? `team-${sessionId}` : undefined}
+        {props.toolbar && <button ref={teamToggle} type="button" className="chat-side-tab chat-team-toggle tip-below" aria-label="Equipo"
+          data-tip={sideTip("team", "Equipo")} aria-expanded={activeSide === "team"} aria-controls={activeSide === "team" ? `team-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "team" ? null : "team")}>
           <ProfilesIcon size={14} /><span className="chat-side-label">Equipo</span>{running && <i className="chat-side-live" aria-hidden="true" />}</button>}
         <UsageToggle ref={usageToggle} profiles={props.settings.profiles} expanded={usageOpen} controls={usageOpen ? `usage-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "usage" ? null : "usage")} />
-        <button ref={taskToggle} type="button" className="chat-task-toggle" aria-label={tasks.length ? `Tareas: ${tasksDone} de ${tasks.length} completadas` : "Tareas"}
-          aria-expanded={tasksOpen} aria-controls={tasksOpen ? `tasks-${sessionId}` : undefined}
+        <button ref={taskToggle} type="button" className="chat-task-toggle tip-below" aria-label={tasks.length ? `Tareas: ${tasksDone} de ${tasks.length} completadas` : "Tareas"}
+          data-tip={sideTip("tasks", tasks.length ? `Tareas · ${tasksDone} de ${tasks.length}` : "Tareas")} aria-expanded={tasksOpen} aria-controls={tasksOpen ? `tasks-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "tasks" ? null : "tasks")}>
           <ListIcon size={14} /><span className="chat-side-label">Tareas</span>{tasks.length > 0 && <small>{tasksDone}/{tasks.length}</small>}</button>
-        {peers.length > 0 && <button ref={peersToggle} type="button" className="chat-task-toggle chat-peers-toggle"
+        {peers.length > 0 && <button ref={peersToggle} type="button" className="chat-task-toggle chat-peers-toggle tip-below"
+          data-tip={sideTip("peers", peers.length === 1 ? "Sesiones · otra sesión en este proyecto" : `Sesiones · ${peers.length} más en este proyecto`)}
           aria-label={peers.length === 1 ? "Sesiones: otra sesión trabaja en este proyecto" : `Sesiones: ${peers.length} sesiones más trabajan en este proyecto`}
           aria-expanded={peersOpen} aria-controls={peersOpen ? `peers-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "peers" ? null : "peers")}>
-          <ProfilesIcon size={14} /><span className="chat-side-label">Sesiones</span><small>{peers.length}</small>
+          <SessionsIcon size={14} /><span className="chat-side-label">Sesiones</span><small>{peers.length}</small>
           {peers.some(peer => peer.working) && <i className="chat-side-live" aria-hidden="true" />}</button>}
-        {branch && <button ref={gitToggle} type="button" className="chat-task-toggle chat-git-toggle" aria-label={`Git · ${branch}`} title={`Git · ${branch}`}
+        {branch && <button ref={gitToggle} type="button" className="chat-task-toggle chat-git-toggle tip-below" aria-label={`Git · ${branch}`} data-tip={`Git · ${branch}`}
           aria-expanded={gitOpen} aria-controls={gitOpen ? `git-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "git" ? null : "git")}>
           <BranchIcon size={14} /><span className="chat-side-label">Git</span><small>{branch}</small></button>}

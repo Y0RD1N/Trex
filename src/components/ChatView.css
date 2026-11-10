@@ -1886,17 +1886,16 @@ pre.chat-ask-preview-body {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   cursor: pointer;
-  transition: color var(--t);
+  transition: color var(--t), background-color var(--t);
 }
 /* Línea de estado de la caja: «opus · pregunta · navegador», sin píldoras ni recuadros. */
 .chat-tray .chat-tray-chip + .chat-tray-chip::before { content: "·"; position: absolute; left: -9px; top: 50%; translate: 0 -50%; color: var(--text-dim); }
 .chat-tray { gap: var(--sp-3-5); }
+/* Mismo gesto que el resto de botones discretos («En cola», uso, «⋯»): fondo suave, sin subrayado. */
 .chat-tray .chat-tray-chip:hover,
 .chat-tray .chat-tray-chip[aria-expanded="true"] {
+  background: var(--hover);
   color: var(--text);
-  text-decoration: underline;
-  text-decoration-color: var(--accent-dim);
-  text-underline-offset: 4px;
 }
 .chat-tray .chat-tray-chip:focus-visible { outline: 2px solid var(--focus-color); outline-offset: -2px; }
 .chat-tray .chat-tray-chip:disabled { opacity: .45; cursor: default; }
@@ -2482,6 +2481,7 @@ pre.chat-ask-preview-body {
   flex: 0 1 auto;
   height: 30px;
   padding: 0 var(--sp-2-5);
+  overflow: hidden;
   border-color: transparent;
   border-radius: var(--radius-md);
   background: transparent;
@@ -2490,6 +2490,33 @@ pre.chat-ask-preview-body {
 .chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):hover { background: var(--hover); border-color: transparent; }
 .chat-side.is-open > .chat-side-tabs > button[aria-expanded="true"] { background: var(--selected); color: var(--text); }
 .chat-side.is-open > .chat-side-tabs > button[aria-expanded="true"] small { color: var(--text-muted); }
+.chat-side.is-open .chat-side-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Abierto, solo la pestaña a la vista lleva su nombre; las demás quedan en icono
+   (y su número), con el nombre en el tooltip: cinco pestañas caben sin montarse. */
+.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) {
+  flex: 0 0 auto;
+  justify-content: center;
+  min-width: 30px;
+  padding: 0 var(--sp-2);
+}
+.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) .chat-side-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) small { display: none; }
+/* La actividad (equipo o sesiones trabajando) queda como punto en la esquina del icono. */
+.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) .chat-side-live {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  box-shadow: 0 0 0 2px var(--bg-surface);
+}
 /* Abierto, la rama ya se ve dentro de Git: la pestaña solo dice «Git». */
 .chat-side.is-open .chat-git-toggle small { display: none; }
 .chat-side-collapse { margin-left: auto; color: var(--text-dim); }
@@ -2539,7 +2566,8 @@ pre.chat-ask-preview-body {
     box-shadow: var(--shadow-4);
     animation-name: chat-sheet-in;
   }
-  .chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse) { flex: 1 1 0; justify-content: center; }
+  .chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse),
+  .chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) { flex: 1 1 0; justify-content: center; }
 }
 @keyframes chat-sheet-in { from { opacity: 0; transform: translateY(10px); } }
 /* Muy estrecho: las pestañas contraídas muestran solo icono y recuento. */

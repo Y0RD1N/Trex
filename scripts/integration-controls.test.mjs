@@ -58,6 +58,25 @@ test("browser guidance needs a browser attached to that session, once per provid
   assert.match(integrationInstructions("claude", integrationContext(enabled, { browser: true })), /browser_navigate/);
   assert.ok(Buffer.byteLength(BROWSER_INSTRUCTIONS) < 700);
 });
+test("computer control and accessibility guidance follow their own switches for every provider", () => {
+  const base = { integrations: off };
+  for (const provider of ["claude", "codex", "trex", "antigravity"]) {
+    assert.equal(integrationInstructions(provider, integrationContext({ ...base, desktopEnabled: false }, { a11y: false, browser: false })), "", provider);
+    const desktop = integrationInstructions(provider, integrationContext({ ...base, desktopEnabled: true }));
+    assert.match(desktop, /Computer control/, provider); assert.doesNotMatch(desktop, /Accessibility|a11y_/, provider);
+    const a11y = integrationInstructions(provider, integrationContext(base, { a11y: true }));
+    assert.match(a11y, /Accessibility control/, provider); assert.doesNotMatch(a11y, /Computer control|desktop_/, provider);
+  }
+});
+test("with every integration off, Claude's appended prompt keeps only the app's own guidance", () => {
+  const all = integrationContext({ integrations: { github: true, blender: true, hyperframes: true }, desktopEnabled: true },
+    { browser: true, a11y: true, available: { github: true, blender: true, hyperframes: true } });
+  const none = integrationContext({ integrations: off, desktopEnabled: false });
+  const appended = context => { const flags = claudeChatFlags(null, null, { integrations: context }); return flags[flags.indexOf("--append-system-prompt") + 1]; };
+  assert.doesNotMatch(appended(none), /GitHub|Blender|HyperFrames|Computer control|Accessibility|browser_navigate|desktop_|a11y_|Check real results/);
+  assert.match(appended(none), /trex_update_tasks/, "the app's own tools stay");
+  assert.ok(Buffer.byteLength(appended(none)) < Buffer.byteLength(appended(all)) / 2, "turning everything off removes more than half of the appended text");
+});
 test("without the native app, detection degrades to the enabled preferences synchronously", () => {
   assert.equal(detectedIntegrations("D:/offline-project"), null);
   assert.equal(detectedIntegrations("D:/offline-project"), null);

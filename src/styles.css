@@ -1210,23 +1210,24 @@ body.dragging-sidebar .sidebar { transition: none; }
 .notification-bell.has-unread { color: var(--text); }
 .notification-bell > span:first-child { display: flex; transform-origin: 50% 20%; }
 .notification-bell-motion { animation: trex-bell-ring .65s var(--ease-out); }
-.notification-count {
-  position: absolute;
-  top: -1px;
-  right: -1px;
+/* Con avisos sin leer la campana se vuelve una pastilla «campana + número»: el
+   número va al lado, no encima del icono, y el tono suave del acento la distingue
+   sin el globo rojo que tapaba la campana. */
+.tabs-bar .notification-bell.has-unread {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  border: 2px solid var(--bg-surface);
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  line-height: 1;
+  flex: 0 0 auto;
+  gap: var(--sp-1);
+  width: auto;
+  min-width: 30px;
+  padding: 0 var(--sp-2) 0 var(--sp-1-5);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-strong);
+}
+.tabs-bar .notification-bell.has-unread:hover,
+.tabs-bar .notification-bell.has-unread[aria-expanded="true"] { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-strong); }
+.notification-count {
+  color: inherit;
+  font: var(--fw-semibold) var(--fs-sm)/1 var(--font-mono);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }

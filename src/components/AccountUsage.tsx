@@ -115,7 +115,7 @@ export function UsageToggle({ profiles, expanded, controls, onClick, ref }: {
   const busy = profiles.some(profile => usageReading(profile).loading);
   const label = alert ? `Uso: ${alert.profile.name} al ${alert.percent} %`
     : top ? `Uso de las cuentas: lo más alto, ${top.profile.name} al ${top.percent} %` : "Uso de las cuentas";
-  return <button ref={ref} type="button" className={`chat-usage-toggle${alert ? " is-alert" : ""}`} aria-label={label} title={label}
+  return <button ref={ref} type="button" className={`chat-usage-toggle tip-below${alert ? " is-alert" : ""}`} aria-label={label} data-tip={label}
     aria-expanded={expanded} aria-controls={controls} onClick={onClick}>
     <UsageOrbitGlyph peaks={alert ? [alert, ...peaks.filter(peak => peak !== alert)] : peaks} hues={hues} busy={busy} alert={!!alert} />
     <span className="chat-side-label">Uso</span>
