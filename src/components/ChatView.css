@@ -799,7 +799,7 @@
 .chat-tool-icon { flex-basis: 14px; color: var(--ok); font: var(--fs-sm) / 1 var(--font-mono); }
 .chat-tool-icon > svg { display: none; }
 .chat-tool-icon::before { content: "✓"; }
-.chat-tool[data-status="running"] .chat-tool-icon::before { content: ""; display: block; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--loader-mask) center / contain no-repeat; mask: var(--loader-mask) center / contain no-repeat; }
+.chat-tool[data-status="running"] .chat-tool-icon::before { content: ""; display: block; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--loader-mask); mask: var(--loader-mask); animation: var(--loader-motion); }
 .chat-tool[data-status="running"] .chat-tool-icon { color: var(--accent-strong); }
 .chat-tool[data-status="error"] .chat-tool-icon::before { content: "✕"; }
 /* Las marcas del final (rueda y círculo) sobran: el estado ya está en el glifo; siguen para lectores de pantalla. */

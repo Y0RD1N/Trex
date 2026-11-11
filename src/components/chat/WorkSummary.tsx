@@ -8,6 +8,7 @@ import { changeTree, type ChangeNode, type WorkSummary as Summary } from "../../
 import { CheckIcon, ChevronIcon, FileIcon, FolderIcon, SplitIcon } from "../Icons";
 import { DiffView } from "./ChatItems";
 import { useMessageEntry } from "./useMessageEntry";
+import { formatNumber } from "../../intl";
 
 const STATUS = { modified: "Modificado", added: "Creado", deleted: "Eliminado", renamed: "Renombrado" };
 
@@ -51,7 +52,7 @@ export function TurnMeta({ startedAt, endedAt, usage }: { startedAt?: number; en
   const hitRate = cacheHitRateLabel(cacheHitRate(usage));
   const breakdown = usage ? [...([["Entrada", usage.inputTokens], ["Salida", usage.outputTokens], ["Razonamiento", usage.reasoningTokens],
     ["Lectura de caché", usage.cachedReadTokens], ["Escritura de caché", usage.cachedWriteTokens], ["Total procesado", usage.totalTokens]] as const)
-    .filter(([, value]) => value !== null).map(([label, value]) => `${label}: ${value!.toLocaleString("es")}`),
+    .filter(([, value]) => value !== null).map(([label, value]) => `${label}: ${formatNumber(value!)}`),
     ...(hitRate ? [`Aciertos de caché: ${hitRate}`] : []), ...(cost ? [`${costKind(usage)}: ${cost}`] : [])].join("\n") : "";
   if (startedAt === undefined && endedAt === undefined && !total) return null;
   const times = startedAt !== undefined && endedAt !== undefined ? `Inicio ${fullDate(startedAt)}\nFin ${fullDate(endedAt)}` : "";
@@ -63,7 +64,7 @@ export function TurnMeta({ startedAt, endedAt, usage }: { startedAt?: number; en
       {startedAt !== undefined && endedAt !== undefined && <span aria-hidden="true">→</span>}
       {endedAt !== undefined && <span>{clock(endedAt)}</span>}
     </time>}
-    {!!total && <span className="chat-turn-tokens tip" data-tip={breakdown || undefined} aria-label={`${total.toLocaleString("es")} tokens nuevos${cached ? `, más ${cached.toLocaleString("es")} leídos de caché` : ""}. ${breakdown.split("\n").join(", ")}`}>
+    {!!total && <span className="chat-turn-tokens tip" data-tip={breakdown || undefined} aria-label={`${formatNumber(total)} tokens nuevos${cached ? `, más ${formatNumber(cached)} leídos de caché` : ""}. ${breakdown.split("\n").join(", ")}`}>
       {formatTokens(total)} tokens{cached > 0 && <span className="usage-cache-note" aria-hidden="true"> · +{formatTokens(cached)} caché</span>}</span>}
   </span>;
 }

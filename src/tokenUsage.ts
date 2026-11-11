@@ -1,3 +1,4 @@
+import { formatNumber } from "./intl";
 /** Provider-reported consumption. Context occupancy is a separate measurement. */
 export type ApiUsage = {
   inputTokens: number | null;
@@ -123,7 +124,7 @@ export function cacheHitRate(usage: ApiUsage | null | undefined): number | null 
 }
 /** "93,4 %"; one decimal at most, in the user's locale. */
 export const cacheHitRateLabel = (rate: number | null): string | null =>
-  rate === null ? null : `${(rate * 100).toLocaleString("es", { maximumFractionDigits: 1 })} %`;
+  rate === null ? null : `${formatNumber(rate * 100, { maximumFractionDigits: 1 })} %`;
 
 /** Compact consumption kept per delegation, member and team. */
 export type UsageTotals = { newTokens: number; cacheReadTokens: number; outputTokens: number; costUsd: number | null; requests: number | null };
@@ -154,7 +155,7 @@ export const costKind = (usage: Pick<ApiUsage, "costEstimated"> | null | undefin
 export function costLabel(value: number | null | undefined): string | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
   if (value > 0 && value < 0.0001) return "< US$0,0001";
-  return value.toLocaleString("es", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: value < 1 ? 4 : 2 });
+  return formatNumber(value, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: value < 1 ? 4 : 2 });
 }
 
 /** Codex `TokenUsageBreakdown`: cached input is included in inputTokens, reasoning in outputTokens. */

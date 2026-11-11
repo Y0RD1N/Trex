@@ -3,7 +3,8 @@
 // Responsabilidades:
 //  - Abrir un PTY real (ConPTY en Windows, openpty en Unix) por cada pestaña.
 //  - Lanzar el shell del usuario y, opcionalmente, un comando dentro de él (Claude Code).
-//  - Bombear la salida del PTY al frontend en base64 (para no romper UTF-8) y recibir teclas.
+//  - Bombear la salida del PTY al frontend y recibir teclas. La salida va en binario por un canal
+//    de Tauri (sin base64 ni JSON) y agrupada: ver `output_batch.rs`.
 //  - Redimensionar, matar procesos y limpiar sesiones.
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -11,11 +12,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
+use crate::output_batch::OutputBatcher;
 use crate::output_flow::OutputFlow;
+
+/// Salida continua: como mucho una entrega cada 16 ms (un fotograma); xterm no pinta más a menudo.
+const OUTPUT_BATCH_WINDOW: Duration = Duration::from_millis(16);
+/// Tope de una entrega: la mitad de la ventana del control de flujo, para tener dos en vuelo.
+const OUTPUT_BATCH_MAX: usize = crate::output_flow::OUTPUT_WINDOW_BYTES / 2;
 use crate::terminal_env::{configure_claude_display, configure_terminal_colors};
 
 fn default_cols() -> u16 {
@@ -424,7 +431,7 @@ fn build_command(req: &SpawnRequest) -> Result<(ResolvedShell, Vec<String>, Opti
 }
 
 impl PtyState {
-    pub fn spawn(&self, app: AppHandle, req: SpawnRequest) -> Result<SpawnResponse, String> {
+    pub fn spawn(&self, app: AppHandle, req: SpawnRequest, on_data: Channel<InvokeResponseBody>) -> Result<SpawnResponse, String> {
         if req.id.trim().is_empty() {
             return Err("La sesión necesita un id.".into());
         }
@@ -521,33 +528,35 @@ impl PtyState {
             inner.sessions.insert(id.clone(), session);
         }
 
-        // Hilo lector: PTY -> frontend (base64 para preservar UTF-8).
+        // Hilo lector: PTY -> frontend. Las lecturas se agrupan y salen en binario por el canal de
+        // la terminal: los bytes llegan intactos (UTF-8 partido incluido) y xterm los decodifica.
         let (reader_done_tx, reader_done_rx) = std::sync::mpsc::channel();
         {
-            let app = app.clone();
-            let id = id.clone();
             let output_flow = output_flow.clone();
             thread::spawn(move || {
+                let output = {
+                    let output_flow = output_flow.clone();
+                    OutputBatcher::<u8>::new("pty-output", OUTPUT_BATCH_WINDOW, OUTPUT_BATCH_MAX, move |bytes| {
+                        if on_data.send(InvokeResponseBody::Raw(bytes)).is_err() {
+                            output_flow.stop();
+                        }
+                    })
+                };
                 let mut buf = [0u8; 16384];
-                let decoder = base64::engine::general_purpose::STANDARD;
-                let event = format!("pty-data-{id}");
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            // Si la ventana se cerró (o la entrega falló), se deja de leer.
                             if !output_flow.reserve(n) { break; }
-                            let payload = serde_json::json!({
-                                "data": decoder.encode(&buf[..n]),
-                            });
-                            if app.emit(&event, payload).is_err() {
-                                output_flow.stop();
-                                break;
-                            }
+                            output.extend(&buf[..n]);
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break,
                     }
                 }
+                // Lo pendiente sale antes del aviso de fin (el hilo de espera aguarda esta señal).
+                output.close_then(|| ());
                 let _ = reader_done_tx.send(());
             });
         }

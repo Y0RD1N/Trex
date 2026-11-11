@@ -22,10 +22,13 @@ import "./glass.css";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { IS_WINDOWS } from "./platform";
+import { installActivityMotion } from "./activityMotion";
 
 // Windows 11 redondea la ventana sin bordes y le pone su borde y su sombra: el
 // CSS no repite el marco (ver `--window-radius` en tokens.css). Antes del primer
 // pintado, para que tampoco la pantalla de carga muestre esquinas de más.
 if (IS_WINDOWS) document.documentElement.dataset.platform = "windows";
+// Los indicadores de actividad comparten reloj (menos fotogramas mientras el agente trabaja).
+installActivityMotion();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<ErrorBoundary scope="app"><App /></ErrorBoundary>);

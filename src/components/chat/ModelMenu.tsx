@@ -6,7 +6,7 @@
  * cuenta con su versión exacta, solo los niveles de esfuerzo que admite cada
  * uno y la velocidad rápida cuando el modelo la ofrece.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import DropdownMenu from "../DropdownMenu";
 import AgentIcon from "../AgentIcon";
 import { BoltIcon, CheckIcon, ChevronIcon } from "../Icons";
@@ -55,7 +55,7 @@ function TrayMenu({ label, icon, text, badge, menuLabel, className = "", trigger
   </>;
 }
 
-export function ModelMenu({ provider, models, model, choice, onModel, openSignal, triggerClassName }: {
+function ModelMenuView({ provider, models, model, choice, onModel, openSignal, triggerClassName }: {
   provider: AgentProvider; models: ModelInfo[]; model: string | null; choice: string | null; onModel: (value: string) => void;
   openSignal?: number; triggerClassName?: string;
 }) {
@@ -144,3 +144,6 @@ export function EffortMenu({ levels, effort, onEffort, speed, fast, onFast, open
     </>}
   </TrayMenu>;
 }
+
+/** Memorizado: el chat se repinta con cada tanda de texto y el menú no depende de ella. */
+export const ModelMenu = memo(ModelMenuView);

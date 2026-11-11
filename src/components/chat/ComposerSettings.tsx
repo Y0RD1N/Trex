@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import DropdownMenu from "../DropdownMenu";
 import { AlertIcon, BoltIcon, CheckIcon, ChevronIcon, CloseIcon, EllipsisIcon, PencilIcon, SettingsIcon, ShieldIcon } from "../Icons";
 import type { SelectOption } from "../Select";
@@ -68,7 +68,7 @@ export function ComposerMoreMenu({ actions }: { actions: ComposerAction[] }) {
   </>;
 }
 
-export default function ComposerSettings({ mode, modes, onMode, levels, effort, onEffort, speed, fast, onFast, openSignal }: Props) {
+function ComposerSettings({ mode, modes, onMode, levels, effort, onEffort, speed, fast, onFast, openSignal }: Props) {
   const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
@@ -185,3 +185,6 @@ export default function ComposerSettings({ mode, modes, onMode, levels, effort, 
     </DropdownMenu>
   </>;
 }
+
+/** Memorizado: el chat se repinta con cada tanda de texto y este componente no depende de ella. */
+export default memo(ComposerSettings);

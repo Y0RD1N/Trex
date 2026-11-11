@@ -1,5 +1,6 @@
 /** Archivos editados en un turno: usa el diff neto del proveedor cuando existe. */
 import { diffStats, inputDiff, list, record, relativePath, type ChatItem, type DiffLine, type ToolItem } from "./chatState";
+import { compareText } from "./intl";
 
 export type ChangedFile = {
   path: string;
@@ -91,7 +92,7 @@ export function summarizeWork(items: ChatItem[], cwd: string, rawDiff?: string):
     else byPath.set(key, file);
   }
   const netFiles = rawDiff ? filesFromDiff(rawDiff, cwd) : [];
-  const files = (rawDiff === "" ? [] : netFiles.length ? netFiles : [...byPath.values()]).sort((a, b) => a.path.localeCompare(b.path, "es", { numeric: true }));
+  const files = (rawDiff === "" ? [] : netFiles.length ? netFiles : [...byPath.values()]).sort((a, b) => compareText(a.path, b.path, { numeric: true }));
   return { files, added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) };
 }
 
@@ -129,6 +130,6 @@ export function changeTree(files: ChangedFile[]): ChangeNode[] {
     });
   }
   const sort = (nodes: ChangeNode[]): ChangeNode[] => nodes.sort((a, b) => Number(!!a.file) - Number(!!b.file)
-    || a.name.localeCompare(b.name, "es", { numeric: true })).map(node => ({ ...node, children: sort(node.children) }));
+    || compareText(a.name, b.name, { numeric: true })).map(node => ({ ...node, children: sort(node.children) }));
   return sort(roots);
 }

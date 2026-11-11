@@ -21,6 +21,7 @@ mod git;
 mod git_panel;
 mod handoff;
 mod integrations;
+mod output_batch;
 mod message_queue;
 mod queue_mcp;
 mod process_lifetime;
@@ -213,9 +214,11 @@ async fn pty_spawn(
     app: AppHandle,
     state: State<'_, PtyState>,
     request: SpawnRequest,
+    // Salida de la terminal en binario (ver `pty.rs`).
+    on_data: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<SpawnResponse, String> {
     let state = state.inner().clone();
-    blocking(move || state.spawn(app, request)).await
+    blocking(move || state.spawn(app, request, on_data)).await
 }
 
 #[tauri::command]

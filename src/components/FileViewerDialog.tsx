@@ -22,6 +22,7 @@ import { FileBadge, SharedFilesContext, useHome } from "./chat/SharedFiles";
 import { AlertIcon, CheckIcon, CloseIcon, CopyIcon, DownloadIcon, ExternalIcon, FolderIcon } from "./Icons";
 import type { FileViewerSession } from "./FileViewer";
 import "./FileViewer.css";
+import { formatNumber } from "../intl";
 
 type Loaded =
   | { status: "loading" }
@@ -98,7 +99,7 @@ function TableView({ text, path }: { text: string; path: string }) {
       <tbody>{body.map((row, index) => <tr key={index}><td className="num">{index + 1}</td>
         {cells(row).map((cell, column) => <td key={column} className={numeric[column] ? "n" : undefined}>{cell}</td>)}</tr>)}</tbody>
     </table>
-    {total > rows.length && <p className="file-viewer-foot">Se muestran {(rows.length - 1).toLocaleString("es")} de {(total - 1).toLocaleString("es")} filas.</p>}
+    {total > rows.length && <p className="file-viewer-foot">Se muestran {formatNumber(rows.length - 1)} de {formatNumber(total - 1)} filas.</p>}
   </div>;
 }
 

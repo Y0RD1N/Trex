@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import { ArrowUpIcon, CloseIcon, ListIcon, PencilIcon } from "../Icons";
 import type { ChatMessageQueue } from "../../hooks/useMessageQueue";
 import type { QueuedMessage } from "../../messageQueue";
@@ -21,7 +21,7 @@ export type QueuedMessagesProps = {
 type EditDraft = { message: QueuedMessage; text: string; expectedText: string; conflict?: string };
 type QueueRow = { message: QueuedMessage; state: "pending" | "claimed" | "outbox" | "retained"; dispatchId?: string };
 
-export default function QueuedMessages({ queue, running, busy, onRemove, onContinue, onEdit, onSendNow, onRestoreDirect,
+function QueuedMessages({ queue, running, busy, onRemove, onContinue, onEdit, onSendNow, onRestoreDirect,
   directDisabledReason, compact = false, onFocusComposer }: QueuedMessagesProps) {
   const { messages, receipt, outbox = [] } = queue.snapshot;
   const claimed = receipt?.messages ?? [];
@@ -211,3 +211,6 @@ export default function QueuedMessages({ queue, running, busy, onRemove, onConti
     count={rows.length || "!"} visible={available} attention={!!queue.error || !!Object.keys(errors).length}>{content}</ComposerPanel>
     : available ? content : null;
 }
+
+/** Memorizado: el chat se repinta con cada tanda de texto y este componente no depende de ella. */
+export default memo(QueuedMessages);

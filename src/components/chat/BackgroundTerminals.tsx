@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { memo, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { AgentTerminal, TerminalOwner } from "../../agentTerminals";
 import { RefreshIcon, TerminalIcon } from "../Icons";
 import ComposerPanel from "./ComposerPanel";
@@ -7,7 +7,7 @@ import "./BackgroundTerminals.css";
 const COLORS = { antigravity: "var(--text-muted)", claude: "var(--text-muted)", codex: "var(--text-muted)", trex: "var(--text-muted)" };
 const STATES: Record<AgentTerminal["state"], string> = { running: "Activa", stopping: "Deteniendo…", completed: "Finalizada", failed: "Falló", stopped: "Detenida", unknown: "Sin confirmar" };
 const plain = (value: string): string => value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
-export default function BackgroundTerminals({ owners }: { owners: TerminalOwner[] }) {
+function BackgroundTerminals({ owners }: { owners: TerminalOwner[] }) {
   const [open, setOpen] = useState(false), [selected, setSelected] = useState<string | null>(null), [message, setMessage] = useState("");
   const [stopping, setStopping] = useState(new Set<string>());
   const [input, setInput] = useState(""), [writing, setWriting] = useState(false);
@@ -68,3 +68,6 @@ export default function BackgroundTerminals({ owners }: { owners: TerminalOwner[
     </section>
   </ComposerPanel>;
 }
+
+/** Memorizado: el chat se repinta con cada tanda de texto y este componente no depende de ella. */
+export default memo(BackgroundTerminals);

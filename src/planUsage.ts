@@ -9,6 +9,7 @@ import { formatClock, getTimeFormat, type TimeFormat } from "./timeFormat";
  * común; quien los pide es el chat o la ventana de uso.
  */
 import { list, record, text, type Json } from "./chatState";
+import { formatDate, formatNumber } from "./intl";
 
 export type UsageSeverity = "normal" | "warning" | "critical";
 
@@ -270,16 +271,16 @@ export function resetLabel(resetsAt: number | null, now: number, timeFormat: Tim
     return `se reinicia en ${hours} h${rest ? ` ${rest} min` : ""}`;
   }
   const date = new Date(resetsAt);
-  const day = date.toLocaleDateString("es", { weekday: "long" });
+  const day = formatDate(date, { weekday: "long" });
   const time = formatClock(date, timeFormat);
   return minutes < 7 * 24 * 60 ? `se reinicia el ${day} a las ${time}`
-    : `se reinicia el ${date.toLocaleDateString("es", { day: "numeric", month: "short" })} a las ${time}`;
+    : `se reinicia el ${formatDate(date, { day: "numeric", month: "short" })} a las ${time}`;
 }
 
 export function moneyLabel(value: number, currency: string): string {
-  if (currency === "créditos") return `${value.toLocaleString("es", { maximumFractionDigits: 2 })} créditos`;
+  if (currency === "créditos") return `${formatNumber(value, { maximumFractionDigits: 2 })} créditos`;
   try {
-    return value.toLocaleString("es", { style: "currency", currency });
+    return formatNumber(value, { style: "currency", currency });
   } catch {
     return `${value.toFixed(2)} ${currency}`;
   }

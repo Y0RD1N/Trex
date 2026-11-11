@@ -12,6 +12,12 @@
  * se procesa sin esperar, y con la ventana oculta no se retrasa nada (los temporizadores se frenan).
  */
 export const BATCH_MS = 50;
+/**
+ * Con la ventana sin foco (Trex a la vista mientras se trabaja en otra aplicación) el texto se pinta
+ * cada 200 ms: cada tanda cuesta un render de React, estilo, layout, pintado y presentar la ventana,
+ * y nadie lo está leyendo palabra a palabra. Al recuperar el foco lo pendiente se entrega al momento.
+ */
+export const BLURRED_BATCH_MS = 200;
 
 export type BatchEnvironment = {
   now: () => number;
@@ -20,6 +26,8 @@ export type BatchEnvironment = {
   clearTimer: (handle: unknown) => void;
   /** Un fallo en un manejador no debe impedir que se procesen los demás. */
   onError: (error: unknown) => void;
+  /** Intervalo vigente entre tandas (por ejemplo, más largo sin foco); si falta, el fijo. */
+  interval?: () => number;
 };
 
 export type BatchScheduler = {
@@ -49,7 +57,7 @@ export function createBatchScheduler(env: BatchEnvironment, interval = BATCH_MS)
       jobs.add(job);
       if (env.hidden()) { run(); return; }
       if (timer !== null) return;
-      const wait = interval - (env.now() - last);
+      const wait = (env.interval?.() ?? interval) - (env.now() - last);
       if (wait <= 0) run();
       else timer = env.setTimer(() => { timer = null; run(); }, wait);
     },

@@ -21,6 +21,7 @@ import type { AgentProvider, LauncherProfile } from "../types";
 import AgentIcon from "./AgentIcon";
 import { AlertIcon, BoltIcon, RefreshIcon } from "./Icons";
 import "./AccountUsage.css";
+import { formatDate } from "../intl";
 
 /** Un dato más viejo que esto se marca como antiguo. */
 const STALE_MS = 15 * 60_000;
@@ -71,8 +72,8 @@ function resetShort(resetsAt: number | null, now: number, timeFormat: TimeFormat
     return `reinicia en ${hours} h${rest ? ` ${rest} min` : ""}`;
   }
   const date = new Date(resetsAt);
-  const day = minutes < 7 * 24 * 60 ? date.toLocaleDateString("es", { weekday: "short" }).replace(/\.$/, "")
-    : date.toLocaleDateString("es", { day: "numeric", month: "short" });
+  const day = minutes < 7 * 24 * 60 ? formatDate(date, { weekday: "short" }).replace(/\.$/, "")
+    : formatDate(date, { day: "numeric", month: "short" });
   return `reinicia ${day} ${formatClock(date, timeFormat)}`;
 }
 

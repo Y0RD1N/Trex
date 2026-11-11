@@ -1,7 +1,7 @@
 /**
  * TerminalView: monta un terminal xterm.js conectado a una sesión PTY del
- * backend (eventos `pty-data-<id>` / `pty-exit-<id>` y comandos pty_write,
- * pty_resize, pty_spawn).
+ * backend: la salida llega en binario por un canal (`pty_spawn`), el fin por el
+ * evento `pty-exit-<id>`, y las teclas y el tamaño van con pty_write y pty_resize.
  *
  * El componente se monta una sola vez por pestaña y nunca se desmonta al
  * cambiar de pestaña (el padre lo oculta con display:none), así que el buffer
@@ -15,11 +15,10 @@ import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Channel } from "@tauri-apps/api/core";
 import {
   DEFAULT_FONT_FAMILY,
-  b64ToBytes,
   formatError,
-  listenPtyData,
   listenPtyExit,
   ptyAck,
   ptyKill,
@@ -96,6 +95,8 @@ function TerminalView({
   const rendererFailedRef = useRef(false);
   const disposablesRef = useRef<IDisposable[]>([]);
   const unlistensRef = useRef<Array<() => void>>([]);
+  /** Canal binario de la salida del PTY que se va a lanzar (ver `subscribe` y `pty.rs`). */
+  const dataChannelRef = useRef<Channel<ArrayBuffer> | null>(null);
   const releaseOutputRef = useRef<(() => void) | null>(null);
   const disposedRef = useRef(false);
   const spawnedRef = useRef(false);
@@ -292,11 +293,19 @@ function TerminalView({
         released = true;
         for (const listener of activityListeners) listener.dispose();
       };
-      const unData = await listenPtyData(id, (payload) => {
+      // Rendimiento: la salida llega en binario y agrupada por un canal (sin base64, JSON ni un
+      // evento por lectura de la PTY); se le pasa tal cual a xterm.
+      const channel = new Channel<ArrayBuffer>();
+      channel.onmessage = (data) => {
         if (released || disposedRef.current) return;
-        const bytes = b64ToBytes(payload.data);
+        const bytes = new Uint8Array(data);
         termRef.current?.write(bytes, () => acknowledge(bytes.length));
-      });
+      };
+      dataChannelRef.current = channel;
+      const unData = (): void => {
+        channel.onmessage = () => { /* sesión sustituida o cerrada */ };
+        if (dataChannelRef.current === channel) dataChannelRef.current = null;
+      };
       const unExit = await listenPtyExit(id, (payload) => {
         if (released || disposedRef.current) return;
         // Al salir se anuncia ya lo que estuviera pendiente (p. ej. `claude -p`).
@@ -352,7 +361,9 @@ function TerminalView({
       // Los listeners se registran antes de lanzar el proceso para no perder salida.
       await subscribe(id);
       if (disposedRef.current) return;
-      await ptySpawn({
+      const onData = dataChannelRef.current;
+      if (!onData) return;
+      await ptySpawn(onData, {
         id,
         cwd: dir,
         command: cmd,

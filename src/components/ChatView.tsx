@@ -12,7 +12,7 @@ import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browse
  * TerminalView, se monta una vez por pestaña y el padre la oculta con
  * display:none, así que el proceso y el hilo se conservan al cambiar de sesión.
  */
-import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { formatError, gitBranch, listProjectFiles, readClipboard, trexBrowserOpenArtifact, trexBrowserResolveSpace, trexBrowserSpaces } from "../api";
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
@@ -858,14 +858,23 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   const workModeRef = useRef(mode === "plan" ? agent.defaultMode : mode);
   useEffect(() => { if (mode !== "plan") workModeRef.current = mode; }, [mode]);
   const nativeModes = session.modes ?? agent.modes;
-  const availableModes = props.planningOnly ? nativeModes.filter(option => option.value === "plan") : nativeModes;
-  const modeOptions = availableModes.some(option => option.value === mode) ? availableModes
-    : [...availableModes, { value: mode, label: agent.otherModes[mode] ?? mode, icon: <ShieldIcon size={13} /> }];
-  const efforts = supportedEfforts(state.models, state.model, state.modelChoice);
+  // Rendimiento: mientras llega texto, el panel se repinta con cada tanda (~20 veces por segundo).
+  // Los menús y paneles del compositor están memorizados; aquí se les da datos y funciones con
+  // identidad estable para que solo se repinten cuando cambia lo que muestran.
+  const modeOptions = useMemo(() => {
+    const availableModes = props.planningOnly ? nativeModes.filter(option => option.value === "plan") : nativeModes;
+    return availableModes.some(option => option.value === mode) ? availableModes
+      : [...availableModes, { value: mode, label: agent.otherModes[mode] ?? mode, icon: <ShieldIcon size={13} /> }];
+  }, [nativeModes, props.planningOnly, mode, agent.otherModes]);
+  const efforts = useMemo(() => supportedEfforts(state.models, state.model, state.modelChoice), [state.models, state.model, state.modelChoice]);
   const filesContext = useMemo(() => ({ cwd, streaming: false }), [cwd]);
   const viewer = useImageViewer();
-  const speed = fastSpeed(state.models, state.model, state.modelChoice);
-  const usage = shownUsage(state);
+  const speed = useMemo(() => fastSpeed(state.models, state.model, state.modelChoice), [state.models, state.model, state.modelChoice]);
+  const usage = useMemo(() => shownUsage(state), [state.usage, state.models, state.model, state.modelChoice]); // eslint-disable-line react-hooks/exhaustive-deps -- shownUsage solo lee esos campos
+  const relayMessage = useCallback((message: string) => callbacks.current.onMessage(message), []);
+  const focusComposer = useCallback(() => inputRef.current?.focus({ preventScroll: true }), []);
+  const terminalOwners = useMemo(() => props.terminalOwners ?? (session.terminals ? [{ id: sessionId, label: props.profileName ?? agent.name, provider, session: session.terminals }] : []),
+    [props.terminalOwners, session.terminals, sessionId, props.profileName, agent.name, provider]);
 
   const statusText = (): string => {
     const model = currentModel(state.models, state.model, state.modelChoice);
@@ -1241,6 +1250,24 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
     setSideTab(null);
     focus.current?.focus({ preventScroll: true });
   };
+  // Acciones con identidad fija para los paneles memorizados (ver `modeOptions` más arriba).
+  const removeQueued = useStableCallback((id: string): void => {
+    void queueAction(() => session.queue.client.remove(id)).catch(error => callbacks.current.onMessage(formatError(error)));
+  });
+  const editQueued = useStableCallback((id: string, text: string, expectedText: string) => queueAction(() => session.queue.client.update(id, text, expectedText)));
+  const sendQueued = useStableCallback((message: QueuedMessage) => sendQueuedNow(message));
+  const restoreQueued = useStableCallback((id: string) => queueAction(() => session.queue.client.restoreDirect(id)));
+  const queuedBlockedReason = useStableCallback((message: QueuedMessage): string | null =>
+    hasDirectQueue ? "Revisa el envío directo pendiente antes de enviar otro mensaje." : props.queuedSendReason?.(message) ?? null);
+  const chooseModel = useStableCallback((model: string): void => { session.setModel(model); backToInput(); });
+  const openAllUsage = useStableCallback((): void => setSideTab("usage"));
+  const compactNow = useStableCallback((): void => {
+    stickRef.current = true;
+    // Claude Code resume con su propio `/compact`; Codex, con su petición.
+    if (!runLocal("compact", "")) session.send("/compact", [], []);
+    backToInput();
+  });
+  const closeGit = useStableCallback((): void => closeSide(gitToggle));
   const moreActions: ComposerAction[] = [
     ...(props.onPlanHere && provider !== "antigravity" ? [{ id: "plan", label: "Planear aquí", icon: <MapIcon size={14} />,
       hint: handoffDisabled ? handoffHint : "Prepara un plan con otro agente sin salir de este chat.", disabled: handoffDisabled, run: planHere }] : []),
@@ -1345,12 +1372,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
     <div className="chat-composer-wrap" ref={composerRef}>
      <div className="chat-composer-accessories">
       {props.composerLead && <ComposerPanel label="Planificación" title="Planificación y ejecución" icon={<MapIcon size={13} />}>{props.composerLead}</ComposerPanel>}
-      <BackgroundTerminals owners={props.terminalOwners ?? (session.terminals ? [{ id: sessionId, label: props.profileName ?? agent.name, provider, session: session.terminals }] : [])} />
-      <QueuedMessages compact onFocusComposer={() => inputRef.current?.focus({ preventScroll: true })} queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending || workflowLocked}
-        onContinue={wakeQueue} onRemove={id => { void queueAction(() => session.queue.client.remove(id)).catch(error => callbacks.current.onMessage(formatError(error))); }}
-        onEdit={(id, text, expectedText) => queueAction(() => session.queue.client.update(id, text, expectedText))}
-        onSendNow={sendQueuedNow} onRestoreDirect={id => queueAction(() => session.queue.client.restoreDirect(id))}
-        directDisabledReason={message => hasDirectQueue ? "Revisa el envío directo pendiente antes de enviar otro mensaje." : props.queuedSendReason?.(message) ?? null} />
+      <BackgroundTerminals owners={terminalOwners} />
+      <QueuedMessages compact onFocusComposer={focusComposer} queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending || workflowLocked}
+        onContinue={wakeQueue} onRemove={removeQueued} onEdit={editQueued} onSendNow={sendQueued} onRestoreDirect={restoreQueued}
+        directDisabledReason={queuedBlockedReason} />
      </div>
      <div className="chat-dock">
       {showSuggestions && !question && <Suggestions id={`${sessionId}-suggestions`} items={suggestions} active={selectedSuggestion} loading={loadingSuggestions}
@@ -1491,7 +1516,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
       <div className="chat-controls">
       <div className="chat-tray">
         <ModelMenu provider={provider} models={state.models} model={state.model} choice={state.modelChoice}
-          onModel={model => { session.setModel(model); backToInput(); }} openSignal={menuSignal.model} triggerClassName="chat-composer-model" />
+          onModel={chooseModel} openSignal={menuSignal.model} triggerClassName="chat-composer-model" />
         <ComposerSettings mode={mode} modes={modeOptions} onMode={session.setMode}
           levels={efforts} effort={state.effort} onEffort={session.setEffort} speed={speed} fast={state.fast} onFast={session.setFast}
           openSignal={menuSignal} />
@@ -1502,15 +1527,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
       <div className="chat-composer-meta">
         {(usage || state.plan || state.apiUsage || state.costUsd !== null || provider === "trex" || provider === "antigravity") && <UsageMenu usage={usage} plan={state.plan} apiUsage={state.apiUsage} costUsd={state.costUsd} product={agent.product} busy={handoffPending || running || state.process !== "ready"}
           controls={session.usageControls} canCompact={session.supportsCompact} autoCompactAt={session.autoCompactAt} showUnavailable={provider === "trex" || provider === "antigravity"}
-          onOpenAll={() => setSideTab("usage")}
-          onCompact={() => {
-            stickRef.current = true;
-            // Claude Code resume con su propio `/compact`; Codex, con su petición.
-            if (!runLocal("compact", "")) session.send("/compact", [], []);
-            backToInput();
-          }} />}
+          onOpenAll={openAllUsage} onCompact={compactNow} />}
         {branch && <BranchMenu cwd={cwd} branch={branch} busy={running || submittingEdit} visible={visible}
-          onChange={setBranch} onMessage={message => callbacks.current.onMessage(message)} />}
+          onChange={setBranch} onMessage={relayMessage} />}
       </div>
       </div>
      </div>
@@ -1555,7 +1574,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
       {peersOpen && coordination && <PeerSessions panelId={`peers-${sessionId}`} board={coordination.board} session={coordination.session}
         project={coordination.project} onClose={() => closeSide(peersToggle)} />}
       {branch && <GitPanel key={cwd} panelId={`git-${sessionId}`} cwd={cwd} branch={branch} busy={running || submittingEdit} open={gitOpen} visible={visible && gitOpen}
-        onBranch={setBranch} onMessage={message => callbacks.current.onMessage(message)} onClose={() => closeSide(gitToggle)} />}
+        onBranch={setBranch} onMessage={relayMessage} onClose={closeGit} />}
     </div>
     </div>
   </div>;

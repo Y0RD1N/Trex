@@ -10,6 +10,7 @@ import { permissionRisk } from "./chat/ComposerSettings";
 import Select from "./Select";
 import { AlertIcon, ChevronIcon, GaugeIcon, RotateIcon, StopIcon } from "./Icons";
 import "./TeamUsage.css";
+import { formatNumber } from "../intl";
 
 type Props = { team: AgentTeam; states: Record<string, ChatState>; snapshot: TeamSnapshot | null; starting: boolean; busy: boolean;
   onStop: () => void; onResume: () => void; onLoad: (member: TeamMember) => void; /** Abre la conversación completa de un subagente. */ onOpen?: (member: TeamMember) => void;
@@ -78,12 +79,12 @@ export default function AgentTeamToolbar({ team, states, snapshot, starting, bus
         (!team.setup || busy) && <button type="button" className="agent-team-control" onClick={onStop} title="Detener equipo" aria-label="Detener equipo"><StopIcon size={13} /></button>}
     </div>
     {(total && total.newTokens > 0 || limit !== null) && <div className="team-usage-summary">
-      <span className="team-usage-total" title={total?.cacheReadTokens ? `Además, ${total.cacheReadTokens.toLocaleString("es")} tokens leídos de caché` : undefined}>
+      <span className="team-usage-total" title={total?.cacheReadTokens ? `Además, ${formatNumber(total.cacheReadTokens)} tokens leídos de caché` : undefined}>
         <GaugeIcon size={12} /><strong>{formatTokens(total?.newTokens ?? 0)}</strong> tokens nuevos{cost ? ` · ${cost}` : ""}
       </span>
       {limit !== null && <span className="team-budget">
         <span className={`team-budget-meter${ratio >= 1 ? " critical" : ratio >= .8 ? " warning" : ""}`} role="meter" aria-valuemin={0} aria-valuemax={limit} aria-valuenow={Math.min(spent.team.used, limit)}
-          aria-label={`Presupuesto del equipo: ${spent.team.used.toLocaleString("es")} de ${limit.toLocaleString("es")} tokens nuevos`}><i style={{ width: `${Math.round(ratio * 100)}%` }} /></span>
+          aria-label={`Presupuesto del equipo: ${formatNumber(spent.team.used)} de ${formatNumber(limit)} tokens nuevos`}><i style={{ width: `${Math.round(ratio * 100)}%` }} /></span>
         <span className="team-budget-text">{percentText(ratio * 100)} de {formatTokens(limit)}</span>
       </span>}
     </div>}
@@ -129,7 +130,7 @@ export default function AgentTeamToolbar({ team, states, snapshot, starting, bus
               <span>{model ? modelName(model) : member.agent.model ?? "Modelo del perfil"}{member.agent.effort ? ` · ${member.agent.effort}` : ""}</span>
               <span className="team-member-usage">
                 <ContextRing percent={entry?.contextPercent ?? null} />
-                <span className="team-member-tokens" aria-label={`${(entry?.usage?.newTokens ?? 0).toLocaleString("es")} tokens nuevos`}>{formatTokens(entry?.usage?.newTokens ?? 0)} tokens</span>
+                <span className="team-member-tokens" aria-label={`${formatNumber(entry?.usage?.newTokens ?? 0)} tokens nuevos`}>{formatTokens(entry?.usage?.newTokens ?? 0)} tokens</span>
                 {memberBudget?.limit != null && <span className="team-member-budget">de {formatTokens(memberBudget.limit)}</span>}
                 {memberCost && <span className="team-member-cost">{memberCost}</span>}
                 {warn && <span className={`team-quota${quotaLevel(warn.peak)}`} title={quotaText(warn)} aria-label={`Cuenta al ${percentText(warn.peak ?? 0)} de su cuota`}><AlertIcon size={11} />{percentText(warn.peak ?? 0)}</span>}

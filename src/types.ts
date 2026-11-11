@@ -270,9 +270,6 @@ export type TabState = SessionLaunch & {
   createdAt: number;
 };
 
-/** Payload del evento `pty-data-<id>` (datos en base64). */
-export type PtyDataPayload = { data: string };
-
 /** Payload del evento `pty-exit-<id>`. */
 export type PtyExitPayload = { code: number | null };
 

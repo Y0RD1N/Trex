@@ -8,7 +8,7 @@ import type { BrowserOptions } from "../browser";
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { createBatchScheduler, createOrderedQueue } from "../lineBatch";
+import { BATCH_MS, BLURRED_BATCH_MS, createBatchScheduler, createOrderedQueue } from "../lineBatch";
 import {
   agentKill, agentSpawn, agentWrite, agentTerminalOutput, listenAgentExit, listenAgentLine, listenAgentStderr, type AgentSpawnRequest,
 } from "../api";
@@ -109,9 +109,14 @@ const agentEvents = createBatchScheduler({
   clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
   // Se relanza fuera de la tanda para que llegue al registro de errores sin cortar al resto.
   onError: error => { setTimeout(() => { throw error; }); },
+  interval: () => typeof document === "undefined" || document.hasFocus() ? BATCH_MS : BLURRED_BATCH_MS,
 });
-// Al ocultarse la ventana los temporizadores se frenan: lo pendiente se entrega ya.
-if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => { if (document.hidden) agentEvents.flush(); });
+// Al ocultarse la ventana los temporizadores se frenan: lo pendiente se entrega ya. Al volver
+// el foco, también: quien mira la ventana ve el texto al día sin esperar a la tanda lenta.
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => { if (document.hidden) agentEvents.flush(); });
+  window.addEventListener("focus", () => agentEvents.flush());
+}
 
 type AgentEvent = { kind: "line"; line: string } | { kind: "stderr"; line: string } | { kind: "exit"; code: number | null };
 

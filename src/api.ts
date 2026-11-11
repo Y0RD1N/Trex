@@ -6,7 +6,7 @@ import { normalizeAutoCompact } from "./autoCompact";
  * Capa de acceso al backend: envoltorios de `invoke`/`listen` y utilidades
  * compartidas (ids, valores por defecto, normalización y color de acento).
  */
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri, type Channel } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { initialProfiles, normalizeLaunch, normalizeProfiles } from "./profiles";
 import { DEFAULT_PASTE_SHORTCUT, parseShortcut, type ClipboardContent } from "./paste";
@@ -28,7 +28,6 @@ import type {
   ClaudeInfo,
   PersistedTab,
   Project,
-  PtyDataPayload,
   PtyExitPayload,
   SessionInfo,
   Settings,
@@ -39,20 +38,6 @@ import type {
 } from "./types";
 
 // --- Utilidades básicas ----------------------------------------------------
-
-/** Decodifica una cadena base64 (payload de `pty-data-*`) a bytes. */
-export const b64ToBytes = (b64: string): Uint8Array => {
-  // WebKit reciente decodifica directamente a bytes sin una cadena intermedia.
-  // Conserva el camino compatible para WebViews que aún no tengan esta API.
-  const fromBase64 = (Uint8Array as typeof Uint8Array & {
-    fromBase64?: (value: string) => Uint8Array;
-  }).fromBase64;
-  if (fromBase64) return fromBase64(b64);
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-};
 
 /** Genera un id de sesión PTY válido: "t-<timestamp>-<aleatorio4>". */
 export const newSessionId = (): string =>
@@ -141,8 +126,9 @@ export const writeClipboard = (text: string): Promise<void> => isTauri()
 export const claudeRewindPoint = (configDir: string, id: string, messageId: string): Promise<string | null> =>
   invoke("claude_rewind_point", { configDir, id, messageId });
 
-export const ptySpawn = (request: SpawnRequest): Promise<SpawnResponse> =>
-  invoke<SpawnResponse>("pty_spawn", { request });
+/** Lanza un PTY; su salida llega en binario por `onData` (un `Channel` de Tauri). */
+export const ptySpawn = (onData: Channel<ArrayBuffer>, request: SpawnRequest): Promise<SpawnResponse> =>
+  invoke<SpawnResponse>("pty_spawn", { request, onData });
 
 export const ptyWrite = (id: string, data: string): Promise<void> =>
   invoke<void>("pty_write", { id, data });
@@ -212,20 +198,19 @@ export const codexContextWindows = (configDir: string): Promise<Record<string, n
 
 // --- Eventos ----------------------------------------------------------------
 
-export const listenPtyData = (
-  id: string,
-  callback: (payload: PtyDataPayload) => void,
-): Promise<UnlistenFn> =>
-  listen<PtyDataPayload>(`pty-data-${id}`, (event) => callback(event.payload));
-
 export const listenPtyExit = (
   id: string,
   callback: (payload: PtyExitPayload) => void,
 ): Promise<UnlistenFn> =>
   listen<PtyExitPayload>(`pty-exit-${id}`, (event) => callback(event.payload));
 
+/** Las líneas llegan en tandas (`line_batch.rs`); cada una se entrega por separado y en orden. */
 export const listenAgentLine = (id: string, callback: (line: string) => void): Promise<UnlistenFn> =>
-  listen<{ line: string }>(`agent-line-${id}`, (event) => callback(event.payload.line));
+  listen<{ lines?: string[]; line?: string }>(`agent-line-${id}`, (event) => {
+    const { lines, line } = event.payload;
+    if (lines) for (const each of lines) callback(each);
+    else if (typeof line === "string") callback(line);
+  });
 
 export const listenAgentStderr = (id: string, callback: (line: string) => void): Promise<UnlistenFn> =>
   listen<{ line: string }>(`agent-stderr-${id}`, (event) => callback(event.payload.line));

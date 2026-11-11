@@ -420,14 +420,24 @@ impl AgentState {
     }
 }
 
-/// Reenvía los eventos del proceso a la ventana con nombres por sesión.
+/// Ventana de agrupado de las líneas de stdout (ver `output_batch.rs`): ~30 entregas por segundo
+/// como mucho, por debajo de los 50 ms con los que el frontend pinta.
+const LINE_BATCH_WINDOW: Duration = Duration::from_millis(33);
+
+/// Reenvía los eventos del proceso a la ventana con nombres por sesión. Las líneas van en tandas
+/// (`{ "lines": [...] }`); los avisos de stderr y el cierre salen detrás de las líneas pendientes.
 pub fn tauri_emitter(app: AppHandle, id: String) -> Arc<dyn Fn(AgentEvent) + Send + Sync> {
-    Arc::new(move |event| {
-        let _ = match event {
-            AgentEvent::Line(line) => app.emit(&format!("agent-line-{id}"), serde_json::json!({ "line": line })),
-            AgentEvent::Stderr(line) => app.emit(&format!("agent-stderr-{id}"), serde_json::json!({ "line": line })),
-            AgentEvent::Exit(code) => app.emit(&format!("agent-exit-{id}"), serde_json::json!({ "code": code })),
-        };
+    let (line_event, stderr_event, exit_event) = (format!("agent-line-{id}"), format!("agent-stderr-{id}"), format!("agent-exit-{id}"));
+    let lines = {
+        let app = app.clone();
+        crate::output_batch::LineBatcher::new("agent-lines", LINE_BATCH_WINDOW, usize::MAX, move |lines| {
+            let _ = app.emit(&line_event, serde_json::json!({ "lines": lines }));
+        })
+    };
+    Arc::new(move |event| match event {
+        AgentEvent::Line(line) => lines.push(line),
+        AgentEvent::Stderr(line) => lines.flush_then(|| { let _ = app.emit(&stderr_event, serde_json::json!({ "line": line })); }),
+        AgentEvent::Exit(code) => lines.close_then(|| { let _ = app.emit(&exit_event, serde_json::json!({ "code": code })); }),
     })
 }
 

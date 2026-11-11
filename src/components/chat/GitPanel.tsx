@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { formatError, gitProjectAction, gitProjectDiff, gitProjectStatus, listGitBranches, type GitBranches } from "../../api";
 import { gitDiffRows, gitFileLabel, type GitProjectDiff, type GitProjectStatus } from "../../gitPanel";
 import { formatClock } from "../../timeFormat";
@@ -9,7 +9,7 @@ import BranchMenu, { GIT_BRANCH_CHANGED } from "./BranchMenu";
 import "./TaskPanel.css";
 import "./GitPanel.css";
 
-export default function GitPanel({ cwd, branch, busy, visible, open = true, panelId, onClose, onBranch, onMessage }: {
+function GitPanel({ cwd, branch, busy, visible, open = true, panelId, onClose, onBranch, onMessage }: {
   cwd: string; branch: string; busy: boolean; visible: boolean; open?: boolean; panelId: string; onClose: () => void;
   onBranch: (branch: string | null) => void; onMessage: (text: string) => void;
 }) {
@@ -146,3 +146,6 @@ export default function GitPanel({ cwd, branch, busy, visible, open = true, pane
     </div><footer>{checkedAt ? `Remoto comprobado a las ${formatClock(checkedAt, timeFormat)}` : "Los cambios locales se actualizan mientras este panel está abierto."}</footer>
   </aside>;
 }
+
+/** Memorizado: el chat se repinta con cada tanda de texto y este componente no depende de ella. */
+export default memo(GitPanel);

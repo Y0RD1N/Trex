@@ -10,6 +10,7 @@ const ast=ts.createSourceFile(url.pathname,source,ts.ScriptTarget.Latest,true,ts
 const body=ast.statements.filter(node=>ts.isVariableStatement(node)||ts.isFunctionDeclaration(node)).map(node=>node.getText(ast)).join('\n').replaceAll('import.meta.url',JSON.stringify(url.href));
 const harness=await new (Object.getPrototypeOf(async function(){}).constructor)('assert','readFile','test','ts','load',body+'\nreturn {host,react,jsxRuntime,flush};')(assert,readFile,test,ts,load);
 const browser=await load('browser');
+const intl=await load('intl');
 const componentSource=await readFile(new URL('../src/components/chat/BrowserMenu.tsx',import.meta.url),'utf8');
 const compile=new Function('require','exports','window','crypto',ts.transpileModule(componentSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText);
 const nodes=node=>!node||typeof node!=='object'?[]:Array.isArray(node)?node.flatMap(nodes):[node,...nodes(node.props?.children)];
@@ -30,7 +31,7 @@ function fixture(t,extra={}){
   const exports={};compile(name=>{
     if(name==='react')return {...harness.react,useId:()=>harness.react.useRef('spaces-fixture').current};
     if(name==='react/jsx-runtime')return harness.jsxRuntime;
-    if(name==='../../api')return api;if(name==='../../browser')return browser;
+    if(name==='../../api')return api;if(name==='../../browser')return browser;if(name==='../../intl')return intl;
     if(name==='../DropdownMenu')return {default:'DropdownMenu'};
     if(name==='../Icons')return {CloseIcon:'CloseIcon',GlobeIcon:'GlobeIcon',ImageIcon:'ImageIcon'};
     if(name.endsWith('.css'))return {};throw new Error('Unexpected import '+name);

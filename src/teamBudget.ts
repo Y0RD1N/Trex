@@ -5,6 +5,7 @@
  */
 import type { AgentTeam } from "./agentTeam";
 import { formatTokens } from "./chatState";
+import { formatNumber } from "./intl";
 
 export const TEAM_BUDGET_PRESETS: (number | null)[] = [null, 250_000, 500_000, 1_000_000, 2_000_000];
 export const MEMBER_BUDGET_PRESETS: (number | null)[] = [null, 100_000, 250_000, 500_000, 1_000_000];
@@ -45,7 +46,7 @@ export function budgetRemaining(team: Budgeted, memberId: string): number | null
 
 /** Nota orientativa para el subagente: el límite real se aplica antes de empezar. */
 export function budgetNote(remaining: number | null): string {
-  return remaining === null ? "" : ` Presupuesto orientativo restante: ${remaining.toLocaleString("es")} tokens; trabaja de forma económica (lee solo lo necesario, informes breves).`;
+  return remaining === null ? "" : ` Presupuesto orientativo restante: ${formatNumber(remaining)} tokens; trabaja de forma económica (lee solo lo necesario, informes breves).`;
 }
 
 /** Siguiente escalón para ampliar un límite: el preajuste superior o el doble. */

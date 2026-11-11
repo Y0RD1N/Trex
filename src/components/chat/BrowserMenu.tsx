@@ -5,6 +5,7 @@ import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import DropdownMenu from "../DropdownMenu";
 import { CloseIcon, GlobeIcon, ImageIcon } from "../Icons";
 import "./BrowserMenu.css";
+import { formatDate } from "../../intl";
 
 const SPACE_ACTIVITY: Record<string,string>={browser_navigate:"Abriendo página",browser_navigate_back:"Navegando",browser_reload:"Recargando",browser_snapshot:"Inspeccionando",browser_click:"Interactuando",browser_type:"Escribiendo",browser_fill_form:"Completando",browser_take_screenshot:"Tomando captura",browser_evaluate:"Revisando página",browser_wait_for:"Esperando",browser_save_download:"Guardando descarga",browser_batch:"Ejecutando pasos",browser_start_video:"Grabando"};
 
@@ -140,7 +141,7 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
   };
   // "Actualizar estado" would otherwise look like a no-op: say when it finished.
   const refreshStatus = async (): Promise<void> => {
-    if (await call("browser_status")) setOpenNote(`Estado actualizado a las ${new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}.`);
+    if (await call("browser_status")) setOpenNote(`Estado actualizado a las ${formatDate(new Date(), { hour: "2-digit", minute: "2-digit", second: "2-digit" })}.`);
   };
   // Personal tabs share the application window and keep their own storage.
   const openPersonal = async (): Promise<void> => {

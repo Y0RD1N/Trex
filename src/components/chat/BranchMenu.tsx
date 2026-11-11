@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createGitBranch, formatError, listGitBranches, switchGitBranch, type GitBranchInfo, type GitBranches } from "../../api";
 import DropdownMenu from "../DropdownMenu";
 import { BranchIcon, CheckIcon, ChevronIcon, CloseIcon, PlusIcon, RefreshIcon, SearchIcon } from "../Icons";
@@ -7,7 +7,7 @@ import "./BranchMenu.css";
 
 export const GIT_BRANCH_CHANGED = "trex:git-branch-changed";
 
-export default function BranchMenu({ cwd, branch, busy, visible, onChange, onMessage }: {
+function BranchMenu({ cwd, branch, busy, visible, onChange, onMessage }: {
   cwd: string;
   branch: string;
   busy: boolean;
@@ -193,3 +193,6 @@ export default function BranchMenu({ cwd, branch, busy, visible, onChange, onMes
     </DropdownMenu>
   </>;
 }
+
+/** Memorizado: el chat se repinta con cada tanda de texto y este componente no depende de ella. */
+export default memo(BranchMenu);

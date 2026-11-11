@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { EMPTY_QUEUE, MessageQueue, type QueuedMessage, type QueueSnapshot } from "../messageQueue";
 
@@ -26,9 +26,11 @@ export function useMessageQueue(queueId: string) {
     void client.load().catch(reason => { if (mounted.current) setError(String(reason)); });
     return () => { mounted.current = false; };
   }, [client]);
-  return { snapshot, ready, error, client,
-    reload: () => client.load().catch(reason => { if (mounted.current) setError(String(reason)); throw reason; }),
-    enqueue: (text: string, images: QueuedMessage["images"], previews: string[]) => client.enqueue({ id: crypto.randomUUID(), text, images, previews, createdAt: Date.now() }) };
+  const reload = useCallback(() => client.load().catch(reason => { if (mounted.current) setError(String(reason)); throw reason; }), [client]);
+  const enqueue = useCallback((text: string, images: QueuedMessage["images"], previews: string[]) =>
+    client.enqueue({ id: crypto.randomUUID(), text, images, previews, createdAt: Date.now() }), [client]);
+  // Misma identidad mientras la cola no cambie: el panel de la cola está memorizado.
+  return useMemo(() => ({ snapshot, ready, error, client, reload, enqueue }), [snapshot, ready, error, client, reload, enqueue]);
 }
 
 export type ChatMessageQueue = ReturnType<typeof useMessageQueue>;

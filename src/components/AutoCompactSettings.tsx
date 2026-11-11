@@ -4,8 +4,9 @@
  */
 import { useId, useState } from "react";
 import { AUTO_COMPACT_PROVIDERS, autoCompactThreshold, type AutoCompactProvider, type AutoCompactSettings as Value } from "../autoCompact";
+import { formatNumber } from "../intl";
 
-const grouped = (tokens: number): string => tokens.toLocaleString("es");
+const grouped = (tokens: number): string => formatNumber(tokens);
 
 export default function AutoCompactSettings({ value, onChange }: { value: Value; onChange: (value: Value) => void }) {
   const id = useId();

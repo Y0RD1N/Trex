@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { load } from "./ts-loader.mjs";
 
-const { createBatchScheduler, createOrderedQueue, BATCH_MS } = await load("lineBatch");
+const { createBatchScheduler, createOrderedQueue, BATCH_MS, BLURRED_BATCH_MS } = await load("lineBatch");
 
 /** Reloj y temporizadores falsos: las pruebas avanzan el tiempo a mano. */
 function environment({ hidden = false } = {}) {
@@ -125,4 +125,23 @@ test("a ritmo sostenido se procesa una tanda por intervalo, no una por línea", 
   advance(BATCH_MS);
   assert.equal(lines, 200, "no se pierde ninguna línea");
   assert.ok(batches <= 1000 / BATCH_MS + 2, `tandas: ${batches}`);
+});
+
+test("sin foco las tandas se espacian y la primera línea tras un silencio sigue sin esperar", () => {
+  const { env, advance } = environment();
+  let focused = false;
+  const scheduler = createBatchScheduler({ ...env, interval: () => focused ? BATCH_MS : BLURRED_BATCH_MS });
+  const seen = [];
+  const queue = createOrderedQueue(scheduler, item => seen.push(item), () => true, env.onError);
+  queue.push("a");
+  assert.deepEqual(seen, ["a"], "tras el silencio, al momento");
+  queue.push("b");
+  advance(BATCH_MS);
+  assert.deepEqual(seen, ["a"], "sin foco no basta el intervalo normal");
+  advance(BLURRED_BATCH_MS - BATCH_MS);
+  assert.deepEqual(seen, ["a", "b"], "llega con el intervalo largo");
+  focused = true;
+  queue.push("c");
+  advance(BATCH_MS);
+  assert.deepEqual(seen, ["a", "b", "c"], "con foco vuelve el intervalo corto");
 });

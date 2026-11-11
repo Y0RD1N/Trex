@@ -10,6 +10,7 @@ import type { BrowserArtifact } from "./browser";
 import type { AgentInfo, CommandInfo, SkillInfo } from "./chatCommands";
 import type { PlanUsage } from "./planUsage";
 import type { AgentActivity } from "./types";
+import { formatNumber } from "./intl";
 
 export type ToolStatus = "running" | "done" | "error";
 export type DiffLine = { kind: "add" | "del" | "ctx" | "gap"; text: string };
@@ -497,8 +498,8 @@ export const contextTokensLabel = (usage: ContextUsage): string => usage.measure
   : `${formatTokens(usage.used)}${usage.window ? ` de ${formatTokens(usage.window)}` : ""} tokens`;
 
 export const formatTokens = (count: number): string =>
-  count >= 999_500 ? `${(count / 1_000_000).toLocaleString("es", { maximumFractionDigits: 1 })} M`
-    : count >= 1000 ? `${(count / 1000).toLocaleString("es", { maximumFractionDigits: count >= 100_000 ? 0 : 1 })} k` : String(count);
+  count >= 999_500 ? `${formatNumber(count / 1_000_000, { maximumFractionDigits: 1 })} M`
+    : count >= 1000 ? `${formatNumber(count / 1000, { maximumFractionDigits: count >= 100_000 ? 0 : 1 })} k` : String(count);
 
 export function chatActivity(state: ChatState): AgentActivity {
   if (pendingPermissions(state) > 0) return "waiting";
@@ -545,7 +546,7 @@ function describeA11y(tool: string, input: Json, running: boolean): ToolSummary 
   const window = text(input.app) || "una ventana";
   const characters = (value: unknown): string => {
     const count = text(value).length;
-    return count === 1 ? "1 carácter" : `${count.toLocaleString("es")} caracteres`;
+    return count === 1 ? "1 carácter" : `${formatNumber(count)} caracteres`;
   };
   const steps = Array.isArray(input.steps) ? input.steps.length : 0;
   const windowActions: Record<string, [string, string]> = { minimize: ["Minimizando", "Minimizó"], maximize: ["Maximizando", "Maximizó"],

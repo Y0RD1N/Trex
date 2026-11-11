@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { memo, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { contextPercent, contextTokensLabel, formatTokens, type ContextUsage } from "../../chatState";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
@@ -10,6 +10,7 @@ import { ContextDetails } from "./ContextMeter";
 import { PlanWindows } from "./PlanMeter";
 import "./UsageMenu.css";
 import "./TokenUsage.css";
+import { formatNumber } from "../../intl";
 
 type Props = {
   usage: ContextUsage | null;
@@ -31,7 +32,7 @@ const severityRank: Record<UsageSeverity, number> = { normal: 0, warning: 1, cri
 const percentLabel = (percent: number): string => percent > 0 && percent < 1 ? "<1 %" : `${Math.round(percent)} %`;
 
 /** Un único acceso al contexto de la conversación y a los límites de la cuenta. */
-export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, busy, controls, showUnavailable, onCompact, canCompact, autoCompactAt, onOpenAll }: Props) {
+function UsageMenu({ usage, plan, apiUsage, costUsd, product, busy, controls, showUnavailable, onCompact, canCompact, autoCompactAt, onOpenAll }: Props) {
   const id = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<FloatingAnchor | null>(null);
@@ -67,19 +68,19 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
     ? `Uso del plan: ${plan.windows.map(window => `${window.label}: ${percentLabel(window.percent)}`).join(" · ")}`
     : "Uso del plan: porcentajes no disponibles";
   const reportedCost = apiUsage?.costUsd ?? costUsd;
-  const money = (value: number): string => value.toLocaleString("es", { style: "currency", currency: "USD", maximumFractionDigits: 6 });
+  const money = (value: number): string => formatNumber(value, { style: "currency", currency: "USD", maximumFractionDigits: 6 });
   const cost = typeof reportedCost === "number" && Number.isFinite(reportedCost) && reportedCost >= 0 ? reportedCost > 0 && reportedCost < .000001 ? `< ${money(.000001)}` : money(reportedCost) : null;
   const costPartial = apiUsage?.costUsd !== null && apiUsage?.costUsd !== undefined && apiUsage.costPartial;
   // Lo nuevo de este chat; las lecturas de caché son reutilización barata del mismo contexto.
   const chatTokens = newTokens(apiUsage);
   const cachedTokens = cacheReadTokens(apiUsage);
   const hitRate = cacheHitRateLabel(cacheHitRate(apiUsage));
-  const cacheNote = cachedTokens > 0 ? ` (+ ${cachedTokens.toLocaleString("es")} leídos de caché${hitRate ? ` · ${hitRate} de aciertos` : ""})` : "";
+  const cacheNote = cachedTokens > 0 ? ` (+ ${formatNumber(cachedTokens)} leídos de caché${hitRate ? ` · ${hitRate} de aciertos` : ""})` : "";
   // Casi todo lo «nuevo» del primer turno es escribir en caché el prompt fijo del agente.
   const parts = newTokenParts(apiUsage);
   const partsNote = parts && parts.cacheWrite > 0
-    ? `\n  entrada ${parts.input.toLocaleString("es")} · escritura de caché ${parts.cacheWrite.toLocaleString("es")} · salida ${parts.output.toLocaleString("es")}` : "";
-  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens nuevos de este chat: ${chatTokens.toLocaleString("es")}${cacheNote}${partsNote}` : ""}${cost ? `\n${costKind(apiUsage)}: ${cost}` : ""}`;
+    ? `\n  entrada ${formatNumber(parts.input)} · escritura de caché ${formatNumber(parts.cacheWrite)} · salida ${formatNumber(parts.output)}` : "";
+  const summary = `${contextSummary}${plan ? `\n${planSummary}` : ""}${chatTokens ? `\nTokens nuevos de este chat: ${formatNumber(chatTokens)}${cacheNote}${partsNote}` : ""}${cost ? `\n${costKind(apiUsage)}: ${cost}` : ""}`;
   const ringPercent = percent ?? (showPlan ? limiting.percent : 0);
   const ringLength = 2 * Math.PI * 5.5;
   const ringFilled = ringPercent > 0 ? Math.max(ringPercent, 4) : 0;
@@ -156,15 +157,15 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
         <h3 id={`${id}-tokens`} className="chat-menu-label">Consumo de la conversación</h3>
         {apiUsage ? <>
           {chatTokens !== null && <p className="chat-usage-plan-name usage-new-tokens">
-            <strong className="usage-number">{chatTokens.toLocaleString("es")}</strong> tokens nuevos
-            {cachedTokens > 0 && <span className="usage-cache-note"> · + {cachedTokens.toLocaleString("es")} leídos de caché</span>}
+            <strong className="usage-number">{formatNumber(chatTokens)}</strong> tokens nuevos
+            {cachedTokens > 0 && <span className="usage-cache-note"> · + {formatNumber(cachedTokens)} leídos de caché</span>}
             {cost && <span className="usage-cache-note"> · {cost}{costPartial ? " (parcial)" : ""}</span>}
           </p>}
           <dl className="chat-api-usage">
             {([["Entrada", apiUsage.inputTokens], ["Salida", apiUsage.outputTokens], ["Razonamiento", apiUsage.reasoningTokens],
               ["Lectura de caché", apiUsage.cachedReadTokens], ["Escritura de caché", apiUsage.cachedWriteTokens],
               ["Total procesado", apiUsage.totalTokens], ["Intentos de API", apiUsage.requests]] as const).filter(([, value]) => value !== null).map(([label, value]) =>
-              <div key={label}><dt>{label}</dt><dd>{value!.toLocaleString("es")}</dd></div>)}
+              <div key={label}><dt>{label}</dt><dd>{formatNumber(value!)}</dd></div>)}
             {hitRate && <div><dt>Aciertos de caché</dt><dd>{hitRate}</dd></div>}
           </dl>
           <p className="chat-context-note">{apiUsage.partial ? "El proveedor no informó todos los contadores; el consumo mostrado es parcial. " : ""}Tokens nuevos = entrada sin caché + salida + escritura de caché. Las lecturas de caché reutilizan contexto ya enviado y se muestran aparte. {hitRate ? "Aciertos de caché = parte de la entrada servida desde la caché del proveedor, contando solo las peticiones que informaron ese contador. " : ""}El consumo corresponde a este chat.</p>
@@ -180,3 +181,6 @@ export default function UsageMenu({ usage, plan, apiUsage, costUsd, product, bus
     </DropdownMenu>
   </>;
 }
+
+/** Memorizado: el chat se repinta con cada tanda de texto y este componente no depende de ella. */
+export default memo(UsageMenu);
