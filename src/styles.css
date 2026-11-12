@@ -1044,16 +1044,26 @@ body.dragging-sidebar .sidebar { transition: none; }
 @keyframes cli-update-in { from { opacity: 0; transform: translateY(4px); } }
 
 /* --- Área principal y cabecera ---------------------------------------------------- */
-.main { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-app); }
+/* Retícula de la cabecera: todas las cápsulas miden lo mismo, quedan centradas
+   en la barra, separadas por el mismo hueco y a la misma distancia de los dos
+   bordes. El botón de la barra lateral vive fuera de `.tabs-bar`, por eso las
+   medidas se definen aquí y no en la barra. */
+.main {
+  --bar-pill: 34px;
+  --bar-btn: 30px;
+  --bar-gap: var(--sp-2);
+  --bar-inset: var(--sp-3);
+  position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-app);
+}
 .sidebar-reopen {
   position: absolute;
   z-index: 35;
-  top: var(--sp-1-5);
-  left: var(--sp-3-5);
+  top: calc((var(--header-h) - var(--bar-pill)) / 2);
+  left: var(--bar-inset);
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--bar-pill);
+  height: var(--bar-pill);
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -1066,7 +1076,7 @@ body.dragging-sidebar .sidebar { transition: none; }
 .sidebar-reopen[hidden] { display: none; }
 .sidebar-reopen:hover { background: var(--hover); color: var(--text); }
 .sidebar-reopen:active { transform: scale(.94); }
-.main:has(> .sidebar-reopen:not([hidden])) .tabs-bar { padding-left: 62px; }
+.main:has(> .sidebar-reopen:not([hidden])) .tabs-bar { padding-left: calc(var(--bar-inset) + var(--bar-pill) + var(--bar-gap)); }
 /* Modo inmersivo: el botón vive en el hueco reservado de la barra superior, así
    que se esconde y vuelve con ella en lugar de flotar sobre la terminal. Con el
    teclado sigue siendo alcanzable: al recibir el foco reaparece. */
@@ -1126,9 +1136,9 @@ body.dragging-sidebar .sidebar { transition: none; }
   inset: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--sp-1-5);
+  gap: var(--bar-gap);
   height: var(--header-h);
-  padding: 0 var(--sp-3) 0 var(--sp-4);
+  padding: 0 var(--bar-inset);
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
 }
@@ -1139,15 +1149,23 @@ body.dragging-sidebar .sidebar { transition: none; }
 .main.chat-canvas { --chat-header-space: calc(var(--header-h) + 8px); }
 .main.chat-canvas > .bar-slot { height: 0; transition: none; }
 .main.chat-canvas .tabs-bar { pointer-events: none; }
-/* Cada grupo de la cabecera es una píldora opaca con el mismo contorno. */
+/* Cada grupo de la cabecera es una píldora opaca con el mismo contorno y el
+   mismo alto. El alto es fijo (no sale del contenido más el borde): Chromium
+   redondea el grosor del borde según la escala de pantalla, y así ninguna
+   cápsula queda unas décimas más alta o más baja que las demás. */
 .tabs-bar > :is(.workspace-title, .session-create, .window-controls, button) {
   pointer-events: auto;
+  height: var(--bar-pill);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
   box-shadow: var(--shadow-1);
 }
-.tabs-bar > button { width: 34px; height: 34px; }
+/* Los botones dentro de una cápsula quedan a la misma distancia del contorno
+   por arriba, por abajo y por los lados. */
+.tabs-bar > :is(.session-create, .window-controls) {
+  padding: 0 calc((var(--bar-pill) - var(--bar-btn)) / 2 - 1px);
+}
 .workspace-title {
   flex: 0 1 auto;
   display: flex;
@@ -1155,7 +1173,6 @@ body.dragging-sidebar .sidebar { transition: none; }
   gap: var(--sp-2);
   min-width: 0;
   max-width: min(60%, 720px);
-  height: 34px;
   padding: 0 var(--sp-2-5);
   overflow: hidden;
 }
@@ -1194,9 +1211,9 @@ body.dragging-sidebar .sidebar { transition: none; }
 }
 .workspace-team-mark { display: flex; align-items: center; gap: 2px; color: var(--accent-strong); }
 .workspace-team-count { font-size: var(--fs-xs); font-weight: var(--fw-medium); line-height: 1; font-variant-numeric: tabular-nums; }
-.session-create { position: relative; display: flex; align-items: center; gap: var(--sp-1); margin-left: auto; padding: 1px; }
-.window-controls { position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-1); padding: 1px; }
-.window-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; height: 32px; border-radius: var(--radius-md); }
+.session-create { position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-1); margin-left: auto; }
+.window-controls { position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-1); }
+.window-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--sp-1); }
 .window-btn {
   display: grid;
   place-items: center;
@@ -1211,10 +1228,12 @@ body.dragging-sidebar .sidebar { transition: none; }
   transition: background-color var(--t), color var(--t), transform var(--t);
 }
 .window-btn:hover { background: var(--hover); color: var(--text); }
-.window-actions > .window-btn { flex: 0 0 32px; width: 32px; height: 32px; }
 .window-actions > .window-btn[data-window-action="close"]:hover, .window-btn.close:hover { background: var(--danger-bg); color: var(--danger); }
 /* Una misma caja, trazo y separación para todos los controles de la cabecera. */
-.tabs-bar :is(.icon-btn, .window-btn) { flex: 0 0 30px; width: 30px; height: 30px; margin: 0; color: var(--text-muted); }
+.tabs-bar :is(.icon-btn, .window-btn) { flex: 0 0 var(--bar-btn); width: var(--bar-btn); height: var(--bar-btn); margin: 0; color: var(--text-muted); }
+/* Un botón suelto en la barra (la campana) es su propia cápsula: mide lo mismo
+   que las demás en lugar de quedarse en el tamaño de un botón interior. */
+.tabs-bar > :is(.icon-btn, .window-btn) { flex-basis: var(--bar-pill); width: var(--bar-pill); height: var(--bar-pill); }
 .tabs-bar :is(.icon-btn, .window-btn) svg { display: block; width: 18px; height: 18px; stroke-width: 1.6; }
 .tabs-bar :is(.icon-btn, .window-btn):hover { color: var(--text); }
 .tabs-bar .icon-btn.active { background: var(--selected); color: var(--text); }
@@ -1232,7 +1251,7 @@ body.dragging-sidebar .sidebar { transition: none; }
   flex: 0 0 auto;
   gap: var(--sp-1);
   width: auto;
-  min-width: 30px;
+  min-width: var(--bar-pill);
   padding: 0 var(--sp-2) 0 var(--sp-1-5);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent-strong);
