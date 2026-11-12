@@ -1375,7 +1375,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
 
     <div className="chat-composer-wrap" ref={composerRef}>
      <div className="chat-composer-accessories">
-      {props.composerLead && <ComposerPanel label="Planificación" title="Planificación y ejecución" icon={<MapIcon size={13} />}>{props.composerLead}</ComposerPanel>}
+      {props.composerLead && <ComposerPanel label="Planificación" title="Planificación y ejecución" glyph="◇">{props.composerLead}</ComposerPanel>}
       <BackgroundTerminals owners={terminalOwners} />
       <QueuedMessages compact onFocusComposer={focusComposer} queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending || workflowLocked}
         onContinue={wakeQueue} onRemove={removeQueued} onEdit={editQueued} onSendNow={sendQueued} onRestoreDirect={restoreQueued}

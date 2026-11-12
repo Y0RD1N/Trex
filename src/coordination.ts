@@ -112,6 +112,45 @@ export function peerNoteParts(note: string): { age: string; from: string | null;
   return conflict ? { age: conflict[1], from: null, text: conflict[2] } : { age: "", from: null, text: note };
 }
 
+/**
+ * Un aviso de otra sesión listo para pintarlo con jerarquía en el hilo: un mensaje, o un choque de edición
+ * (cuatro frases que escribe `coordination.rs`). Solo cambia cómo se ve: el texto que recibe el agente es el mismo.
+ * `null` si no encaja, y entonces se pinta como un aviso cualquiera.
+ */
+export type PeerNoticeView =
+  | { kind: "message"; age: string; from: string; text: string }
+  | {
+    kind: "conflict"; age: string; path: string;
+    /** Sesión con la que se pisan, tal como la nombra el tablero: «Agente · título de la sesión». */
+    label: string;
+    /** `true`: lo editaste tú y la otra sesión llegó antes; `false`: lo editó la otra sesión. */
+    youEdited: boolean;
+    /** Había una reserva (si no, solo una edición reciente de las dos). */
+    claimed: boolean;
+    /** «hace 2 min», cuando editaste algo que la otra sesión cambió antes sin reservarlo. */
+    since: string | null;
+    /** Para qué reservó el archivo. */
+    reason: string | null;
+    /** Qué hacer: la segunda frase del aviso, tal cual. */
+    advice: string;
+  };
+
+export function peerNotice(note: string): PeerNoticeView | null {
+  const { age, from, text } = peerNoteParts(note);
+  if (from) return { kind: "message", age, from, text };
+  if (!age) return null;
+  const base = { kind: "conflict" as const, age };
+  let m = /^«(.+?)» editó (.+?), que tienes reservado(?: \(([\s\S]+)\))?\. (Revisa[\s\S]*)$/.exec(text);
+  if (m) return { ...base, label: m[1], path: m[2], youEdited: false, claimed: true, since: null, reason: m[3] ?? null, advice: m[4] };
+  m = /^Editaste (.+?), que «(.+?)» tiene reservado(?: \(([\s\S]+)\))?\. (Comprueba[\s\S]*)$/.exec(text);
+  if (m) return { ...base, label: m[2], path: m[1], youEdited: true, claimed: true, since: null, reason: m[3] ?? null, advice: m[4] };
+  m = /^«(.+?)» editó (.+?), que tú también cambiaste hace poco\. (Vuelve[\s\S]*)$/.exec(text);
+  if (m) return { ...base, label: m[1], path: m[2], youEdited: false, claimed: false, since: null, reason: null, advice: m[3] };
+  m = /^Editaste (.+?), que «(.+?)» cambió (hace [^.]+?)\. (Comprueba[\s\S]*)$/.exec(text);
+  if (m) return { ...base, label: m[2], path: m[1], youEdited: true, claimed: false, since: m[3], reason: null, advice: m[4] };
+  return null;
+}
+
 /** Avisos para una sesión, del más antiguo al más reciente. */
 export const notesFor = (board: PeerBoard | null, session: string): PeerNote[] =>
   (board?.notes ?? []).filter(note => note.to === session).sort((a, b) => a.at - b.at);

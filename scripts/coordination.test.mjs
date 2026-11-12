@@ -4,7 +4,7 @@ import { load } from "./ts-loader.mjs";
 
 const {
   editPaths, newEdits, withNotes, withoutNotes, notesFor, peersOf, isCoordinationTool, COORDINATION_TOOLS, PEER_INSTRUCTIONS,
-  CoordinationHub, SYNC_MS, PEER_WAKE, WAKE_LIMIT, notesBlock, peerTurnNotes, peerNoteParts,
+  CoordinationHub, SYNC_MS, PEER_WAKE, WAKE_LIMIT, notesBlock, peerTurnNotes, peerNoteParts, peerNotice,
 } = await load("coordination");
 const { claudeInboxReply } = await load("inboxProtocol");
 const { INBOX_SERVER } = await load("messageQueue");
@@ -221,6 +221,44 @@ test("an automatic turn is remembered as the other session's message, not as the
     { age: "Hace 1 min", from: "Codex · API (2)", text: "¿Puedo?\nGracias" });
   assert.deepEqual(peerNoteParts("Hace un momento · «Codex» editó src/a.ts"), { age: "Hace un momento", from: null, text: "«Codex» editó src/a.ts" });
   assert.deepEqual(peerNoteParts("texto libre"), { age: "", from: null, text: "texto libre" });
+});
+
+// The four conflict sentences are written by `coordination.rs`; the chat takes them apart to draw a card.
+test("a peer notice is split into what the chat shows: file, who, why and what to do", () => {
+  const advice = "Revisa su cambio antes de seguir y, si os vais a pisar, poneos de acuerdo con trex_message.";
+  assert.deepEqual(peerNotice(`Hace un momento · «Claude Code · oye una investigacion que deseo que hagas si actualmente se...» editó native/src/generative.rs, que tienes reservado (Evaluar optimización de MRT2 Base tras la comparación de calidad del usuario). ${advice}`), {
+    kind: "conflict", age: "Hace un momento", path: "native/src/generative.rs", label: "Claude Code · oye una investigacion que deseo que hagas si actualmente se...",
+    youEdited: false, claimed: true, since: null, reason: "Evaluar optimización de MRT2 Base tras la comparación de calidad del usuario", advice,
+  });
+  const check = "Comprueba que no has deshecho su trabajo y poneos de acuerdo con trex_message.";
+  assert.deepEqual(peerNotice(`Hace 3 min · Editaste src/a.ts, que «Codex · API (2)» tiene reservado (Rediseñar (avisos)). ${check}`), {
+    kind: "conflict", age: "Hace 3 min", path: "src/a.ts", label: "Codex · API (2)", youEdited: true, claimed: true, since: null, reason: "Rediseñar (avisos)", advice: check,
+  }, "a reason may contain parentheses");
+  assert.equal(peerNotice(`Hace 3 min · Editaste src/a.ts, que «Codex» tiene reservado. ${check}`).reason, null, "the reservation may have no reason");
+  const reread = "Vuelve a leerlo antes de seguir editándolo y, si os vais a pisar, poneos de acuerdo con trex_message.";
+  assert.deepEqual(peerNotice(`Hace un momento · «Codex» editó src/api.ts, que tú también cambiaste hace poco. ${reread}`), {
+    kind: "conflict", age: "Hace un momento", path: "src/api.ts", label: "Codex", youEdited: false, claimed: false, since: null, reason: null, advice: reread,
+  });
+  const lastCheck = "Comprueba que no has deshecho su trabajo y poneos de acuerdo con trex_message si hace falta.";
+  assert.deepEqual(peerNotice(`Hace un momento · Editaste C:\\app\\src\\api.ts, que «Codex» cambió hace 2 min. ${lastCheck}`), {
+    kind: "conflict", age: "Hace un momento", path: "C:\\app\\src\\api.ts", label: "Codex", youEdited: true, claimed: false, since: "hace 2 min", reason: null, advice: lastCheck,
+  });
+  assert.deepEqual(peerNotice("Hace 2 min · mensaje de «Codex · API (2)»: ¿Puedo tocar src/api.ts?\nGracias"),
+    { kind: "message", age: "Hace 2 min", from: "Codex · API (2)", text: "¿Puedo tocar src/api.ts?\nGracias" });
+  for (const other of ["texto libre", "Modo cambiado a planificación.", "Hace un momento · otra cosa que no es un choque", ""]) {
+    assert.equal(peerNotice(other), null, other);
+  }
+});
+
+test("the conflict sentences the chat understands are still the ones the backend writes", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src-tauri/src/coordination.rs", import.meta.url), "utf8");
+  for (const phrase of [
+    "editó {path}, que tienes reservado{why}. Revisa su cambio antes de seguir",
+    "Editaste {path}, que «{label}» tiene reservado{why}. Comprueba que no has deshecho su trabajo",
+    "editó {path}, que tú también cambiaste hace poco. Vuelve a leerlo antes de seguir editándolo",
+    "Editaste {path}, que «{label}» cambió {}. Comprueba que no has deshecho su trabajo",
+  ]) assert.ok(source.includes(phrase), `coordination.rs no longer says: ${phrase} (update peerNotice in src/coordination.ts and PeerNotice.tsx)`);
 });
 
 test("the agents' budget pauses after the limit and a person's message resumes it", async () => {

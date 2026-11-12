@@ -134,8 +134,10 @@ function QueuedMessages({ queue, running, busy, onRemove, onContinue, onEdit, on
         const directReason = state === "pending" ? directDisabledReason?.(message) : null;
         const rowId = `${id}-${message.id}`;
         return <li key={message.id} className={`chat-queue-item is-${state}${draft ? " is-editing" : ""}`} aria-busy={!!pending}>
+          <span className="chat-queue-number"><span className="chat-queue-sr">Mensaje </span>{String(index + 1).padStart(2, "0")}</span>
           <div className="chat-queue-message">
-            <div className="chat-queue-meta"><span className="chat-queue-number">Mensaje {String(index + 1).padStart(2, "0")}</span>
+            {/* «En cola» es lo normal y lo dice el título del panel: solo se ve el estado cuando es otro. */}
+            <div className={`chat-queue-meta${state === "pending" ? " chat-queue-sr" : ""}`}>
               <span className={`chat-queue-status${state === "outbox" && !sendingDirect ? " is-uncertain" : ""}`}>
                 <span aria-hidden="true" />{state === "pending" ? "En cola" : state === "claimed" ? "En lectura · esperando confirmación" : state === "outbox" ? sendingDirect ? "Enviando…" : "Revisa si se envió" : "Edición conservada"}
               </span>
@@ -207,7 +209,7 @@ function QueuedMessages({ queue, running, busy, onRemove, onContinue, onEdit, on
     </ol>
     <div className="chat-queue-announcement" role="status" aria-live="polite">{notice}</div>
   </section>;
-  return compact ? <ComposerPanel label="Cola" title="Mensajes pendientes" icon={<ListIcon size={13} />}
+  return compact ? <ComposerPanel label="Cola" title="Mensajes pendientes" glyph="≡"
     count={rows.length || "!"} visible={available} attention={!!queue.error || !!Object.keys(errors).length}>{content}</ComposerPanel>
     : available ? content : null;
 }

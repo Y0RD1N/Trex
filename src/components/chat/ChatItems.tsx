@@ -7,7 +7,7 @@ import {
   a11yVerified, answersOf, describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
   type DiffLine, type PermissionItem, type ToolItem, type ToolSummary,
 } from "../../chatState";
-import { AlertIcon, CheckIcon, ChevronIcon, CloseIcon, FileIcon, GlobeIcon, ImageIcon, InfoIcon, ListIcon, MapIcon, PencilIcon,
+import { CheckIcon, ChevronIcon, CloseIcon, FileIcon, GlobeIcon, ImageIcon, ListIcon, MapIcon, PencilIcon,
   QuestionIcon, RotateIcon, SearchIcon, ShieldIcon, SparkIcon, TerminalIcon, WrenchIcon } from "../Icons";
 import Markdown, { CopyButton } from "./Markdown";
 import { FileBadge, SharedFilesContext } from "./SharedFiles";
@@ -19,6 +19,8 @@ import { useMessageEntry } from "./useMessageEntry";
 import { brokerArtifactId, type BrowserArtifact } from "../../browser";
 import { formatClock, formatDateTime } from "../../timeFormat";
 import { useTimeFormat } from "../../hooks/useTimeFormat";
+import { peerNotice } from "../../coordination";
+import { PeerNotice } from "./PeerNotice";
 
 const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
   read: <FileIcon />, edit: <PencilIcon size={15} />, run: <TerminalIcon size={15} />, search: <SearchIcon size={15} />,
@@ -353,9 +355,16 @@ export const PermissionCard = memo(function PermissionCard({ item, cwd, agent, o
   </div>;
 });
 
+/** Hasta aquí un aviso de una línea es una píldora; más largo (o con lista) es una tarjeta. */
+const COMPACT_NOTICE_CHARS = 80;
+
 export const Notice = memo(function Notice({ tone, text }: { tone: "info" | "warn" | "error"; text: string }) {
-  return <div className={`chat-notice ${tone}${text.includes("\n") ? " multiline" : ""}`} role={tone === "error" ? "alert" : "status"}>
-    <span aria-hidden="true">{tone === "info" ? <InfoIcon size={14} /> : <AlertIcon size={14} />}</span>
+  const peer = useMemo(() => tone === "error" ? null : peerNotice(text), [tone, text]);
+  if (peer) return <PeerNotice tone={tone} view={peer} />;
+  const multiline = text.includes("\n");
+  const compact = tone !== "error" && !multiline && text.length <= COMPACT_NOTICE_CHARS;
+  return <div className={`chat-notice ${tone}${multiline ? " multiline" : ""}${compact ? " is-compact" : ""}`} role={tone === "error" ? "alert" : "status"}>
+    <span className="chat-notice-glyph" aria-hidden="true" />
     <span>{text}</span>
   </div>;
 });

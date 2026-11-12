@@ -1,43 +1,88 @@
-/* --- Terminales en segundo plano (pestaña sobre la caja de mensaje) ------------- */
+/* --- Terminales en segundo plano (pestaña sobre la caja de mensaje) -------------
+   Mismo lenguaje que las herramientas del chat: un glifo de estado por fila («✓ cargo test»)
+   y, abajo, una terminal de verdad: su fondo, la carpeta en la barra y una línea de entrada «›». */
+.chat-background-panel { min-width: 0; margin: 0; }
+.chat-background-list { display: grid; gap: 1px; padding: 0 var(--sp-2) var(--sp-2-5); }
+.chat-background-row { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; border-radius: var(--radius-md); }
+.chat-background-row.is-selected { background: var(--selected); }
+.chat-background-select {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2-5);
+  min-width: 0;
+  padding: var(--sp-1-5) var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-background-select:hover { background: var(--hover); }
+
+/* Glifo de estado: ✓ hecho, ✕ falló, ■ detenida, ? sin confirmar y la rueda mientras corre. */
+.chat-background-state { flex: 0 0 14px; display: grid; place-items: center; color: var(--text-dim); font: var(--fs-sm) / 1 var(--font-mono); }
+.chat-background-state::before { content: "?"; color: var(--warn-text); }
+.chat-background-state[data-state="completed"]::before { content: "✓"; color: var(--ok); }
+.chat-background-state[data-state="failed"]::before { content: "✕"; color: var(--danger); }
+.chat-background-state[data-state="stopped"]::before { content: "■"; color: var(--text-dim); font-size: 0.75em; }
+.chat-background-state[data-state="running"]::before,
+.chat-background-state[data-state="stopping"]::before {
+  content: "";
+  display: block;
+  width: 12px;
+  height: 12px;
+  background: var(--accent-strong);
+  -webkit-mask: var(--loader-mask);
+  mask: var(--loader-mask);
+  animation: var(--loader-motion);
+}
+.chat-background-state[data-state="stopping"]::before { background: var(--warn); }
+
+.chat-background-copy { flex: 1; display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.chat-background-copy > strong { min-width: 0; overflow: hidden; color: var(--text); font: var(--fw-medium) var(--fs-xs)/1.6 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.chat-background-copy > small { flex-shrink: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-background-status { flex-shrink: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+
+/* «■ Detener»: texto, sin caja; solo el peligro aparece al pasar por encima. */
 .chat-background-stop {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: var(--sp-1-5);
   min-height: var(--hit-min);
   padding: var(--sp-1) var(--sp-2-5);
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-muted);
   font: var(--fw-medium) var(--fs-xs)/1.5 var(--font-ui);
   cursor: pointer;
-  transition: background-color var(--t), color var(--t), border-color var(--t);
+  transition: background-color var(--t), color var(--t);
 }
-.chat-background-stop:hover:not(:disabled) { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-text); }
+.chat-background-stop::before { content: "■"; font: 0.7rem/1 var(--font-mono); }
+.chat-background-stop:hover:not(:disabled) { background: var(--danger-bg); color: var(--danger-text); }
 .chat-background-stop:disabled { color: var(--text-dim); cursor: default; }
-.chat-background-panel { min-width: 0; margin: 0; }
-.chat-background-list { display: grid; gap: var(--sp-1); padding: 0 var(--sp-2) var(--sp-2-5); }
-.chat-background-row { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; padding: var(--sp-2); border: 1px solid transparent; border-radius: var(--radius-lg); }
-.chat-background-row.is-selected { background: var(--selected); }
-.chat-background-select { flex: 1; display: flex; align-items: center; gap: var(--sp-2-5); min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.chat-background-glyph { flex: 0 0 30px; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-md); background: var(--bg-inset); color: var(--terminal-owner-color, var(--text-muted)); }
-.chat-background-copy { min-width: 0; }
-.chat-background-copy > strong { display: block; overflow: hidden; color: var(--text); font: var(--fw-medium) var(--fs-xs)/1.6 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.chat-background-copy > small { display: flex; flex-wrap: wrap; gap: 2px var(--sp-1-5); margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal); }
-.chat-background-copy > small > span:first-child { color: var(--text-muted); }
-.chat-background-output { padding: var(--sp-3) var(--sp-4); background: var(--bg-inset); }
-.chat-background-output > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--sp-1-5); color: var(--text-muted); font-size: var(--fs-xs); }
-.chat-background-cwd { display: block; margin-top: var(--sp-2); color: var(--text-dim); font: var(--fs-xs)/1.6 var(--font-mono); overflow-wrap: anywhere; }
-.chat-background-output pre { min-height: 60px; max-height: 160px; margin: var(--sp-3) 0 0; overflow: auto; color: var(--term-fg, var(--text)); font: var(--fs-xs)/1.7 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.chat-background-output > small { display: block; margin-top: var(--sp-2); color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-background-stop:disabled::before { content: none; }
+
+/* La terminal: fondo de terminal, la carpeta y el estado en una barra fina, la salida y la línea de entrada. */
+.chat-background-output { border-top: 1px solid var(--border-subtle); background: var(--term-bg); color: var(--term-fg, var(--text)); }
+.chat-background-bar { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border-subtle); color: var(--text-dim); font: var(--fs-xs)/1.5 var(--font-mono); }
+.chat-background-cwd { min-width: 0; font: inherit; overflow-wrap: anywhere; }
+.chat-background-bar > span { flex-shrink: 0; font-family: var(--font-ui); }
+.chat-background-output pre { min-height: 72px; max-height: 180px; margin: 0; padding: var(--sp-3) var(--sp-4); overflow: auto; color: var(--term-fg, var(--text)); font: var(--fs-xs)/1.7 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-background-output > small { display: block; padding: 0 var(--sp-4) var(--sp-2); color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-background-input { display: flex; align-items: center; gap: var(--sp-2); padding: 2px var(--sp-3) 2px var(--sp-4); border-top: 1px solid var(--border-subtle); transition: border-color var(--t); }
+.chat-background-input > span { color: var(--text-dim); font: var(--fs-sm) / 1 var(--font-mono); transition: color var(--t); }
+.chat-background-input:focus-within { border-top-color: var(--accent-strong); }
+.chat-background-input:focus-within > span { color: var(--accent-strong); }
+.chat-background-input input { flex: 1; min-width: 0; padding: var(--sp-2) 0; border: 0; background: transparent; color: var(--term-fg, var(--text)); font: var(--fs-xs)/1.5 var(--font-mono); outline: none; }
+.chat-background-input input::placeholder { color: var(--text-dim); }
+.chat-background-input button { padding: var(--sp-1) var(--sp-2); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-muted); font: var(--fw-medium) var(--fs-xs)/1.5 var(--font-ui); cursor: pointer; }
+.chat-background-input button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.chat-background-input button:disabled { opacity: .45; cursor: default; }
+
 .chat-background-hint, .chat-background-empty, .chat-background-error { margin: 0; padding: var(--sp-2-5) var(--sp-4) var(--sp-3); color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-relaxed); overflow-wrap: anywhere; }
 .chat-background-error { color: var(--danger-text); }
-.chat-background-input { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
-.chat-background-input input { flex: 1; min-width: 0; padding: var(--sp-2) var(--sp-2-5); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text); font: var(--fs-xs)/1.5 var(--font-mono); }
-.chat-background-input input:focus { border-color: var(--accent-strong); outline: none; }
-.chat-background-input button { padding: var(--sp-1-5) var(--sp-2-5); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text); font: var(--fs-xs)/1.5 var(--font-ui); cursor: pointer; }
-.chat-background-input button:hover:not(:disabled) { background: var(--hover); }
-.chat-background-input button:disabled { opacity: .5; cursor: default; }
-@container chat (max-width: 500px) { .chat-background-row { gap: var(--sp-1); padding-inline: var(--sp-1); } }
+@container chat (max-width: 500px) { .chat-background-row { gap: 0; } .chat-background-status { display: none; } }

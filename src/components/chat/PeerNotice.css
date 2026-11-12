@@ -1,0 +1,65 @@
+/* --- Aviso de otra sesión (choque de edición o mensaje) ------------------------------
+   Vive dentro de la tarjeta .chat-notice (superficie neutra y borde fino del color del aviso).
+   Todo cuelga de la misma sangría que el título, la del glifo (18px + hueco). */
+.chat-notice.is-peer {
+  --peer-indent: calc(18px + var(--sp-2-5));
+  display: grid;
+  align-items: start;
+  gap: var(--sp-2);
+  padding-block: var(--sp-3);
+}
+.chat-notice.is-peer > :not(.peer-notice-head) { margin-left: var(--peer-indent); }
+
+/* Glifo, título, una regla fina que llena el hueco (como la de los títulos del markdown) y la hora. */
+.peer-notice-head { display: flex; align-items: center; gap: var(--sp-2-5); min-width: 0; }
+.peer-notice-head .chat-notice-glyph { height: auto; }
+.peer-notice-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-notice-title strong { font-weight: var(--fw-semibold); }
+.peer-notice-session { color: var(--text-muted); }
+.peer-notice-rule { flex: 1 1 var(--sp-4); min-width: var(--sp-4); border-top: 1px solid var(--border-subtle); }
+.peer-notice-age { flex-shrink: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+
+.peer-notice-file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1-5);
+  justify-self: start;
+  max-width: calc(100% - var(--peer-indent));
+  padding: 3px var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.peer-notice-file > svg { flex-shrink: 0; color: var(--text-dim); }
+.peer-notice-file .dir { color: var(--text-dim); }
+.peer-notice-file .base { color: var(--text); font-weight: var(--fw-medium); }
+
+.peer-notice-text { margin: 0; }
+.peer-notice-text strong { font-weight: var(--fw-semibold); }
+p.peer-notice-text:last-child { white-space: pre-wrap; }
+
+/* Los datos son un árbol: «├─ sesión …», «└─ qué hacer …» (las ramas, del tono de las de las herramientas). */
+.peer-notice-tree {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  column-gap: var(--sp-2);
+  row-gap: 3px;
+  margin-block: var(--sp-1) 0;
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}
+.peer-notice-tree > div { display: contents; }
+.peer-notice-tree .branch { color: var(--border-strong); font-family: var(--font-mono); }
+.peer-notice-tree dt { color: var(--text-dim); font-family: var(--font-mono); white-space: nowrap; }
+.peer-notice-tree dd { margin: 0; color: var(--text-muted); }
+.peer-notice-tree code {
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  /* El fondo se extiende con una sombra, no con relleno: el punto que sigue queda pegado al nombre. */
+  box-shadow: 0 0 0 2px var(--bg-inset);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}

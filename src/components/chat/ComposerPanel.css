@@ -5,12 +5,12 @@
 .composer-tab {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-1-5);
   min-width: 0;
   max-width: 100%;
-  min-height: 32px;
+  min-height: 30px;
   margin-bottom: -1px;
-  padding: var(--sp-1-5) var(--sp-3) 7px;
+  padding: var(--sp-1) var(--sp-3) 6px var(--sp-2-5);
   border: 1px solid var(--border-strong);
   border-bottom: 0;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -23,10 +23,16 @@
 .composer-tab > svg { flex-shrink: 0; }
 .composer-tab > span:not([class]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-tab:hover, .composer-tab[aria-expanded="true"] { background: var(--bg-elevated); color: var(--text); }
-.composer-tab > svg:last-child { opacity: .65; transform: rotate(-90deg); }
-.composer-tab[aria-expanded="true"] > svg:last-child { transform: rotate(90deg); }
-.composer-tab-count { display: grid; place-items: center; min-width: 18px; height: 18px; padding-inline: var(--sp-1); border-radius: var(--radius-xs); background: var(--bg-inset); color: var(--text); font: var(--fw-medium) var(--fs-xs)/1 var(--font-mono); }
-.composer-tab.needs-attention .composer-tab-count { background: var(--danger-bg); color: var(--danger-text); }
+/* Glifos de texto, como en el resto del chat: nada de iconos en recuadros. El contador es solo un número. */
+.composer-tab-glyph { color: var(--text-dim); font: var(--fw-medium) var(--fs-sm)/1 var(--font-mono); }
+.composer-tab:hover .composer-tab-glyph, .composer-tab[aria-expanded="true"] .composer-tab-glyph { color: var(--text-muted); }
+.composer-tab-count { color: var(--text); font: var(--fw-medium) var(--fs-xs)/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.composer-tab.needs-attention .composer-tab-count { color: var(--danger-text); }
+.composer-tab.needs-attention .composer-tab-glyph { color: var(--danger-text); }
+/* El panel se abre hacia arriba: ▴ promete desplegar, ▾ recoger. */
+.composer-tab-caret { color: var(--text-dim); font: var(--fs-xs)/1 var(--font-mono); }
+.composer-tab-caret::before { content: "▴"; }
+.composer-tab[aria-expanded="true"] .composer-tab-caret::before { content: "▾"; }
 .composer-tab-live { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .composer-panel {
   position: fixed;
@@ -45,10 +51,11 @@
   pointer-events: auto;
 }
 .composer-panel[hidden] { display: none; }
-.composer-panel-heading { display: flex; flex-shrink: 0; align-items: center; gap: var(--sp-1-5); padding: var(--sp-3-5) var(--sp-3-5) var(--sp-2-5) var(--sp-4); }
-.composer-panel-heading > div { flex: 1; min-width: 0; }
-.composer-panel-heading h2 { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-semibold); line-height: var(--lh-normal); }
-.composer-panel-heading p { margin: 2px 0 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal); }
+/* Título, una regla fina que llena el hueco (como la de los títulos del markdown), el dato corto y las acciones. */
+.composer-panel-heading { display: flex; flex-shrink: 0; align-items: center; gap: var(--sp-2-5); padding: var(--sp-3) var(--sp-2-5) var(--sp-2) var(--sp-4); }
+.composer-panel-heading h2 { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; font-size: var(--fs-md); font-weight: var(--fw-semibold); line-height: var(--lh-normal); text-overflow: ellipsis; white-space: nowrap; }
+.composer-panel-rule { flex: 1 1 var(--sp-4); min-width: var(--sp-4); border-top: 1px solid var(--border-subtle); }
+.composer-panel-heading p { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; color: var(--text-dim); font-size: var(--fs-xs); line-height: var(--lh-normal); text-overflow: ellipsis; white-space: nowrap; }
 .composer-panel-heading .icon-btn { flex-shrink: 0; }
 .composer-panel-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .composer-panel .agent-room-composer-lead { gap: var(--sp-3); padding: 3px var(--sp-4) var(--sp-4); }
