@@ -41,6 +41,8 @@
      área que queda (main.tsx escribe --vv-h y --vv-top). */
   .r-app { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
   html.kb-open .r-app { bottom: auto; top: var(--vv-top, 0px); height: var(--vv-h, 100%); }
+  /* App de inicio en iOS: la altura real de la pantalla (ver main.tsx). */
+  html.full-h .r-app { bottom: auto; height: var(--app-h); }
   .r-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding-top: var(--safe-top); }
 
   /* ----- Marca, cabecera y conexión ------------------------------------------ */
@@ -119,6 +121,8 @@
   .r-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 6px; font: 12.5px var(--font-mono); color: var(--text-muted); }
   .r-summary span { display: inline-flex; align-items: center; gap: 6px; }
   .r-summary .is-warn { color: var(--warn-text); }
+  .r-summary button { min-height: 28px; font: inherit; }
+  .r-mono { font: 12.5px var(--font-mono) !important; color: var(--text-muted); }
 
   .r-project { border-bottom: 1px solid var(--line); }
   .r-project:last-of-type { border-bottom: 0; }

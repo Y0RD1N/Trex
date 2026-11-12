@@ -149,24 +149,9 @@ function LinkChip({ state, host, latency }: { state: ConnectionState; host: stri
   </span>;
 }
 
-/// --- B · Sesiones, agrupadas por proyecto como en la barra lateral del PC ----------------
+// --- B · Sesiones, agrupadas por proyecto como en la barra lateral del PC ----------------
 
 const ORDER: Record<RemoteSession["status"], number> = { needs: 0, working: 1, idle: 2, exited: 3 };
-const COLLAPSED_KEY = "trex-remote-collapsed";
-
-function useCollapsed(): [Set<string>, (id: string) => void] {
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
-  });
-  const toggle = (id: string) => setCollapsed(previous => {
-    const next = new Set(previous);
-    if (!next.delete(id)) next.add(id);
-    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next])); } catch { /* sin almacenamiento */ }
-    return next;
-  });
-  return [collapsed, toggle];
-}
-
 /** Glifo de estado: el mismo idioma que la barra lateral (▲ te espera, la «t» en estratos trabaja). */
 function StatusGlyph({ session }: { session: RemoteSession }) {
   if (session.status === "needs") return <span className="r-glyph is-warn" aria-label="Te necesita">{session.need?.kind === "question" ? "?" : "▲"}</span>;
@@ -203,12 +188,13 @@ function SessionRow({ session, now, onOpen, onQuick }: { session: RemoteSession;
 
 type ProjectGroup = { id: string; name: string; order: number; sessions: RemoteSession[] };
 
-function SessionList({ sessions, onlyWaiting, onOpen, onQuick }: {
+function SessionList({ sessions, onlyWaiting, expanded, onToggle, onShowWaiting, onOpen, onQuick }: {
   sessions: RemoteSession[]; onlyWaiting: boolean;
+  /** Proyectos desplegados. Al abrir la app todos empiezan plegados, como la barra lateral. */
+  expanded: Set<string>; onToggle: (project: string) => void; onShowWaiting: () => void;
   onOpen: (id: string) => void; onQuick: (session: RemoteSession, allowed: boolean) => Promise<void>;
 }) {
   const now = useNow();
-  const [collapsed, toggle] = useCollapsed();
   const groups = useMemo(() => {
     const byProject = new Map<string, ProjectGroup>();
     for (const session of sessions) {
@@ -227,18 +213,18 @@ function SessionList({ sessions, onlyWaiting, onOpen, onQuick }: {
   return <div className="r-scroll">
     <div className="r-rule r-sec"><span>{onlyWaiting ? "Te esperan" : "Proyectos"}</span><span className="r-n">{groups.length}</span></div>
     {!onlyWaiting && (waiting > 0 || working > 0) && <p className="r-summary">
-      {waiting > 0 && <span className="is-warn">▲ {waiting} {waiting === 1 ? "te espera" : "te esperan"}</span>}
+      {waiting > 0 && <button type="button" className="is-warn" onClick={onShowWaiting}>▲ {waiting} {waiting === 1 ? "te espera" : "te esperan"} ›</button>}
       {working > 0 && <span><Loader size={12} />{working} trabajando</span>}
     </p>}
     {!groups.length && <div className="r-empty">{onlyWaiting ? "Nada te espera ahora mismo." : "No hay sesiones de chat abiertas en el PC."}</div>}
     {groups.map(group => {
-      // Lo que te necesita no se esconde aunque el proyecto esté plegado.
-      const open = onlyWaiting || !collapsed.has(group.id);
+      // Plegado solo queda la cabecera con su estado (▲ te espera, la «t» trabaja), como en el PC.
+      const open = onlyWaiting || expanded.has(group.id);
       const needs = group.sessions.filter(session => session.status === "needs").length;
       const busy = group.sessions.some(session => session.status === "working");
-      const shown = open ? group.sessions : group.sessions.filter(session => session.status === "needs");
+      const shown = open ? group.sessions : [];
       return <section key={group.id} className="r-project">
-        <button type="button" className="r-project-head" aria-expanded={open} disabled={onlyWaiting} onClick={() => toggle(group.id)}>
+        <button type="button" className="r-project-head" aria-expanded={open} disabled={onlyWaiting} onClick={() => onToggle(group.id)}>
           {!onlyWaiting && <Chevron open={open} />}
           <ProjectIcon id={group.id} size={20} />
           <span className="r-project-name">{group.name}</span>
@@ -620,6 +606,27 @@ function QuestionSheet({ agent, pending, onAnswer }: { agent: string; pending: E
 
 // --- Este dispositivo ---------------------------------------------------------------------------
 
+/** Medidas de la pantalla, para diagnosticar huecos o recortes en un móvil concreto. */
+function ScreenInfo() {
+  const [, redraw] = useState(0);
+  useEffect(() => {
+    const update = () => redraw(value => value + 1);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  const frame = document.querySelector(".r-app")?.getBoundingClientRect().height ?? 0;
+  // env() no se puede leer directamente: se mide con un elemento de prueba.
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:fixed;visibility:hidden;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)";
+  document.body.appendChild(probe);
+  const insets = `${parseFloat(getComputedStyle(probe).paddingTop)}/${parseFloat(getComputedStyle(probe).paddingBottom)}`;
+  probe.remove();
+  const standalone = (navigator as Navigator & { standalone?: boolean }).standalone === true || matchMedia("(display-mode: standalone)").matches;
+  return <div><span className="r-meta">pantalla</span>
+    <b className="r-mono">{screen.width}×{screen.height} · ventana {window.innerHeight} · marco {Math.round(frame)} · {standalone ? "app de inicio" : "navegador"}
+      {document.documentElement.classList.contains("full-h") ? " · altura corregida" : ""} · márgenes {insets}</b></div>;
+}
+
 function DeviceScreen({ host, device, onForget }: { host: string; device: { id: string; name: string } | null; onForget: () => void }) {
   const [permission, setPermission] = useState(() => typeof Notification === "undefined" ? "unsupported" : Notification.permission);
   return <div className="r-scroll">
@@ -627,6 +634,7 @@ function DeviceScreen({ host, device, onForget }: { host: string; device: { id: 
     <div className="r-card r-device">
       <div><span className="r-meta">nombre</span><b>{device?.name ?? "—"}</b></div>
       <div><span className="r-meta">conectado a</span><b>{host || "PC"} · {location.host}</b></div>
+      <ScreenInfo />
     </div>
     <div className="r-rule r-sec"><span>Avisos</span></div>
     <div className="r-card r-device">
@@ -659,6 +667,12 @@ export default function RemoteApp() {
   const [detail, setDetail] = useState<RemoteDetail | null>(null);
   const [tab, setTab] = useState<Tab>("sessions");
   const [toast, setToast] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggleProject = (project: string) => setExpanded(previous => {
+    const next = new Set(previous);
+    if (!next.delete(project)) next.add(project);
+    return next;
+  });
   const openRef = useRef(open);
   openRef.current = open;
   const seenNeeds = useRef(new Set<string>());
@@ -722,7 +736,8 @@ export default function RemoteApp() {
         <header className="r-top"><Brand /><span className="r-wordmark">trex</span><LinkChip state={state} host={host} latency={latency} /></header>
         {tab === "device" ? <DeviceScreen host={host} device={device} onForget={forget} />
           : state === "connecting" && !sessions.length ? <div className="r-empty"><Loader size={22} /><span>Conectando con tu PC…</span></div>
-          : <SessionList sessions={sessions} onlyWaiting={tab === "waiting"} onOpen={openSession} onQuick={quick} />}
+          : <SessionList sessions={sessions} onlyWaiting={tab === "waiting"} expanded={expanded} onToggle={toggleProject}
+            onShowWaiting={() => setTab("waiting")} onOpen={openSession} onQuick={quick} />}
         <nav className="r-dock" aria-label="Secciones">
           <button type="button" className={`r-tab${tab === "sessions" ? " is-on" : ""}`} aria-current={tab === "sessions" ? "page" : undefined} onClick={() => setTab("sessions")}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg>Sesiones</button>
