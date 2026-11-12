@@ -267,6 +267,8 @@ pub struct Inner {
     error: Mutex<Option<String>>,
     hub: Mutex<Hub>,
     uploads: Mutex<HashMap<String, Upload>>,
+    /// Carpeta de adjuntos de la app (la misma que usa el escritorio).
+    uploads_dir: Mutex<Option<PathBuf>>,
     tx: broadcast::Sender<Outgoing>,
     next_id: AtomicU64,
     /// Generación del servidor: un reintento de una configuración anterior no arranca nada.
@@ -281,7 +283,7 @@ impl Default for RemoteState {
         let (tx, _) = broadcast::channel(256);
         Self(Arc::new(Inner {
             app: Mutex::new(None), config: Mutex::new(RemoteConfig::default()), pairing: Mutex::new(None),
-            server: Mutex::new(None), error: Mutex::new(None), hub: Mutex::new(Hub::default()), uploads: Mutex::new(HashMap::new()), tx,
+            server: Mutex::new(None), error: Mutex::new(None), hub: Mutex::new(Hub::default()), uploads: Mutex::new(HashMap::new()), uploads_dir: Mutex::new(None), tx,
             next_id: AtomicU64::new(1), generation: AtomicU64::new(0),
         }))
     }
@@ -472,8 +474,7 @@ async fn upload(AxumState(state): AxumState<RemoteState>, headers: HeaderMap, bo
     if body.len() > SAVED_MAX_BYTES { return json_error(StatusCode::PAYLOAD_TOO_LARGE, "El archivo pesa más de 100 MB."); }
     let name = headers.get("x-file-name").and_then(|value| value.to_str().ok()).map(percent_decode).unwrap_or_default();
     let name: String = safe_name(&name).chars().take(120).collect();
-    let Some(app) = state.0.app() else { return json_error(StatusCode::SERVICE_UNAVAILABLE, "trex aún no está listo."); };
-    let root = match attachments_dir(&app) { Ok(root) => root, Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error) };
+    let Some(root) = lock(&state.0.uploads_dir).clone() else { return json_error(StatusCode::SERVICE_UNAVAILABLE, "trex aún no está listo."); };
     let image = body.len() <= IMAGE_MAX_BYTES && image_type(&body).is_some();
     let size = body.len();
     let stored = { let name = name.clone(); tauri::async_runtime::spawn_blocking(move || store_attachment(&root, &name, &body)).await };
@@ -785,6 +786,7 @@ pub fn init(app: &AppHandle) {
     let state = app.state::<RemoteState>().inner().clone();
     *lock(&state.0.app) = Some(app.clone());
     *lock(&state.0.config) = load_config(app);
+    *lock(&state.0.uploads_dir) = attachments_dir(app).ok();
     if lock(&state.0.config).enabled { start(&state); }
 }
 
@@ -1182,6 +1184,29 @@ mod tests {
         assert!(state.0.authenticate(&token).is_some());
         // Solo se sirven los archivos de la app móvil.
         assert_eq!(client.get(format!("http://127.0.0.1:{port}/preview.html")).send().unwrap().status().as_u16(), 404);
+
+        // Adjuntos: solo con el token, y lo subido se puede enviar con un mensaje.
+        let dir = std::env::temp_dir().join(format!("trex-remote-upload-{}", std::process::id()));
+        *lock(&state.0.uploads_dir) = Some(dir.clone());
+        let upload_url = format!("http://127.0.0.1:{port}/api/upload");
+        let origin = format!("http://127.0.0.1:{port}");
+        let png = b"\x89PNG\r\n\x1a\nresto".to_vec();
+        let anonymous = client.post(&upload_url).header("origin", &origin).body(png.clone()).send().unwrap();
+        assert_eq!(anonymous.status().as_u16(), 401);
+        let uploaded = client.post(&upload_url).header("origin", &origin).header("authorization", format!("Bearer {token}"))
+            .header("x-file-name", "mi%20foto%3F.png").body(png.clone()).send().unwrap();
+        assert_eq!(uploaded.status().as_u16(), 200);
+        let body: Value = serde_json::from_str(&uploaded.text().unwrap()).unwrap();
+        assert_eq!(body["image"], true);
+        assert_eq!(body["name"], "mi foto_.png");
+        let device = state.0.device_for(&token).unwrap();
+        let files = state.0.resolve_uploads(&device.id, &[body["id"].as_str().unwrap().to_string()]).unwrap();
+        assert_eq!(std::fs::read(files[0]["path"].as_str().unwrap()).unwrap(), png);
+        // Un archivo cualquiera también, sin ser imagen.
+        let doc = client.post(&upload_url).header("origin", &origin).header("authorization", format!("Bearer {token}"))
+            .header("x-file-name", "notas.txt").body("hola").send().unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&doc.text().unwrap()).unwrap()["image"], false);
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = running.shutdown.send(true);
     }
 }

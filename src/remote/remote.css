@@ -27,7 +27,8 @@
   :root[data-theme="light"] { --accent-ink: color-mix(in srgb, var(--accent) 62%, #000); --line: color-mix(in srgb, var(--text) 9%, transparent); }
 
   * { box-sizing: border-box; margin: 0; }
-  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg-app); color: var(--text); }
+  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; color: var(--text); }
+  html { background: var(--bg-app); }
   html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   body { font: var(--r-fs)/1.5 var(--font-sans); -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
   #root { height: 100%; }
@@ -37,12 +38,15 @@
   img { -webkit-touch-callout: none; -webkit-user-drag: none; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 
-  /* El marco: fijo y del tamaño de lo visible. Con el teclado abierto en iOS se ajusta al
-     área que queda (main.tsx escribe --vv-h y --vv-top). */
-  .r-app { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
-  html.kb-open .r-app { bottom: auto; top: var(--vv-top, 0px); height: var(--vv-h, 100%); }
-  /* App de inicio en iOS: la altura real de la pantalla (ver main.tsx). */
-  html.full-h .r-app { bottom: auto; height: var(--app-h); }
+  /* El marco: fijo y del tamaño de lo que se ve. En iOS lo mide viewport.ts (--app-h y
+     --app-top), también con el teclado abierto; en el resto basta con ocupar la ventana. */
+  .r-app { position: fixed; left: 0; right: 0; top: var(--app-top, 0px); height: var(--app-h, 100%);
+    display: flex; flex-direction: column; overflow: hidden; background: var(--bg-app); }
+  /* App de inicio en iOS con la franja muerta de abajo (ver viewport.ts): esa franja ya tapa
+     el indicador de inicio, así que no se deja su margen, y se pinta del color de la barra
+     que queda encima (iOS la rellena con el fondo de la página). */
+  html.dead-band { --safe-bottom: 0px; }
+  html.dead-band:has(.r-dock) { background: var(--bg-sidebar); }
   .r-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding-top: var(--safe-top); }
 
   /* ----- Marca, cabecera y conexión ------------------------------------------ */

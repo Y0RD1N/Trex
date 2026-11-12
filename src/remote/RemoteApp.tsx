@@ -13,6 +13,7 @@ import ProjectCore from "../components/ProjectCore";
 import { MAX_IMAGES, prepareImage } from "../chatImages";
 import { insertImageReferences, removeImageReference, type ReferenceKind } from "../imageReferences";
 import { timeAgo, type RemoteChoice, type RemoteDetail, type RemoteItem, type RemotePending, type RemoteQuestion, type RemoteSession } from "../remoteProtocol";
+import { viewportReport } from "./viewport";
 import { RemoteClient, defaultDeviceName, forgetToken, pairDevice, projectIcon, storedToken, uploadFile, type ConnectionState, type PhoneAction, type RemoteTheme } from "./client";
 
 const T_PATH = "M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z";
@@ -304,6 +305,41 @@ const withExtension = (name: string, type: string): string => {
   return ext ? `${name.replace(/\.[^.]+$/, "") || "foto"}.${ext}` : name;
 };
 
+/** Base64 → bytes sin pasar por fetch (la CSP de la app no deja leer URLs data:). */
+function base64Blob(data: string, type: string): Blob {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type });
+}
+
+/**
+ * Reduce una foto como en el PC. Si el navegador no sabe abrirla como mapa de bits (HEIC
+ * del iPhone en algunas versiones), se dibuja desde una <img>, que sí la entiende, y se
+ * pasa a JPEG. Si tampoco, viaja tal cual y el PC la tratará como archivo.
+ */
+async function shrinkPhoto(file: File, name: string): Promise<{ blob: Blob; type: string }> {
+  try {
+    const prepared = await prepareImage(file, name);
+    return { blob: base64Blob(prepared.data, prepared.mediaType), type: prepared.mediaType };
+  } catch {
+    const url = URL.createObjectURL(file);
+    try {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      const scale = Math.min(1, 1920 / Math.max(image.naturalWidth, image.naturalHeight, 1));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.86));
+      if (blob) return { blob, type: "image/jpeg" };
+    } catch { /* se envía el original */ } finally { URL.revokeObjectURL(url); }
+    return { blob: file, type: file.type };
+  }
+}
+
 function AttachmentChip({ item, index, onRemove }: { item: Attachment; index: number; onRemove: () => void }) {
   const uploading = !item.id && !item.error;
   return <div className={`r-att${item.error ? " is-error" : ""}`} title={item.error ?? item.name}>
@@ -381,16 +417,18 @@ function Composer({ detail, onSend, onToast }: { detail: RemoteDetail; onSend: (
           let body: Blob = file;
           let name = item.name;
           if (kind === "Imagen") {
-            const prepared = await prepareImage(file, item.name);
-            body = await (await fetch(prepared.preview)).blob();
-            name = withExtension(item.name, prepared.mediaType);
+            const prepared = await shrinkPhoto(file, item.name);
+            body = prepared.blob;
+            name = withExtension(item.name, prepared.type);
             update(item.key, { size: body.size, name });
           }
           const uploaded = await uploadFile(body, name, progress => update(item.key, { progress }), item.abort.signal);
           update(item.key, { id: uploaded.id, progress: 1, size: uploaded.size });
         } catch (error) {
           if (item.abort.signal.aborted) return;
-          update(item.key, { error: error instanceof Error ? error.message : String(error) });
+          const message = error instanceof Error ? error.message : String(error);
+          update(item.key, { error: message });
+          onToast(`${item.name}: ${message}`);
         }
       })();
     }
@@ -612,19 +650,10 @@ function ScreenInfo() {
   useEffect(() => {
     const update = () => redraw(value => value + 1);
     window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    return () => { window.removeEventListener("resize", update); window.visualViewport?.removeEventListener("resize", update); };
   }, []);
-  const frame = document.querySelector(".r-app")?.getBoundingClientRect().height ?? 0;
-  // env() no se puede leer directamente: se mide con un elemento de prueba.
-  const probe = document.createElement("div");
-  probe.style.cssText = "position:fixed;visibility:hidden;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)";
-  document.body.appendChild(probe);
-  const insets = `${parseFloat(getComputedStyle(probe).paddingTop)}/${parseFloat(getComputedStyle(probe).paddingBottom)}`;
-  probe.remove();
-  const standalone = (navigator as Navigator & { standalone?: boolean }).standalone === true || matchMedia("(display-mode: standalone)").matches;
-  return <div><span className="r-meta">pantalla</span>
-    <b className="r-mono">{screen.width}×{screen.height} · ventana {window.innerHeight} · marco {Math.round(frame)} · {standalone ? "app de inicio" : "navegador"}
-      {document.documentElement.classList.contains("full-h") ? " · altura corregida" : ""} · márgenes {insets}</b></div>;
+  return <div><span className="r-meta">pantalla</span><b className="r-mono">{viewportReport()}</b></div>;
 }
 
 function DeviceScreen({ host, device, onForget }: { host: string; device: { id: string; name: string } | null; onForget: () => void }) {
