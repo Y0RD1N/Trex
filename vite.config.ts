@@ -37,6 +37,8 @@ export default defineConfig(() => ({
     // loading rare UI (settings, dialogs, highlight.js, xterm addons) on demand.
     chunkSizeWarningLimit: 1200,
     rolldownOptions: {
+      // La app móvil del control remoto es una segunda página: no carga nada del escritorio.
+      input: { main: "index.html", remote: "remote.html" },
       output: {
         // Stable vendor chunks: they keep their hash (and WebView code cache) across
         // app updates and are compiled in parallel with the app code. Only modules

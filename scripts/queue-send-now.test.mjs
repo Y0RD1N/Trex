@@ -8,11 +8,13 @@ import { load } from "./ts-loader.mjs";
 // process boundary and both kinds of browser timer are local, offline fakes.
 const dependencies = Object.fromEntries(await Promise.all([
   "chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "trexChat",
-  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "apps", "coordination",
+  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "apps", "coordination", "remoteProtocol",
 ].map(async name => [`../${name}`, await load(name)])));
 // Applications (Blender) stay off unless a test turns them on: no extra MCP server and no extra mode binding.
 // A `const` so the team-sessions harness, which copies only declarations from this file, gets it too.
 const neutralApps = (dependencies["../apps"] = { ...dependencies["../apps"], appsWanted: () => [], appsServer: async () => null });
+// Remote control stays off: no phone is connected, so a chat never publishes anything.
+const neutralRemote = (dependencies["../remoteBridge"] = { useRemoteSession: () => {} });
 // Trex memory stays off (MEMORY_OFF): no native call, no wait before spawning and no sync after turns.
 const neutralMemory = (dependencies["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory")));
 const compiled = Object.fromEntries(await Promise.all(["Trex", "Claude", "Codex"].map(async provider => {

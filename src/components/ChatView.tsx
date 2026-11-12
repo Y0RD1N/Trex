@@ -58,6 +58,8 @@ import { useImageViewer } from "./ImageViewer";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { syncMemorySoon } from "../memory";
 import QuestionPanel from "./chat/QuestionPanel";
+import { useRemoteSession } from "../remoteBridge";
+import { currentActivity, lastActivityAt, pendingItem, remoteDetail, remoteNeed, remoteStatus } from "../remoteProtocol";
 import Suggestions from "./chat/Suggestions";
 import WorkSummary from "./chat/WorkSummary";
 import BranchMenu, { GIT_BRANCH_CHANGED } from "./chat/BranchMenu";
@@ -1139,6 +1141,52 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   const editingId = editing?.id ?? null;
   const busy = workflowLocked || preparing > 0 || handoffPending || hasQueued || !session.queue.ready;
   const tasks = useMemo(() => props.taskPlan ?? chatTasks(deferredItems, props.profileName ?? agent.name), [props.taskPlan, deferredItems, props.profileName, agent.name]);
+
+  // Control remoto: el móvil ve esta sesión y la dirige por los mismos caminos que el teclado.
+  // Sin ningún móvil conectado el puente no calcula nada (ver remoteBridge.ts).
+  const remoteLock = workflowLocked ? "Un flujo de trabajo controla esta sesión ahora mismo." : handoffPending ? "Esta sesión tiene un traspaso pendiente." : null;
+  const remoteQueues = (running || hasQueued) && sendDuringWork === "queue";
+  const remoteSend = async (text: string): Promise<void> => {
+    if (remoteLock) throw new Error(remoteLock);
+    if (!session.queue.ready) throw new Error("La cola de la sesión aún se está cargando. Prueba en unos segundos.");
+    if (props.coordination) coordinationHub.resetWakes(props.coordination.project);
+    if (remoteQueues) {
+      if (running) queueWakeRef.current.armed = true;
+      await session.queue.enqueue(text, [], []);
+      return;
+    }
+    stickRef.current = true;
+    if (!titledRef.current) { titledRef.current = true; callbacks.current.onTitle(sessionId, conversationTitle(text)); }
+    const coordination = props.coordination;
+    const notes = coordination ? await coordination.pending().catch(() => []) : [];
+    const accepted = await session.send(withNotes(notes, text), [], [], notes.length ? text : undefined);
+    if (accepted === false) throw new Error("El asistente no aceptó el mensaje. Revísalo en el PC.");
+    if (notes.length) coordination?.delivered(notes.map(note => note.id));
+  };
+  useRemoteSession(sessionId, {
+    summary: () => {
+      const model = currentModel(state.models, state.model, state.modelChoice);
+      return {
+        id: sessionId, title: props.sessionTitle || "Sesión nueva", project: { id: props.projectId ?? cwd, name: projectName }, provider,
+        agent: props.profileName ?? agent.name, model: model ? modelName(model) : state.model, status: remoteStatus(state),
+        need: remoteNeed(pendingItem(state.items), cwd), activity: currentActivity(state.items, cwd), updatedAt: lastActivityAt(state, 0),
+      };
+    },
+    detail: () => remoteDetail({ id: sessionId, state, cwd, tasks, queues: remoteQueues, queued: session.queue.snapshot.messages.length,
+      dormant: state.process === "starting" && state.items.length === 0 && !!conversationId, locked: remoteLock }),
+    run: async action => {
+      if (action.kind === "send") return remoteSend(action.text);
+      if (action.kind === "interrupt") {
+        if (!running) throw new Error("La sesión ya no está trabajando.");
+        stopResponse();
+        return;
+      }
+      const item = state.items.find((value): value is PermissionItem => value.kind === "permission" && value.id === action.item);
+      if (!item || item.state !== "pending") throw new Error("Esa petición ya se respondió.");
+      if (remoteLock) throw new Error(remoteLock);
+      answer(item, action.allowed, action.remember, action.choices ?? undefined);
+    },
+  }, [state.items, state.pendingTurns, state.process, state.model, tasks, remoteQueues, session.queue.snapshot, props.sessionTitle, remoteLock, projectName]);
   useEffect(() => {
     // Al aparecer las primeras tareas el panel se abre solo si cabe junto al hilo; en un chat
     // más estrecho flotaría sobre la respuesta. El botón «Tareas» con su recuento sigue a la vista.

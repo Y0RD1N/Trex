@@ -24,6 +24,7 @@ mod integrations;
 mod output_batch;
 mod message_queue;
 mod queue_mcp;
+mod remote;
 mod process_lifetime;
 mod project_icon;
 mod shared_files;
@@ -359,6 +360,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())
         .manage(AgentState::default())
+        .manage(remote::RemoteState::default())
+        .setup(|app| {
+            remote::init(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             agent_team::agent_team_open,
             agent_team::agent_team_poll,
@@ -477,6 +483,16 @@ pub fn run() {
             memory::memory_approve,
             memory::memory_move,
             memory::memory_restore,
+            remote::remote_status,
+            remote::remote_configure,
+            remote::remote_pairing_start,
+            remote::remote_pairing_cancel,
+            remote::remote_revoke,
+            remote::remote_bridge_state,
+            remote::remote_publish,
+            remote::remote_publish_detail,
+            remote::remote_publish_theme,
+            remote::remote_command_result,
         ])
         .on_window_event(|window, event| {
             // Al cerrarse la ventana principal se terminan todas las sesiones.

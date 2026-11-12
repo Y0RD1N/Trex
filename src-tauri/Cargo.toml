@@ -33,6 +33,12 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Control remoto: servidor HTTP/WebSocket para la app móvil (apagado por defecto).
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
+tokio = { version = "1", features = ["net", "sync", "time", "macros", "rt"] }
+getrandom = "0.3"
+if-addrs = "0.13"
+qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

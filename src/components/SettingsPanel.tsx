@@ -1,5 +1,6 @@
 import BrowserSettings from "./BrowserSettings";
 import IntegrationSettings from "./IntegrationSettings";
+import RemoteSettings from "./RemoteSettings";
 /** Ajustes por tema, con cambios en borrador y opciones técnicas desplegables. */
 import { Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { DEFAULT_FONT_FAMILY, clamp } from "../api";
@@ -7,7 +8,7 @@ import AccentPicker from "./AccentPicker";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
-import { BellIcon, CheckIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MoonIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon, WrenchIcon } from "./Icons";
+import { BellIcon, CheckIcon, PhoneIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MoonIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon, WrenchIcon } from "./Icons";
 import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
 import AutoCompactSettings from "./AutoCompactSettings";
@@ -53,6 +54,7 @@ const SECTIONS = [
   { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, description: "Perfiles independientes para Claude Code, Codex y Trex API." },
   { id: "browser", label: "Navegador", icon: <GlobeIcon size={16} />, description: "Pruebas, capturas y grabaciones con tus agentes." },
   { id: "integrations", label: "Integraciones", icon: <WrenchIcon size={16} />, description: "Estado de las aplicaciones y el control de computadora." },
+  { id: "remote", label: "Control remoto", icon: <PhoneIcon size={16} />, description: "Mira y dirige tus sesiones desde el móvil u otro equipo." },
   { id: "sessions", label: "Sesiones", icon: <LayoutIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
   { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
 ] as const;
@@ -307,6 +309,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
               {item.id === "browser" && section === "browser" && <BrowserSettings settings={draft} cwd={cwd} onChange={patch} />}
               {item.id === "integrations" && section === "integrations" && <IntegrationSettings cwd={cwd} integrations={draft.integrations} onIntegrationsChange={integrations => patch({ integrations })} desktopEnabled={draft.desktopEnabled} onDesktopChange={desktopEnabled => patch({ desktopEnabled })} a11yEnabled={draft.a11yEnabled} onA11yChange={a11yEnabled => patch({ a11yEnabled })} a11yKeyboard={draft.a11yKeyboard} onA11yKeyboardChange={a11yKeyboard => patch({ a11yKeyboard })} />}
 
+              {item.id === "remote" && section === "remote" && <RemoteSettings />}
               {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
               {item.id === "notifications" && <NotificationsSettings settings={draft} onChange={patch} />}
               {item.id === "terminal" && <SettingToggle label="Revisar capturas antes de pegarlas" hint="Muestra la imagen y permite confirmarla o cancelar. El texto se pega directamente con el mismo atajo." checked={draft.imagePastePreview} onChange={imagePastePreview=>patch({imagePastePreview})} />}

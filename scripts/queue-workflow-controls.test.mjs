@@ -8,8 +8,10 @@ import { load } from "./ts-loader.mjs";
 // scheduler/JSX, DOM surfaces, queue storage and native process IPC are mocked.
 const names = ["agentPermissions", "agentTeam", "timeFormat", "agentRoom", "agentWorkflow", "handoff", "chatState", "chatTimes", "autoCompact", "chatMessages", "chatCommands", "chatQuestions",
   "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "accountUsageStore", "agentNotices",
-  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations", "accessibility", "coordination"];
+  "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations", "accessibility", "coordination", "remoteProtocol"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));
+// Remote control stays off: no phone is connected, so a chat never publishes anything.
+dependencies["../remoteBridge"] = { useRemoteSession: () => {} };
 // Trex memory stays off (MEMORY_OFF): no native call, no wait before spawning and no sync after turns.
 dependencies["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory"));
 const sources = {

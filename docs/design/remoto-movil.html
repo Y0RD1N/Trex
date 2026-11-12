@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="es" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>trex remoto · maqueta de la app móvil (alternativa A)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ===== trex remoto · alternativa A: «cuaderno de campo» ======================
+   El móvil no es una copia pequeña del escritorio: es el cuaderno que el
+   excavador lleva encima. Lo primero que ves es lo que te necesita; lo demás,
+   ordenado por estratos. Las acciones viven abajo, donde llega el pulgar.
+   Mismo lenguaje que la app: paleta sedimento/hueso, Plex Sans + Plex Mono,
+   reglas con etiqueta, «›» como prefijo de lo tuyo, árbol ├─ para herramientas,
+   esquinas redondeadas y sombras suaves. Sin vidrio, sin degradados, sin brillos.
+   ========================================================================== */
+:root, [data-theme="dark"] {
+  --bg: #16130e; --sidebar: #110f0b; --surface: #1c1913; --elevated: #221e17; --inset: #29241b;
+  --border: #342f24; --border-strong: #4b4434; --text: #e8e0cc; --muted: #b0a791; --dim: #968e7a;
+  --line: color-mix(in srgb, var(--text) 7%, transparent);
+  --hover: color-mix(in srgb, var(--text) 5%, transparent);
+  --ok: #7db58f; --ok-text: #98cba8;
+  --warn: #d9a23f; --warn-text: #e6bd6a; --warn-bg: rgb(217 162 63 / .1); --warn-border: rgb(217 162 63 / .32);
+  --danger-text: #ec8a77; --info-text: #a3bddb;
+  --add: #8cc59b; --del: #e58a78;
+  --shadow-2: 0 6px 16px -8px rgb(0 0 0 / .6), 0 1px 2px rgb(0 0 0 / .3);
+  --shadow-4: 0 26px 64px -20px rgb(0 0 0 / .8), 0 4px 12px rgb(0 0 0 / .4);
+  --page: #0d0b08;
+}
+[data-theme="light"] {
+  --bg: #f2ede0; --sidebar: #eae4d2; --surface: #f7f3e8; --elevated: #faf7ee; --inset: #e5decb;
+  --border: #d4ccb5; --border-strong: #b4aa8f; --text: #1e1a13; --muted: #5a5345; --dim: #615948;
+  --line: color-mix(in srgb, var(--text) 8%, transparent);
+  --hover: color-mix(in srgb, var(--text) 5%, transparent);
+  --ok: #2c6c45; --ok-text: #24593a;
+  --warn: #8a6208; --warn-text: #735008; --warn-bg: rgb(138 98 8 / .09); --warn-border: rgb(138 98 8 / .3);
+  --danger-text: #8f3322; --info-text: #284d7a;
+  --add: #26663f; --del: #a3392a;
+  --shadow-2: 0 4px 14px -6px rgb(30 26 19 / .14), 0 1px 2px rgb(30 26 19 / .05);
+  --shadow-4: 0 24px 60px -18px rgb(30 26 19 / .26), 0 4px 12px rgb(30 26 19 / .07);
+  --page: #ddd6c3;
+}
+:root {
+  --accent: #f06a8d;
+  --accent-ink: color-mix(in srgb, var(--accent) 78%, var(--text));
+  --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-contrast: #16130e;
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 14px; --r-2xl: 18px;
+  --fs: 15px;
+}
+[data-theme="light"] { --accent-ink: color-mix(in srgb, var(--accent) 62%, #000); }
+[data-density="compact"] { --fs: 14px; }
+
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--page); color: var(--text); font: 14px/1.5 var(--sans); padding: 0 0 64px; transition: background .2s; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.mono { font-family: var(--mono); }
+
+/* ----- Cabecera de la maqueta y panel de personalización ----------------- */
+.doc { max-width: 1480px; margin: 0 auto; padding: 32px 32px 0; }
+.doc h1 { font-size: 22px; font-weight: 600; letter-spacing: -.01em; display: flex; align-items: center; gap: 10px; }
+.doc h1 svg { width: 22px; height: 22px; fill: var(--text); }
+.doc .lead { color: var(--muted); max-width: 760px; margin-top: 6px; }
+.rule { display: flex; align-items: center; gap: 12px; color: var(--dim); font: 12px/1 var(--mono); }
+.rule::after { content: ""; flex: 1; border-top: 1px solid var(--line); order: 1; }
+.rule .n { order: 2; }
+
+.tweak { position: sticky; top: 0; z-index: 5; margin: 20px auto 0; max-width: 1480px; padding: 0 32px; }
+.tweak-in { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; padding: 10px 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: var(--shadow-2); }
+.tweak label, .tweak .k { font: 12px var(--mono); color: var(--dim); margin-right: 8px; }
+.seg { display: inline-flex; background: var(--inset); border-radius: var(--r-md); padding: 2px; }
+.seg button { padding: 4px 10px; border-radius: var(--r-sm); font-size: 12.5px; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--elevated); color: var(--text); box-shadow: var(--shadow-2); }
+.sw { width: 22px; height: 22px; border-radius: var(--r-sm); border: 2px solid transparent; outline: 1px solid var(--border); }
+.sw[aria-pressed="true"] { border-color: var(--surface); outline: 2px solid var(--text); }
+.tweak input[type=color] { width: 30px; height: 24px; border: 1px solid var(--border); border-radius: var(--r-sm); background: none; padding: 0 2px; }
+
+/* ----- Escenario: teléfonos ---------------------------------------------- */
+.stage { display: flex; flex-wrap: wrap; justify-content: center; gap: 40px 28px; padding: 28px 32px 12px; max-width: 2200px; margin: 0 auto; }
+.shot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 12px; scroll-snap-align: start; width: 360px; }
+.shot .rule { font-size: 11.5px; }
+.note { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.note b { color: var(--text); font-weight: 500; }
+
+.phone { position: relative; width: 360px; height: 760px; border-radius: 46px; padding: 10px; background: #0a0907;
+  box-shadow: var(--shadow-4), inset 0 0 0 1.5px #2c271f; }
+[data-theme="light"] .phone { background: #1e1a13; }
+.screen { position: relative; height: 100%; border-radius: 37px; overflow: hidden; background: var(--bg);
+  display: flex; flex-direction: column; font-size: var(--fs); }
+.sb { height: 40px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 6px 26px 0 30px;
+  font: 600 13px var(--sans); }
+.sb .isl { position: absolute; left: 50%; top: 10px; translate: -50% 0; width: 96px; height: 26px; border-radius: 20px; background: #000; }
+.sb .ic { display: flex; gap: 5px; align-items: center; }
+.sb .ic i { display: block; width: 3px; background: currentColor; border-radius: 1px; }
+.home-ind { position: absolute; bottom: 7px; left: 50%; translate: -50% 0; width: 118px; height: 4px; border-radius: 3px; background: var(--text); opacity: .55; }
+
+/* ----- Piezas de la app -------------------------------------------------- */
+.brand { width: 18px; height: 18px; fill: var(--text); flex: none; }
+.top { display: flex; align-items: center; gap: 10px; padding: 8px 18px 10px; flex: none; }
+.top .t { font-weight: 600; font-size: 16px; letter-spacing: -.01em; }
+.link { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: var(--r-md);
+  background: var(--surface); border: 1px solid var(--border); font: 11.5px var(--mono); color: var(--muted); }
+.link .bars { display: inline-grid; grid-auto-flow: column; gap: 2px; align-items: end; height: 10px; }
+.link .bars i { width: 3px; border-radius: 1px; background: var(--ok); }
+.link .bars i:nth-child(1) { height: 4px } .link .bars i:nth-child(2) { height: 7px } .link .bars i:nth-child(3) { height: 10px }
+
+.scroll { flex: 1; overflow: hidden; padding: 0 18px; }
+.sec { margin: 14px 0 8px; }
+.sec.first { margin-top: 6px; }
+
+/* núcleo de sondeo: identidad de cada proyecto */
+.core { display: flex; flex-direction: column; width: 6px; border-radius: 2px; overflow: hidden; flex: none; }
+.core i { display: block; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-xl); padding: 12px 13px; }
+.need { border-color: var(--warn-border); background: color-mix(in srgb, var(--warn) 6%, var(--surface)); }
+.srow { display: flex; gap: 11px; align-items: stretch; }
+.srow + .srow { margin-top: 8px; }
+.srow .body { flex: 1; min-width: 0; }
+.srow .h { display: flex; align-items: baseline; gap: 8px; }
+.srow .ttl { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.srow .when { font: 11.5px var(--mono); color: var(--dim); flex: none; }
+.srow .meta { font: 12px var(--mono); color: var(--dim); margin-top: 1px; }
+.srow .st { font: 12.5px var(--mono); margin-top: 7px; display: flex; gap: 6px; align-items: center; }
+.st.warn { color: var(--warn-text); }
+.st.work { color: var(--muted); }
+.quick { display: flex; gap: 6px; margin-top: 10px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: var(--r-md);
+  background: var(--inset); border: 1px solid var(--border); font-size: 13.5px; font-weight: 500; }
+.btn.pri { background: var(--accent); border-color: transparent; color: var(--accent-contrast); }
+.btn.warnb { background: var(--warn); border-color: transparent; color: #16130e; }
+[data-theme="light"] .btn.warnb { color: #fffaf0; }
+.btn.ghost { background: transparent; }
+.btn.sm { height: 32px; padding: 0 11px; font-size: 13px; }
+.btn.grow { flex: 1; }
+
+.plain { display: flex; gap: 11px; padding: 9px 2px; border-bottom: 1px solid var(--line); align-items: center; }
+.plain:last-child { border-bottom: 0; }
+.plain .core { height: 20px; }
+.plain .ttl { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.plain .when { font: 11.5px var(--mono); color: var(--dim); }
+.glyph { font: 12px var(--mono); color: var(--dim); width: 12px; text-align: center; }
+
+.chips { display: flex; gap: 6px; overflow: hidden; margin: 2px 0 4px; }
+.chip { flex: none; display: inline-flex; gap: 7px; align-items: center; height: 30px; padding: 0 11px; border-radius: var(--r-md);
+  border: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+.chip.on { background: var(--text); color: var(--bg); border-color: transparent; }
+.chip .core { height: 14px; width: 4px; }
+
+/* loader: la «t» cortada en cuatro estratos que se encienden de arriba abajo */
+.loader { width: 14px; height: 14px; flex: none; }
+.loader rect { fill: var(--accent); opacity: .22; animation: stratum 1.2s infinite; }
+.loader rect:nth-child(2) { animation-delay: .15s } .loader rect:nth-child(3) { animation-delay: .3s } .loader rect:nth-child(4) { animation-delay: .45s }
+@keyframes stratum { 0%, 60%, 100% { opacity: .22 } 20% { opacity: 1 } }
+
+/* barra inferior: la bandeja de lo que te espera */
+.dock { flex: none; padding: 10px 14px 22px; border-top: 1px solid var(--line); background: var(--sidebar); display: flex; gap: 8px; align-items: center; }
+.dock .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 0; border-radius: var(--r-md);
+  font: 11px var(--mono); color: var(--dim); }
+.dock .tab.on { color: var(--text); background: var(--hover); }
+.dock .tab svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.dock .tab .badge { font: 600 10px var(--mono); background: var(--warn); color: #16130e; border-radius: var(--r-xs); padding: 0 4px; margin-left: 3px; }
+
+/* ----- Chat ------------------------------------------------------------- */
+.chat-top { display: flex; align-items: center; gap: 10px; padding: 6px 14px 10px; border-bottom: 1px solid var(--line); flex: none; }
+.back { width: 34px; height: 34px; border-radius: var(--r-md); display: grid; place-items: center; font-size: 20px; color: var(--muted); }
+.chat-top .core { height: 28px; }
+.chat-top .who { flex: 1; min-width: 0; }
+.chat-top .who b { display: block; font-weight: 500; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-top .who span { font: 11.5px var(--mono); color: var(--dim); }
+.stop { height: 32px; padding: 0 10px; border-radius: var(--r-md); border: 1px solid var(--border); font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.stop i { width: 9px; height: 9px; background: var(--danger-text); border-radius: 2px; }
+
+.tasks { margin: 10px 14px 0; padding: 9px 11px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--border); flex: none; }
+.tasks .h { display: flex; justify-content: space-between; font: 12px var(--mono); color: var(--dim); }
+.tasks .h b { color: var(--text); font-weight: 500; font-family: var(--sans); font-size: 13px; }
+.seglist { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin-top: 7px; }
+.seglist i { height: 4px; border-radius: 2px; background: var(--inset); }
+.seglist i.d { background: var(--ok); } .seglist i.a { background: var(--accent); }
+
+.thread { flex: 1; overflow: hidden; padding: 12px 16px 0; display: flex; flex-direction: column; gap: 12px; }
+.me { align-self: stretch; padding: 9px 12px; border-radius: var(--r-lg); background: var(--inset); color: var(--text); display: flex; gap: 8px; }
+.me::before { content: "›"; color: var(--accent-ink); font-family: var(--mono); }
+.ai p { color: var(--text); }
+.ai p + p { margin-top: 6px; }
+.ai code, .me code { font: 12.5px var(--mono); background: var(--inset); padding: 1px 5px; border-radius: var(--r-xs); }
+.tree { font: 12.5px/1.75 var(--mono); color: var(--muted); }
+.tree .ok { color: var(--ok-text); }
+.tree .d { color: var(--dim); }
+.tree .row { display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; }
+.diff { margin-left: 22px; font: 11.5px var(--mono); }
+.diff .a { color: var(--add); } .diff .r { color: var(--del); }
+.working { display: flex; align-items: center; gap: 8px; font: 12.5px var(--mono); color: var(--muted); }
+
+.composer { flex: none; padding: 8px 12px 24px; border-top: 1px solid var(--line); background: var(--bg); }
+.queued { font: 11.5px var(--mono); color: var(--dim); margin: 0 4px 6px; }
+.box { display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 12px; border-radius: var(--r-xl); background: var(--surface); border: 1px solid var(--border-strong); }
+.box .ph { flex: 1; color: var(--dim); padding: 6px 0; display: flex; gap: 8px; }
+.box .ph::before { content: "›"; color: var(--accent-ink); font-family: var(--mono); }
+.icb { width: 36px; height: 36px; border-radius: var(--r-md); display: grid; place-items: center; color: var(--muted); flex: none; }
+.icb svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+.icb.send { background: var(--accent); color: var(--accent-contrast); }
+
+/* ----- Hojas inferiores (permiso, pregunta) ------------------------------ */
+.dimmed { filter: saturate(.6); opacity: .35; pointer-events: none; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--elevated); border-radius: 26px 26px 37px 37px;
+  border-top: 1px solid var(--border); box-shadow: var(--shadow-4); padding: 10px 16px 28px; }
+.grab { width: 38px; height: 4px; border-radius: 3px; background: var(--border-strong); margin: 0 auto 12px; }
+.sheet .rule { margin-bottom: 10px; }
+.perm { border: 1px solid var(--warn-border); background: var(--warn-bg); border-radius: var(--r-xl); padding: 12px; }
+.perm .what { font-size: 14px; color: var(--text); }
+.perm .what b { font-weight: 600; }
+.cmd { margin-top: 9px; padding: 9px 11px; border-radius: var(--r-md); background: var(--bg); border: 1px solid var(--border);
+  font: 12.5px/1.5 var(--mono); color: var(--text); }
+.cmd .p { color: var(--warn-text); }
+.cmd .cwd { display: block; color: var(--dim); font-size: 11.5px; margin-top: 3px; }
+.why { font-size: 12.5px; color: var(--muted); margin-top: 9px; }
+.acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.acts .wide { grid-column: span 2; }
+.hint { text-align: center; font: 11.5px var(--mono); color: var(--dim); margin-top: 10px; }
+
+.q { font-size: 15px; font-weight: 500; line-height: 1.4; }
+.opts { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.opt { display: flex; gap: 11px; padding: 11px 12px; border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--surface); }
+.opt .k { font: 12px var(--mono); color: var(--dim); width: 14px; padding-top: 1px; }
+.opt b { font-weight: 500; display: block; }
+.opt span { font-size: 12.5px; color: var(--muted); }
+.opt.sel { border-color: var(--accent); background: var(--accent-soft); }
+.opt.sel .k { color: var(--accent-ink); }
+.other { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-radius: var(--r-lg); border: 1px dashed var(--border-strong); color: var(--dim); font-size: 13.5px; }
+
+/* ----- Emparejar --------------------------------------------------------- */
+.pair { flex: 1; padding: 12px 22px 0; display: flex; flex-direction: column; }
+.pair h2 { font-size: 24px; font-weight: 600; letter-spacing: -.015em; line-height: 1.2; }
+.pair .sub { color: var(--muted); margin-top: 6px; font-size: 14px; }
+.steps { margin: 16px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+.steps li { display: flex; gap: 10px; font-size: 13.5px; color: var(--muted); }
+.steps li span { font: 12px var(--mono); color: var(--dim); width: 18px; padding-top: 2px; }
+.viewfinder { position: relative; margin-top: 18px; height: 196px; border-radius: var(--r-2xl); background: var(--sidebar);
+  border: 1px solid var(--border); overflow: hidden;
+  background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 16px 20px; }
+.viewfinder .qr { position: absolute; inset: 0; margin: auto; width: 116px; height: 116px; }
+.viewfinder .qr rect { fill: var(--text); opacity: .85; }
+.corner { position: absolute; width: 22px; height: 22px; border: 2.5px solid var(--accent); }
+.corner.tl { top: 28px; left: 92px; border-right: 0; border-bottom: 0; border-radius: 8px 0 0 0; }
+.corner.tr { top: 28px; right: 92px; border-left: 0; border-bottom: 0; border-radius: 0 8px 0 0; }
+.corner.bl { bottom: 28px; left: 92px; border-right: 0; border-top: 0; border-radius: 0 0 0 8px; }
+.corner.br { bottom: 28px; right: 92px; border-left: 0; border-top: 0; border-radius: 0 0 8px 0; }
+.viewfinder .lbl { position: absolute; left: 12px; bottom: 10px; font: 11px var(--mono); color: var(--dim); }
+.or { margin: 16px 0 8px; }
+.code { display: flex; gap: 6px; align-items: center; }
+.code i { flex: 1; height: 42px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--border);
+  display: grid; place-items: center; font: 500 17px var(--mono); font-style: normal; }
+.code i.cur { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.code em { color: var(--dim); font-style: normal; }
+.net { display: flex; gap: 6px; margin-top: 14px; }
+.net button { flex: 1; height: 34px; border-radius: var(--r-md); border: 1px solid var(--border); font-size: 12.5px; color: var(--muted); }
+.net button.on { border-color: var(--text); color: var(--text); background: var(--surface); }
+.addr { margin-top: 8px; font: 12px var(--mono); color: var(--dim); display: flex; justify-content: space-between; }
+.pair .cta { margin-top: auto; padding: 14px 0 26px; }
+.pair .cta .btn { width: 100%; height: 46px; font-size: 15px; border-radius: var(--r-lg); }
+
+/* ----- Referencias numeradas para iterar --------------------------------- */
+.ref { display: none; position: absolute; z-index: 3; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px;
+  background: var(--accent); color: var(--accent-contrast); font: 600 11px/20px var(--mono); text-align: center; box-shadow: 0 0 0 2px var(--bg); }
+[data-refs="on"] .ref { display: block; }
+.relpos { position: relative; }
+
+.notes { max-width: 1480px; margin: 28px auto 0; padding: 0 32px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px 32px; }
+.notes h3 { font: 500 12px var(--mono); color: var(--dim); margin-bottom: 8px; }
+.notes ul { padding-left: 18px; color: var(--muted); font-size: 13.5px; display: grid; gap: 5px; }
+.notes li b { color: var(--text); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<header class="doc">
+  <div class="rule"><span>trex remoto · app móvil</span><span class="n">alternativa A · «cuaderno de campo»</span></div>
+  <h1 style="margin-top:14px"><svg viewBox="240 248 544 544"><path d="M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z"/></svg>Lo que te necesita, primero</h1>
+  <p class="lead">El móvil no es el escritorio en pequeño: es el cuaderno que llevas encima. Abre en lo que está esperando por ti (permisos, preguntas), las acciones quedan abajo al alcance del pulgar y cada proyecto conserva su núcleo de estratos. Activa «Referencias» para ver los números y pedirme cambios del tipo «en B3, …».</p>
+</header>
+
+<div class="tweak">
+  <div class="tweak-in">
+    <div><span class="k">Modo</span><span class="seg" id="theme"><button data-v="dark" aria-pressed="true">Oscuro</button><button data-v="light" aria-pressed="false">Claro</button></span></div>
+    <div style="display:flex;align-items:center;gap:6px"><span class="k">Acento</span>
+      <button class="sw" data-c="#f06a8d" title="Cinta" style="background:#f06a8d" aria-pressed="true"></button>
+      <button class="sw" data-c="#d9a23f" title="Ocre" style="background:#d9a23f" aria-pressed="false"></button>
+      <button class="sw" data-c="#4fb8a3" title="Pátina" style="background:#4fb8a3" aria-pressed="false"></button>
+      <button class="sw" data-c="#e0674f" title="Óxido" style="background:#e0674f" aria-pressed="false"></button>
+      <button class="sw" data-c="#84a3c8" title="Pizarra" style="background:#84a3c8" aria-pressed="false"></button>
+      <input type="color" id="custom" value="#f06a8d" title="Color propio">
+    </div>
+    <div><span class="k">Densidad</span><span class="seg" id="density"><button data-v="comfy" aria-pressed="true">Cómoda</button><button data-v="compact" aria-pressed="false">Compacta</button></span></div>
+    <div><span class="k">Referencias</span><span class="seg" id="refs"><button data-v="off" aria-pressed="true">Ocultas</button><button data-v="on" aria-pressed="false">Visibles</button></span></div>
+  </div>
+</div>
+
+<main class="stage">
+
+  <!-- ============ A · Emparejar ============ -->
+  <section class="shot">
+    <div class="rule"><span>A · Emparejar</span><span class="n">una sola vez</span></div>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:41</span><span class="isl"></span><span class="ic"><i style="height:5px"></i><i style="height:7px"></i><i style="height:9px"></i><i style="height:11px"></i></span></div>
+      <div class="top"><svg class="brand" viewBox="240 248 544 544"><path d="M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z"/></svg><span class="t">trex</span></div>
+      <div class="pair">
+        <h2 class="relpos">Conecta con tu PC<span class="ref" style="right:0;top:2px">A1</span></h2>
+        <p class="sub">Tus sesiones siguen en el PC. Desde aquí las ves y las diriges.</p>
+        <ol class="steps relpos">
+          <li><span>01</span>En trex, abre Ajustes › Control remoto.</li>
+          <li><span>02</span>Escanea el código o escribe los seis caracteres.</li>
+          <li><span>03</span>Este móvil aparecerá en tu lista de dispositivos.</li>
+          <span class="ref" style="right:0;top:0">A2</span>
+        </ol>
+        <div class="viewfinder">
+          <svg class="qr" viewBox="0 0 29 29" id="qr"></svg>
+          <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+          <span class="lbl">cámara · buscando código</span>
+          <span class="ref" style="right:10px;top:10px">A3</span>
+        </div>
+        <div class="rule or"><span>o escribe el código</span></div>
+        <div class="code relpos"><i>K</i><i>7</i><i>Q</i><em>–</em><i>4</i><i>M</i><i class="cur"></i><span class="ref" style="right:-6px;top:-12px">A4</span></div>
+        <div class="net relpos"><button class="on">WireGuard</button><button>Tailscale</button><button>Wi‑Fi local</button><span class="ref" style="right:-6px;top:-12px">A5</span></div>
+        <div class="addr"><span>10.8.0.1 : 7340</span><span>editar</span></div>
+        <div class="cta"><button class="btn pri">Emparejar este móvil</button></div>
+      </div>
+      <span class="home-ind"></span>
+    </div></div>
+    <p class="note"><b>Tres pasos alineados a la izquierda</b>, como la bienvenida del escritorio. La retícula de fondo del visor es la misma de 8 × 20 px. La red se elige aquí (WireGuard primero, porque es tu camino habitual) y la dirección se rellena sola con el QR.</p>
+  </section>
+
+  <!-- ============ B · Sesiones ============ -->
+  <section class="shot">
+    <div class="rule"><span>B · Sesiones</span><span class="n">pantalla de inicio</span></div>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:41</span><span class="isl"></span><span class="ic"><i style="height:5px"></i><i style="height:7px"></i><i style="height:9px"></i><i style="height:11px"></i></span></div>
+      <div class="top relpos"><svg class="brand" viewBox="240 248 544 544"><path d="M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z"/></svg><span class="t">trex</span>
+        <span class="link"><span class="bars"><i></i><i></i><i></i></span>wg · ESCRITORIO · 18 ms</span><span class="ref" style="right:14px;top:-8px">B1</span></div>
+      <div class="scroll">
+        <div class="chips relpos"><span class="chip on">Todos</span><span class="chip"><span class="core" data-seed="trex"></span>trex</span><span class="chip"><span class="core" data-seed="web-ventas"></span>web-ventas</span><span class="chip"><span class="core" data-seed="blender-kit"></span>blender-kit</span><span class="ref" style="right:0;top:-6px">B2</span></div>
+
+        <div class="rule sec relpos"><span>Te necesitan</span><span class="n">2</span></div>
+        <div class="card need relpos">
+          <span class="ref" style="right:-6px;top:-8px">B3</span>
+          <div class="srow"><span class="core" data-seed="trex"></span><div class="body">
+            <div class="h"><span class="ttl">Puente remoto: servidor axum</span><span class="when">1 min</span></div>
+            <div class="meta">trex · Claude Opus</div>
+            <div class="st warn">▲ pide permiso · Bash</div>
+            <div class="quick"><button class="btn sm ghost grow">Ver</button><button class="btn sm grow">Rechazar</button><button class="btn sm warnb grow">Permitir</button></div>
+          </div></div>
+        </div>
+        <div class="card need" style="margin-top:8px">
+          <div class="srow"><span class="core" data-seed="web-ventas"></span><div class="body">
+            <div class="h"><span class="ttl">Checkout con pago en dos pasos</span><span class="when">6 min</span></div>
+            <div class="meta">web-ventas · Codex</div>
+            <div class="st warn">? pregunta · 3 opciones</div>
+          </div></div>
+        </div>
+
+        <div class="rule sec relpos"><span>Trabajando</span><span class="n">1</span><span class="ref" style="right:-6px;top:-10px">B4</span></div>
+        <div class="card">
+          <div class="srow"><span class="core" data-seed="blender-kit"></span><div class="body">
+            <div class="h"><span class="ttl">Exportar escena a glTF</span><span class="when">12 min</span></div>
+            <div class="meta">blender-kit · Antigravity</div>
+            <div class="st work"><svg class="loader" viewBox="240 248 544 544"><defs><clipPath id="tclip1"><path d="M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z"/></clipPath></defs><g clip-path="url(#tclip1)"><rect x="240" y="248" width="544" height="136"/><rect x="240" y="384" width="544" height="136"/><rect x="240" y="520" width="544" height="136"/><rect x="240" y="656" width="544" height="136"/></g></svg>editando export_gltf.py</div>
+          </div></div>
+        </div>
+
+        <div class="rule sec"><span>En reposo</span><span class="n">4</span></div>
+        <div>
+          <div class="plain"><span class="core" data-seed="trex"></span><span class="ttl">Medidor de uso por cuenta</span><span class="when">ayer</span></div>
+          <div class="plain"><span class="core" data-seed="web-ventas"></span><span class="ttl">Tests e2e del carrito</span><span class="when">ayer</span></div>
+        </div>
+      </div>
+      <nav class="dock relpos">
+        <span class="ref" style="left:8px;top:-10px">B5</span>
+        <button class="tab on"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Sesiones</button>
+        <button class="tab"><svg viewBox="0 0 24 24"><path d="M12 4v10M12 18v.5"/><path d="M3.5 20 12 4l8.5 16Z"/></svg><span>Esperan<span class="badge">2</span></span></button>
+        <button class="tab"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8"/></svg>Equipo</button>
+      </nav>
+      <span class="home-ind"></span>
+    </div></div>
+    <p class="note"><b>Lo que te necesita va arriba</b> y se resuelve sin entrar: permitir o rechazar desde la tarjeta. Agrupado como estratos, por estado y no por proyecto; los chips de arriba filtran por proyecto. Arriba a la derecha, la conexión en vivo: túnel, equipo y latencia.</p>
+  </section>
+
+  <!-- ============ C · Chat en vivo ============ -->
+  <section class="shot">
+    <div class="rule"><span>C · Chat en vivo</span><span class="n">el agente trabaja</span></div>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:41</span><span class="isl"></span><span class="ic"><i style="height:5px"></i><i style="height:7px"></i><i style="height:9px"></i><i style="height:11px"></i></span></div>
+      <div class="chat-top relpos">
+        <button class="back">‹</button><span class="core" data-seed="trex"></span>
+        <div class="who"><b>Puente remoto: servidor axum</b><span>trex · Claude Opus</span></div>
+        <button class="stop"><i></i>Detener</button>
+        <span class="ref" style="right:8px;top:-8px">C1</span>
+      </div>
+      <div class="tasks relpos">
+        <span class="ref" style="right:-6px;top:-8px">C2</span>
+        <div class="h"><b>Conectar el WebSocket</b><span>tareas 2/5 ›</span></div>
+        <div class="seglist"><i class="d"></i><i class="d"></i><i class="a"></i><i></i><i></i></div>
+      </div>
+      <div class="thread">
+        <div class="me relpos"><span>Añade el endpoint <code>/ws</code> y protégelo con el token del dispositivo</span><span class="ref" style="right:-6px;top:-8px">C3</span></div>
+        <div class="ai"><p>Lo monto sobre el router que ya sirve la PWA. Primero miro cómo emite eventos el agente.</p></div>
+        <div class="tree relpos">
+          <div class="row"><span class="d">├─</span><span class="ok">✓</span>Leer agent.rs</div>
+          <div class="row"><span class="d">├─</span><span class="ok">✓</span>Buscar «emit(» · 12 resultados</div>
+          <div class="row"><span class="d">├─</span><span class="ok">✓</span>Editar remote.rs</div>
+          <div class="diff"><span class="a">+48</span> <span class="r">−3</span> <span class="d" style="color:var(--dim)">· ver cambios</span></div>
+          <div class="row"><span class="d">└─</span><svg class="loader" viewBox="240 248 544 544"><defs><clipPath id="tclip2"><path d="M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z"/></clipPath></defs><g clip-path="url(#tclip2)"><rect x="240" y="248" width="544" height="136"/><rect x="240" y="384" width="544" height="136"/><rect x="240" y="520" width="544" height="136"/><rect x="240" y="656" width="544" height="136"/></g></svg>cargo check -p trex</div>
+          <span class="ref" style="right:0;top:-6px">C4</span>
+        </div>
+        <div class="working">trabajando · 1 m 12 s</div>
+      </div>
+      <div class="composer relpos">
+        <span class="ref" style="right:10px;top:-10px">C5</span>
+        <div class="queued">se entregará al terminar el turno</div>
+        <div class="box">
+          <button class="icb" title="Adjuntar foto"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+          <span class="ph">Escribe para encolar…</span>
+          <button class="icb" title="Dictar"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+          <button class="icb send" title="Enviar"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+        </div>
+      </div>
+      <span class="home-ind"></span>
+    </div></div>
+    <p class="note"><b>El mismo chat del escritorio, a una columna.</b> Las herramientas se ven como el árbol <span class="mono">├─ ✓</span>; los cambios, como +/− con enlace al diff. Mientras el agente trabaja, lo que escribas se encola (igual que en el PC). Dictado por voz, porque teclear en el móvil cansa.</p>
+  </section>
+
+  <!-- ============ D · Permiso ============ -->
+  <section class="shot">
+    <div class="rule"><span>D · Permiso</span><span class="n">hoja inferior</span></div>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:41</span><span class="isl"></span><span class="ic"><i style="height:5px"></i><i style="height:7px"></i><i style="height:9px"></i><i style="height:11px"></i></span></div>
+      <div class="dimmed" style="display:flex;flex-direction:column;flex:1">
+        <div class="chat-top"><button class="back">‹</button><span class="core" data-seed="trex"></span><div class="who"><b>Puente remoto: servidor axum</b><span>trex · Claude Opus</span></div></div>
+        <div class="thread"><div class="ai"><p>El código compila. Para comprobar el emparejado necesito ejecutar las pruebas del módulo.</p></div></div>
+      </div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="rule"><span>Claude pide permiso</span><span class="n">hace 40 s</span></div>
+        <div class="perm relpos">
+          <span class="ref" style="right:-6px;top:-8px">D1</span>
+          <div class="what">Quiere <b>ejecutar un comando</b> en tu PC</div>
+          <div class="cmd"><span class="p">$</span> cargo test --lib remote::pairing<span class="cwd">D:\projects\trex\src-tauri</span></div>
+          <div class="why">Para comprobar que un código caducado se rechaza.</div>
+        </div>
+        <div class="acts relpos">
+          <span class="ref" style="right:-6px;top:-8px">D2</span>
+          <button class="btn" style="height:44px">Rechazar</button>
+          <button class="btn warnb" style="height:44px">Permitir una vez</button>
+          <button class="btn ghost wide" style="height:40px">Permitir siempre en este proyecto</button>
+        </div>
+        <div class="hint">también lo verás en el PC · lo que respondas primero manda</div>
+      </div>
+      <span class="home-ind"></span>
+    </div></div>
+    <p class="note"><b>Recuadro ámbar con botones normales</b>, como en el escritorio. El comando completo y su carpeta siempre visibles, nunca recortados: es tu PC. «Permitir siempre» queda aparte y más discreto para que no se pulse sin querer.</p>
+  </section>
+
+  <!-- ============ E · Pregunta ============ -->
+  <section class="shot">
+    <div class="rule"><span>E · Pregunta del agente</span><span class="n">hoja inferior</span></div>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:41</span><span class="isl"></span><span class="ic"><i style="height:5px"></i><i style="height:7px"></i><i style="height:9px"></i><i style="height:11px"></i></span></div>
+      <div class="dimmed" style="display:flex;flex-direction:column;flex:1">
+        <div class="chat-top"><button class="back">‹</button><span class="core" data-seed="web-ventas"></span><div class="who"><b>Checkout con pago en dos pasos</b><span>web-ventas · Codex</span></div></div>
+      </div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="rule"><span>Codex pregunta</span><span class="n">1 de 2</span></div>
+        <p class="q relpos">¿Dónde guardo el carrito mientras el cliente confirma el pago?<span class="ref" style="right:-6px;top:-8px">E1</span></p>
+        <div class="opts relpos">
+          <span class="ref" style="right:-6px;top:-8px">E2</span>
+          <div class="opt sel"><span class="k">1</span><div><b>Sesión del servidor (recomendado)</b><span>No se pierde si recarga la página.</span></div></div>
+          <div class="opt"><span class="k">2</span><div><b>localStorage</b><span>Más simple, pero solo vive en ese navegador.</span></div></div>
+          <div class="opt"><span class="k">3</span><div><b>Tabla de borradores</b><span>Persistente; añade una migración.</span></div></div>
+          <div class="other">› Otra respuesta…</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px"><button class="btn ghost" style="height:44px">Omitir</button><button class="btn pri grow" style="height:44px">Responder</button></div>
+      </div>
+      <span class="home-ind"></span>
+    </div></div>
+    <p class="note"><b>Las opciones son tarjetas grandes</b>, fáciles de tocar, con la recomendada primero. Si el agente hace varias preguntas, se avanza de una en una («1 de 2»). Siempre queda «Otra respuesta» para escribir o dictar.</p>
+  </section>
+
+</main>
+
+<section class="notes">
+  <div>
+    <h3>Decisiones de esta alternativa</h3>
+    <ul>
+      <li><b>Por estado, no por proyecto:</b> «Te necesitan › Trabajando › En reposo».</li>
+      <li><b>Acciones abajo:</b> hojas inferiores y barra inferior, al alcance del pulgar.</li>
+      <li><b>Misma identidad que el PC:</b> núcleo de estratos, loader de la «t», tono y acento sincronizados con tus ajustes.</li>
+      <li><b>Sin terminales en v1:</b> la pestaña «Equipo» mostraría las salas de agentes, en solo lectura.</li>
+    </ul>
+  </div>
+  <div>
+    <h3>Para iterar (dime qué cambiarías)</h3>
+    <ul>
+      <li>¿Barra inferior (B5) o sin barra, todo desde la pantalla de inicio?</li>
+      <li>¿Aprobar desde la tarjeta (B3) o siempre entrando al chat?</li>
+      <li>¿El tono y el acento se copian del PC o se eligen aparte en el móvil?</li>
+      <li>¿Quieres ver la vista de un agente terminado, con su resumen y los cambios?</li>
+    </ul>
+  </div>
+</section>
+
+<script>
+// Núcleo de sondeo: mismo algoritmo que src/strata.ts.
+const EARTH = ["#b5651d","#c9a227","#6b7f4e","#7c8794","#8c3b2a","#d8cfb4","#4c3d2e","#a0764a","#5d6f78"];
+const hash = t => { let v = 2166136261; for (const c of t) { v ^= c.charCodeAt(0); v = Math.imul(v, 16777619); } return v >>> 0; };
+const rnd = s => { let x = s || 1; return () => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return x / 4294967296; }; };
+function strata(seed, h = 20) {
+  const n = rnd(hash(seed)), count = 4 + Math.floor(n() * 2), out = []; let left = h;
+  for (let i = 0; i < count; i++) {
+    const last = i === count - 1, room = left - 2 * (count - 1 - i);
+    const want = Math.round(h / count + (n() - .5) * (h / 4));
+    const layer = last ? left : Math.max(2, Math.min(room, want));
+    out.push({ height: layer, color: EARTH[Math.floor(n() * EARTH.length)] }); left -= layer;
+  }
+  return out;
+}
+document.querySelectorAll(".core[data-seed]").forEach(el => {
+  const h = el.getBoundingClientRect().height || 40;
+  el.innerHTML = strata(el.dataset.seed, 20).map(s => `<i style="height:${(s.height / 20) * 100}%;background:${s.color}"></i>`).join("");
+  if (!el.style.height && !el.closest(".plain,.chip,.chat-top")) el.style.height = "auto";
+});
+
+// QR de muestra (decorativo, determinista).
+(() => {
+  const svg = document.getElementById("qr"), r = rnd(hash("trex-remoto")); let s = "";
+  const finder = (x, y) => `<rect x="${x}" y="${y}" width="7" height="7" rx="1.2"/><rect x="${x+1}" y="${y+1}" width="5" height="5" rx=".8" style="fill:var(--sidebar);opacity:1"/><rect x="${x+2}" y="${y+2}" width="3" height="3" rx=".5"/>`;
+  for (let y = 0; y < 29; y++) for (let x = 0; x < 29; x++) {
+    const inF = (x < 8 && y < 8) || (x > 20 && y < 8) || (x < 8 && y > 20);
+    if (!inF && r() > .52) s += `<rect x="${x}" y="${y}" width="1" height="1"/>`;
+  }
+  svg.innerHTML = s + finder(0, 0) + finder(22, 0) + finder(0, 22);
+})();
+
+// Personalización.
+const root = document.documentElement;
+const group = (id, fn) => document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => {
+  document.querySelectorAll(`#${id} button`).forEach(x => x.setAttribute("aria-pressed", x === b)); fn(b.dataset.v);
+});
+group("theme", v => root.dataset.theme = v);
+group("density", v => root.dataset.density = v);
+group("refs", v => root.dataset.refs = v);
+const swatches = document.querySelectorAll(".sw");
+const setAccent = (c, from) => {
+  root.style.setProperty("--accent", c);
+  swatches.forEach(s => s.setAttribute("aria-pressed", s === from));
+  document.getElementById("custom").value = c;
+};
+swatches.forEach(s => s.onclick = () => setAccent(s.dataset.c, s));
+document.getElementById("custom").oninput = e => setAccent(e.target.value, null);
+</script>
+</body>
+</html>
