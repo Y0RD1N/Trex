@@ -82,7 +82,7 @@ npm ci
 npm run browser:installer
 ```
 
-Extract `TrexBrowser_0.4.1_linux_x64.tar.xz` into an ordinary, user-owned
+Extract `TrexBrowser_0.5.0_linux_x64.tar.xz` into an ordinary, user-owned
 `$XDG_DATA_HOME/trex-browser` directory (normally
 `~/.local/share/trex-browser`). Keep `trex-browser` and
 `trex-browser-runtime/` together and preserve executable modes. Trex and its
