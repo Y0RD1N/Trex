@@ -1,7 +1,10 @@
 pub mod a11y;
 pub mod a11y_mcp;
+pub mod apps_mcp;
 pub mod artifacts;
 pub mod blender;
+pub mod blender_bridge;
+pub mod blender_live;
 pub mod browser;
 pub mod changes;
 pub mod console;
@@ -14,6 +17,7 @@ pub mod evaluation;
 pub mod github;
 pub mod hyperframes;
 pub mod mcp;
+pub mod mcp_server;
 pub mod processes;
 pub mod profile;
 pub mod project;

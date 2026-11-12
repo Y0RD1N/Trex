@@ -86,12 +86,18 @@ merging follows the session's mutation permissions; merge requires the reviewed
 head SHA. Interrupted or uncertain writes require review before continuing.
 The user's existing `gh` authentication is used and credentials are not printed.
 
-`blender_run` executes an existing workspace Python script in a new background
-Blender process, optionally opening a workspace `.blend` file. It does not
-connect to an already-open Blender window. `hyperframes_run` uses a local or
-global installed CLI to lint, snapshot or render in the project; it does not
-install packages. Both tools require the session's normal mutation permissions
-and are unavailable in planning mode. Check the returned exit status and files.
+Blender: `blender_open`, `blender_scene`, `blender_view`, `blender_exec`, `blender_render`
+and `blender_undo` see and drive a Blender the user has open through Trex's own bridge
+add-on (images come back to the model; the user can pause from Blender's status bar), and
+`blender_run` executes a workspace Python script in a new background Blender process. The
+same tools reach Claude Code, Codex and Antigravity through `trex-agent apps-mcp`.
+HyperFrames: `hyperframes_project`, `hyperframes_docs`, `hyperframes_doctor`,
+`hyperframes_check`, `hyperframes_snapshot` (frames come back as images), `hyperframes_render`,
+`hyperframes_preview` and `hyperframes_init` run the installed HyperFrames CLI directly with
+telemetry, update checks and automatic installs switched off; Trex never installs or updates
+it and exposes no cloud, publish or sign-in command. Planning mode keeps only the read-only
+tools (`blender_scene/view/render`, `hyperframes_project/docs/doctor/check`); everything else
+follows the session's mutation permissions. Check the returned results and files.
 
 Desktop access is separately opt-in: `session/start` accepts `desktopEnabled:true`.
 The grant lasts only for that live session, and reopening without the flag revokes

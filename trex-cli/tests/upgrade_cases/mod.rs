@@ -16,7 +16,7 @@ fn disabled_application_integrations_are_not_advertised_or_executable() {
         "Inspect the enabled capabilities",
     );
     let request = f.api.chat();
-    for name in ["github_", "blender_run", "hyperframes_run"] {
+    for name in ["github_", "blender_", "hyperframes_"] {
         assert!(!request.body["tools"]
             .as_array()
             .unwrap()

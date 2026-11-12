@@ -219,8 +219,9 @@ impl ToolRegistry {
                 processes: processes.clone(),
                 settings: settings.clone(),
             }),
-            Box::new(crate::github::GithubProvider),
+            Box::new(crate::github::GithubProvider::default()),
             Box::new(crate::blender::BlenderProvider),
+            Box::new(crate::blender_live::BlenderLiveProvider::default()),
             Box::new(crate::hyperframes::HyperframesProvider),
         ];
         if let Some(browser) = browser {
@@ -246,9 +247,9 @@ impl ToolRegistry {
     fn enabled(&self, name: &str) -> bool {
         if name.starts_with("github_") {
             self.settings.tools.github && (self.workspace.is_none() || crate::github::available())
-        } else if name == "blender_run" {
+        } else if name.starts_with("blender_") {
             self.settings.tools.blender && (self.workspace.is_none() || crate::blender::available())
-        } else if name == "hyperframes_run" {
+        } else if name.starts_with("hyperframes_") {
             self.settings.tools.hyperframes
                 && self
                     .workspace
@@ -300,7 +301,13 @@ impl ToolRegistry {
     /// Guía de las integraciones conectadas: el escritorio nativo y las
     /// `instructions` de cada servidor MCP (como las recibe Claude Code).
     pub fn guidance(&self, mode: &str) -> Vec<String> {
-        self.providers.iter().filter_map(|provider| provider.guidance(mode)).collect()
+        // Only for providers with a tool this session can really use: a disabled or missing
+        // application must not be mentioned in the system prompt.
+        self.providers
+            .iter()
+            .filter(|provider| provider.definitions(mode).iter().any(|tool| self.enabled(tool_name(tool))))
+            .filter_map(|provider| provider.guidance(mode))
+            .collect()
     }
     pub fn invalidate_observation(&self) {
         for provider in &self.providers {
@@ -491,6 +498,17 @@ pub fn is_mutating(name: &str) -> bool {
             | "github_repos"
             | "github_prs"
             | "github_pr_view"
+            | "github_pr_checks"
+            | "github_issues"
+            | "github_runs"
+            | "github_api"
+            | "blender_scene"
+            | "blender_view"
+            | "blender_render"
+            | "hyperframes_project"
+            | "hyperframes_docs"
+            | "hyperframes_doctor"
+            | "hyperframes_check"
             | "desktop_screenshot"
             | "desktop_status"
             | "desktop_monitors"

@@ -611,7 +611,10 @@ fn application_tools_obey_planning_and_approval_modes() {
             "github_pr_create",
             "github_pr_merge",
             "blender_run",
-            "hyperframes_run",
+            "hyperframes_snapshot",
+            "hyperframes_render",
+            "hyperframes_preview",
+            "hyperframes_init",
         ] {
             if mode == "plan" {
                 assert!(

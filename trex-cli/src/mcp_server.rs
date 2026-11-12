@@ -1,0 +1,217 @@
+//! Per-process MCP adapter around a `ToolProvider`. Reads cancellation and EOF while a tool
+//! is running, replays a repeated request id instead of running it twice, and never starts a
+//! second operation on top of a running one (it rejects it, or queues it when asked to).
+use crate::tools::ToolProvider;
+use anyhow::{ensure, Result};
+use serde_json::{json, Value};
+use std::{
+    collections::{HashMap, VecDeque},
+    io::{self, BufRead, Write},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
+use tokio_util::sync::CancellationToken;
+const MAX_FRAME: usize = 64 * 1024;
+const MAX_CACHED_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CALLS: usize = 1024;
+
+fn frame(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    let mut oversized = false;
+    loop {
+        let data = reader.fill_buf()?;
+        if data.is_empty() {
+            return Ok(if oversized {
+                Some(Vec::new())
+            } else if bytes.is_empty() {
+                None
+            } else {
+                Some(bytes)
+            });
+        }
+        let newline = data.iter().position(|b| *b == b'\n');
+        let n = newline.unwrap_or(data.len());
+        if !oversized {
+            if n > MAX_FRAME.saturating_sub(bytes.len()) {
+                oversized = true;
+                bytes.clear();
+            } else {
+                bytes.extend_from_slice(&data[..n]);
+            }
+        }
+        reader.consume(n + usize::from(newline.is_some()));
+        if newline.is_some() {
+            return Ok(Some(bytes));
+        }
+    }
+}
+fn error(id: Value, code: i32, message: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
+}
+fn write(output: &mut impl Write, response: &Value) -> Result<()> {
+    serde_json::to_writer(&mut *output, response)?;
+    output.write_all(b"\n")?;
+    output.flush()?;
+    Ok(())
+}
+struct Pending {
+    request: Value,
+    cancel: CancellationToken,
+    work: tokio::task::JoinHandle<Result<Value>>,
+}
+fn result(value: Result<Value>, is_uncertain: fn(&anyhow::Error) -> bool) -> Value {
+    match value {
+        Ok(value) if value.get("content").is_some() => value,
+        Ok(value) => {
+            json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
+        }
+        Err(e) => {
+            let uncertain = is_uncertain(&e);
+            let code = if uncertain {
+                "UNCERTAIN"
+            } else if e.to_string().starts_with("cancelled") {
+                "CANCELLED"
+            } else {
+                "FAILED"
+            };
+            json!({"content":[{"type":"text","text":e.to_string()}],"isError":true,"structuredContent":{"error":{"code":code},"manualReview":uncertain}})
+        }
+    }
+}
+
+/// What differs between the servers built on this adapter.
+pub struct Spec {
+    pub server_name: &'static str,
+    /// Used in the messages sent to the client ("Desktop operation in progress…").
+    pub label: &'static str,
+    pub instructions: String,
+    pub read_only: fn(&str) -> bool,
+    pub is_uncertain: fn(&anyhow::Error) -> bool,
+    /// The error for a worker that died mid-operation: its outcome is unknown.
+    pub uncertain_error: fn() -> anyhow::Error,
+    pub cwd: PathBuf,
+    /// Tools whose answer is never replayed from the cache (an image was already delivered).
+    pub no_replay: &'static [&'static str],
+    /// Run overlapping calls one after another instead of rejecting them.
+    pub queue: bool,
+}
+const MAX_QUEUED: usize = 16;
+
+fn start(provider: &Arc<dyn ToolProvider>, spec: &Spec, mode: &str, request: Value) -> Pending {
+    let name = request["params"]["name"].as_str().unwrap_or("").to_owned();
+    let arguments = request["params"].get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let available = provider.definitions(mode).iter().any(|t| t["function"]["name"] == name);
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let service = provider.clone();
+    let mode = mode.to_owned();
+    let key = request["id"].to_string();
+    let cwd = spec.cwd.clone();
+    let work = tokio::spawn(async move {
+        ensure!(available, "Tool unavailable in this permission mode.");
+        service.execute(&cwd, &mode, &name, &arguments, &key, token).await
+    });
+    Pending { request, cancel, work }
+}
+
+pub async fn serve(provider: Arc<dyn ToolProvider>, spec: Spec, mode: &str) -> Result<()> {
+    ensure!(
+        matches!(mode, "plan" | "full"),
+        "{} MCP mode must be plan or full",
+        spec.label.to_lowercase()
+    );
+    let (send, mut receive) = tokio::sync::mpsc::channel(16);
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut input = stdin.lock();
+        loop {
+            match frame(&mut input) {
+                Ok(Some(bytes)) => {
+                    if send.blocking_send(bytes).is_err() {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    });
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    let mut cache: HashMap<String, (Value, Value)> = HashMap::new();
+    let mut cache_bytes = 0usize;
+    let mut active: Option<Pending> = None;
+    let mut queued: VecDeque<Value> = VecDeque::new();
+    loop {
+        tokio::select! {
+            completed = async { (&mut active.as_mut().unwrap().work).await }, if active.is_some() => {
+                let pending = active.take().unwrap();
+                let id = pending.request["id"].clone();
+                let name = pending.request["params"]["name"].as_str().unwrap_or("").to_owned();
+                let result = result(completed.unwrap_or_else(|_| {
+                    if (spec.read_only)(&name) { Err(anyhow::anyhow!("{} worker failed", spec.label.to_lowercase())) }
+                    else { Err((spec.uncertain_error)()) }
+                }), spec.is_uncertain);
+                let response = json!({"jsonrpc":"2.0","id":id,"result":result});
+                // An image (a capture, or what changed after an action) is delivered once and never replayed.
+                let image = response["result"]["content"].as_array().is_some_and(|items| items.iter().any(|item| item["type"] == "image"));
+                let cached = if spec.no_replay.contains(&name.as_str()) || image {
+                    json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"This image response was already delivered; call the tool again with a new request ID."}],"isError":true}})
+                } else { response.clone() };
+                cache_bytes += cached.to_string().len() + pending.request.to_string().len();
+                cache.insert(id.to_string(), (pending.request, cached));
+                write(&mut output, &response)?;
+                if let Some(next) = queued.pop_front() {
+                    active = Some(start(&provider, &spec, mode, next));
+                }
+            }
+            bytes = receive.recv() => {
+                let Some(bytes) = bytes else { break; };
+                let request: Value = match serde_json::from_slice(&bytes) {
+                    Ok(v) => v,
+                    Err(_) => { write(&mut output, &error(Value::Null, -32700, "Invalid or oversized request"))?; continue; }
+                };
+                if request["jsonrpc"] == "2.0" && request["method"] == "notifications/cancelled" && request.get("id").is_none() {
+                    if let Some(pending) = &active {
+                        if request["params"]["requestId"] == pending.request["id"] { pending.cancel.cancel(); }
+                    }
+                    queued.retain(|waiting| waiting["id"] != request["params"]["requestId"]);
+                    continue;
+                }
+                let Some(id) = request.get("id").filter(|id| id.is_string() || id.is_number()).cloned() else { continue; };
+                let method = request["method"].as_str().unwrap_or("");
+                let response = if request["jsonrpc"] != "2.0" { error(id.clone(), -32600, "Invalid request") }
+                else if method == "initialize" { json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":spec.server_name,"version":"0.1.0"},"instructions":spec.instructions}}) }
+                else if method == "ping" { json!({"jsonrpc":"2.0","id":id,"result":{}}) }
+                else if method == "tools/list" {
+                    let tools: Vec<Value> = provider.definitions(mode).into_iter().map(|v| {
+                        let f = &v["function"]; let read_only = (spec.read_only)(f["name"].as_str().unwrap_or(""));
+                        json!({"name":f["name"],"description":f["description"],"inputSchema":f["parameters"],"annotations":{"readOnlyHint":read_only,"destructiveHint":!read_only,"idempotentHint":false,"openWorldHint":true}})
+                    }).collect();
+                    json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}})
+                }
+                else if method == "tools/call" {
+                    if let Some((prior, response)) = cache.get(&id.to_string()) {
+                        if prior == &request { response.clone() } else { error(id.clone(), -32600, "Tool request ID was already used with different arguments") }
+                    } else if let Some(pending) = &active {
+                        if pending.request == request || queued.contains(&request) { continue; }
+                        if pending.request["id"] == id || queued.iter().any(|waiting| waiting["id"] == id) { error(id.clone(), -32600, "Tool request ID was already used with different arguments") }
+                        else if spec.queue && queued.len() < MAX_QUEUED { queued.push_back(request); continue; }
+                        else { error(id.clone(), -32001, &format!("{} operation in progress; this request was not started", spec.label)) }
+                    } else if cache.len() >= MAX_CALLS || cache_bytes >= MAX_CACHED_BYTES - MAX_FRAME - 4096 {
+                        error(id.clone(), -32000, &format!("{} session operation limit reached; restart the session", spec.label))
+                    } else {
+                        active = Some(start(&provider, &spec, mode, request));
+                        continue;
+                    }
+                } else { error(id.clone(), -32601, "Unknown method") };
+                write(&mut output, &response)?;
+            }
+        }
+    }
+    if let Some(mut pending) = active {
+        pending.cancel.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(2), &mut pending.work).await;
+    }
+    Ok(())
+}

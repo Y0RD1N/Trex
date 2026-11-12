@@ -20,6 +20,29 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum BridgeAction {
+    /// Blender found, add-on state and running bridge sessions.
+    Status,
+    /// Install the add-on into Blender and enable it (keeps the user's other preferences).
+    Install,
+    /// Disable and remove the add-on.
+    Uninstall,
+    /// Open Blender with the bridge (the user watches it); no change to their preferences.
+    Open {
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum HyperframesAction {
+    /// Installed version, what blocks work, and the state of the agent skills.
+    Status,
+    /// Install or update the HyperFrames skills in the user's agent folders (explicit action).
+    SkillsUpdate,
+}
+
+#[derive(Subcommand)]
 enum Command {
     Profiles {
         #[command(subcommand)]
@@ -82,6 +105,31 @@ enum Command {
     DesktopMcp {
         #[arg(long)]
         mode: String,
+    },
+    /// Application control (Blender today) as an MCP server for one session.
+    AppsMcp {
+        #[arg(long, value_parser = ["plan", "full"])]
+        mode: String,
+        /// The project folder: where `blender_open` may open files from and HyperFrames runs.
+        #[arg(long)]
+        cwd: PathBuf,
+        /// Comma-separated applications this session gets: blender, hyperframes, github.
+        #[arg(long, default_value = "blender")]
+        apps: String,
+    },
+    /// Manage Trex's Blender bridge: status, installing it into Blender's add-ons, removing it,
+    /// and opening Blender with it. Prints JSON.
+    BlenderBridge {
+        #[command(subcommand)]
+        action: BridgeAction,
+    },
+    /// HyperFrames status for Settings, and installing its skills. Prints JSON.
+    Hyperframes {
+        #[command(subcommand)]
+        action: HyperframesAction,
+        /// The project folder (where a project-local install is looked for).
+        #[arg(long)]
+        cwd: PathBuf,
     },
     /// Inspect desktop availability without capturing the screen or sending input.
     DesktopDoctor {
@@ -598,7 +646,27 @@ async fn run() -> Result<()> {
             print_json(&result)?;
         }
         Command::AppServer => server::run(selected(cli.profile)?).await?,
+        Command::BlenderBridge { action } => {
+            let dir = trex_agent::blender_live::bridge_dir().context("no per-user state directory")?;
+            let cancel = tokio_util::sync::CancellationToken::new();
+            print_json(&match action {
+                BridgeAction::Status => trex_agent::blender_bridge::status(&dir, &cancel).await?,
+                BridgeAction::Install => trex_agent::blender_bridge::change("install", &dir, &cancel).await?,
+                BridgeAction::Uninstall => trex_agent::blender_bridge::change("uninstall", &dir, &cancel).await?,
+                BridgeAction::Open { file } => trex_agent::blender_bridge::open(&dir, file, &cancel).await?,
+            })?
+        }
+        Command::Hyperframes { action, cwd } => {
+            anyhow::ensure!(cwd.is_absolute() && cwd.is_dir(), "--cwd must be an existing absolute directory");
+            let root = cwd.canonicalize()?;
+            let cancel = tokio_util::sync::CancellationToken::new();
+            print_json(&match action {
+                HyperframesAction::Status => trex_agent::hyperframes::admin_status(&root, &cancel).await?,
+                HyperframesAction::SkillsUpdate => trex_agent::hyperframes::admin_skills_update(&root, &cancel).await?,
+            })?
+        }
         Command::DesktopMcp { mode } => trex_agent::desktop_mcp::serve(&mode).await?,
+        Command::AppsMcp { mode, cwd, apps } => trex_agent::apps_mcp::serve(&mode, cwd, &trex_agent::apps_mcp::App::parse_list(&apps)?).await?,
         Command::DesktopDoctor { json: _ } => print_json(&trex_agent::desktop::doctor().await?)?,
         Command::A11yMcp { mode, engine: _, keyboard } => tokio::task::spawn_blocking(move || trex_agent::a11y_mcp::serve(&mode, keyboard)).await??,
         Command::A11yDoctor { json: _ } => print_json(&tokio::task::spawn_blocking(trex_agent::a11y_mcp::doctor).await?)?,
