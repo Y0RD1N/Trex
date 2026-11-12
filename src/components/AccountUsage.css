@@ -1,8 +1,8 @@
-/* --- Uso de las cuentas, en órbitas --------------------------------------------
+/* --- Uso de las cuentas, como un cuaderno de campo ------------------------------
    Cada cuenta lleva el tono de su asistente (siempre junto a su nombre e
    icono, nunca solo el color). Aviso (≥ 75 %) y crítico (≥ 90 %) usan los
-   colores de estado con su icono. La rayita de cada barra marca cuánto ha
-   pasado de la ventana. */
+   colores de estado con su glifo ▲. Las barras son celdas de la retícula y la
+   celda con contorno marca cuánto ha pasado de la ventana. */
 /* Mini órbita de la pestaña */
 .usage-glyph { flex: 0 0 auto; overflow: visible; }
 .usage-glyph-spin { color: var(--text); transform-origin: 10px 10px; animation: usage-spin 1.2s linear infinite; }
@@ -22,49 +22,71 @@
 .usage-panel { display: flex; flex-direction: column; gap: var(--sp-2-5); padding: var(--sp-3); }
 .usage-panel > * { flex-shrink: 0; }
 
-/* Órbitas */
-.usage-hero {
-  position: relative;
-  overflow: hidden;
-  padding: var(--sp-3) var(--sp-3) var(--sp-2-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background:
-    radial-gradient(120px 90px at 50% 40%, color-mix(in srgb, var(--usage-claude) 15%, transparent), transparent 70%),
-    radial-gradient(150px 110px at 25% 28%, color-mix(in srgb, var(--usage-codex) 10%, transparent), transparent 70%),
-    radial-gradient(150px 110px at 78% 58%, color-mix(in srgb, var(--usage-agy) 10%, transparent), transparent 70%),
-    var(--bg-elevated);
-}
-.usage-hero-stars {
+/* Cabecera: la lectura más alta y la regla ------------------------------------- */
+.usage-hero { position: relative; padding: var(--sp-3-5) var(--sp-3-5) var(--sp-2-5); border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--bg-elevated); }
+/* Regla con etiqueta: «USO · 3 CUENTAS ───── ↻ hace 1 min» */
+.usage-rule { display: flex; align-items: center; gap: var(--sp-2); color: var(--text-dim); font: var(--fw-medium) var(--fs-xs)/1.4 var(--font-mono); }
+.usage-rule > span { text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.usage-rule::after { content: ""; flex: 1; order: 1; min-width: var(--sp-3); border-top: 1px solid var(--border); }
+.usage-rule > em { order: 2; font-style: normal; white-space: nowrap; }
+.usage-hero-read { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3); }
+.usage-hero-read > strong { flex: 0 0 auto; color: var(--text); font: var(--fw-semibold) 44px/1 var(--font-mono); letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.usage-hero-read > strong small { font-size: 22px; letter-spacing: 0; }
+.usage-hero-read.is-warning > strong { color: var(--warn-text); }
+.usage-hero-read.is-critical > strong { color: var(--danger-text); }
+.usage-hero-read > div { display: grid; gap: 3px; min-width: 0; }
+.usage-hero-read b { overflow: hidden; color: var(--text); font-size: var(--fs-sm); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.usage-hero-read > div > span { color: var(--text-dim); font: var(--fs-xs) var(--font-mono); white-space: nowrap; }
+.usage-hero-state.is-warning { color: var(--warn-text) !important; }
+.usage-hero-state.is-critical { color: var(--danger-text) !important; }
+
+/* Regla de 0 a 100: una banderita por cuenta. La geometría (fila de cada
+   etiqueta y punto exacto del mástil) sale de layoutFlags en usageRuler.ts. */
+.usage-ruler { padding: var(--sp-3-5) 4px 0; }
+.usage-ruler-track { position: relative; height: calc(var(--ruler-baseline) + 18px); }
+.usage-flag.is-measuring { visibility: hidden; }
+.usage-flag.is-measuring em { transform: translateX(-50%); }
+.usage-flag em {
   position: absolute;
-  inset: 0;
-  opacity: var(--usage-stars);
-  pointer-events: none;
-  background-image:
-    radial-gradient(1px 1px at 12% 18%, rgb(255 255 255 / .35), transparent 60%),
-    radial-gradient(1px 1px at 86% 12%, rgb(255 255 255 / .25), transparent 60%),
-    radial-gradient(1px 1px at 93% 50%, rgb(255 255 255 / .3), transparent 60%),
-    radial-gradient(1px 1px at 6% 60%, rgb(255 255 255 / .2), transparent 60%),
-    radial-gradient(1.5px 1.5px at 18% 84%, rgb(255 255 255 / .25), transparent 60%),
-    radial-gradient(1px 1px at 72% 88%, rgb(255 255 255 / .2), transparent 60%);
+  z-index: 2;
+  top: var(--flag-top);
+  left: var(--flag-left);
+  max-width: 132px;
+  height: 19px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--hue) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--hue) 16%, var(--bg-elevated));
+  color: var(--text);
+  font: var(--fw-medium) var(--fs-xs)/17px var(--font-mono);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.usage-hero-kicker { position: relative; display: flex; justify-content: space-between; gap: var(--sp-2); color: var(--text-dim); font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: .05em; text-transform: uppercase; }
-.usage-hero-orbits { position: relative; display: block; margin: var(--sp-1) auto var(--sp-1-5); overflow: visible; }
-.usage-hero-arc { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--hue) var(--usage-glow), transparent)); transition: stroke-dasharray var(--dur) var(--ease-out); }
-.usage-hero-moon { stroke: var(--usage-moon); opacity: .9; }
-.usage-hero-orbits .is-stale { opacity: .55; }
-.usage-hero-value { fill: var(--text); font: var(--fw-semibold) 28px/1 var(--font-sans); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.usage-hero-caption { fill: var(--text-dim); font: 11px var(--font-sans); }
-.usage-hero-legend { position: relative; display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
-.usage-hero-legend li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); line-height: 1.5; }
-.usage-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 0 2px var(--bg-elevated); }
-.usage-hero-name { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
-.usage-hero-legend em { color: var(--text-dim); font-size: var(--fs-xs); font-style: normal; white-space: nowrap; }
-.usage-hero-legend b { min-width: 36px; color: var(--text); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; text-align: right; }
-.usage-hero-legend b.is-stale { color: var(--text-muted); }
+.usage-flag i { position: absolute; z-index: 1; top: calc(var(--flag-top) + 19px); left: var(--flag-stem); width: 1.5px; height: calc(var(--ruler-baseline) - var(--flag-top) - 19px); margin-left: -.75px; background: var(--hue); }
+.usage-flag i::after { content: ""; position: absolute; bottom: -4.5px; left: 50%; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 0 2px var(--bg-elevated); }
+.usage-flag.is-stale { opacity: .55; }
+/* Marcas cada 5 y, más largas, cada 25. */
+.usage-ruler-scale {
+  position: absolute;
+  top: calc(var(--ruler-baseline) - 14px);
+  right: 0;
+  left: 0;
+  height: 14px;
+  border-right: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  background:
+    repeating-linear-gradient(to right, var(--border-strong) 0 1px, transparent 1px 25%) bottom / 100% 14px no-repeat,
+    repeating-linear-gradient(to right, var(--border) 0 1px, transparent 1px 5%) bottom / 100% 6px no-repeat;
+}
+.usage-ruler-numbers { position: absolute; top: calc(var(--ruler-baseline) + 4px); right: 0; left: 0; color: var(--text-dim); font: var(--fs-xs)/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.usage-ruler-numbers > span { position: absolute; transform: translateX(-50%); }
+.usage-ruler-numbers > span:first-child { transform: none; }
+.usage-ruler-numbers > span:last-child { transform: translateX(-100%); }
 
 /* Frescura y «Actualizar» */
-.usage-fresh { display: flex; align-items: center; gap: var(--sp-2); min-height: 26px; color: var(--text-dim); font-size: var(--fs-xs); }
+.usage-fresh { display: flex; align-items: center; gap: var(--sp-2); min-height: 26px; color: var(--text-dim); font: var(--fs-xs) var(--font-mono); }
 .usage-fresh-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); }
 .usage-fresh-dot.is-live { background: var(--ok-text); box-shadow: 0 0 0 3px var(--ok-bg); }
 .usage-refresh {
@@ -78,14 +100,14 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-muted);
-  font-size: var(--fs-xs);
+  font: var(--fs-xs) var(--font-sans);
   cursor: pointer;
 }
 .usage-refresh:hover:not([aria-disabled="true"]) { background: var(--hover); color: var(--text); }
 .usage-refresh[aria-disabled="true"] { opacity: .55; cursor: default; }
 
-/* Tarjeta de cada cuenta */
-.usage-card { position: relative; overflow: hidden; padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elevated); }
+/* Cada cuenta: cabecera y sus ventanas en árbol ------------------------------- */
+.usage-card { position: relative; overflow: hidden; padding: var(--sp-3) var(--sp-3) var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elevated); }
 .usage-card.is-loading::after {
   content: "";
   position: absolute;
@@ -100,39 +122,39 @@
 .usage-card-icon .agent-icon { color: inherit; }
 .usage-card-identity { min-width: 0; }
 .usage-card-identity h3 { margin: 0; overflow: hidden; color: var(--text); font-size: var(--fs-md); font-weight: var(--fw-semibold); line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
-.usage-card-meta { overflow: hidden; color: var(--text-dim); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
-.usage-card-meta code { font: var(--fs-xs) var(--font-mono); }
-.usage-card-plan { padding: 2px 7px; border-radius: var(--radius-sm); background: var(--bg-inset); color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-semibold); white-space: nowrap; }
+.usage-card-meta { overflow: hidden; color: var(--text-dim); font: var(--fs-xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.usage-card-meta code { font: inherit; }
+.usage-card-plan { padding: 2px 7px; border-radius: var(--radius-sm); background: var(--bg-inset); color: var(--text-muted); font: var(--fw-semibold) var(--fs-xs) var(--font-mono); white-space: nowrap; }
 .usage-card-spin { display: inline-grid; color: var(--text-dim); animation: usage-spin 1.2s linear infinite; }
-.usage-windows { display: grid; gap: var(--sp-3); margin: var(--sp-3) 0 0; padding: 0; list-style: none; }
-.usage-window-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); color: var(--text-muted); font-size: var(--fs-sm); }
+
+/* Ramas «├─ └─» dibujadas con líneas, alineadas con la fila de cada ventana. */
+.usage-windows { display: grid; margin: var(--sp-2-5) 0 0; padding: 0; list-style: none; }
+.usage-window { position: relative; padding: 0 0 var(--sp-1) 22px; }
+.usage-window::before { content: ""; position: absolute; top: 0; bottom: 0; left: 5px; border-left: 1px solid var(--border-strong); }
+.usage-window:last-child::before { bottom: auto; height: 10px; }
+.usage-window::after { content: ""; position: absolute; top: 10px; left: 5px; width: 11px; border-top: 1px solid var(--border-strong); }
+.usage-window-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); min-height: 20px; color: var(--text-muted); font: var(--fs-sm) var(--font-mono); }
 .usage-window-head > span { min-width: 0; overflow-wrap: anywhere; }
-.usage-window-head b { display: inline-flex; align-items: center; gap: 3px; color: var(--text); font-size: 15px; font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-window-head b { flex: 0 0 auto; color: var(--text); font-size: 13px; font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .usage-window.is-warning .usage-window-head b { color: var(--warn-text); }
 .usage-window.is-critical .usage-window-head b { color: var(--danger-text); }
-.usage-meter { position: relative; height: 6px; margin-top: 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--hue) 16%, transparent); }
-.usage-meter > i {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: var(--radius-pill);
-  background: linear-gradient(90deg, color-mix(in srgb, var(--hue) 70%, var(--bg-app)), var(--hue));
-  box-shadow: 0 0 10px -2px color-mix(in srgb, var(--hue) 70%, transparent);
-  transition: width var(--dur) var(--ease-out);
-}
-.usage-window.is-warning .usage-meter > i { background: var(--warn); box-shadow: none; }
-.usage-window.is-critical .usage-meter > i { background: var(--danger); box-shadow: none; }
-.usage-meter > u { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text-muted); box-shadow: 0 0 0 2px var(--bg-elevated); }
-.usage-window small { display: flex; justify-content: space-between; gap: var(--sp-2); margin-top: 3px; color: var(--text-dim); font-size: var(--fs-xs); }
+.usage-window small { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--sp-1-5); min-height: 20px; color: var(--text-dim); font: var(--fs-xs) var(--font-mono); }
 .usage-pace { flex: 0 0 auto; }
 .usage-pace.is-easy { color: var(--ok-text); }
 .usage-pace.is-even { color: var(--text-muted); }
 .usage-pace.is-fast { color: var(--warn-text); }
-.usage-card.is-stale .usage-meter > i { opacity: .55; }
-.usage-card-error { margin: var(--sp-2-5) 0 0; color: var(--danger-text); font-size: var(--fs-sm); overflow-wrap: anywhere; }
-.usage-card-skeleton { display: grid; gap: var(--sp-2); margin-top: var(--sp-3); }
-.usage-card-skeleton i { display: block; height: 6px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--hue) 14%, transparent); }
-.usage-card-skeleton i + i { width: 60%; }
-.usage-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1-5); margin-top: var(--sp-2-5); }
+
+/* 25 celdas de 4 %; la celda con contorno es el tiempo transcurrido. */
+.usage-cells { display: grid; grid-template-columns: repeat(25, minmax(0, 1fr)); gap: 2px; max-width: 280px; margin: 3px 0 2px; }
+.usage-cells > i { height: 12px; border-radius: 2.5px; background: color-mix(in srgb, var(--hue) 14%, var(--bg-inset)); transition: background-color var(--dur) var(--ease-out); }
+.usage-cells > i.on { background: var(--hue); }
+.usage-window.is-warning .usage-cells > i.on { background: var(--warn); }
+.usage-window.is-critical .usage-cells > i.on { background: var(--danger); }
+.usage-cells > i.t { outline: 1.5px solid var(--text); outline-offset: 1px; }
+.usage-card.is-stale .usage-cells > i.on { opacity: .55; }
+.usage-card-error { margin: var(--sp-2-5) 0 var(--sp-1); color: var(--danger-text); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.usage-card-skeleton { display: grid; gap: var(--sp-2-5); margin: var(--sp-3) 0 var(--sp-1); }
+.usage-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1-5); margin: var(--sp-1-5) 0 var(--sp-1); }
 .usage-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px var(--sp-2); border-radius: var(--radius-pill); background: var(--bg-inset); color: var(--text-muted); font-size: var(--fs-xs); }
 
 /* Cuentas sin límites: un bloque discreto, no una tarjeta cada una */
@@ -145,8 +167,10 @@
 .usage-quiet-name code { margin-left: var(--sp-1-5); color: var(--text-dim); font: var(--fs-xs) var(--font-mono); }
 .usage-quiet-note { color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
 
-.usage-legend { display: flex; align-items: flex-start; gap: var(--sp-2); margin: 0 2px; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
-.usage-legend u { flex: 0 0 auto; width: 2px; height: 12px; margin-top: 2px; border-radius: 1px; background: var(--text-muted); }
+.usage-legend { display: flex; flex-wrap: wrap; gap: var(--sp-1-5) var(--sp-3-5); margin: 0 2px; color: var(--text-dim); font: var(--fs-xs)/1.45 var(--font-mono); }
+.usage-legend > span { display: inline-flex; align-items: center; gap: var(--sp-1-5); }
+.usage-legend i { flex: 0 0 auto; width: 9px; height: 12px; border-radius: 2.5px; background: var(--text-dim); }
+.usage-legend i.t { width: 7px; height: 10px; margin: 0 1px; background: transparent; outline: 1.5px solid var(--text); outline-offset: 1px; }
 .usage-none { padding: var(--sp-5) var(--sp-4); border-radius: var(--radius-lg); background: var(--bg-inset); text-align: center; }
 .usage-none h3 { margin: 0; font-size: var(--fs-base); }
 .usage-none p { margin: var(--sp-2) 0 0; color: var(--text-muted); font-size: var(--fs-sm); }

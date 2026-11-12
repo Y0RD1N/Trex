@@ -106,9 +106,6 @@
     --usage-codex-2: #78aef0;
     --usage-agy: #199e70;
     --usage-agy-2: #4cc296;
-    --usage-moon: #ffffff;
-    --usage-glow: 55%;
-    --usage-stars: 1;
   }
 
   /* --- Color: modo claro ------------------------------------------------- */
@@ -195,9 +192,6 @@
     --usage-codex-2: #2563b8;
     --usage-agy: #199e70;
     --usage-agy-2: #10734f;
-    --usage-moon: var(--bg-surface);
-    --usage-glow: 0%;
-    --usage-stars: 0;
   }
 
   /* --- Escalas independientes del modo ---------------------------------- */
