@@ -1,6 +1,7 @@
 //! The app executable can also run as a small, newline-delimited MCP server.
 //! Reading claims a durable receipt; only the frontend acknowledges delivery.
 use crate::coordination;
+use crate::memory;
 use crate::message_queue::{list_in, read_in};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -48,6 +49,11 @@ pub struct Peer {
 
 fn is_coordination(name: &Value) -> bool {
     name.as_str().is_some_and(|name| coordination::TOOLS.contains(&name))
+}
+
+/// Memoria de Trex (ver `memory.rs`): como la coordinación, necesita el proyecto de la sesión.
+fn is_memory(name: &Value) -> bool {
+    name.as_str().is_some_and(|name| memory::TOOLS.contains(&name))
 }
 
 /// Return true for every invocation of this mode, including invalid arguments,
@@ -267,6 +273,8 @@ fn serve_tools(
     // create an inbox or claim pending messages.
     list_in(data_dir, queue_id)?;
     let mut replies = HashMap::new();
+    // Quién usa el servidor (codex, trex-agent…): la procedencia de lo que guarde en la memoria.
+    let mut client: Option<String> = None;
     while let Some(frame) = read_frame(&mut reader)
         .map_err(|error| format!("No se pudo leer una petición MCP: {error}"))?
     {
@@ -283,7 +291,19 @@ fn serve_tools(
                     let name = &request["params"]["name"];
                     let coordination = peer.is_some() && is_coordination(name);
                     let method = request.get("method").and_then(Value::as_str).unwrap_or_default().to_owned();
-                    if scope == Scope::Tasks && method == "tools/call" && name != TASK_TOOL && !coordination {
+                    if method == "initialize" {
+                        client = request["params"]["clientInfo"]["name"].as_str().map(|name| name.chars().take(40).collect());
+                    }
+                    let remembered = method == "tools/call" && peer.is_some() && is_memory(name);
+                    if remembered {
+                        // Las herramientas de memoria no tocan la cola: valen en cualquier conexión con sesión.
+                        request.get("id").cloned().filter(|id| id.is_string() || id.is_number()).map(|id| {
+                            let peer = peer.expect("comprobado arriba");
+                            let source = format!("{} · sesión {}", client.as_deref().unwrap_or("agente"), peer.session);
+                            let args = request["params"].get("arguments").cloned().unwrap_or(Value::Null);
+                            json!({"jsonrpc":"2.0","id":id,"result":memory::call(data_dir, Some(&peer.project), &source, name.as_str().unwrap_or_default(), &args)})
+                        })
+                    } else if scope == Scope::Tasks && method == "tools/call" && name != TASK_TOOL && !coordination {
                         request.get("id").cloned().map(|id| rpc_error(id, -32601, "Esta conexión solo ofrece trex_update_tasks."))
                     } else if scope == Scope::Peers && method == "tools/call" && !coordination {
                         request.get("id").cloned().map(|id| rpc_error(id, -32601, "Esta conexión solo ofrece la coordinación entre sesiones."))
@@ -293,7 +313,7 @@ fn serve_tools(
                         match (scope, method.as_str(), result) {
                             (Scope::Tasks | Scope::Peers, "tools/list", Some(result)) => {
                                 if let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) {
-                                    tools.retain(|t| (scope == Scope::Tasks && t["name"] == TASK_TOOL) || is_coordination(&t["name"]));
+                                    tools.retain(|t| (scope == Scope::Tasks && t["name"] == TASK_TOOL) || is_coordination(&t["name"]) || is_memory(&t["name"]));
                                 }
                             }
                             (Scope::Peers, "initialize", Some(result)) => result["instructions"] = json!(PEERS_INSTRUCTIONS),
@@ -413,6 +433,10 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str, peer: Option<
             }), task_tool()];
             if peer.is_some() {
                 tools.extend(coordination::tools());
+                // Con la memoria apagada (panel Memoria) sus herramientas no se ofrecen.
+                if memory::enabled(data_dir) {
+                    tools.extend(memory::tools());
+                }
             }
             json!({"tools": tools})
         }
@@ -634,7 +658,7 @@ mod tests {
         serve_tools(Cursor::new(lines(&requests)), &mut output, &dir.0, QUEUE, Scope::Tasks, Some(&peer)).unwrap();
         let replies = parse(output);
         let names: Vec<&str> = replies[0]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, [TASK_TOOL, "trex_peers", "trex_claim", "trex_release", "trex_message"]);
+        assert_eq!(names, [TASK_TOOL, "trex_peers", "trex_claim", "trex_release", "trex_message", "trex_memory_search", "trex_memory_read", "trex_memory_save", "trex_memory_forget"]);
         assert_eq!(replies[1]["result"]["isError"], false, "{}", replies[1]);
         assert!(replies[1]["result"]["content"][0]["text"].as_str().unwrap().contains("recurso git"));
         assert!(replies[2]["result"]["content"][0]["text"].as_str().unwrap().contains("Tus reservas: recurso git"));
@@ -645,6 +669,31 @@ mod tests {
         let replies = parse(output);
         assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 2);
         assert!(replies[1].get("error").is_some());
+    }
+
+    #[test]
+    fn memory_tools_need_a_session_and_record_who_saved() {
+        let dir = TestDir::new();
+        let project = if cfg!(windows) { "D:\\Mi proyecto" } else { "/home/ana/Mi proyecto" };
+        let peer = Peer { session: "tab-7".into(), project: project.into() };
+        let save = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trex_memory_save","arguments":{
+            "name":"usa-pnpm","scope":"project","type":"project","description":"El repo usa pnpm","body":"Usa pnpm, no npm."}}});
+        let requests = [json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"codex-mcp-client","version":"1"}}}),
+            save.clone(),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"trex_memory_read","arguments":{"name":"usa-pnpm","scope":"project"}}})];
+        let input = requests.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
+        let mut output = Vec::new();
+        serve_tools(Cursor::new(input), &mut output, &dir.0, QUEUE, Scope::Tasks, Some(&peer)).unwrap();
+        let replies: Vec<Value> = output.split(|b| *b == b'\n').filter(|v| !v.is_empty()).map(|v| serde_json::from_slice(v).unwrap()).collect();
+        assert_eq!(replies[1]["result"]["isError"], false, "{}", replies[1]);
+        assert!(replies[2]["result"]["content"][0]["text"].as_str().unwrap().contains("Usa pnpm, no npm."));
+        let stored = memory::Store::open(&dir.0, Some(project)).unwrap().list().unwrap().0;
+        assert_eq!(stored[0].source.as_deref(), Some("codex-mcp-client · sesión tab-7"));
+        // Sin sesión (sin proyecto) no se ofrecen ni se ejecutan.
+        let mut output = Vec::new();
+        serve_tools(Cursor::new(save.to_string() + "\n"), &mut output, &dir.0, QUEUE, Scope::All, None).unwrap();
+        let reply: Value = serde_json::from_slice(output.split(|b| *b == b'\n').next().unwrap()).unwrap();
+        assert!(reply.get("error").is_some(), "{reply}");
     }
 
     #[test]
@@ -663,7 +712,7 @@ mod tests {
         let replies: Vec<Value> = output.split(|b| *b == b'\n').filter(|v| !v.is_empty()).map(|v| serde_json::from_slice(v).unwrap()).collect();
         assert_eq!(replies[0]["result"]["instructions"], PEERS_INSTRUCTIONS);
         let names: Vec<&str> = replies[1]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["trex_peers", "trex_claim", "trex_release", "trex_message"]);
+        assert_eq!(names, ["trex_peers", "trex_claim", "trex_release", "trex_message", "trex_memory_search", "trex_memory_read", "trex_memory_save", "trex_memory_forget"]);
         assert_eq!(replies[2]["error"]["code"], -32601, "Trex CLI keeps its own task list");
         assert_eq!(replies[3]["error"]["code"], -32601, "and its own inbox");
         assert_eq!(replies[4]["result"]["isError"], false, "{}", replies[4]);

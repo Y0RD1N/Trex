@@ -4,6 +4,8 @@ import test from "node:test";
 import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 const deps = Object.fromEntries(await Promise.all(["chatState", "chatTimes", "autoCompact", "messageQueue", "trexChat", "chatTasks", "integrations", "accessibility", "sharedFiles"].map(async name => ["../" + name, await load(name)])));
+// Trex memory stays off (MEMORY_OFF): no native call and no wait before spawning.
+deps["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory"));
 const source = await readFile(new URL("../src/hooks/useTrexChat.ts", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 const compile = new Function("require", "exports", "crypto", compiled);

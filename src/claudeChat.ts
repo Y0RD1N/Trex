@@ -25,6 +25,7 @@ import { taskToolInput } from "./taskTools";
 import { addApiUsage, claudeApiUsage, type ApiUsage } from "./tokenUsage";
 import { stampItems } from "./chatTimes";
 import { integrationInstructions, type IntegrationContext } from "./integrations";
+import { claudeMemoryInstructions, claudeMemorySettings, type SessionMemory } from "./memory";
 
 export type ChatAction =
   | BaseChatAction
@@ -49,7 +50,7 @@ export const claudeAppendsInstructions = (profileArgs: string | null): boolean =
 
 /** Opciones que convierten el CLI en un proceso de chat por stdin/stdout. */
 export function claudeChatFlags(profileArgs: string | null, conversationId: string | null,
-  choices: { model?: string | null; effort?: string | null; mode?: string | null; integrations?: IntegrationContext; rolePolicy?: string | null } = {}): string[] {
+  choices: { model?: string | null; effort?: string | null; mode?: string | null; integrations?: IntegrationContext; rolePolicy?: string | null; memory?: SessionMemory | null } = {}): string[] {
   const flags = [
     "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--include-partial-messages",
@@ -67,9 +68,13 @@ export function claudeChatFlags(profileArgs: string | null, conversationId: stri
     // Plan mode and its permission checks stay; only the way out of plan mode is removed.
     const rolePolicy = choices.rolePolicy?.replace(/\s+/g, " ").replace(/"/g, "'").trim() || null;
     flags.push("--append-system-prompt", [FILE_SHARING_INSTRUCTIONS, questionInstructions("claude"), INBOX_INSTRUCTIONS, taskInstructions("claude"), PEER_INSTRUCTIONS,
-      integrationInstructions("claude", choices.integrations), rolePolicy].filter(Boolean).join(" "));
+      integrationInstructions("claude", choices.integrations), rolePolicy, claudeMemoryInstructions(choices.memory ?? null)].filter(Boolean).join(" "));
     if (rolePolicy) flags.push("--disallowedTools", "ExitPlanMode");
   }
+  // Memoria de Trex: la memoria automática del proyecto es la carpeta compartida con los demás
+  // agentes, salvo que el perfil ya traiga sus propios ajustes.
+  const memorySettings = claudeMemorySettings(choices.memory ?? null);
+  if (memorySettings && !/(^|\s)--settings(\s|=|$)/.test(profileArgs ?? "")) flags.push("--settings", memorySettings);
   const choosesConversation = /(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(profileArgs ?? "");
   if (conversationId && !choosesConversation) flags.push("--resume", conversationId);
   // Al reanudar el proceso se conserva lo que se eligió en el chat.

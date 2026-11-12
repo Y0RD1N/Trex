@@ -31,3 +31,6 @@
 .integration-engine small { color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.45; }
 .integration-engine-dot { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 2px; border: 1.5px solid var(--border-strong); border-radius: 50%; transition: border-color var(--t), box-shadow var(--t); }
 .integration-engine[aria-checked="true"] .integration-engine-dot { border-color: var(--accent-strong); box-shadow: inset 0 0 0 3px var(--bg-surface), inset 0 0 0 8px var(--accent-strong); }
+/* Blender en vivo: estado del puente y sus acciones. */
+.integration-bridge-lines { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.5; }
+.integration-bridge-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }

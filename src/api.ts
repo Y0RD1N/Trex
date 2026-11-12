@@ -1,3 +1,5 @@
+import type { BlenderBridgeStatus, BridgeAction } from "./blenderBridge";
+import type { HyperframesAction, HyperframesStatus } from "./hyperframesStatus";
 import type { BrowserStatus, BrowserConfig, BrowserCall, BrowserResult, BrowserMode, BrowserProfile, BrowserOptions, BrowserSpace } from "./browser";
 import { validBrowserProfile, browserSpaceLabel } from "./browser";
 import { DEFAULT_INTEGRATIONS, normalizeIntegrations } from "./integrations";
@@ -618,6 +620,11 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
 
 export const trexBrowserStatus = (): Promise<BrowserStatus> => invoke("trex_browser_status");
 export const trexDesktopMcpConfig = (mode: BrowserMode): Promise<BrowserConfig> => invoke("trex_desktop_mcp_config", { mode });
+/** Estado de HyperFrames y, solo a petición, instalar o actualizar sus skills (escribe en las carpetas de skills de los agentes). */
+export const hyperframesAdmin = (action: HyperframesAction, cwd: string): Promise<HyperframesStatus> => invoke("hyperframes_admin", { action, cwd });
+/** Estado e instalación del puente con Blender; `open` arranca Blender con el puente (hasta un minuto). */
+export const blenderBridge = (action: BridgeAction, file?: string): Promise<BlenderBridgeStatus> => invoke("blender_bridge", { action, file: file ?? null });
+export const trexAppsMcpConfig = (mode: BrowserMode, cwd: string, apps: string[]): Promise<BrowserConfig> => invoke("trex_apps_mcp_config", { mode, cwd, apps });
 export const trexA11yMcpConfig = (mode: BrowserMode): Promise<BrowserConfig> => invoke("trex_a11y_mcp_config", { mode });
 export const trexBrowserMcpConfig = (cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserConfig> => invoke("trex_browser_mcp_config", { cwd, mode, clientId, profile });
 export const trexBrowserCall = (request: BrowserCall): Promise<BrowserResult> => invoke("trex_browser_call", { request });

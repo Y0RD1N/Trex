@@ -503,6 +503,22 @@ pub async fn trex_cli_conversations(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_application_list_is_validated_and_normalised() {
+        let list = |items: &[&str]| super::app_list(&items.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(list(&["blender"]).unwrap(), "blender");
+        assert_eq!(list(&["hyperframes", "blender"]).unwrap(), "blender,hyperframes", "always in Trex's order");
+        assert_eq!(list(&["github", "hyperframes", "blender"]).unwrap(), "blender,hyperframes,github");
+        for bad in [&[][..], &["gimp"][..], &["blender", "blender"][..], &["blender", ""][..]] {
+            assert!(list(bad).is_err(), "{bad:?}");
+        }
+    }
+    #[test]
+    fn the_cli_error_line_is_the_last_non_empty_line_without_its_prefix() {
+        assert_eq!(super::cli_error_line(b"noise\ntrex-agent: PermissionError: add-ons folder is read-only\n\n"), "PermissionError: add-ons folder is read-only");
+        assert_eq!(super::cli_error_line(b""), "");
+        assert!(super::cli_error_line(&vec![b'x'; 5000]).chars().count() <= 300);
+    }
     use super::*;
 
     #[test]
@@ -739,6 +755,129 @@ pub async fn trex_desktop_mcp_config(mode: String) -> Result<serde_json::Value, 
     let binary = installed_cli_path()?;
     let command = binary.to_str().ok_or("La ruta del agente no es UTF-8 válida.")?;
     Ok(serde_json::json!({"command":command,"args":["desktop-mcp","--mode",fixed_mode]}))
+}
+
+/// The applications a session may be given, in the order Trex lists them.
+const APPS: [&str; 3] = ["blender", "hyperframes", "github"];
+
+/// Validate and normalise the requested applications: known names only, no repeats, at least one.
+fn app_list(requested: &[String]) -> Result<String, String> {
+    let chosen: Vec<&str> = APPS.iter().copied().filter(|app| requested.iter().any(|r| r == app)).collect();
+    if chosen.is_empty() || requested.iter().any(|r| !APPS.contains(&r.as_str())) || chosen.len() != requested.len() {
+        return Err("Lista de aplicaciones no válida.".into());
+    }
+    Ok(chosen.join(","))
+}
+
+/// Bind application control (Blender, HyperFrames) to a fresh MCP process. The permission mode, the
+/// project folder and the applications are fixed here: a tool call cannot change them.
+#[tauri::command]
+pub async fn trex_apps_mcp_config(mode: String, cwd: String, apps: Vec<String>) -> Result<serde_json::Value, String> {
+    let fixed_mode = match mode.as_str() {
+        "observe" => "plan",
+        "qa" | "full" => "full",
+        _ => return Err("Modo de aplicaciones no válido.".into()),
+    };
+    let list = app_list(&apps)?;
+    let folder = Path::new(&cwd);
+    if !folder.is_absolute() || !folder.is_dir() {
+        return Err("La carpeta del proyecto no es válida.".into());
+    }
+    // A Trex CLI without this subcommand, or without --apps, would fail the whole session at start:
+    // leave the applications out and say why.
+    let help = crate::blocking(|| invoke_cli(&["apps-mcp", "--help"], None))
+        .await
+        .map_err(|_| "Actualiza Trex CLI para controlar aplicaciones.".to_string())?;
+    if !String::from_utf8_lossy(&help).contains("--apps") {
+        return Err("Actualiza Trex CLI para controlar aplicaciones.".into());
+    }
+    let binary = installed_cli_path()?;
+    let command = binary.to_str().ok_or("La ruta del agente no es UTF-8 válida.")?;
+    Ok(serde_json::json!({"command":command,"args":["apps-mcp","--mode",fixed_mode,"--cwd",cwd,"--apps",list]}))
+}
+
+/// Blender needs room to start (up to a minute); the other commands here stop at 15 s.
+const BLENDER_TIMEOUT: Duration = Duration::from_secs(150);
+
+/// The CLI prints its failure as one line on stderr (`trex-agent: <reason>`): keep that line so
+/// Settings can say why, without echoing anything else.
+fn cli_error_line(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let line = text.lines().rev().map(str::trim).find(|line| !line.is_empty()).unwrap_or("");
+    let line = line.strip_prefix("trex-agent: ").unwrap_or(line);
+    line.chars().take(300).collect()
+}
+
+/// Run `trex-agent <args>` with room for slow work (Blender starting, a skills download) and keep the
+/// CLI's one-line error so Settings can say why it failed.
+fn run_long_cli(binary: &Path, cli_args: &[&str], limit: Duration) -> Result<serde_json::Value, String> {
+    let mut command = cli_command(binary);
+    command.args(cli_args);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|_| "No se pudo iniciar Trex CLI.".to_string())?;
+    let (out_tx, out_rx) = mpsc::sync_channel(1);
+    let (err_tx, err_rx) = mpsc::sync_channel(1);
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    thread::spawn(move || { let _ = out_tx.send(stdout.map(read_output).unwrap_or(Err(()))); });
+    thread::spawn(move || { let _ = err_tx.send(stderr.map(read_output).unwrap_or(Err(()))); });
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("La acción tardó demasiado en responder.".into());
+            }
+        }
+    };
+    let wait = || deadline.saturating_duration_since(Instant::now()).max(Duration::from_secs(2));
+    let stdout = out_rx.recv_timeout(wait()).ok().and_then(Result::ok).unwrap_or_default();
+    let stderr = err_rx.recv_timeout(wait()).ok().and_then(Result::ok).unwrap_or_default();
+    if !status.success() {
+        let reason = cli_error_line(&stderr);
+        return Err(if reason.is_empty() { "No se pudo completar la acción.".into() } else { reason });
+    }
+    parse_json(&stdout).map_err(|_| "Trex CLI devolvió una respuesta ilegible.".to_string())
+}
+
+fn run_blender_bridge(binary: &Path, verb: &str, file: Option<&str>) -> Result<serde_json::Value, String> {
+    let mut cli_args = vec!["blender-bridge", verb];
+    if let Some(file) = file {
+        cli_args.extend(["--file", file]);
+    }
+    run_long_cli(binary, &cli_args, BLENDER_TIMEOUT)
+}
+
+/// Status, install, uninstall and open for Trex's Blender bridge (Settings → Integrations).
+#[tauri::command]
+pub async fn blender_bridge(action: String, file: Option<String>) -> Result<serde_json::Value, String> {
+    let verb = match action.as_str() {
+        "status" | "install" | "uninstall" | "open" => action,
+        _ => return Err("Acción de Blender no válida.".into()),
+    };
+    if file.is_some() && verb != "open" {
+        return Err("Solo se puede indicar un archivo al abrir Blender.".into());
+    }
+    let binary = installed_cli_path()?;
+    crate::blocking(move || run_blender_bridge(&binary, &verb, file.as_deref())).await
+}
+
+/// HyperFrames status for Settings, and installing or updating its skills (explicit button only).
+#[tauri::command]
+pub async fn hyperframes_admin(action: String, cwd: String) -> Result<serde_json::Value, String> {
+    let verb = match action.as_str() {
+        "status" => "status",
+        "skillsUpdate" => "skills-update",
+        _ => return Err("Acción de HyperFrames no válida.".into()),
+    };
+    if !Path::new(&cwd).is_absolute() || !Path::new(&cwd).is_dir() {
+        return Err("La carpeta del proyecto no es válida.".into());
+    }
+    let binary = installed_cli_path()?;
+    crate::blocking(move || run_long_cli(&binary, &["hyperframes", verb, "--cwd", &cwd], Duration::from_secs(300))).await
 }
 
 #[derive(Deserialize, Serialize)]

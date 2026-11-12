@@ -60,8 +60,53 @@ fn installed_blender() -> bool {
     std::fs::read_dir(base).ok().into_iter().flatten().flatten()
         .any(|entry| entry.file_name().to_string_lossy().starts_with("Blender ") && entry.path().join("blender.exe").is_file())
 }
+/// Subfolders of `base` whose name starts with `prefix` (`/opt/blender-5.2`, `~/blender-4.2.0`).
 #[cfg(not(windows))]
-fn installed_blender() -> bool { false }
+fn dirs_starting(base: &Path, prefix: &str) -> Vec<PathBuf> {
+    std::fs::read_dir(base).ok().into_iter().flatten().flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
+        .map(|entry| entry.path()).collect()
+}
+/// Where Linux and macOS installs usually live when `blender` is not on the PATH: an explicit
+/// `BLENDER_PATH`, Snap, a tarball under /opt or the home folder, Steam, Flatpak, or the macOS app.
+/// Mirrors the search in `trex-cli/src/blender.rs`, which is what the agent actually runs.
+#[cfg(not(windows))]
+fn installed_blender() -> bool {
+    if std::env::var_os("BLENDER_PATH").map(PathBuf::from).filter(|p| p.is_absolute()).is_some_and(|p| p.is_file()) { return true }
+    let home = std::env::var_os("HOME").map(PathBuf::from).filter(|p| p.is_absolute());
+    let mut dirs: Vec<PathBuf> = vec![PathBuf::from("/snap/bin"), PathBuf::from("/usr/local/bin")];
+    dirs.extend(dirs_starting(Path::new("/opt"), "blender"));
+    if let Some(home) = &home {
+        dirs.extend(dirs_starting(home, "blender-"));
+        dirs.push(home.join(".local/share/Steam/steamapps/common/Blender"));
+    }
+    if dirs.iter().any(|dir| file_in(dir, &["blender"])) { return true }
+    #[cfg(target_os = "macos")]
+    {
+        let mut apps = vec![PathBuf::from("/Applications")];
+        apps.extend(home.iter().map(|home| home.join("Applications")));
+        if apps.iter().flat_map(|base| dirs_starting(base, "Blender")).any(|app| file_in(&app.join("Contents/MacOS"), &["Blender"])) { return true }
+    }
+    home.is_some_and(|home| home.join(".local/share/flatpak/app/org.blender.Blender").is_dir())
+        || Path::new("/var/lib/flatpak/app/org.blender.Blender").is_dir()
+}
+
+/// Where a global install of the HyperFrames CLI usually lands on Linux and macOS when the app was
+/// launched without the shell's PATH: npm/pnpm/bun/volta prefixes and the node version managers.
+/// Mirrors the search in `trex-cli/src/hyperframes.rs`, which is what the agent actually runs.
+#[cfg(not(windows))]
+fn global_hyperframes(names: &[&str]) -> bool {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from).filter(|p| p.is_absolute()) else { return false };
+    let mut dirs: Vec<PathBuf> = [".npm-global/bin", ".bun/bin", ".volta/bin", ".local/share/pnpm", ".local/share/mise/shims", ".asdf/shims"].iter().map(|d| home.join(d)).collect();
+    for (base, suffix) in [(".local/share/mise/installs/node", "bin"), (".nvm/versions/node", "bin"), (".local/share/fnm/node-versions", "installation/bin"), (".asdf/installs/nodejs", "bin")] {
+        dirs.extend(dirs_starting(&home.join(base), "").into_iter().map(|v| v.join(suffix)));
+    }
+    #[cfg(target_os = "macos")]
+    dirs.extend([PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")]);
+    dirs.iter().any(|dir| file_in(dir, names))
+}
+#[cfg(windows)]
+fn global_hyperframes(_: &[&str]) -> bool { false }
 
 fn local_hyperframes(cwd: Option<&str>) -> bool {
     let Some(path) = cwd.map(Path::new).filter(|path| path.is_absolute()) else { return false };
@@ -79,7 +124,7 @@ fn discover(cwd: Option<&str>) -> IntegrationStatus {
         .is_some_and(|base| file_in(&base.join("npm"), hyperframes));
     IntegrationStatus {
         blender: in_path(blender) || home_bin(blender) || installed_blender(),
-        hyperframes: local || in_path(hyperframes) || home_bin(hyperframes) || (cfg!(windows) && npm_global),
+        hyperframes: local || in_path(hyperframes) || home_bin(hyperframes) || (cfg!(windows) && npm_global) || global_hyperframes(hyperframes),
         hyperframes_local: local,
         github_cli: find_github().is_some(),
         node: in_path(node) || home_bin(node),
@@ -122,6 +167,18 @@ pub async fn github_connection_status() -> Result<&'static str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
+    #[test]
+    fn versioned_install_folders_are_found_by_prefix() {
+        let dir = std::env::temp_dir().join(format!("trex-blender-dirs-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("blender-5.2.2")).unwrap();
+        std::fs::create_dir_all(dir.join("unrelated")).unwrap();
+        let found = dirs_starting(&dir, "blender-");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("blender-5.2.2"));
+        assert!(dirs_starting(&dir.join("missing"), "blender-").is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn local_detection_rejects_relative_paths_and_missing_projects() {
         assert!(!local_hyperframes(None));

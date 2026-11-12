@@ -10,6 +10,8 @@ const names = ["agentPermissions", "agentTeam", "timeFormat", "agentRoom", "agen
   "chatImages", "chatFiles", "sharedFiles", "imageReferences", "workSummary", "planUsage", "accountUsageStore", "agentNotices",
   "visualDesign", "paste", "messageQueue", "trexChat", "browser", "chatTasks", "integrations", "accessibility", "coordination"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => [`../${name}`, await load(name)])));
+// Trex memory stays off (MEMORY_OFF): no native call, no wait before spawning and no sync after turns.
+dependencies["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory"));
 const sources = {
   stable: "hooks/useStableCallback.ts", workflow: "hooks/useAgentWorkflow.ts", trex: "hooks/useTrexChat.ts",
   panel: "components/ChatView.tsx", room: "components/AgentRoomView.tsx", motion: "motion.ts",
@@ -107,7 +109,7 @@ function uiModule(name) {
 }
 const uiPaths = new Set(["./chat/BrowserMenu","./AgentIcon", "./AgentRoomToolbar", "./Select", "./Icons", "./chat/ChatItems", "./chat/ModelMenu",
   "./chat/ComposerSettings", "./chat/UsageMenu", "./chat/SharedFiles", "./ImageViewer", "./chat/QuestionPanel",
-  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/GitPanel", "./chat/QueuedMessages", "./chat/ComposerPanel", "./chat/BackgroundTerminals", "./chat/TaskPanel", "./chat/AgentActivity", "./chat/ChatWelcome", "./AccountUsage", "./chat/PeerSessions"]);
+  "./chat/Suggestions", "./chat/WorkSummary", "./chat/BranchMenu", "./chat/GitPanel", "./chat/QueuedMessages", "./chat/ComposerPanel", "./chat/BackgroundTerminals", "./chat/TaskPanel", "./chat/MemoryPanel", "./chat/AgentActivity", "./chat/ChatWelcome", "./AccountUsage", "./chat/PeerSessions"]);
 function environment() {
   let counter = 0;
   const timers = new Map();

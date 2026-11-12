@@ -31,6 +31,7 @@ mod terminal_env;
 mod trex_cli;
 mod trex_browser;
 mod window_material;
+mod memory;
 
 use agent::{AgentSpawnRequest, AgentSpawnResponse, AgentState};
 use config::AppConfig;
@@ -386,6 +387,9 @@ pub fn run() {
             integrations::github_connection_status,
             trex_cli::trex_cli_status,
             trex_cli::trex_desktop_mcp_config,
+            trex_cli::trex_apps_mcp_config,
+            trex_cli::blender_bridge,
+            trex_cli::hyperframes_admin,
             trex_cli::trex_desktop_status,
             trex_cli::trex_a11y_status,
             trex_cli::trex_a11y_mcp_config,
@@ -460,6 +464,19 @@ pub fn run() {
             codex_models::codex_context_windows,
             accounts::detect_account_dir,
             desktop_notification,
+            memory::memory_session,
+            memory::memory_sync,
+            memory::memory_list,
+            memory::memory_tools,
+            memory::memory_call,
+            memory::memory_overview,
+            memory::memory_set_enabled,
+            memory::memory_read,
+            memory::memory_write,
+            memory::memory_forget,
+            memory::memory_approve,
+            memory::memory_move,
+            memory::memory_restore,
         ])
         .on_window_event(|window, event| {
             // Al cerrarse la ventana principal se terminan todas las sesiones.

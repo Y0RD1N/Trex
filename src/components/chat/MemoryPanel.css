@@ -1,0 +1,60 @@
+/* --- Memoria del chat ---------------------------------------------------------
+   Vive dentro del panel lateral, como Tareas y Sesiones (ver TaskPanel.css). */
+.memory-panel { height: 100%; }
+.memory-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-4) var(--sp-2); }
+.memory-search { flex: 1 1 auto; min-width: 0; height: 28px; padding: 0 var(--sp-2-5); font-size: var(--fs-sm); }
+.memory-switch { display: flex; flex-shrink: 0; align-items: center; gap: var(--sp-1-5); color: var(--text-muted); font-size: var(--fs-xs); cursor: pointer; }
+.memory-switch input { appearance: none; -webkit-appearance: none; box-sizing: border-box; position: relative; width: 30px; height: 18px; margin: 0; flex-shrink: 0;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-2xl); background: var(--bg-inset); cursor: pointer; transition: background-color 140ms, border-color 140ms; }
+.memory-switch input::before { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-dim); transition: transform 140ms, background-color 140ms; }
+.memory-switch input:checked { background: var(--accent-strong); border-color: var(--accent-strong); }
+.memory-switch input:checked::before { background: var(--strong-ink, #fff); transform: translateX(12px); }
+.memory-switch input:disabled { opacity: .5; cursor: default; }
+
+.memory-off, .memory-error { flex-shrink: 0; margin: 0 var(--sp-4) var(--sp-2); font-size: var(--fs-xs); line-height: var(--lh-normal, 1.5); }
+.memory-off { padding: var(--sp-2) var(--sp-2-5); border: 1px solid var(--warn-border); border-radius: var(--radius-md); background: var(--warn-bg); color: var(--warn-text); }
+.memory-error { color: var(--danger-text); overflow-wrap: anywhere; }
+
+.memory-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 var(--sp-2) var(--sp-2); }
+.memory-section { margin: var(--sp-2) 0 var(--sp-3); }
+.memory-section > h3, .memory-section > summary { display: flex; align-items: baseline; gap: var(--sp-2); margin: 0 var(--sp-2) var(--sp-1-5);
+  color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: .02em; text-transform: uppercase; }
+.memory-section > summary { cursor: pointer; }
+.memory-section small { color: var(--text-dim); font-weight: var(--fw-medium); font-variant-numeric: tabular-nums; }
+.memory-empty { margin: 0 var(--sp-2); color: var(--text-dim); font-size: var(--fs-xs); }
+
+.memory-list, .memory-plain { margin: 0; padding: 0; list-style: none; }
+.memory-list > li { margin: 2px 0 0; border-radius: var(--radius-md); }
+.memory-list > li.is-flagged { box-shadow: inset 2px 0 0 var(--warn); }
+.memory-entry { display: grid; gap: 2px; width: 100%; padding: var(--sp-2) var(--sp-2); border: 0; border-radius: var(--radius-md); background: transparent; color: inherit; text-align: left; }
+.memory-entry:hover, .memory-entry[aria-expanded="true"] { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.memory-entry-head { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.memory-entry-head strong { min-width: 0; overflow: hidden; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
+.memory-kind { flex-shrink: 0; margin-left: auto; color: var(--text-dim); font-size: 11px; }
+.memory-entry-description { color: var(--text-muted); font-size: var(--fs-xs); line-height: var(--lh-normal, 1.5); }
+
+.memory-detail, .memory-form { display: grid; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2) var(--sp-2-5); }
+.memory-body { max-height: 260px; overflow: auto; padding: var(--sp-2) var(--sp-2-5); border-radius: var(--radius-md); background: var(--bg-inset);
+  color: var(--text); font-size: var(--fs-xs); line-height: var(--lh-normal, 1.5); white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-meta { margin: 0; color: var(--text-dim); font-size: 11px; overflow-wrap: anywhere; }
+.memory-warning { display: flex; gap: var(--sp-1-5); margin: 0; color: var(--warn-text); font-size: var(--fs-xs); line-height: var(--lh-normal, 1.5); }
+.memory-warning > svg { flex-shrink: 0; margin-top: 2px; }
+.memory-actions { display: flex; flex-wrap: wrap; gap: var(--sp-1-5); }
+.memory-actions .btn { display: inline-flex; align-items: center; gap: var(--sp-1); }
+
+.memory-form label { display: grid; gap: var(--sp-1); color: var(--text-muted); font-size: var(--fs-xs); }
+.memory-form .input { font-size: var(--fs-sm); }
+.memory-form textarea { resize: vertical; min-height: 96px; font-family: var(--font-mono); font-size: var(--fs-xs); line-height: var(--lh-normal, 1.5); }
+.memory-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--sp-2); }
+
+.memory-plain > li { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-1-5) var(--sp-2); font-size: var(--fs-xs); }
+.memory-plain > li > svg { flex-shrink: 0; margin-top: 2px; color: var(--warn); }
+.memory-plain > li > span { flex: 1 1 auto; min-width: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.memory-plain strong { color: var(--text); font-family: var(--font-mono); font-weight: var(--fw-medium); }
+.memory-plain small { display: block; color: var(--text-dim); }
+.memory-plain .btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--sp-1); }
+
+.memory-footer { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-2) var(--sp-4) var(--sp-4);
+  border-top: 1px solid var(--border); color: var(--text-dim); font-size: var(--fs-xs); }
+.memory-footer p { margin: 0; }
+.memory-footer .btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--sp-1); }

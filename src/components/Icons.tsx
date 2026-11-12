@@ -201,6 +201,17 @@ export function PencilIcon({ size = 16, strokeWidth = 1.5 }: IconProps) {
   );
 }
 
+/** Memoria: un cuaderno con marcador (lo que recuerdan los agentes). */
+export function MemoryIcon({ size = 16, strokeWidth = 1.5 }: IconProps) {
+  return (
+    <svg {...svgProps(size, strokeWidth)}>
+      <path d="M6.5 4.2h10.3a1.7 1.7 0 0 1 1.7 1.7v12.4a1.7 1.7 0 0 1-1.7 1.7H6.5a1.5 1.5 0 0 1-1.5-1.5V5.7a1.5 1.5 0 0 1 1.5-1.5z" />
+      <path d="M9 4.2v6.3l1.8-1.3 1.8 1.3V4.2" />
+      <path d="M9 14.2h6M9 16.8h4" />
+    </svg>
+  );
+}
+
 /** Papelera: eliminar. */
 export function TrashIcon({ size = 16, strokeWidth = 1.5 }: IconProps) {
   return (

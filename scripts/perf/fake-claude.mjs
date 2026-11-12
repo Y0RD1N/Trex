@@ -17,6 +17,10 @@
  */
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
+
+// FAKE_ARGV_LOG: anota con qué opciones lo lanzó Trex (para comprobar lo que recibe cada sesión).
+if (process.env.FAKE_ARGV_LOG) appendFileSync(process.env.FAKE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + "\n");
 
 const CHUNK_MS = Number(process.env.FAKE_CHUNK_MS ?? 20);
 const CHUNK = Number(process.env.FAKE_CHUNK ?? 12);

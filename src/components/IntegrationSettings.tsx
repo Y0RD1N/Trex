@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { a11yStatus, desktopStatus, formatError, githubConnectionStatus, integrationDependencies, type A11yStatus, type DesktopStatus, type GitHubConnectionStatus, type IntegrationDependencies } from "../api";
+import { a11yStatus, blenderBridge, desktopStatus, formatError, githubConnectionStatus, hyperframesAdmin, integrationDependencies, type A11yStatus, type DesktopStatus, type GitHubConnectionStatus, type IntegrationDependencies } from "../api";
+import { describeBridge, type BlenderBridgeStatus, type BridgeAction } from "../blenderBridge";
+import { describeHyperframes, type HyperframesAction, type HyperframesStatus } from "../hyperframesStatus";
 import "./BrowserSettings.css";
 import "./IntegrationSettings.css";
 import type { ApplicationIntegrations } from "../types";
@@ -23,6 +25,27 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
   const [desktopError, setDesktopError] = useState<string | null>(null);
   const [a11y, setA11y] = useState<A11yStatus | null>(null);
   const [a11yError, setA11yError] = useState<string | null>(null);
+  const [bridge, setBridge] = useState<BlenderBridgeStatus | null>(null);
+  const [bridgeBusy, setBridgeBusy] = useState<BridgeAction | null>(null);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
+  const [hyperframes, setHyperframes] = useState<HyperframesStatus | null>(null);
+  const [hyperframesBusy, setHyperframesBusy] = useState<HyperframesAction | null>(null);
+  const [hyperframesError, setHyperframesError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!cwd) return;
+    let current = true;
+    setHyperframes(null); setHyperframesError(null);
+    void hyperframesAdmin("status", cwd).then(result => { if (current) setHyperframes(result); })
+      .catch(reason => { if (current) setHyperframesError(formatError(reason)); });
+    return () => { current = false; };
+  }, [cwd, revision]);
+  useEffect(() => {
+    let current = true;
+    setBridge(null); setBridgeError(null);
+    void blenderBridge("status").then(result => { if (current) setBridge(result); })
+      .catch(reason => { if (current) setBridgeError(formatError(reason)); });
+    return () => { current = false; };
+  }, [revision]);
   useEffect(() => {
     let current = true;
     setA11y(null); setA11yError(null);
@@ -44,6 +67,21 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
       .catch(reason => { if (current) setError(formatError(reason)); });
     return () => { current = false; };
   }, [cwd, revision]);
+  const runBridge = async (action: BridgeAction) => {
+    setBridgeBusy(action); setBridgeError(null);
+    try { setBridge(await blenderBridge(action)); }
+    catch (reason) { setBridgeError(formatError(reason)); }
+    finally { setBridgeBusy(null); }
+  };
+  const runHyperframes = async (action: HyperframesAction) => {
+    if (!cwd) return;
+    setHyperframesBusy(action); setHyperframesError(null);
+    try { setHyperframes(await hyperframesAdmin(action, cwd)); }
+    catch (reason) { setHyperframesError(formatError(reason)); }
+    finally { setHyperframesBusy(null); }
+  };
+  const summary = describeBridge(bridge);
+  const hyperframesSummary = describeHyperframes(hyperframes, !!cwd);
   const guide = (url: string) => void openUrl(url).catch(reason => setError(formatError(reason)));
   // El motor de accesibilidad va dentro de Trex (Windows y Linux): no hay nada que instalar.
   const engineReady = a11y?.available === true;
@@ -92,6 +130,28 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
       {integrations.github && status?.githubCli && <div className="browser-settings-foot"><span>Conexión de GitHub<br />{github === "connected" ? "Sesión confirmada" : github === "timeout" ? "La comprobación agotó el tiempo" : github ? "No se pudo confirmar una sesión" : "Aún no comprobada"}</span><button type="button" className="btn btn-small" disabled={checkingGithub} onClick={() => void checkGithub()}>{checkingGithub ? "Comprobando…" : "Comprobar conexión"}</button></div>}
       {status && <p className="browser-settings-note">Node: {status.node ? "detectado" : "no detectado"} · FFmpeg: {status.ffmpeg ? "detectado" : "no detectado"}. La detección no comprueba versiones. Las aplicaciones desactivadas no se anuncian como integraciones. Las herramientas generales de cada agente conservan sus propios permisos.</p>}
       {error && <p className="browser-settings-error" role="alert">{error}</p>}
+    </div>
+    <div className="browser-settings-card integration-bridge">
+      <div className="browser-settings-heading"><div><h4>Blender en vivo</h4><p>Tus agentes ven y manejan el Blender que tienes abierto</p></div>
+        <span className={`browser-settings-status${summary.tone === "ready" ? " is-ready" : ""}`} role="status">{summary.label}</span></div>
+      {summary.lines.length > 0 && <ul className="integration-bridge-lines" aria-label="Estado del puente con Blender">{summary.lines.map(line => <li key={line}>{line}</li>)}</ul>}
+      <div className="integration-bridge-actions">
+        <button type="button" className="btn btn-small" disabled={!summary.canOpen || bridgeBusy !== null} onClick={() => void runBridge("open")}>{bridgeBusy === "open" ? "Abriendo Blender…" : "Abrir Blender con Trex"}</button>
+        {summary.installLabel && <button type="button" className="btn btn-small" disabled={bridgeBusy !== null} onClick={() => void runBridge("install")}>{bridgeBusy === "install" ? "Instalando…" : summary.installLabel}</button>}
+        {summary.canUninstall && <button type="button" className="btn btn-small" disabled={bridgeBusy !== null} onClick={() => void runBridge("uninstall")}>{bridgeBusy === "uninstall" ? "Quitando…" : "Quitar el puente"}</button>}
+      </div>
+      {bridgeError && <p className="browser-settings-error" role="alert">{bridgeError}</p>}
+      <p className="browser-settings-note">Abrir Blender con Trex no cambia tu configuración de Blender. Instalar el puente lo activa en cada Blender que abras en este equipo y conserva tus preferencias; si ya tienes Blender abierto, reinícialo o actívalo en Preferencias → Add-ons. Puedes pausar el control en cualquier momento con el indicador «Trex» de la barra de estado de Blender (abajo a la derecha). Los agentes ejecutan Python en tu Blender: el modo de permisos del agente decide si pueden cambiar algo o solo mirar. Lo que ven (capturas de la escena) llega al proveedor del modelo.</p>
+    </div>
+    <div className="browser-settings-card integration-bridge">
+      <div className="browser-settings-heading"><div><h4>HyperFrames</h4><p>Vídeo con HTML: tus agentes lo crean, lo ven y lo renderizan</p></div>
+        <span className={`browser-settings-status${hyperframesSummary.tone === "ready" ? " is-ready" : ""}`} role="status">{hyperframesSummary.label}</span></div>
+      {hyperframesSummary.lines.length > 0 && <ul className="integration-bridge-lines" aria-label="Estado de HyperFrames">{hyperframesSummary.lines.map(line => <li key={line}>{line}</li>)}</ul>}
+      {hyperframesSummary.skillsLabel && <div className="integration-bridge-actions">
+        <button type="button" className="btn btn-small" disabled={hyperframesBusy !== null} onClick={() => void runHyperframes("skillsUpdate")}>{hyperframesBusy === "skillsUpdate" ? "Instalando skills…" : hyperframesSummary.skillsLabel}</button>
+      </div>}
+      {hyperframesError && <p className="browser-settings-error" role="alert">{hyperframesError}</p>}
+      <p className="browser-settings-note">Los agentes usan HyperFrames con herramientas que validan la composición, te muestran los fotogramas, la renderizan y abren la vista previa; la versión es la que tengas instalada: Trex nunca instala ni actualiza HyperFrames, ni envía telemetría suya. Las skills son las instrucciones oficiales de HyperFrames para los modelos; instalarlas escribe en las carpetas de skills de tus agentes{hyperframesSummary.skillsLocation ? ` (por ejemplo ${hyperframesSummary.skillsLocation})` : ""} y solo ocurre cuando pulsas el botón. Sin ellas, los agentes leen la documentación integrada con hyperframes_docs. Lo que ven (fotogramas) llega al proveedor del modelo.</p>
     </div>
   </div>;
 }

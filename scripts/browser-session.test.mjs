@@ -1125,3 +1125,77 @@ for (const provider of ["claude", "codex"]) test(`${provider}: where the accessi
   }
   assert.ok(h.state.items.some(item => item.kind === "notice" && /solo está disponible en Windows/.test(item.text)));
 });
+
+// ---- Blender, HyperFrames and the other applications (trex_apps) ----
+const { appToolsFor } = dependencies["../apps"];
+const appsInstructions = a11yInstructions;
+const appsServerFor = calls => async (mode, folder, apps) => {
+  calls.push([mode, folder, apps]);
+  return { command: "C:\\Trex\\trex-agent.exe", args: ["apps-mcp", "--mode", mode === "observe" ? "plan" : "full", "--cwd", folder, "--apps", apps.join(",")] };
+};
+const inventory = apps => { const tools = appToolsFor(apps); return { read: tools.read, action: tools.action, all: [...tools.read, ...tools.action] }; };
+for (const apps of [["blender"], ["hyperframes"], ["github"], ["blender", "hyperframes", "github"]]) for (const provider of ["claude", "codex"]) test(`${provider}: ${apps.join(" + ")} tools bind to the permission mode, reads never prompt and planning restarts read-only`, async t => {
+  const calls = [], tools = inventory(apps);
+  const h = harness(t, provider, {
+    browser: { ...browser, enabled: false },
+    apps: { appsWanted: () => apps, appsServer: appsServerFor(calls) },
+    mcpStatus: { data: [{ name: "trex_apps", runtimeStatus: "connected", tools: Object.fromEntries(tools.all.map(name => [name, { name }])) }] },
+  });
+  await h.ready();
+  assert.deepEqual(calls, [["qa", cwd, apps]], "the folder, the permission class and the applications are fixed at start");
+  const text = appsInstructions(provider, h);
+  for (const app of apps) assert.match(text, provider === "claude" ? new RegExp(`trex_apps MCP tools \\(${app}_\\*\\)`) : new RegExp(`connected trex_apps MCP tools \\(${app}_\\*\\)`), `${provider} is told about ${app}`);
+  for (const other of ["blender", "hyperframes", "github"].filter(app => !apps.includes(app))) assert.doesNotMatch(text, new RegExp(`trex_apps MCP tools \\(${other}_\\*\\)`), `${other} is not announced as served`);
+  if (apps.includes("blender")) assert.doesNotMatch(text, /not an open window/, "the headless-only sentence is replaced");
+  else assert.match(text, /not an open window/, "Blender is enabled but not served: it keeps the CLI advice instead of a promise of tools");
+  const expectedArgs = (mode) => ["apps-mcp", "--mode", mode, "--cwd", cwd, "--apps", apps.join(",")];
+  if (provider === "claude") {
+    const flags = h.spawns[0].request.flags, config = JSON.parse(flags[flags.indexOf("--mcp-config") + 1]);
+    assert.deepEqual(config.mcpServers.trex_apps.args, expectedArgs("full"));
+    const allowed = flags.filter((flag, i) => flags[i - 1] === "--allowedTools").join(",");
+    for (const name of tools.read) assert.ok(allowed.includes(`mcp__trex_apps__${name}`), `${name} is pre-approved`);
+    for (const name of tools.action) assert.ok(!allowed.includes(name), `${name} still goes through the permission prompt`);
+  } else {
+    const config = h.writes.find(write => write.method === "thread/start").params.config;
+    assert.deepEqual(config["mcp_servers.trex_apps.args"], expectedArgs("full"));
+    assert.equal(config["mcp_servers.trex_apps.default_tools_approval_mode"], "writes", "only tools that change something ask");
+    assert.equal(config["mcp_servers.trex_apps.required"], true);
+    assert.ok(h.writes.some(write => write.method === "mcpServerStatus/list" && write.params.serverName === "trex_apps"));
+    for (const name of tools.action) delete h.options.mcpStatus.data[0].tools[name];
+  }
+  h.session.setMode("plan");
+  assert.equal(await send(h), true);
+  assert.deepEqual(calls, [["qa", cwd, apps], ["observe", cwd, apps]]);
+  assert.equal(h.spawns.length, 2, "a change of permission class replaces the session, as for the desktop");
+  if (provider === "claude") {
+    const flags = h.spawns[1].request.flags, config = JSON.parse(flags[flags.indexOf("--mcp-config") + 1]);
+    assert.deepEqual(config.mcpServers.trex_apps.args, expectedArgs("plan"));
+  } else {
+    const config = h.writes.filter(write => ["thread/start", "thread/resume"].includes(write.method)).at(-1).params.config;
+    assert.deepEqual(config["mcp_servers.trex_apps.args"], expectedArgs("plan"));
+  }
+});
+
+for (const provider of ["claude", "codex"]) test(`${provider}: where the CLI cannot serve applications the chat starts without them and says why`, async t => {
+  const h = harness(t, provider, {
+    browser: { ...browser, enabled: false },
+    apps: { appsWanted: () => ["blender", "hyperframes"], appsServer: async (_mode, _cwd, _apps, warn) => { warn("Las aplicaciones (Blender, HyperFrames) no se activaron en este chat: Actualiza Trex CLI para controlar aplicaciones."); return null; } },
+  });
+  await h.ready();
+  assert.equal(await send(h), true);
+  assert.doesNotMatch(appsInstructions(provider, h) ?? "", /trex_apps/, "no tools, so no promise of tools");
+  if (provider === "claude") {
+    const flags = h.spawns[0].request.flags, index = flags.indexOf("--mcp-config");
+    assert.ok(index < 0 || !JSON.parse(flags[index + 1]).mcpServers.trex_apps);
+  } else {
+    assert.equal(h.writes.find(write => write.method === "thread/start").params.config["mcp_servers.trex_apps.enabled"], undefined);
+  }
+  assert.ok(h.state.items.some(item => item.kind === "notice" && /Actualiza Trex CLI/.test(item.text)));
+});
+
+test("claude: with every application off or known to be missing, no apps server is requested", async t => {
+  let asked = 0;
+  const h = harness(t, "claude", { browser: { ...browser, enabled: false }, apps: { appsServer: async () => { asked++; return null; } } });
+  await h.ready();
+  assert.equal(asked, 0, "the neutral default (no application wanted) never reaches the server");
+});

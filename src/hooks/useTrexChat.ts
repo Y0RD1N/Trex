@@ -25,6 +25,7 @@ async function coordinationServer(session: string, project: string): Promise<{ c
 }
 import { withChatTimes } from "../chatTimes";
 import { autoCompactTokens, trexAutoCompactSettings } from "../autoCompact";
+import { loadMemory, memoryInstructions } from "../memory";
 const timedTrexReducer = withChatTimes(trexReducer);
 
 /** Una herramienta se cortó sin saber si llegó a actuar: Trex CLI no la repite
@@ -188,7 +189,8 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
         model: selected.model, effort: selected.effort, conversationId: nativeConversation.current,
         // Como Claude y Codex: cómo adjuntar archivos para que el chat los pinte como tarjeta.
-        instructions: [FILE_SHARING_INSTRUCTIONS, TREX_INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations)].filter(Boolean).join(" "),
+        instructions: [FILE_SHARING_INSTRUCTIONS, TREX_INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations),
+          memoryInstructions(coordination ? await loadMemory(current.cwd) : null)].filter(Boolean).join(" "),
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
         settings: { ...integrationRestrictions(current.integrations), ...trexAutoCompactSettings(autoCompactAt.current = autoCompactTokens(current.autoCompact, "trex")) }, desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}),
         ...(coordination ? { coordination } : {}) });

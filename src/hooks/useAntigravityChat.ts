@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { formatError, installAntigravity, messageQueueMcpConfig, trexDesktopMcpConfig } from "../api";
 import { A11Y_SERVER, accessibilityServer } from "../accessibility";
+import { APPS_SERVER, appsServer, appsWanted, type AppId } from "../apps";
 import { openAntigravity, type AntigravityConnection } from "../antigravityConnection";
 import { AntigravityUsageReader, antigravityTier } from "../antigravityUsage";
 import { AcpError, acpMcpServer, acpPrompt, validAcpSessionId } from "../acpProtocol";
@@ -14,6 +15,7 @@ import { INBOX_WAKE, messageQueueId, type QueueReceipt } from "../messageQueue";
 import { useMessageQueue } from "./useMessageQueue";
 import { localId, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { withChatTimes } from "../chatTimes";
+import { loadMemory, loadedMemory, memoryInstructions } from "../memory";
 const timedAntigravityReducer = withChatTimes(antigravityReducer);
 
 const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} For multi-step work, in ordinary chats too, publish and update the chat task list with trex_update_tasks (trex_inbox MCP server; plan:[{step,status}], at most one in_progress); mark work completed only after verifying it. Messages the user types while you work are queued by trex and delivered as the next user turn with their attachments; do not poll an inbox or claim an attachment that was not delivered. ${PEER_INSTRUCTIONS}`;
@@ -38,7 +40,7 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
   const controller = useRef<AbortController | null>(null);
   const choices = useRef({ model: options.model, effort: options.effort, mode: options.mode });
   /** What this ACP session has: an attached browser and the installed applications. */
-  const tools = useRef<{ browser: boolean; available: Partial<Record<"github" | "blender" | "hyperframes", boolean>> | null; a11y?: boolean }>({ browser: false, available: null });
+  const tools = useRef<{ browser: boolean; available: Partial<Record<"github" | "blender" | "hyperframes", boolean>> | null; a11y?: boolean; apps?: readonly AppId[] }>({ browser: false, available: null });
   /** The <trex_context> stays in the session's history: it is sent again only for a new/reloaded session or new content. */
   const contextSent = useRef<{ session: string; text: string } | null>(null);
   /** Texto de los mensajes del usuario que repite un historial recuperado: si ya
@@ -139,12 +141,18 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       const detection = detectedIntegrations(current.cwd);
       // Experimental: where the accessibility engine cannot run, the session starts without it, with a notice.
       const a11y = current.a11yEnabled ? await accessibilityServer("full", message => notice("warn", message)) : null;
-      tools.current = { browser: !!browser, available: detection instanceof Promise ? await detection : detection, a11y: !!a11y };
+      const available = detection instanceof Promise ? await detection : detection;
+      // Antigravity has no read-only planner mode here (it refuses to start as one), so the server is bound to full, like the desktop's.
+      const wanted = appsWanted(current.integrations, available);
+      const apps = wanted.length ? await appsServer("full", current.cwd, wanted, message => notice("warn", message)) : null;
+      tools.current = { browser: !!browser, available, a11y: !!a11y, apps: apps ? wanted : [] };
       const tasks = await messageQueueMcpConfig(messageQueueId(current.queueId ?? current.sessionId), true,
         { session: current.queueId ?? current.sessionId, project: current.cwd });
+      // Memoria de Trex: el resumen viaja en el contexto de la sesión (sin ella, el chat sigue igual).
+      await loadMemory(current.cwd);
       const servers = [acpMcpServer("trex_inbox", { command: text(tasks["mcp_servers.trex_inbox.command"]), args: tasks["mcp_servers.trex_inbox.args"] as string[] }),
         ...(browser ? [acpMcpServer("trex_browser", browser)] : []), ...(current.desktopEnabled ? [acpMcpServer("trex_desktop", await trexDesktopMcpConfig("full"))] : []),
-        ...(a11y ? [acpMcpServer(A11Y_SERVER, a11y)] : [])];
+        ...(a11y ? [acpMcpServer(A11Y_SERVER, a11y)] : []), ...(apps ? [acpMcpServer(APPS_SERVER, apps)] : [])];
       if (!isCurrent(token)) throw new Error("Se canceló la conexión.");
       const capabilities = record(native.init.agentCapabilities);
       const saved = conversation.current;
@@ -208,7 +216,7 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
         : acpPrompt(value, images, imageSupported);
       // Explicit context travels as text, including on resume; no private or undocumented injection channel.
       // It stays in the session history, so it is repeated only for a new/reloaded session or changed content.
-      const context = `<trex_context>\n${[INSTRUCTIONS, integrationInstructions("antigravity", integrationContext(latest.current, tools.current))].filter(Boolean).join(" ")}${latest.current.planningInstruction ? `\n${latest.current.planningInstruction}` : ""}\n</trex_context>`;
+      const context = `<trex_context>\n${[INSTRUCTIONS, integrationInstructions("antigravity", integrationContext(latest.current, tools.current)), memoryInstructions(loadedMemory(latest.current.cwd))].filter(Boolean).join(" ")}${latest.current.planningInstruction ? `\n${latest.current.planningInstruction}` : ""}\n</trex_context>`;
       const withContext = contextSent.current?.session !== session.current || contextSent.current.text !== context;
       if (withContext) prompt.unshift({ type: "text", text: context });
       const id = localId(), native = connection.current, nativeSession = session.current;

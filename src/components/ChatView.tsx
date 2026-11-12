@@ -1,6 +1,6 @@
 import { formatClock } from "../timeFormat";
 import GitPanel from "./chat/GitPanel";
-import { BranchIcon } from "./Icons";
+import { BranchIcon, MemoryIcon } from "./Icons";
 import BrowserMenu from "./chat/BrowserMenu";
 import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browser";
 /**
@@ -56,12 +56,14 @@ import UsageMenu from "./chat/UsageMenu";
 import { FileBadge, SharedFilesContext } from "./chat/SharedFiles";
 import { useImageViewer } from "./ImageViewer";
 import { useStableCallback } from "../hooks/useStableCallback";
+import { syncMemorySoon } from "../memory";
 import QuestionPanel from "./chat/QuestionPanel";
 import Suggestions from "./chat/Suggestions";
 import WorkSummary from "./chat/WorkSummary";
 import BranchMenu, { GIT_BRANCH_CHANGED } from "./chat/BranchMenu";
 import QueuedMessages from "./chat/QueuedMessages";
 import TaskPanel from "./chat/TaskPanel";
+import MemoryPanel from "./chat/MemoryPanel";
 import { AccountUsagePanel, UsageToggle } from "./AccountUsage";
 import { onUsagePanelRequest, reportLiveUsage } from "../accountUsageStore";
 import SubagentActivity from "./chat/AgentActivity";
@@ -172,7 +174,7 @@ const THREAD_STEP = 80;
 const NO_ITEMS: ChatItem[] = [];
 
 /** Pestañas del panel lateral: equipo, uso, tareas, sesiones del proyecto y Git comparten un solo panel. */
-type SideTab = "team" | "usage" | "tasks" | "peers" | "git";
+type SideTab = "team" | "usage" | "tasks" | "peers" | "git" | "memory";
 /** Atajos de la caja de mensaje: los mismos disparadores que abren las sugerencias. */
 const COMPOSER_HINTS = [
   { char: "/", label: "Comandos" },
@@ -243,6 +245,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   const setTasksOpen = (open: boolean): void => setSideTab(tab => open ? "tasks" : tab === "tasks" ? null : tab);
   const gitToggle = useRef<HTMLButtonElement>(null);
   const peersToggle = useRef<HTMLButtonElement>(null);
+  const memoryToggle = useRef<HTMLButtonElement>(null);
   const teamToggle = useRef<HTMLButtonElement>(null);
   const usageToggle = useRef<HTMLButtonElement>(null);
   // «Ver uso» desde la paleta o el menú: lo abre el chat a la vista, primero el que tiene el foco.
@@ -380,13 +383,14 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   useEffect(() => {
     const before = previous.current;
     if (permissions > before.permissions) callbacks.current.onNotice(sessionId, "attention");
+    if (before.activity !== "idle" && activity === "idle") syncMemorySoon(cwd);
     if (before.activity !== "idle" && activity === "idle" && state.process !== "exited") {
       const last = state.items[state.items.length - 1];
       if (last?.kind === "notice" && last.tone === "error") callbacks.current.onNotice(sessionId, "error");
       else if (last?.kind === "turn" && last.durationMs >= MIN_WORK_MS) callbacks.current.onNotice(sessionId, "ready");
     }
     previous.current = { activity, permissions };
-  }, [activity, permissions, sessionId, state.items, state.process]);
+  }, [activity, permissions, sessionId, state.items, state.process, cwd]);
 
   // La conversación se guarda en cuanto tiene un mensaje (Codex abre el hilo antes).
   const hasMessages = state.items.some(item => item.kind === "user");
@@ -1240,10 +1244,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   // Otras sesiones vivas en este proyecto: su pestaña solo existe mientras las haya.
   const peers = coordination ? peersOf(coordination.board, coordination.session) : [];
   const activeSide = sideTab === "git" && !branch || sideTab === "team" && !props.toolbar || sideTab === "peers" && !peers.length ? null : sideTab;
-  const tasksOpen = activeSide === "tasks", gitOpen = activeSide === "git", usageOpen = activeSide === "usage", peersOpen = activeSide === "peers";
+  const tasksOpen = activeSide === "tasks", gitOpen = activeSide === "git", usageOpen = activeSide === "usage", peersOpen = activeSide === "peers", memoryOpen = activeSide === "memory";
   const tasksDone = tasks.filter(task => task.status === "completed").length;
   const sideToggle = (tab: SideTab): { current: HTMLButtonElement | null } =>
-    tab === "team" ? teamToggle : tab === "git" ? gitToggle : tab === "usage" ? usageToggle : tab === "peers" ? peersToggle : taskToggle;
+    tab === "team" ? teamToggle : tab === "git" ? gitToggle : tab === "usage" ? usageToggle : tab === "peers" ? peersToggle : tab === "memory" ? memoryToggle : taskToggle;
   // Con el panel abierto, las pestañas que no se ven quedan en icono: su nombre va en el tooltip.
   const sideTip = (tab: SideTab, text: string): string | undefined => activeSide && activeSide !== tab ? text : undefined;
   const closeSide = (focus: { current: HTMLButtonElement | null }): void => {
@@ -1564,6 +1568,10 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
           aria-expanded={gitOpen} aria-controls={gitOpen ? `git-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "git" ? null : "git")}>
           <BranchIcon size={14} /><span className="chat-side-label">Git</span><small>{branch}</small></button>}
+        <button ref={memoryToggle} type="button" className="chat-task-toggle chat-memory-toggle tip-below" aria-label="Memoria compartida de los agentes"
+          data-tip={sideTip("memory", "Memoria · lo que recuerdan todos los agentes")} aria-expanded={memoryOpen} aria-controls={memoryOpen ? `memory-${sessionId}` : undefined}
+          onClick={() => setSideTab(tab => tab === "memory" ? null : "memory")}>
+          <MemoryIcon size={14} /><span className="chat-side-label">Memoria</span></button>
         {activeSide && <button type="button" className="icon-btn chat-side-collapse tip tip-below" aria-label="Contraer panel" data-tip="Contraer panel (Esc)"
           onClick={() => closeSide(sideToggle(activeSide))}><CloseIcon size={14} /></button>}
       </div>
@@ -1573,6 +1581,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         onClose={() => closeSide(taskToggle)} onReveal={revealTask} />}
       {peersOpen && coordination && <PeerSessions panelId={`peers-${sessionId}`} board={coordination.board} session={coordination.session}
         project={coordination.project} onClose={() => closeSide(peersToggle)} />}
+      {memoryOpen && <MemoryPanel panelId={`memory-${sessionId}`} project={cwd} onClose={() => closeSide(memoryToggle)} />}
       {branch && <GitPanel key={cwd} panelId={`git-${sessionId}`} cwd={cwd} branch={branch} busy={running || submittingEdit} open={gitOpen} visible={visible && gitOpen}
         onBranch={setBranch} onMessage={relayMessage} onClose={closeGit} />}
     </div>

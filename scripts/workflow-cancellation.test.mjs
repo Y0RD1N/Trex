@@ -7,6 +7,10 @@ import { load } from "./ts-loader.mjs";
 // Exercise the real hook and reducers; only React scheduling, timers and native IPC are fake.
 const names = ["chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "agentTeam", "integrations", "accessibility", "coordination"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => ["../" + name, await load(name)])));
+// Applications (Blender) stay off unless a test turns them on: no extra MCP server and no extra mode binding.
+dependencies["../apps"] = { ...(await load("apps")), appsWanted: () => [], appsServer: async () => null };
+// Trex memory stays off (MEMORY_OFF): no native call, no wait before spawning and no sync after turns.
+dependencies["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory"));
 const source = await readFile(new URL("../src/hooks/useClaudeChat.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },

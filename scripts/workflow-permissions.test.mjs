@@ -7,6 +7,10 @@ import { load } from "./ts-loader.mjs";
 // Run the actual hooks, protocol encoders and reducers. No process or model is started.
 const modules = ["chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "coordination"];
 const dependencies = Object.fromEntries(await Promise.all(modules.map(async name => ["../" + name, await load(name)])));
+// Applications (Blender) stay off unless a test turns them on: no extra MCP server and no extra mode binding.
+dependencies["../apps"] = { ...(await load("apps")), appsWanted: () => [], appsServer: async () => null };
+// Trex memory stays off (MEMORY_OFF): no native call, no wait before spawning and no sync after turns.
+dependencies["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory"));
 const compiled = Object.fromEntries(await Promise.all(["Claude", "Codex"].map(async provider => {
   const source = await readFile(new URL(`../src/hooks/use${provider}Chat.ts`, import.meta.url), "utf8");
   const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } });

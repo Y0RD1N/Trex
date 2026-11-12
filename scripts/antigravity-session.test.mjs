@@ -5,6 +5,10 @@ import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 const names = ["acpProtocol", "antigravityChat", "antigravityUsage", "chatState", "chatTimes", "browser", "integrations", "accessibility", "sharedFiles", "messageQueue", "coordination"];
 const deps = Object.fromEntries(await Promise.all(names.map(async name => ["../" + name, await load(name)])));
+// Applications (Blender) stay off unless a test turns them on: no extra MCP server and no extra mode binding.
+deps["../apps"] = { ...(await load("apps")), appsWanted: () => [], appsServer: async () => null };
+// Trex memory stays off (MEMORY_OFF): no native call, no wait before spawning and no sync after turns.
+deps["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory"));
 const { AcpConnection } = deps["../acpProtocol"];
 const { INBOX_WAKE } = deps["../messageQueue"];
 const compiled = ts.transpileModule(await readFile(new URL("../src/hooks/useAntigravityChat.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
@@ -71,7 +75,7 @@ function harness(t, extra = {}) {
   const exports = {};
   compile(name => name === "react" ? hooks : name === "../api" ? api : name === "../antigravityConnection" ? { openAntigravity: open }
     : name === "../browserConnection" ? { connectBrowser: async options => options?.enabled ? { command: "browser", args: ["--client", options.clientId, "--profile", options.profile] } : null }
-      : name === "./chatSession" ? { localId: () => `local-${++serial}` } : name === "./useMessageQueue" ? { useMessageQueue: id => { queueId = id; return queue; } }
+      : name === "../apps" ? { ...deps[name], ...extra.apps } : name === "./chatSession" ? { localId: () => `local-${++serial}` } : name === "./useMessageQueue" ? { useMessageQueue: id => { queueId = id; return queue; } }
         : deps[name] ?? (() => { throw Error(`Unexpected hook import: ${name}`); })(), exports);
   const options = { sessionId: "tab-one", cwd: "C:/project", command: "antigravity-acp", args: "", shell: "", env: null, conversationId: null, mode: null, visible: false, onRunning() {}, onExit() {}, ...extra.options };
   const render = () => { cursor = 0; session = exports.useAntigravityChat(options); for (const effect of effects.splice(0)) effect(); return session; };
@@ -93,6 +97,22 @@ test("Antigravity starts without inference and binds only the selected chat's to
   assert.deepEqual(h.mcpQueries, [{ id: "t-tab-one", tasksOnly: true }]);
   assert.deepEqual(servers[1].args, ["--client", "client-a", "--profile", "BROWSER4"]);
   assert.deepEqual(h.session.modes.map(m => m.value), ["ask"]);
+});
+
+for (const apps of [["blender"], ["blender", "hyperframes", "github"]]) test(`Antigravity gets ${apps.join(" + ")} bound to full, and the prompt says how to use them`, async t => {
+  const calls = [];
+  const h = harness(t, { apps: { appsWanted: () => apps, appsServer: async (mode, folder, list) => { calls.push([mode, folder, list]); return { command: "apps", args: ["apps-mcp", "--mode", "full", "--cwd", folder, "--apps", list.join(",")] }; } } });
+  await h.start();
+  assert.deepEqual(calls, [["full", "C:/project", apps]], "no read-only planner exists for Antigravity here");
+  const servers = h.writes.find(w => w.method === "session/new").params.mcpServers;
+  assert.deepEqual(servers.map(s => s.name), ["trex_inbox", "trex_apps"]);
+  assert.deepEqual(servers[1].args, ["apps-mcp", "--mode", "full", "--cwd", "C:/project", "--apps", apps.join(",")]);
+  await h.session.send("Make a video", [], []); await tick();
+  const prompt = h.writes.find(w => w.method === "session/prompt").params.prompt[0].text;
+  assert.match(prompt, /connected trex_apps MCP tools \(blender_\*\)/);
+  assert.equal(/connected trex_apps MCP tools \(hyperframes_\*\)/.test(prompt), apps.includes("hyperframes"));
+  assert.equal(/connected trex_apps MCP tools \(github_\*\)/.test(prompt), apps.includes("github"));
+  assert.doesNotMatch(prompt, /not an open window/);
 });
 
 const usageReport = "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 95% remaining (resets Nov 01, 2026, 16:02 UTC)";

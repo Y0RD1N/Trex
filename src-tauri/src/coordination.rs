@@ -952,15 +952,22 @@ pub async fn coordination_release(app: AppHandle, project: String, claim: String
     blocking(move || with_board(&root, &project, |board, _, _| ((), force_release(board, &claim)))).await
 }
 
+/// Herramientas de una sesión de Claude en su proyecto: coordinación y memoria de Trex.
 #[tauri::command]
 pub fn coordination_tools() -> Vec<Value> {
-    tools()
+    let mut list = tools();
+    list.extend(crate::memory::tools());
+    list
 }
 
-/// Herramientas de coordinación de las sesiones de Claude (su servidor MCP lo sirve la ventana).
+/// Herramientas de las sesiones de Claude (su servidor MCP lo sirve la ventana): las de memoria
+/// van a `memory.rs`, con Claude y la sesión como procedencia.
 #[tauri::command]
 pub async fn coordination_call(app: AppHandle, project: String, session: String, name: String, arguments: Value) -> Result<Value, String> {
     let root = data_dir(&app)?;
+    if crate::memory::TOOLS.contains(&name.as_str()) {
+        return blocking(move || Ok(crate::memory::call(&root, Some(&project), &format!("claude · sesión {session}"), &name, &arguments))).await;
+    }
     blocking(move || Ok(call(&root, &project, &session, &name, &arguments))).await
 }
 

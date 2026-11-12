@@ -13,6 +13,7 @@ import { agentKill, agentWrite, agentTeamMcpConfig, trexDesktopMcpConfig, claude
 import { TEAM_TOOLS, TEAM_SERVER } from "../agentTeam";
 import { browserConfigForShell } from "../browser";
 import { A11Y_READ_TOOLS, A11Y_SERVER, accessibilityServer } from "../accessibility";
+import { APPS_READ_TOOLS, APPS_SERVER, appToolsFor, appsServer, appsWanted } from "../apps";
 import { withoutConversationArgs } from "../chatMessages";
 import { claudeSkillText, parseClaudeCommands } from "../chatCommands";
 import { readConversation } from "../conversations";
@@ -25,6 +26,7 @@ import { useMessageQueue } from "./useMessageQueue";
 import { deliverInbox, InboxRequests, INBOX_SERVER, INBOX_WAKE } from "../messageQueue";
 import { CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, claudeInboxInitialize, claudeInboxReply } from "../inboxProtocol";
 import { COORDINATION_TOOLS, coordinationCall, coordinationTools } from "../coordination";
+import { MEMORY_TOOLS, loadMemory, loadedMemory } from "../memory";
 import { IS_WINDOWS } from "../platform";
 import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMode, claudePlanningExitResponse, claudePlanningFlags } from "../workflowSafety";
 import { withChatTimes } from "../chatTimes";
@@ -35,8 +37,9 @@ const timedChatReducer = withChatTimes(chatReducer);
 const USAGE_INTERVAL_MS = 60_000;
 // A shell or unknown tool approval can escape plan mode; only known readers may be approved.
 /** Herramientas de coordinación entre sesiones: solo avisan y reservan en el registro de trex, nunca tocan el proyecto. */
-const CLAUDE_COORDINATION_TOOLS = COORDINATION_TOOLS.map(name => `mcp__${INBOX_SERVER}__${name}`);
-const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, `mcp__${INBOX_SERVER}__trex_peers`, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
+// La memoria de Trex va por el mismo puente que la coordinación y, como ella, sin pedir permiso.
+const CLAUDE_COORDINATION_TOOLS = [...COORDINATION_TOOLS, ...MEMORY_TOOLS].map(name => `mcp__${INBOX_SERVER}__${name}`);
+const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, `mcp__${INBOX_SERVER}__trex_peers`, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...APPS_READ_TOOLS.map(name => `mcp__${APPS_SERVER}__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
 const planningDeniedLine = (requestId: string): string => JSON.stringify({
   type: "control_response", response: { subtype: "success", request_id: requestId,
     response: { behavior: "deny", message: "Esta pestaña de planificación solo permite herramientas de lectura y preguntas; no puede conceder permisos de escritura o ejecución." } },
@@ -81,8 +84,11 @@ type Control =
 export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env, conversationId } = options;
   const planningOnly = useRef(options.planningOnly === true).current;
-  const browserModeIntent = useRef(options.mode ?? ((options.browser?.enabled || options.desktopEnabled || options.a11yEnabled) ? claudeProfilePermissionMode(args, IS_WINDOWS && shell !== "wsl") : null));
+  const browserModeIntent = useRef(options.mode ?? ((options.browser?.enabled || options.desktopEnabled || options.a11yEnabled || options.integrations?.blender !== false || options.integrations?.hyperframes !== false || options.integrations?.github !== false) ? claudeProfilePermissionMode(args, IS_WINDOWS && shell !== "wsl") : null));
   const browserBoundMode = useRef<ReturnType<typeof browserMode> | null>(null);
+  /** Este proceso arrancó con `trex_apps`: su modo también se fija al arrancar, como el del escritorio. */
+  const appsBoundRef = useRef(false);
+  const modeBound = (): boolean => !!(callbacks.current.browser?.enabled || callbacks.current.desktopEnabled || callbacks.current.a11yEnabled || appsBoundRef.current);
   const browserConnectionRef = useRef<BrowserTransport | null>(null);
   const browserConnecting = useRef(false);
   const modeRevision = useRef(0);
@@ -234,7 +240,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   }, [control]);
 
   const syncBrowserMode = useCallback((mode: unknown, procId: string): boolean => {
-    if (planningOnly || readyProcessRef.current !== procId || !(callbacks.current.browser?.enabled || callbacks.current.desktopEnabled || callbacks.current.a11yEnabled) || typeof mode !== "string"
+    if (planningOnly || readyProcessRef.current !== procId || !modeBound() || typeof mode !== "string"
       || !["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"].includes(mode)) return false;
     if (browserModeIntent.current !== mode) modeRevision.current++;
     browserModeIntent.current = mode;
@@ -243,7 +249,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     // Over MCP-HTTP the broker re-binds the same agent token to the new mode, so
     // the conversation keeps running. Desktop and accessibility control are stdio with a fixed mode.
     const connection = browserConnectionRef.current;
-    if (isBrowserHttp(connection) && !callbacks.current.desktopEnabled && !callbacks.current.a11yEnabled) {
+    if (isBrowserHttp(connection) && !callbacks.current.desktopEnabled && !callbacks.current.a11yEnabled && !appsBoundRef.current) {
       browserBoundMode.current = next;
       dispatch({ type: "mode", mode });
       void rebindBrowser(connection, mode, false).then(ok => {
@@ -277,7 +283,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     if (reply?.request_id && pending) {
       pendingControlsRef.current.delete(reply.request_id);
       const data = reply.subtype === "success" ? reply.response ?? {} : {};
-      const staleMode = (callbacks.current.browser?.enabled || callbacks.current.desktopEnabled || callbacks.current.a11yEnabled) && (pending.kind === "initialize" || pending.kind === "mode")
+      const staleMode = modeBound() && (pending.kind === "initialize" || pending.kind === "mode")
         && pending.modeRevision !== undefined && pending.modeRevision !== modeRevision.current;
       if (pending.kind === "mode" && staleMode) return;
       if (pending.kind === "initialize") {
@@ -451,7 +457,11 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
             message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message }), true), startup.signal) : null;
         } finally { if (startupRef.current === startup) browserConnecting.current = false; }
         startup.signal.throwIfAborted();
-        const accessEnabled = !!browser || callbacks.current.desktopEnabled === true || callbacks.current.a11yEnabled === true;
+        // Installed applications (cached per folder) decide whether the apps server is attached.
+        const detection = detectedIntegrations(cwd);
+        const available = detection instanceof Promise ? await whileCurrent(detection, startup.signal) : detection;
+        const wantApps = appsWanted(callbacks.current.integrations, available);
+        const accessEnabled = !!browser || callbacks.current.desktopEnabled === true || callbacks.current.a11yEnabled === true || wantApps.length > 0;
         const chosenMode = planningOnly ? "plan" : accessEnabled ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
         browserConnecting.current = callbacks.current.desktopEnabled === true;
         let desktop = null;
@@ -461,23 +471,30 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         const a11yConfig = callbacks.current.a11yEnabled ? await whileCurrent(accessibilityServer(browserMode(chosenMode, planningOnly),
           message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message })), startup.signal) : null;
         const a11y = a11yConfig ? browserConfigForShell(a11yConfig, shell) : null;
+        // Blender and HyperFrames: where the CLI lacks the server, the chat starts without it, with a notice.
+        const appsConfig = wantApps.length ? await whileCurrent(appsServer(browserMode(chosenMode, planningOnly), cwd, wantApps,
+          message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message })), startup.signal) : null;
+        const apps = appsConfig ? browserConfigForShell(appsConfig, shell) : null;
+        appsBoundRef.current = !!apps;
         const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", conversationOverrideRef.current)
           : conversationOverrideRef.current ? withoutConversationArgs(args) : args;
-        // Only what this process really has: an attached browser and installed applications.
-        const detection = detectedIntegrations(cwd);
-        const available = detection instanceof Promise ? await whileCurrent(detection, startup.signal) : detection;
-        const integrations = integrationContext(callbacks.current, { browser: !!browser, available, a11y: !!a11y });
+        // Only what this process really has: an attached browser, accessibility and apps, and installed applications.
+        const integrations = integrationContext(callbacks.current, { browser: !!browser, available, a11y: !!a11y, apps: apps ? wantApps : [] });
+        // Memoria de Trex: su carpeta del proyecto y lo global (sin ella el chat arranca igual).
+        const memory = loadedMemory(cwd) ?? await whileCurrent(loadMemory(cwd), startup.signal);
         const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations,
-          rolePolicy: planningOnly ? callbacks.current.planningInstruction : null });
+          rolePolicy: planningOnly ? callbacks.current.planningInstruction : null, memory });
         launchGuidanceRef.current = { integrations, appended: flags.includes("--append-system-prompt") };
         if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
           && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
         const teamConfig = callbacks.current.team ? browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell) : null;
         startup.signal.throwIfAborted();
-        if (browser || desktop || a11y || teamConfig) flags.push("--mcp-config", JSON.stringify({ mcpServers: {
-          ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(teamConfig ? { trex_team: { command: teamConfig.command, args: teamConfig.args, timeout: 1900000 } } : {}),
+        if (browser || desktop || a11y || apps || teamConfig) flags.push("--mcp-config", JSON.stringify({ mcpServers: {
+          ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}), ...(teamConfig ? { trex_team: { command: teamConfig.command, args: teamConfig.args, timeout: 1900000 } } : {}),
         } }));
         if (teamConfig) flags.push("--allowedTools", TEAM_TOOLS.map(name => `mcp__${TEAM_SERVER}__${name}`).join(","));
+        // Looking at Blender changes nothing: only code execution, opening and undo go through the permission prompt.
+        if (apps) flags.push("--allowedTools", appToolsFor(wantApps).read.map(name => `mcp__${APPS_SERVER}__${name}`).join(","));
         browserBoundMode.current = accessEnabled ? browserMode(chosenMode, planningOnly) : null;
         browserConnectionRef.current = browser;
         if (accessEnabled) initialization ??= initializationWait();
@@ -618,23 +635,30 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const browser = callbacks.current.browser?.enabled ? await whileCurrent(connectBrowser(callbacks.current.browser, cwd, browserModeIntent.current ?? current.modeChoice, planningOnly, shell,
         message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message }), true), request.signal) : null;
       request.signal.throwIfAborted();
-      const accessEnabled = !!browser || callbacks.current.desktopEnabled === true || callbacks.current.a11yEnabled === true;
+      const detection = detectedIntegrations(cwd);
+      const available = detection instanceof Promise ? await whileCurrent(detection, request.signal) : detection;
+      const wantApps = appsWanted(callbacks.current.integrations, available);
+      const accessEnabled = !!browser || callbacks.current.desktopEnabled === true || callbacks.current.a11yEnabled === true || wantApps.length > 0;
       const chosenMode = planningOnly ? "plan" : accessEnabled ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
       const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await whileCurrent(trexDesktopMcpConfig(browserMode(chosenMode, planningOnly)), request.signal), shell) : null;
       const a11yConfig = callbacks.current.a11yEnabled ? await whileCurrent(accessibilityServer(browserMode(chosenMode, planningOnly),
         message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message })), request.signal) : null;
       const a11y = a11yConfig ? browserConfigForShell(a11yConfig, shell) : null;
+      const appsConfig = wantApps.length ? await whileCurrent(appsServer(browserMode(chosenMode, planningOnly), cwd, wantApps,
+        message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message })), request.signal) : null;
+      const apps = appsConfig ? browserConfigForShell(appsConfig, shell) : null;
+      appsBoundRef.current = !!apps;
       const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", true) : withoutConversationArgs(args);
-      const detection = detectedIntegrations(cwd);
-      const available = detection instanceof Promise ? await whileCurrent(detection, request.signal) : detection;
-      const integrations = integrationContext(callbacks.current, { browser: !!browser, available, a11y: !!a11y });
+      const integrations = integrationContext(callbacks.current, { browser: !!browser, available, a11y: !!a11y, apps: apps ? wantApps : [] });
+      const memory = loadedMemory(cwd) ?? await whileCurrent(loadMemory(cwd), request.signal);
       const chatFlags = claudeChatFlags(profileArgs, point ? current.sessionId : null,
-        { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations, rolePolicy: planningOnly ? callbacks.current.planningInstruction : null });
+        { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations, rolePolicy: planningOnly ? callbacks.current.planningInstruction : null, memory });
       launchGuidanceRef.current = { integrations, appended: chatFlags.includes("--append-system-prompt") };
       const flags = planningOnly ? claudePlanningFlags(chatFlags) : chatFlags;
       if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
         && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
-      if (browser || desktop || a11y) flags.push("--mcp-config", JSON.stringify({ mcpServers: { ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}) } }));
+      if (browser || desktop || a11y || apps) flags.push("--mcp-config", JSON.stringify({ mcpServers: { ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}) } }));
+      if (apps) flags.push("--allowedTools", appToolsFor(wantApps).read.map(name => `mcp__${APPS_SERVER}__${name}`).join(","));
       browserBoundMode.current = accessEnabled ? browserMode(chosenMode, planningOnly) : null;
       browserConnectionRef.current = browser;
       if (point) flags.push("--resume-session-at", point, "--fork-session");

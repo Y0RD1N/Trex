@@ -8,8 +8,13 @@ import { load } from "./ts-loader.mjs";
 // process boundary and both kinds of browser timer are local, offline fakes.
 const dependencies = Object.fromEntries(await Promise.all([
   "chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "trexChat",
-  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "coordination",
+  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "apps", "coordination",
 ].map(async name => [`../${name}`, await load(name)])));
+// Applications (Blender) stay off unless a test turns them on: no extra MCP server and no extra mode binding.
+// A `const` so the team-sessions harness, which copies only declarations from this file, gets it too.
+const neutralApps = (dependencies["../apps"] = { ...dependencies["../apps"], appsWanted: () => [], appsServer: async () => null });
+// Trex memory stays off (MEMORY_OFF): no native call, no wait before spawning and no sync after turns.
+const neutralMemory = (dependencies["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory")));
 const compiled = Object.fromEntries(await Promise.all(["Trex", "Claude", "Codex"].map(async provider => {
   const source = await readFile(new URL(`../src/hooks/use${provider}Chat.ts`, import.meta.url), "utf8");
   const { outputText } = ts.transpileModule(source, {
@@ -182,6 +187,7 @@ function harness(t, provider, extra = {}) {
   const modules = {
     ...dependencies,
     ...(extra.accessibility ? { "../accessibility": { ...dependencies["../accessibility"], ...extra.accessibility } } : {}),
+    ...(extra.apps ? { "../apps": { ...dependencies["../apps"], ...extra.apps } } : {}),
     react: hooks,
     "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },
     "../api": { agentWrite: nativeWrite, formatError: error => error?.message ?? String(error),
