@@ -375,7 +375,28 @@ fn cache_table(report: &serde_json::Value) -> String {
     out
 }
 
+/// Windows gives the main thread 1 MB. In a debug build clap's derive keeps every subcommand's builder in a
+/// single frame (`augment_subcommands`), and with this many subcommands that frame alone overflowed it: every
+/// invocation, even `--version`, died with "main has overflowed its stack" (seen on the Windows CI). The whole
+/// program runs on a thread with room to spare; the size is address space reserved, not memory used.
+const STACK_BYTES: usize = 16 * 1024 * 1024;
+
 fn main() {
+    match std::thread::Builder::new().name("trex-agent".into()).stack_size(STACK_BYTES).spawn(run_program) {
+        Ok(worker) => {
+            if worker.join().is_err() {
+                // The panic message was already printed by the panic hook; keep the usual exit code for it.
+                std::process::exit(101);
+            }
+        }
+        Err(error) => {
+            eprintln!("trex-agent: cannot start the main thread: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_program() {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
