@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 /// Tamaño máximo de un archivo arrastrado o pegado que se guarda para el asistente.
-const SAVED_MAX_BYTES: usize = 100 * 1024 * 1024;
+pub(crate) const SAVED_MAX_BYTES: usize = 100 * 1024 * 1024;
 
 /// Lado más largo de una captura antes de enviarla a la ventana.
 const CLIPBOARD_MAX_EDGE: u32 = 1920;
@@ -143,24 +143,32 @@ pub async fn save_attachment(app: AppHandle, request: tauri::ipc::Request<'_>) -
         .and_then(|value| value.to_str().ok())
         .map(percent_decode)
         .unwrap_or_default();
-    let root = app
+    let root = attachments_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || store_attachment(&root, &name, &bytes).map(|path| path.to_string_lossy().into_owned()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Carpeta donde se guardan los adjuntos sin ruta (también los que sube el móvil).
+pub(crate) fn attachments_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("No se encontró la carpeta de la app: {e}"))?
-        .join("attachments");
-    tauri::async_runtime::spawn_blocking(move || {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|time| time.as_nanos())
-            .unwrap_or_default();
-        let dir = root.join(format!("{stamp:x}"));
-        std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;
-        let path = dir.join(safe_name(&name));
-        std::fs::write(&path, bytes).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;
-        Ok(path.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        .join("attachments"))
+}
+
+/// Guarda un adjunto en su propia subcarpeta (dos archivos con el mismo nombre no se pisan).
+pub(crate) fn store_attachment(root: &std::path::Path, name: &str, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|time| time.as_nanos())
+        .unwrap_or_default();
+    let dir = root.join(format!("{stamp:x}"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;
+    let path = dir.join(safe_name(name));
+    std::fs::write(&path, bytes).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;
+    Ok(path)
 }
 
 #[cfg(test)]

@@ -8,7 +8,11 @@
  */
 import { describeTool, diffStats, questionsOf, questionsTitle, text, type ChatItem, type ChatState, type Json, type PermissionItem } from "./chatState";
 import type { ChatTask } from "./chatTasks";
+import { splitAttachedFiles } from "./imageReferences";
 import type { AgentProvider } from "./types";
+
+/** Último componente de una ruta de Windows o Unix. */
+const pathName = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
 export type RemoteStatus = "needs" | "working" | "idle" | "exited";
 
@@ -18,7 +22,8 @@ export type RemoteNeed = { kind: "permission" | "question" | "plan"; item: strin
 export type RemoteSession = {
   id: string;
   title: string;
-  project: { id: string; name: string };
+  /** `path` sirve al PC para encontrar el icono; `order` es su lugar en la barra lateral. */
+  project: { id: string; name: string; path: string; order: number };
   provider: AgentProvider;
   /** Perfil y modelo, para reconocer la sesión («Claude Code · Opus»). */
   agent: string;
@@ -32,7 +37,7 @@ export type RemoteSession = {
 };
 
 export type RemoteItem =
-  | { kind: "user"; id: string; text: string; images: number }
+  | { kind: "user"; id: string; text: string; images: number; files: string[] }
   | { kind: "text"; id: string; text: string; final: boolean }
   | { kind: "tool"; id: string; verb: string; target: string; status: "running" | "done" | "error"; added: number; removed: number }
   | { kind: "notice"; id: string; tone: "info" | "warn" | "error"; text: string }
@@ -134,7 +139,12 @@ export function remoteItems(items: ChatItem[], cwd: string): RemoteItem[] {
   const out: RemoteItem[] = [];
   for (const item of items) {
     switch (item.kind) {
-      case "user": out.push({ kind: "user", id: item.id, text: clip(item.text), images: item.images }); break;
+      case "user": {
+        // Los archivos viajan como rutas al final del mensaje: el móvil muestra solo sus nombres.
+        const { text: body, files } = splitAttachedFiles(item.text);
+        out.push({ kind: "user", id: item.id, text: clip(body.trim()), images: item.images, files: files.slice(0, 20).map(pathName) });
+        break;
+      }
       case "text": if (item.text.trim()) out.push({ kind: "text", id: item.id, text: clip(item.text), final: item.final }); break;
       case "tool": if (!QUIET_TOOLS.has(item.name)) out.push(toolItem(item, cwd)); break;
       case "notice": out.push({ kind: "notice", id: item.id, tone: item.tone, text: clip(item.text, 600) }); break;
@@ -227,8 +237,10 @@ export function remoteDetail(input: DetailInput): RemoteDetail {
 // --- Órdenes que llegan del móvil ---------------------------------------------------
 
 export type RemoteChoice = { question: string; selected: string[]; other: string };
+/** Un adjunto ya subido al PC (el backend traduce el id del móvil a su ruta). */
+export type RemoteFile = { path: string; name: string; image: boolean };
 export type RemoteAction =
-  | { kind: "send"; text: string }
+  | { kind: "send"; text: string; files: RemoteFile[] }
   | { kind: "answer"; item: string; allowed: boolean; remember: boolean; choices: RemoteChoice[] | null }
   | { kind: "interrupt" };
 export type RemoteCommand = { command: number; device: string; session: string; action: RemoteAction };
@@ -240,7 +252,14 @@ export function parseRemoteCommand(value: unknown): RemoteCommand | null {
   const action = raw.action as Record<string, unknown> | undefined;
   if (typeof raw.command !== "number" || typeof raw.session !== "string" || !action || typeof action !== "object") return null;
   const base = { command: raw.command, device: typeof raw.device === "string" ? raw.device : "", session: raw.session };
-  if (action.kind === "send" && typeof action.text === "string" && action.text.trim()) return { ...base, action: { kind: "send", text: action.text } };
+  if (action.kind === "send" && typeof action.text === "string") {
+    const files = (Array.isArray(action.files) ? action.files : []).slice(0, 20).flatMap(value => {
+      const f = (value ?? {}) as Record<string, unknown>;
+      return typeof f.path === "string" && f.path ? [{ path: f.path, name: typeof f.name === "string" ? f.name : pathName(f.path), image: f.image === true }] : [];
+    });
+    if (!action.text.trim() && !files.length) return null;
+    return { ...base, action: { kind: "send", text: action.text, files } };
+  }
   if (action.kind === "interrupt") return { ...base, action: { kind: "interrupt" } };
   if (action.kind === "answer" && typeof action.item === "string") {
     const choices = Array.isArray(action.choices) ? action.choices.map(choice => {

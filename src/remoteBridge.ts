@@ -34,6 +34,8 @@ class RemoteBridge {
   private started = false;
   private themeObserver: MutationObserver | null = null;
   private themeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Orden de los proyectos en la barra lateral: el móvil los agrupa igual. */
+  private projectOrder = new Map<string, number>();
 
   start(): void {
     if (this.started || !isTauri()) return;
@@ -57,6 +59,15 @@ class RemoteBridge {
       this.dirtyList = true;
       this.schedule();
     };
+  }
+
+  setProjectOrder(ids: string[]): void {
+    const next = new Map(ids.map((id, index) => [id, index]));
+    if (next.size === this.projectOrder.size && [...next].every(([id, index]) => this.projectOrder.get(id) === index)) return;
+    this.projectOrder = next;
+    if (!this.active) return;
+    this.dirtyList = true;
+    this.schedule();
   }
 
   /** Algo visible cambió en una sesión. Sin móviles conectados no hace nada. */
@@ -107,7 +118,10 @@ class RemoteBridge {
       this.dirtyList = false;
       const sessions: RemoteSession[] = [];
       for (const entry of this.entries.values()) {
-        try { sessions.push(entry.summary()); } catch { /* una sesión rota no deja sin lista a las demás */ }
+        try {
+          const summary = entry.summary();
+          sessions.push({ ...summary, project: { ...summary.project, order: this.projectOrder.get(summary.project.id) ?? Number.MAX_SAFE_INTEGER } });
+        } catch { /* una sesión rota no deja sin lista a las demás */ }
       }
       void invoke("remote_publish", { sessions }).catch(() => undefined);
     }

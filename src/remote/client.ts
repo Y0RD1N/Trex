@@ -5,6 +5,10 @@
  */
 import type { RemoteAction, RemoteDetail, RemoteSession } from "../remoteProtocol";
 
+/** Lo que manda el móvil: los adjuntos van como ids de lo ya subido (el PC los traduce a rutas). */
+export type PhoneAction = Exclude<RemoteAction, { kind: "send" }> | { kind: "send"; text: string; attachments: string[] };
+export type Uploaded = { id: string; name: string; size: number; image: boolean };
+
 export type RemoteTheme = { mode: "dark" | "light"; colors: Record<string, string> };
 export type ConnectionState = "connecting" | "online" | "offline" | "denied";
 
@@ -44,6 +48,45 @@ export async function pairDevice(code: string, name: string): Promise<void> {
   if (!response.ok || !body.token) throw new Error(body.error ?? "No se pudo emparejar. Comprueba la conexión con el PC.");
   localStorage.setItem(TOKEN_KEY, body.token);
   if (body.device) localStorage.setItem(DEVICE_KEY, JSON.stringify(body.device));
+}
+
+const authHeaders = (): Record<string, string> => ({ authorization: `Bearer ${storedToken() ?? ""}` });
+
+/** Sube un adjunto al PC (queda en su carpeta de adjuntos) y devuelve su id. */
+export function uploadFile(file: Blob, name: string, progress?: (fraction: number) => void, signal?: AbortSignal): Promise<Uploaded> {
+  return new Promise((resolve, reject) => {
+    // XHR y no fetch: así se ve el progreso de subida, que con fotos grandes por VPN importa.
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/upload");
+    for (const [key, value] of Object.entries(authHeaders())) request.setRequestHeader(key, value);
+    request.setRequestHeader("x-file-name", encodeURIComponent(name || "archivo"));
+    request.upload.onprogress = event => { if (event.lengthComputable) progress?.(event.loaded / event.total); };
+    request.onload = () => {
+      let body: Partial<Uploaded> & { error?: string } = {};
+      try { body = JSON.parse(request.responseText); } catch { /* respuesta sin JSON */ }
+      if (request.status === 200 && body.id) resolve(body as Uploaded);
+      else reject(new Error(body.error ?? (request.status === 413 ? "El archivo pesa más de 100 MB." : "No se pudo subir el archivo al PC.")));
+    };
+    request.onerror = () => reject(new Error("Se cortó la conexión al subir el archivo."));
+    request.onabort = () => reject(new DOMException("Cancelado", "AbortError"));
+    signal?.addEventListener("abort", () => request.abort(), { once: true });
+    request.send(file);
+  });
+}
+
+const icons = new Map<string, Promise<string | null>>();
+
+/** Logo del proyecto (el de la barra lateral del PC); null si no tiene. Se pide una vez. */
+export function projectIcon(project: string): Promise<string | null> {
+  let pending = icons.get(project);
+  if (!pending) {
+    pending = fetch(`/api/icon?project=${encodeURIComponent(project)}`, { headers: authHeaders(), credentials: "omit", cache: "no-store" })
+      .then(response => response.ok ? response.json() as Promise<{ url: string | null }> : { url: null })
+      .then(body => typeof body.url === "string" && body.url.startsWith("data:image/") ? body.url : null)
+      .catch(() => { icons.delete(project); return null; });
+    icons.set(project, pending);
+  }
+  return pending;
 }
 
 export class RemoteClient {
@@ -100,7 +143,7 @@ export class RemoteClient {
   }
 
   /** Orden para una sesión; se resuelve cuando el PC la ejecutó (o falla con su motivo). */
-  command(session: string, action: RemoteAction): Promise<void> {
+  command(session: string, action: PhoneAction): Promise<void> {
     if (!this.socket || this.state !== "online") return Promise.reject(new Error("Sin conexión con el PC."));
     const req = this.nextRequest++;
     return new Promise((resolve, reject) => {

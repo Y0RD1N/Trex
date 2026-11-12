@@ -9,9 +9,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { strata } from "../strata";
+import ProjectCore from "../components/ProjectCore";
+import { MAX_IMAGES, prepareImage } from "../chatImages";
+import { insertImageReferences, removeImageReference, type ReferenceKind } from "../imageReferences";
 import { timeAgo, type RemoteChoice, type RemoteDetail, type RemoteItem, type RemotePending, type RemoteQuestion, type RemoteSession } from "../remoteProtocol";
-import { RemoteClient, defaultDeviceName, forgetToken, pairDevice, storedToken, type ConnectionState, type RemoteTheme } from "./client";
+import { RemoteClient, defaultDeviceName, forgetToken, pairDevice, projectIcon, storedToken, uploadFile, type ConnectionState, type PhoneAction, type RemoteTheme } from "./client";
 
 const T_PATH = "M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z";
 const PROVIDER_NAME: Record<string, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity", trex: "Trex" };
@@ -31,13 +33,21 @@ function Loader({ size = 14 }: { size?: number }) {
   </svg>;
 }
 
-/** Núcleo de sondeo: la misma columna de estratos que el proyecto tiene en el PC. */
-const Core = memo(function Core({ seed, height }: { seed: string; height?: number }) {
-  const layers = useMemo(() => strata(seed, 20), [seed]);
-  return <span className="r-core" style={height ? { height } : undefined} aria-hidden="true">
-    {layers.map((layer, index) => <i key={index} style={{ flexGrow: layer.height, background: layer.color }} />)}
+/** El logo del proyecto, como en la barra lateral del PC; sin logo, la carpeta con sus estratos. */
+const ProjectIcon = memo(function ProjectIcon({ id, size = 18 }: { id: string; size?: number }) {
+  const [icon, setIcon] = useState<{ id: string; url: string | null } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void projectIcon(id).then(url => { if (alive) setIcon({ id, url }); });
+    return () => { alive = false; };
+  }, [id]);
+  const url = icon?.id === id ? icon.url : null;
+  return <span className="r-picon" style={{ width: size, height: size }} aria-hidden="true">
+    {url ? <img src={url} alt="" width={size} height={size} draggable={false} /> : <ProjectCore seed={id} size={size} />}
   </span>;
 });
+
+const Chevron = ({ open }: { open?: boolean }) => <svg className={`r-chev${open ? " is-open" : ""}`} viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>;
 
 const safeUrl = (url: string): string => {
   const value = defaultUrlTransform(url);
@@ -139,76 +149,125 @@ function LinkChip({ state, host, latency }: { state: ConnectionState; host: stri
   </span>;
 }
 
-// --- B · Sesiones ------------------------------------------------------------------------
+/// --- B · Sesiones, agrupadas por proyecto como en la barra lateral del PC ----------------
 
 const ORDER: Record<RemoteSession["status"], number> = { needs: 0, working: 1, idle: 2, exited: 3 };
+const COLLAPSED_KEY = "trex-remote-collapsed";
 
-function SessionCard({ session, now, onOpen, onQuick }: { session: RemoteSession; now: number; onOpen: () => void; onQuick: (allowed: boolean) => Promise<void> }) {
+function useCollapsed(): [Set<string>, (id: string) => void] {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
+  });
+  const toggle = (id: string) => setCollapsed(previous => {
+    const next = new Set(previous);
+    if (!next.delete(id)) next.add(id);
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next])); } catch { /* sin almacenamiento */ }
+    return next;
+  });
+  return [collapsed, toggle];
+}
+
+/** Glifo de estado: el mismo idioma que la barra lateral (▲ te espera, la «t» en estratos trabaja). */
+function StatusGlyph({ session }: { session: RemoteSession }) {
+  if (session.status === "needs") return <span className="r-glyph is-warn" aria-label="Te necesita">{session.need?.kind === "question" ? "?" : "▲"}</span>;
+  if (session.status === "working") return <span className="r-glyph" aria-label="Trabajando"><Loader size={13} /></span>;
+  if (session.status === "exited") return <span className="r-glyph is-dim" aria-label="Cerrada">✕</span>;
+  return <span className="r-glyph is-dim" aria-hidden="true">·</span>;
+}
+
+function SessionRow({ session, now, onOpen, onQuick }: { session: RemoteSession; now: number; onOpen: () => void; onQuick: (allowed: boolean) => Promise<void> }) {
   const [busy, setBusy] = useState<"allow" | "deny" | null>(null);
   const quick = async (allowed: boolean) => {
     setBusy(allowed ? "allow" : "deny");
     try { await onQuick(allowed); } finally { setBusy(null); }
   };
   const need = session.need;
-  return <article className={`r-card${need ? " is-need" : ""}`}>
-    <button type="button" className="r-srow" onClick={onOpen}>
-      <Core seed={session.project.id} />
+  const line = need ? `${need.kind === "permission" ? "pide permiso · " : need.kind === "question" ? "pregunta · " : ""}${need.label}`
+    : session.status === "working" ? session.activity ?? "trabajando" : null;
+  return <div className={`r-session${need ? " is-need" : ""}${session.status === "exited" ? " is-exited" : ""}`}>
+    <button type="button" className="r-session-main" onClick={onOpen}>
+      <StatusGlyph session={session} />
       <span className="r-sbody">
-        <span className="r-sh"><b className="r-ttl">{session.title}</b><span className="r-when">{timeAgo(session.updatedAt, now)}</span></span>
-        <span className="r-meta">{session.project.name} · {session.agent}{session.model ? ` · ${session.model}` : ""}</span>
-        {need ? <span className="r-st is-warn">{need.kind === "question" ? "?" : "▲"} {need.kind === "permission" ? "pide permiso · " : need.kind === "plan" ? "" : "pregunta · "}{need.label}</span>
-          : session.status === "working" ? <span className="r-st is-work"><Loader />{session.activity ?? "trabajando"}</span> : null}
+        <span className="r-sh"><span className="r-ttl">{session.title}</span>
+          <span className="r-when">{session.status === "exited" ? "cerrada" : timeAgo(session.updatedAt, now)}</span></span>
+        <span className="r-meta">{session.agent}{session.model ? ` · ${session.model}` : ""}</span>
+        {line && <span className={`r-st${need ? " is-warn" : ""}`}>{line}</span>}
       </span>
     </button>
     {need?.kind === "permission" && <div className="r-quick">
-      <button type="button" className="r-btn is-ghost" onClick={onOpen}>Ver</button>
       <button type="button" className="r-btn" disabled={!!busy} onClick={() => void quick(false)}>{busy === "deny" ? <Loader /> : "Rechazar"}</button>
       <button type="button" className="r-btn is-warn" disabled={!!busy} onClick={() => void quick(true)}>{busy === "allow" ? <Loader /> : "Permitir"}</button>
     </div>}
-  </article>;
+  </div>;
 }
 
-function SessionList({ sessions, filter, onFilter, onlyWaiting, onOpen, onQuick }: {
-  sessions: RemoteSession[]; filter: string | null; onFilter: (project: string | null) => void; onlyWaiting: boolean;
+type ProjectGroup = { id: string; name: string; order: number; sessions: RemoteSession[] };
+
+function SessionList({ sessions, onlyWaiting, onOpen, onQuick }: {
+  sessions: RemoteSession[]; onlyWaiting: boolean;
   onOpen: (id: string) => void; onQuick: (session: RemoteSession, allowed: boolean) => Promise<void>;
 }) {
   const now = useNow();
-  const projects = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const session of sessions) seen.set(session.project.id, session.project.name);
-    return [...seen];
-  }, [sessions]);
-  const visible = sessions.filter(session => (!filter || session.project.id === filter) && (!onlyWaiting || session.status === "needs"))
-    .sort((a, b) => ORDER[a.status] - ORDER[b.status] || b.updatedAt - a.updatedAt);
-  const groups: [string, RemoteSession[]][] = [
-    ["Te necesitan", visible.filter(s => s.status === "needs")],
-    ["Trabajando", visible.filter(s => s.status === "working")],
-    ["En reposo", visible.filter(s => s.status === "idle" || s.status === "exited")],
-  ];
+  const [collapsed, toggle] = useCollapsed();
+  const groups = useMemo(() => {
+    const byProject = new Map<string, ProjectGroup>();
+    for (const session of sessions) {
+      if (onlyWaiting && session.status !== "needs") continue;
+      const { id, name, order } = session.project;
+      const group = byProject.get(id) ?? { id, name, order: order ?? Number.MAX_SAFE_INTEGER, sessions: [] };
+      group.sessions.push(session);
+      byProject.set(id, group);
+    }
+    const list = [...byProject.values()];
+    for (const group of list) group.sessions.sort((a, b) => ORDER[a.status] - ORDER[b.status] || b.updatedAt - a.updatedAt);
+    return list.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+  }, [sessions, onlyWaiting]);
+  const waiting = sessions.filter(session => session.status === "needs").length;
+  const working = sessions.filter(session => session.status === "working").length;
   return <div className="r-scroll">
-    {projects.length > 1 && <div className="r-chips" role="toolbar" aria-label="Filtrar por proyecto">
-      <button type="button" className={`r-chip${filter ? "" : " is-on"}`} onClick={() => onFilter(null)}>Todos</button>
-      {projects.map(([id, name]) => <button type="button" key={id} className={`r-chip${filter === id ? " is-on" : ""}`} onClick={() => onFilter(filter === id ? null : id)}>
-        <Core seed={id} height={14} />{name}</button>)}
-    </div>}
-    {!visible.length && <div className="r-empty">{onlyWaiting ? "Nada te espera ahora mismo." : "No hay sesiones de chat abiertas en el PC."}</div>}
-    {groups.map(([label, list]) => list.length > 0 && <section key={label}>
-      <div className="r-rule r-sec"><span>{label}</span><span className="r-n">{list.length}</span></div>
-      {label === "En reposo"
-        ? <div className="r-plain-list">{list.map(session => <button type="button" key={session.id} className="r-plain" onClick={() => onOpen(session.id)}>
-            <Core seed={session.project.id} height={20} /><span className="r-ttl">{session.title}</span>
-            <span className="r-when">{session.status === "exited" ? "cerrada" : timeAgo(session.updatedAt, now)}</span></button>)}</div>
-        : <div className="r-cards">{list.map(session => <SessionCard key={session.id} session={session} now={now} onOpen={() => onOpen(session.id)}
-            onQuick={allowed => onQuick(session, allowed)} />)}</div>}
-    </section>)}
+    <div className="r-rule r-sec"><span>{onlyWaiting ? "Te esperan" : "Proyectos"}</span><span className="r-n">{groups.length}</span></div>
+    {!onlyWaiting && (waiting > 0 || working > 0) && <p className="r-summary">
+      {waiting > 0 && <span className="is-warn">▲ {waiting} {waiting === 1 ? "te espera" : "te esperan"}</span>}
+      {working > 0 && <span><Loader size={12} />{working} trabajando</span>}
+    </p>}
+    {!groups.length && <div className="r-empty">{onlyWaiting ? "Nada te espera ahora mismo." : "No hay sesiones de chat abiertas en el PC."}</div>}
+    {groups.map(group => {
+      // Lo que te necesita no se esconde aunque el proyecto esté plegado.
+      const open = onlyWaiting || !collapsed.has(group.id);
+      const needs = group.sessions.filter(session => session.status === "needs").length;
+      const busy = group.sessions.some(session => session.status === "working");
+      const shown = open ? group.sessions : group.sessions.filter(session => session.status === "needs");
+      return <section key={group.id} className="r-project">
+        <button type="button" className="r-project-head" aria-expanded={open} disabled={onlyWaiting} onClick={() => toggle(group.id)}>
+          {!onlyWaiting && <Chevron open={open} />}
+          <ProjectIcon id={group.id} size={20} />
+          <span className="r-project-name">{group.name}</span>
+          {needs > 0 ? <span className="r-glyph is-warn" aria-label={`${needs} te esperan`}>▲</span> : busy ? <Loader size={13} /> : null}
+          <span className="r-n">{group.sessions.length}</span>
+        </button>
+        {shown.length > 0 && <div className="r-project-sessions">
+          {shown.map(session => <SessionRow key={session.id} session={session} now={now} onOpen={() => onOpen(session.id)}
+            onQuick={allowed => onQuick(session, allowed)} />)}
+        </div>}
+      </section>;
+    })}
   </div>;
 }
 
 // --- C · Chat en vivo ------------------------------------------------------------------------
 
+const ImageGlyph = () => <svg className="r-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><circle cx="9" cy="10" r="1.6" /><path d="m4.5 18 5-5 3.5 3.5 2.5-2.5 4 4" /></svg>;
+const FileGlyph = () => <svg className="r-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h6.5L18.5 8.5v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1Z" /><path d="M13.5 3.5v5h5" /></svg>;
+
 const ItemRow = memo(function ItemRow({ item }: { item: RemoteItem }) {
   switch (item.kind) {
-    case "user": return <div className="r-me"><span>{item.text}{item.images > 0 && <small> · {item.images} imagen{item.images === 1 ? "" : "es"}</small>}</span></div>;
+    case "user": return <div className="r-me">
+      {item.text && <span className="r-me-text">{item.text}</span>}
+      {(item.images > 0 || item.files.length > 0) && <span className="r-me-files">
+        {item.images > 0 && <span className="r-file-tag"><ImageGlyph />{item.images} imagen{item.images === 1 ? "" : "es"}</span>}
+        {item.files.map((name, index) => <span key={index} className="r-file-tag"><FileGlyph />{name}</span>)}
+      </span>}
+    </div>;
     case "text": return <div className="r-ai"><Markdown text={item.text} /></div>;
     case "notice": return <div className={`r-notice is-${item.tone}`}>{item.text}</div>;
     case "turn": return <div className="r-turn">respuesta en {duration(item.durationMs)}</div>;
@@ -244,31 +303,157 @@ function WorkingLine({ since }: { since: number | null }) {
   return <div className="r-working"><Loader />trabajando{since ? ` · ${duration(now - since)}` : ""}</div>;
 }
 
-function Composer({ detail, onSend }: { detail: RemoteDetail; onSend: (text: string) => Promise<void> }) {
+// --- Adjuntos: se suben al PC al elegirlos y el mensaje solo lleva sus ids ---------------------
+
+const MAX_ATTACHED_FILES = 10;
+type Attachment = {
+  key: string; kind: ReferenceKind; name: string; size: number; preview: string | null;
+  progress: number; id: string | null; error: string | null; abort: AbortController;
+};
+
+const formatSize = (bytes: number): string => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const isPicture = (file: File): boolean => /^image\/(png|jpe?g|gif|webp|heic|heif)$/i.test(file.type);
+const withExtension = (name: string, type: string): string => {
+  const ext = type === "image/jpeg" ? "jpg" : type === "image/png" ? "png" : null;
+  return ext ? `${name.replace(/\.[^.]+$/, "") || "foto"}.${ext}` : name;
+};
+
+function AttachmentChip({ item, index, onRemove }: { item: Attachment; index: number; onRemove: () => void }) {
+  const uploading = !item.id && !item.error;
+  return <div className={`r-att${item.error ? " is-error" : ""}`} title={item.error ?? item.name}>
+    <span className="r-att-thumb">{item.preview ? <img src={item.preview} alt="" /> : <FileGlyph />}</span>
+    <span className="r-att-body">
+      <span className="r-att-ref">[{item.kind} {index + 1}]<small>{item.error ? "no se subió" : uploading ? `${Math.round(item.progress * 100)} %` : formatSize(item.size)}</small></span>
+      <span className="r-att-name">{item.error ?? item.name}</span>
+    </span>
+    {uploading && <span className="r-att-bar" style={{ transform: `scaleX(${Math.max(0.04, item.progress)})` }} />}
+    <button type="button" className="r-att-x" aria-label={`Quitar ${item.name}`} onClick={onRemove}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" /></svg></button>
+  </div>;
+}
+
+function Composer({ detail, onSend, onToast }: { detail: RemoteDetail; onSend: (text: string, attachments: string[]) => Promise<void>; onToast: (text: string) => void }) {
   const [text, setText] = useState("");
+  const [items, setItems] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   useEffect(() => {
     const el = area.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
   }, [text]);
+  // Las vistas previas son URLs de objeto y las subidas siguen vivas: todo se suelta al salir.
+  useEffect(() => () => { for (const item of itemsRef.current) { item.abort.abort(); if (item.preview) URL.revokeObjectURL(item.preview); } }, []);
+
+  const update = (key: string, patch: Partial<Attachment>) => setItems(list => list.map(item => item.key === key ? { ...item, ...patch } : item));
+  const caret = () => {
+    const el = area.current;
+    const end = textRef.current.length;
+    return el && document.activeElement === el ? { start: el.selectionStart, end: el.selectionEnd } : { start: end, end };
+  };
+
+  const add = (files: File[]) => {
+    const current = itemsRef.current;
+    const pictures = files.filter(isPicture);
+    const others = files.filter(file => !isPicture(file));
+    const roomImages = MAX_IMAGES - current.filter(item => item.kind === "Imagen").length;
+    const roomFiles = MAX_ATTACHED_FILES - current.filter(item => item.kind === "Archivo").length;
+    if (pictures.length > roomImages) onToast(`Puedes adjuntar hasta ${MAX_IMAGES} imágenes por mensaje.`);
+    if (others.length > roomFiles) onToast(`Puedes adjuntar hasta ${MAX_ATTACHED_FILES} archivos por mensaje.`);
+    const accepted = [...pictures.slice(0, Math.max(0, roomImages)).map(file => ({ file, kind: "Imagen" as const })),
+      ...others.slice(0, Math.max(0, roomFiles)).map(file => ({ file, kind: "Archivo" as const }))];
+    if (!accepted.length) return;
+    // Las citas «[Imagen 1]» van donde estaba el cursor, como en el PC.
+    let draft = textRef.current;
+    let selection = caret();
+    for (const kind of ["Imagen", "Archivo"] as const) {
+      const count = accepted.filter(entry => entry.kind === kind).length;
+      const first = current.filter(item => item.kind === kind).length;
+      const next = insertImageReferences(draft, selection, first, count, kind);
+      draft = next.text;
+      selection = next.selection;
+    }
+    setText(draft);
+    const fresh: Attachment[] = accepted.map(({ file, kind }) => ({
+      key: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, kind, name: file.name || (kind === "Imagen" ? "foto.jpg" : "archivo"),
+      size: file.size, preview: kind === "Imagen" ? URL.createObjectURL(file) : null, progress: 0, id: null, error: null, abort: new AbortController(),
+    }));
+    // Primero las imágenes y luego los archivos: así se numeran en el PC.
+    setItems(list => [...list.filter(item => item.kind === "Imagen"), ...fresh.filter(item => item.kind === "Imagen"),
+      ...list.filter(item => item.kind === "Archivo"), ...fresh.filter(item => item.kind === "Archivo")]);
+    for (const [index, { file, kind }] of accepted.entries()) {
+      const item = fresh[index];
+      void (async () => {
+        try {
+          // Las fotos se reducen en el móvil (como en el PC): suben antes y gastan menos contexto.
+          let body: Blob = file;
+          let name = item.name;
+          if (kind === "Imagen") {
+            const prepared = await prepareImage(file, item.name);
+            body = await (await fetch(prepared.preview)).blob();
+            name = withExtension(item.name, prepared.mediaType);
+            update(item.key, { size: body.size, name });
+          }
+          const uploaded = await uploadFile(body, name, progress => update(item.key, { progress }), item.abort.signal);
+          update(item.key, { id: uploaded.id, progress: 1, size: uploaded.size });
+        } catch (error) {
+          if (item.abort.signal.aborted) return;
+          update(item.key, { error: error instanceof Error ? error.message : String(error) });
+        }
+      })();
+    }
+  };
+
+  const remove = (key: string) => {
+    const list = itemsRef.current;
+    const item = list.find(value => value.key === key);
+    if (!item) return;
+    item.abort.abort();
+    if (item.preview) URL.revokeObjectURL(item.preview);
+    const same = list.filter(value => value.kind === item.kind);
+    const next = removeImageReference(textRef.current, caret(), same.indexOf(item), same.length, item.kind);
+    setText(next.text);
+    setItems(list.filter(value => value.key !== key));
+  };
+
+  const uploading = items.some(item => !item.id && !item.error);
+  const failed = items.some(item => item.error);
+  const ready = (text.trim().length > 0 || items.length > 0) && !uploading && !failed;
   const send = async () => {
-    const value = text.trim();
-    if (!value || busy) return;
+    if (!ready || busy) return;
     setBusy(true);
-    try { await onSend(value); setText(""); } catch { /* el aviso lo muestra quien envía */ } finally { setBusy(false); }
+    try {
+      await onSend(text.trim(), items.flatMap(item => item.id ? [item.id] : []));
+      for (const item of items) if (item.preview) URL.revokeObjectURL(item.preview);
+      setText("");
+      setItems([]);
+    } catch { /* el aviso lo muestra quien envía */ } finally { setBusy(false); }
   };
   if (detail.locked) return <div className="r-composer"><div className="r-locked">{detail.locked}</div></div>;
   return <div className="r-composer">
     {detail.queues && <div className="r-queued">se entregará al terminar el turno{detail.queued > 0 ? ` · ${detail.queued} en cola` : ""}</div>}
+    {items.length > 0 && <div className="r-atts">
+      {items.map(item => <AttachmentChip key={item.key} item={item} index={items.filter(value => value.kind === item.kind).indexOf(item)} onRemove={() => remove(item.key)} />)}
+    </div>}
     <div className="r-box">
-      <span className="r-prompt" aria-hidden="true">›</span>
+      <button type="button" className="r-attach" aria-label="Adjuntar fotos o archivos" onClick={() => picker.current?.click()}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
+      <input ref={picker} type="file" multiple hidden onChange={event => {
+        const files = [...(event.currentTarget.files ?? [])];
+        event.currentTarget.value = "";
+        add(files);
+      }} />
       <textarea ref={area} rows={1} value={text} placeholder={detail.queues ? "Escribe para encolar…" : "Escribe una indicación…"} aria-label="Mensaje"
         onChange={event => setText(event.currentTarget.value)} />
-      <button type="button" className="r-send" aria-label={detail.queues ? "Añadir a la cola" : "Enviar"} disabled={!text.trim() || busy} onClick={() => void send()}>
-        {busy ? <Loader /> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" /></svg>}
+      <button type="button" className="r-send" aria-label={detail.queues ? "Añadir a la cola" : "Enviar"} disabled={!ready || busy} onClick={() => void send()}>
+        {busy || uploading ? <Loader /> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" /></svg>}
       </button>
     </div>
   </div>;
@@ -276,7 +461,7 @@ function Composer({ detail, onSend }: { detail: RemoteDetail; onSend: (text: str
 
 function ChatScreen({ session, detail, onBack, onCommand, onToast }: {
   session: RemoteSession | null; detail: RemoteDetail | null; onBack: () => void;
-  onCommand: (action: Parameters<RemoteClient["command"]>[1]) => Promise<void>; onToast: (text: string) => void;
+  onCommand: (action: PhoneAction) => Promise<void>; onToast: (text: string) => void;
 }) {
   const thread = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -287,26 +472,37 @@ function ChatScreen({ session, detail, onBack, onCommand, onToast }: {
     const el = thread.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [detail]);
-  const run = async (action: Parameters<RemoteClient["command"]>[1]): Promise<void> => {
+  // Con el teclado abierto el hilo encoge: se mantiene pegado al final.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const keep = () => { const el = thread.current; if (el && stick.current) el.scrollTop = el.scrollHeight; };
+    viewport.addEventListener("resize", keep);
+    return () => viewport.removeEventListener("resize", keep);
+  }, []);
+  const run = async (action: PhoneAction): Promise<void> => {
     try { await onCommand(action); } catch (error) { onToast(error instanceof Error ? error.message : String(error)); throw error; }
   };
   const title = session?.title ?? "Sesión";
   return <div className="r-screen">
-    <header className="r-chat-top">
-      <button type="button" className="r-back" aria-label="Volver a las sesiones" onClick={onBack}>‹</button>
-      {session && <Core seed={session.project.id} height={28} />}
-      <div className="r-who"><b>{title}</b><span>{session ? `${session.project.name} · ${session.agent}${session.model ? ` · ${session.model}` : ""}` : "cargando…"}</span></div>
-      {detail?.running && <button type="button" className="r-stop" onClick={() => void run({ kind: "interrupt" }).catch(() => undefined)}><i />Detener</button>}
-    </header>
-    {detail && detail.tasks.total > 0 && <div className="r-tasks">
-      <div className="r-tasks-h"><b>{detail.tasks.current ?? (detail.tasks.done === detail.tasks.total ? "Tareas completadas" : "Tareas")}</b><span>tareas {detail.tasks.done}/{detail.tasks.total}</span></div>
-      <div className="r-seglist" style={{ gridTemplateColumns: `repeat(${Math.min(detail.tasks.total, 24)}, 1fr)` }}>
-        {Array.from({ length: Math.min(detail.tasks.total, 24) }, (_, index) => {
-          const scaled = Math.floor(index * detail.tasks.total / Math.min(detail.tasks.total, 24));
-          return <i key={index} className={scaled < detail.tasks.done ? "is-done" : scaled === detail.tasks.done && detail.tasks.current ? "is-active" : ""} />;
-        })}
+    <header className="r-chat-head">
+      <div className="r-chat-top">
+        <button type="button" className="r-back" aria-label="Volver a las sesiones" onClick={onBack}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" /></svg></button>
+        <div className="r-who"><b>{title}</b>
+          <span>{session ? <><ProjectIcon id={session.project.id} size={13} />{session.project.name} · {session.agent}{session.model ? ` · ${session.model}` : ""}</> : "cargando…"}</span></div>
+        {detail?.running && <button type="button" className="r-stop" onClick={() => void run({ kind: "interrupt" }).catch(() => undefined)}><i />Detener</button>}
       </div>
-    </div>}
+      {detail && detail.tasks.total > 0 && <div className="r-tasks">
+        <div className="r-tasks-h"><b>{detail.tasks.current ?? (detail.tasks.done === detail.tasks.total ? "Tareas completadas" : "Tareas")}</b><span>{detail.tasks.done}/{detail.tasks.total}</span></div>
+        <div className="r-seglist" style={{ gridTemplateColumns: `repeat(${Math.min(detail.tasks.total, 24)}, 1fr)` }}>
+          {Array.from({ length: Math.min(detail.tasks.total, 24) }, (_, index) => {
+            const scaled = Math.floor(index * detail.tasks.total / Math.min(detail.tasks.total, 24));
+            return <i key={index} className={scaled < detail.tasks.done ? "is-done" : scaled === detail.tasks.done && detail.tasks.current ? "is-active" : ""} />;
+          })}
+        </div>
+      </div>}
+    </header>
     <div className="r-thread" ref={thread} onScroll={event => {
       const el = event.currentTarget;
       stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -319,7 +515,7 @@ function ChatScreen({ session, detail, onBack, onCommand, onToast }: {
       {pending && !sheetOpen && <button type="button" className="r-pending-bar" onClick={() => setSheetClosed(null)}>
         {pending.kind === "question" ? "? Te hace una pregunta" : pending.kind === "plan" ? "▲ Propone un plan" : "▲ Pide permiso"} · ver</button>}
     </div>
-    {detail && <Composer detail={detail} onSend={text => run({ kind: "send", text })} />}
+    {detail && <Composer detail={detail} onToast={onToast} onSend={(text, attachments) => run({ kind: "send", text, attachments })} />}
     {sheetOpen && pending && <Sheet agent={PROVIDER_NAME[session?.provider ?? ""] ?? session?.agent ?? "El agente"} pending={pending}
       onClose={() => setSheetClosed(pending.item)}
       onAnswer={(allowed, remember, choices) => run({ kind: "answer", item: pending.item, allowed, remember, choices })} />}
@@ -462,7 +658,6 @@ export default function RemoteApp() {
   const [open, setOpen] = useState<string | null>(null);
   const [detail, setDetail] = useState<RemoteDetail | null>(null);
   const [tab, setTab] = useState<Tab>("sessions");
-  const [filter, setFilter] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const openRef = useRef(open);
   openRef.current = open;
@@ -507,7 +702,7 @@ export default function RemoteApp() {
     history.pushState({ session: id }, "");
   };
   const closeSession = () => { if (history.state?.session) history.back(); else { setOpen(null); setDetail(null); client.current?.watch(null); } };
-  const command = (session: string, action: Parameters<RemoteClient["command"]>[1]) => client.current?.command(session, action) ?? Promise.reject(new Error("Sin conexión."));
+  const command = (session: string, action: PhoneAction) => client.current?.command(session, action) ?? Promise.reject(new Error("Sin conexión."));
   const quick = async (session: RemoteSession, allowed: boolean) => {
     if (!session.need) return;
     try { await command(session.id, { kind: "answer", item: session.need.item, allowed, remember: false, choices: null }); }
@@ -515,7 +710,7 @@ export default function RemoteApp() {
   };
   const forget = () => { forgetToken(); client.current?.stop(); setState("denied"); setReason(null); };
 
-  if (state === "denied") return <PairScreen reason={reason} />;
+  if (state === "denied") return <div className="r-app"><PairScreen reason={reason} /></div>;
 
   const waiting = sessions.filter(session => session.status === "needs").length;
   const current = open ? sessions.find(session => session.id === open) ?? null : null;
@@ -527,7 +722,7 @@ export default function RemoteApp() {
         <header className="r-top"><Brand /><span className="r-wordmark">trex</span><LinkChip state={state} host={host} latency={latency} /></header>
         {tab === "device" ? <DeviceScreen host={host} device={device} onForget={forget} />
           : state === "connecting" && !sessions.length ? <div className="r-empty"><Loader size={22} /><span>Conectando con tu PC…</span></div>
-          : <SessionList sessions={sessions} filter={filter} onFilter={setFilter} onlyWaiting={tab === "waiting"} onOpen={openSession} onQuick={quick} />}
+          : <SessionList sessions={sessions} onlyWaiting={tab === "waiting"} onOpen={openSession} onQuick={quick} />}
         <nav className="r-dock" aria-label="Secciones">
           <button type="button" className={`r-tab${tab === "sessions" ? " is-on" : ""}`} aria-current={tab === "sessions" ? "page" : undefined} onClick={() => setTab("sessions")}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg>Sesiones</button>

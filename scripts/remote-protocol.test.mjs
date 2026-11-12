@@ -75,13 +75,24 @@ test("la actividad es la herramienta en curso del turno actual", () => {
 });
 
 test("solo se aceptan órdenes conocidas con la forma esperada", () => {
-  assert.deepEqual(parseRemoteCommand({ command: 3, device: "d", session: "s", action: { kind: "send", text: "hola" } }).action, { kind: "send", text: "hola" });
+  assert.deepEqual(parseRemoteCommand({ command: 3, device: "d", session: "s", action: { kind: "send", text: "hola" } }).action, { kind: "send", text: "hola", files: [] });
   assert.equal(parseRemoteCommand({ command: 3, session: "s", action: { kind: "send", text: "  " } }), null);
   assert.equal(parseRemoteCommand({ command: "3", session: "s", action: { kind: "interrupt" } }), null);
   assert.equal(parseRemoteCommand({ command: 3, session: "s", action: { kind: "shell" } }), null);
   const answer = parseRemoteCommand({ command: 1, session: "s", action: { kind: "answer", item: "p", allowed: "yes", choices: [{ question: "q", selected: ["A", 2], other: 5 }] } });
   assert.equal(answer.action.allowed, false);
   assert.deepEqual(answer.action.choices, [{ question: "q", selected: ["A"], other: "" }]);
+});
+
+test("lo enviado desde el móvil puede ser solo adjuntos, y el hilo muestra los nombres de los archivos", () => {
+  const files = [{ path: "C:/datos/attachments/1/foto.png", name: "foto.png", image: true }, { path: 7 }, { path: "C:/x/informe.pdf", image: "sí" }];
+  const parsed = parseRemoteCommand({ command: 2, session: "s", action: { kind: "send", text: "", files } });
+  assert.deepEqual(parsed.action.files, [{ path: "C:/datos/attachments/1/foto.png", name: "foto.png", image: true }, { path: "C:/x/informe.pdf", name: "informe.pdf", image: false }]);
+  assert.equal(parseRemoteCommand({ command: 2, session: "s", action: { kind: "send", text: " ", files: [] } }), null);
+  const [user] = remoteItems([{ kind: "user", id: "u", text: "Revisa esto\n\nArchivos adjuntos:\n[Archivo 1]: C:\\datos\\informe.pdf\n[Archivo 2]: /tmp/notas.md", images: 2, previews: [] }], "/p");
+  assert.equal(user.text, "Revisa esto");
+  assert.deepEqual(user.files, ["informe.pdf", "notas.md"]);
+  assert.equal(user.images, 2);
 });
 
 test("las fechas relativas son cortas", () => {

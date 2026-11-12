@@ -14,7 +14,7 @@
 //! revocar en cualquier momento (cierra sus conexiones). El WebSocket exige el token en
 //! el primer mensaje y rechaza orígenes ajenos (DNS rebinding, otras webs).
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State as AxumState;
+use axum::extract::{DefaultBodyLimit, State as AxumState};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -31,6 +31,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
+use crate::attachments::{attachments_dir, image_type, percent_decode, safe_name, store_attachment, SAVED_MAX_BYTES};
+
 const CONFIG_FILE: &str = "remote.json";
 pub const DEFAULT_PORT: u16 = 7340;
 const PAIRING_TTL: Duration = Duration::from_secs(5 * 60);
@@ -45,6 +47,12 @@ const MAX_SEND_CHARS: usize = 20_000;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const RETRY_BIND: Duration = Duration::from_secs(20);
+/// Adjuntos que sube el móvil: cuántos por mensaje, cuánto tiempo valen y cuántos se recuerdan.
+const MAX_ATTACHMENTS: usize = 20;
+const UPLOAD_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const MAX_UPLOADS: usize = 64;
+/// Una imagen más grande viaja como archivo (el escritorio no adjunta imágenes de más de 20 MB).
+const IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
 /// Eventos hacia el frontend del escritorio.
 const EVENT_ACTIVE: &str = "remote://active";
 const EVENT_WATCH: &str = "remote://watch";
@@ -230,9 +238,21 @@ struct Running {
     bound: Vec<SocketAddr>,
 }
 
+/// Un archivo subido desde un móvil, a la espera de que lo envíe con un mensaje.
+struct Upload {
+    device: String,
+    path: PathBuf,
+    name: String,
+    image: bool,
+    at: std::time::Instant,
+}
+
 #[derive(Default)]
 struct Hub {
     sessions: Option<Arc<str>>,
+    /// Ruta de cada proyecto con sesiones publicadas: solo de esas se sirve el icono.
+    projects: HashMap<String, PathBuf>,
+    icons: HashMap<PathBuf, Option<String>>,
     details: HashMap<String, Arc<str>>,
     theme: Option<Arc<str>>,
     connections: HashMap<u64, Connection>,
@@ -246,6 +266,7 @@ pub struct Inner {
     server: Mutex<Option<Running>>,
     error: Mutex<Option<String>>,
     hub: Mutex<Hub>,
+    uploads: Mutex<HashMap<String, Upload>>,
     tx: broadcast::Sender<Outgoing>,
     next_id: AtomicU64,
     /// Generación del servidor: un reintento de una configuración anterior no arranca nada.
@@ -260,7 +281,7 @@ impl Default for RemoteState {
         let (tx, _) = broadcast::channel(256);
         Self(Arc::new(Inner {
             app: Mutex::new(None), config: Mutex::new(RemoteConfig::default()), pairing: Mutex::new(None),
-            server: Mutex::new(None), error: Mutex::new(None), hub: Mutex::new(Hub::default()), tx,
+            server: Mutex::new(None), error: Mutex::new(None), hub: Mutex::new(Hub::default()), uploads: Mutex::new(HashMap::new()), tx,
             next_id: AtomicU64::new(1), generation: AtomicU64::new(0),
         }))
     }
@@ -290,6 +311,35 @@ impl Inner {
     fn announce(&self) {
         self.emit(EVENT_ACTIVE, json!({ "active": self.active() }));
         self.emit(EVENT_WATCH, json!({ "ids": self.watching() }));
+    }
+
+    /// El dispositivo de un token, sin apuntar el uso (para peticiones HTTP sueltas).
+    fn device_for(&self, token: &str) -> Option<Device> {
+        if token.len() < 32 || token.len() > 128 { return None; }
+        let hash = token_hash(token);
+        lock(&self.config).devices.iter().find(|device| same_secret(&device.token_hash, &hash)).cloned()
+    }
+
+    fn add_upload(&self, id: String, upload: Upload) {
+        let mut uploads = lock(&self.uploads);
+        uploads.retain(|_, upload| upload.at.elapsed() < UPLOAD_TTL);
+        while uploads.len() >= MAX_UPLOADS {
+            let Some(oldest) = uploads.iter().min_by_key(|(_, upload)| upload.at).map(|(id, _)| id.clone()) else { break };
+            uploads.remove(&oldest);
+        }
+        uploads.insert(id, upload);
+    }
+
+    /// Traduce los ids de adjuntos de un móvil a rutas del PC. Solo valen los suyos.
+    fn resolve_uploads(&self, device: &str, ids: &[String]) -> Result<Value, String> {
+        let uploads = lock(&self.uploads);
+        let mut files = Vec::new();
+        for id in ids {
+            let upload = uploads.get(id).filter(|upload| upload.device == device && upload.at.elapsed() < UPLOAD_TTL)
+                .ok_or("Un adjunto ya no está en el PC. Vuelve a adjuntarlo.")?;
+            files.push(json!({ "path": upload.path.to_string_lossy(), "name": upload.name, "image": upload.image }));
+        }
+        Ok(Value::Array(files))
     }
 
     fn authenticate(&self, token: &str) -> Option<Device> {
@@ -399,6 +449,69 @@ async fn pair(AxumState(state): AxumState<RemoteState>, headers: HeaderMap, Json
     }
 }
 
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ")
+}
+
+fn no_store(mut response: Response) -> Response {
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+fn json_error(status: StatusCode, error: impl Into<String>) -> Response {
+    no_store((status, Json(json!({ "error": error.into() }))).into_response())
+}
+
+/// Un adjunto del móvil: se guarda con los del escritorio y se devuelve un id para enviarlo.
+async fn upload(AxumState(state): AxumState<RemoteState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if !same_origin(&headers) { return json_error(StatusCode::FORBIDDEN, "Origen no permitido."); }
+    let Some(device) = bearer(&headers).and_then(|token| state.0.device_for(token)) else {
+        return json_error(StatusCode::UNAUTHORIZED, "Este móvil ya no está emparejado. Vuelve a emparejarlo.");
+    };
+    if body.is_empty() { return json_error(StatusCode::BAD_REQUEST, "El archivo está vacío."); }
+    if body.len() > SAVED_MAX_BYTES { return json_error(StatusCode::PAYLOAD_TOO_LARGE, "El archivo pesa más de 100 MB."); }
+    let name = headers.get("x-file-name").and_then(|value| value.to_str().ok()).map(percent_decode).unwrap_or_default();
+    let name: String = safe_name(&name).chars().take(120).collect();
+    let Some(app) = state.0.app() else { return json_error(StatusCode::SERVICE_UNAVAILABLE, "trex aún no está listo."); };
+    let root = match attachments_dir(&app) { Ok(root) => root, Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error) };
+    let image = body.len() <= IMAGE_MAX_BYTES && image_type(&body).is_some();
+    let size = body.len();
+    let stored = { let name = name.clone(); tauri::async_runtime::spawn_blocking(move || store_attachment(&root, &name, &body)).await };
+    let path = match stored {
+        Ok(Ok(path)) => path,
+        Ok(Err(error)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    let id = match random_bytes::<16>() { Ok(bytes) => hex(&bytes), Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error) };
+    state.0.add_upload(id.clone(), Upload { device: device.id, path, name: name.clone(), image, at: std::time::Instant::now() });
+    no_store(Json(json!({ "id": id, "name": name, "size": size, "image": image })).into_response())
+}
+
+/// Logo de un proyecto con sesiones abiertas (el mismo que muestra la barra lateral).
+async fn icon(AxumState(state): AxumState<RemoteState>, headers: HeaderMap, uri: Uri) -> Response {
+    if !same_origin(&headers) { return json_error(StatusCode::FORBIDDEN, "Origen no permitido."); }
+    if bearer(&headers).and_then(|token| state.0.device_for(token)).is_none() {
+        return json_error(StatusCode::UNAUTHORIZED, "Este móvil ya no está emparejado.");
+    }
+    let project = uri.query().unwrap_or("").split('&').find_map(|pair| pair.strip_prefix("project=")).map(percent_decode).unwrap_or_default();
+    let (path, cached) = {
+        let hub = lock(&state.0.hub);
+        let Some(path) = hub.projects.get(&project).cloned() else { return json_error(StatusCode::NOT_FOUND, "Proyecto desconocido.") };
+        let cached = hub.icons.get(&path).cloned();
+        (path, cached)
+    };
+    let url = match cached {
+        Some(url) => url,
+        None => {
+            let search = path.clone();
+            let url = tauri::async_runtime::spawn_blocking(move || crate::project_icon::find_project_icon(&search)).await.ok().flatten();
+            lock(&state.0.hub).icons.insert(path, url.clone());
+            url
+        }
+    };
+    no_store(Json(json!({ "url": url })).into_response())
+}
+
 async fn websocket(AxumState(state): AxumState<RemoteState>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
     if !same_origin(&headers) { return (StatusCode::FORBIDDEN, "Origen no permitido").into_response(); }
     upgrade.max_message_size(MAX_CLIENT_MESSAGE).max_frame_size(MAX_CLIENT_MESSAGE)
@@ -503,7 +616,19 @@ fn handle_client(inner: &Arc<Inner>, connection: u64, device: &str, body: &str, 
             let request = value["req"].as_u64().unwrap_or(0);
             let reply = move |ok: bool, error: Option<String>| text(json!({ "type": "result", "req": request, "ok": ok, "error": error }));
             let Some(session) = value["session"].as_str().filter(|id| valid_session(id)) else { return Some(reply(false, Some("Sesión no válida.".into()))) };
-            let action = match validate_action(&value["action"]) { Ok(action) => action, Err(error) => return Some(reply(false, Some(error))) };
+            let mut action = match validate_action(&value["action"]) { Ok(action) => action, Err(error) => return Some(reply(false, Some(error))) };
+            // Los adjuntos llegan como ids de lo que este móvil subió: al escritorio van sus rutas.
+            if action["kind"] == "send" {
+                let ids: Vec<String> = action["attachments"].as_array()
+                    .map(|list| list.iter().filter_map(|id| id.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                match inner.resolve_uploads(device, &ids) {
+                    Ok(files) => if let Some(object) = action.as_object_mut() {
+                        object.remove("attachments");
+                        object.insert("files".into(), files);
+                    },
+                    Err(error) => return Some(reply(false, Some(error))),
+                }
+            }
             let command = inner.next_id.fetch_add(1, Ordering::Relaxed);
             let (done_tx, done_rx) = oneshot::channel();
             lock(&inner.hub).pending.insert(command, done_tx);
@@ -534,9 +659,18 @@ fn validate_action(action: &Value) -> Result<Value, String> {
     match action["kind"].as_str() {
         Some("send") => {
             let text = action["text"].as_str().map(str::trim).unwrap_or("");
-            if text.is_empty() { return Err("El mensaje está vacío.".into()); }
+            let attachments = match &action["attachments"] {
+                Value::Null => Vec::new(),
+                Value::Array(list) if list.len() <= MAX_ATTACHMENTS => list.iter()
+                    .map(|id| id.as_str().filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+                        .map(str::to_string).ok_or_else(|| "Adjunto no válido.".to_string()))
+                    .collect::<Result<Vec<_>, _>>()?,
+                Value::Array(_) => return Err(format!("Puedes adjuntar hasta {MAX_ATTACHMENTS} archivos por mensaje.")),
+                _ => return Err("Adjunto no válido.".into()),
+            };
+            if text.is_empty() && attachments.is_empty() { return Err("El mensaje está vacío.".into()); }
             if text.chars().count() > MAX_SEND_CHARS { return Err("El mensaje es demasiado largo.".into()); }
-            Ok(json!({ "kind": "send", "text": text }))
+            Ok(json!({ "kind": "send", "text": text, "attachments": attachments }))
         }
         Some("answer") => {
             let item = action["item"].as_str().filter(|id| !id.is_empty() && id.len() <= 256).ok_or("Falta la petición a la que respondes.")?;
@@ -632,6 +766,8 @@ async fn bind(state: &RemoteState, config: &RemoteConfig) -> Result<Running, Str
     let router = Router::new()
         .route("/api/pair", post(pair))
         .route("/api/ws", get(websocket))
+        .route("/api/upload", post(upload).layer(DefaultBodyLimit::max(SAVED_MAX_BYTES + 1024)))
+        .route("/api/icon", get(icon))
         .fallback(get(serve_asset))
         .with_state(state.clone());
     for listener in listeners {
@@ -861,7 +997,15 @@ pub fn remote_bridge_state(state: State<'_, RemoteState>) -> BridgeState {
 pub fn remote_publish(state: State<'_, RemoteState>, sessions: Value) -> Result<(), String> {
     let json: Arc<str> = json!({ "type": "sessions", "sessions": sessions }).to_string().into();
     if json.len() > MAX_SESSIONS_JSON { return Err("La lista de sesiones es demasiado grande.".into()); }
-    lock(&state.0.hub).sessions = Some(json.clone());
+    let projects: HashMap<String, PathBuf> = sessions.as_array().into_iter().flatten().filter_map(|session| {
+        let project = &session["project"];
+        Some((project["id"].as_str()?.to_string(), PathBuf::from(project["path"].as_str().filter(|path| !path.is_empty())?)))
+    }).collect();
+    {
+        let mut hub = lock(&state.0.hub);
+        hub.sessions = Some(json.clone());
+        hub.projects = projects;
+    }
     let _ = state.0.tx.send(Outgoing::Sessions(json));
     Ok(())
 }
@@ -977,6 +1121,11 @@ mod tests {
     fn only_known_and_bounded_actions_reach_the_desktop() {
         assert!(validate_action(&json!({ "kind": "send", "text": "  hola " })).unwrap()["text"] == "hola");
         assert!(validate_action(&json!({ "kind": "send", "text": "   " })).is_err());
+        // Solo con adjuntos también vale; lo que no tiene forma de id, no.
+        let id = "a".repeat(32);
+        assert!(validate_action(&json!({ "kind": "send", "text": "", "attachments": [id] })).is_ok());
+        assert!(validate_action(&json!({ "kind": "send", "text": "x", "attachments": ["../../etc"] })).is_err());
+        assert!(validate_action(&json!({ "kind": "send", "text": "x", "attachments": vec![id.clone(); MAX_ATTACHMENTS + 1] })).is_err());
         assert!(validate_action(&json!({ "kind": "send", "text": "x".repeat(MAX_SEND_CHARS + 1) })).is_err());
         assert!(validate_action(&json!({ "kind": "shell", "text": "rm -rf" })).is_err());
         let answer = validate_action(&json!({ "kind": "answer", "item": "p-1", "allowed": true, "choices": [{ "question": "¿?", "selected": ["A"], "other": "" }] })).unwrap();
@@ -984,6 +1133,21 @@ mod tests {
         assert_eq!(answer["remember"], false);
         assert!(validate_action(&json!({ "kind": "answer" })).is_err());
         assert!(!valid_session("../x") && valid_session("tab-123_a"));
+    }
+
+    #[test]
+    fn a_phone_only_sends_its_own_uploads() {
+        let state = RemoteState::default();
+        let upload = |device: &str| Upload { device: device.into(), path: PathBuf::from("C:/a/foto.png"), name: "foto.png".into(), image: true, at: std::time::Instant::now() };
+        state.0.add_upload("1".repeat(32), upload("movil"));
+        state.0.add_upload("2".repeat(32), upload("otro"));
+        let files = state.0.resolve_uploads("movil", &["1".repeat(32)]).unwrap();
+        assert_eq!(files[0]["name"], "foto.png");
+        assert_eq!(files[0]["image"], true);
+        assert!(state.0.resolve_uploads("movil", &["2".repeat(32)]).is_err());
+        assert!(state.0.resolve_uploads("movil", &["3".repeat(32)]).is_err());
+        for index in 0..MAX_UPLOADS + 5 { state.0.add_upload(format!("{index:032}"), upload("movil")); }
+        assert!(lock(&state.0.uploads).len() <= MAX_UPLOADS);
     }
 
     #[test]

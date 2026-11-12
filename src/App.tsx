@@ -71,6 +71,7 @@ import ImageViewerProvider from "./components/ImageViewer";
 import FileViewerProvider from "./components/FileViewer";
 import ProjectHome from "./components/ProjectHome";
 import { sessionLabel } from "./sessionTitle";
+import { remoteBridge } from "./remoteBridge";
 import { filterProjects, includeAddedProject, normalizeProjectFilter, type ProjectFilter } from "./projectFilter";
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, profilesForInstallation, restoreLaunch } from "./profiles";
@@ -1384,6 +1385,8 @@ function AppShell() {
         tabs.some((tab) => tab.projectId === project.id && normalizeText(sessionLabel(tab)).includes(needle)),
     );
   }, [config?.projects, config?.ui.projectFilter, search, tabs]);
+  // El móvil agrupa las sesiones por proyecto en el mismo orden que la barra lateral.
+  useEffect(() => { remoteBridge.setProjectOrder(config?.projects.map(project => project.id) ?? []); }, [config?.projects]);
 
   if (!config || !workspaceReady) return <Splash />;
 

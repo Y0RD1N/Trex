@@ -59,7 +59,7 @@ import { useStableCallback } from "../hooks/useStableCallback";
 import { syncMemorySoon } from "../memory";
 import QuestionPanel from "./chat/QuestionPanel";
 import { useRemoteSession } from "../remoteBridge";
-import { currentActivity, lastActivityAt, pendingItem, remoteDetail, remoteNeed, remoteStatus } from "../remoteProtocol";
+import { currentActivity, lastActivityAt, pendingItem, remoteDetail, remoteNeed, remoteStatus, type RemoteFile } from "../remoteProtocol";
 import Suggestions from "./chat/Suggestions";
 import WorkSummary from "./chat/WorkSummary";
 import BranchMenu, { GIT_BRANCH_CHANGED } from "./chat/BranchMenu";
@@ -1146,20 +1146,32 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   // Sin ningún móvil conectado el puente no calcula nada (ver remoteBridge.ts).
   const remoteLock = workflowLocked ? "Un flujo de trabajo controla esta sesión ahora mismo." : handoffPending ? "Esta sesión tiene un traspaso pendiente." : null;
   const remoteQueues = (running || hasQueued) && sendDuringWork === "queue";
-  const remoteSend = async (text: string): Promise<void> => {
+  const remoteSend = async (text: string, files: RemoteFile[]): Promise<void> => {
     if (remoteLock) throw new Error(remoteLock);
     if (!session.queue.ready) throw new Error("La cola de la sesión aún se está cargando. Prueba en unos segundos.");
+    // Lo que sube el móvil ya está guardado en el PC: las imágenes se leen como en el escritorio
+    // (el móvil ya las redujo) y el resto viaja como ruta al final del mensaje.
+    const pictures = files.filter(file => file.image).slice(0, MAX_IMAGES);
+    const docs = files.filter(file => !pictures.includes(file)).slice(0, MAX_FILES);
+    const loaded = await Promise.all(pictures.map(file => readImageFile(file.path).catch(() => { throw new Error(`No se pudo abrir «${file.name}» en el PC.`); })));
+    const images = loaded.map(({ mediaType, data }) => ({ mediaType, data }));
+    const previews = loaded.map(({ mediaType, data }) => `data:${mediaType};base64,${data}`);
+    const message = withAttachedFiles(text.trim(), docs.map(file => file.path));
     if (props.coordination) coordinationHub.resetWakes(props.coordination.project);
     if (remoteQueues) {
       if (running) queueWakeRef.current.armed = true;
-      await session.queue.enqueue(text, [], []);
+      await session.queue.enqueue(message, images, previews);
       return;
     }
     stickRef.current = true;
-    if (!titledRef.current) { titledRef.current = true; callbacks.current.onTitle(sessionId, conversationTitle(text)); }
+    if (!titledRef.current) {
+      titledRef.current = true;
+      callbacks.current.onTitle(sessionId, conversationTitle(text.trim() || (docs.length === 1 && !images.length ? docs[0].name
+        : docs.length ? "Archivos adjuntos" : images.length === 1 ? "Imagen" : "Imágenes")));
+    }
     const coordination = props.coordination;
     const notes = coordination ? await coordination.pending().catch(() => []) : [];
-    const accepted = await session.send(withNotes(notes, text), [], [], notes.length ? text : undefined);
+    const accepted = await session.send(withNotes(notes, message), images, previews, notes.length ? message : undefined);
     if (accepted === false) throw new Error("El asistente no aceptó el mensaje. Revísalo en el PC.");
     if (notes.length) coordination?.delivered(notes.map(note => note.id));
   };
@@ -1167,7 +1179,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
     summary: () => {
       const model = currentModel(state.models, state.model, state.modelChoice);
       return {
-        id: sessionId, title: props.sessionTitle || "Sesión nueva", project: { id: props.projectId ?? cwd, name: projectName }, provider,
+        id: sessionId, title: props.sessionTitle || "Sesión nueva", project: { id: props.projectId ?? cwd, name: projectName, path: cwd, order: 0 }, provider,
         agent: props.profileName ?? agent.name, model: model ? modelName(model) : state.model, status: remoteStatus(state),
         need: remoteNeed(pendingItem(state.items), cwd), activity: currentActivity(state.items, cwd), updatedAt: lastActivityAt(state, 0),
       };
@@ -1175,7 +1187,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
     detail: () => remoteDetail({ id: sessionId, state, cwd, tasks, queues: remoteQueues, queued: session.queue.snapshot.messages.length,
       dormant: state.process === "starting" && state.items.length === 0 && !!conversationId, locked: remoteLock }),
     run: async action => {
-      if (action.kind === "send") return remoteSend(action.text);
+      if (action.kind === "send") return remoteSend(action.text, action.files);
       if (action.kind === "interrupt") {
         if (!running) throw new Error("La sesión ya no está trabajando.");
         stopResponse();
