@@ -11,7 +11,8 @@
 /* Pestaña «Uso» junto a Tareas y Git (la forma la pone .chat-side-tabs) */
 .chat-side-tabs .chat-usage-toggle { gap: 7px; padding-left: var(--sp-2-5); }
 .chat-side-tabs .chat-usage-toggle .chat-usage-peak { display: inline-flex; align-items: center; gap: 3px; color: var(--text); font-weight: var(--fw-semibold); }
-.chat-side-tabs .chat-usage-toggle.is-alert { border-color: var(--warn-border); background: linear-gradient(180deg, var(--warn-bg), transparent 75%), var(--bg-surface); }
+/* En aviso, un tinte ámbar plano y opaco: sin degradado ni reflejo. */
+.chat-side-tabs .chat-usage-toggle.is-alert { border-color: var(--warn-border); background: color-mix(in srgb, var(--warn) 10%, var(--bg-surface)); }
 .chat-side-tabs .chat-usage-toggle.is-alert .chat-usage-peak { max-width: 160px; overflow: hidden; color: var(--warn-text); text-overflow: ellipsis; }
 .chat-side.is-open .chat-usage-toggle .chat-usage-peak { display: none; }
 .chat-side.is-open .chat-side-tabs > .chat-usage-toggle.is-alert { background: transparent; }
@@ -108,15 +109,8 @@
 
 /* Cada cuenta: cabecera y sus ventanas en árbol ------------------------------- */
 .usage-card { position: relative; overflow: hidden; padding: var(--sp-3) var(--sp-3) var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elevated); }
-.usage-card.is-loading::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--text) 6%, transparent) 50%, transparent 70%);
-  animation: usage-sweep 1.6s ease-in-out infinite;
-}
-@keyframes usage-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+/* Mientras se lee, la tarjeta no lleva brillos: lo dicen el icono que gira y
+   «actualizando…» en su cabecera. */
 .usage-card-head { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-2-5); }
 .usage-card-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--hue) 16%, transparent); color: var(--hue); }
 .usage-card-icon .agent-icon { color: inherit; }
@@ -176,6 +170,6 @@
 .usage-none p { margin: var(--sp-2) 0 0; color: var(--text-muted); font-size: var(--fs-sm); }
 
 @media (prefers-reduced-motion: reduce) {
-  .usage-glyph-spin, .usage-card-spin, .usage-card.is-loading::after { animation: none; }
+  .usage-glyph-spin, .usage-card-spin { animation: none; }
 }
-:root[data-motion="reduced"] :is(.usage-glyph-spin, .usage-card-spin, .usage-card.is-loading::after) { animation: none; }
+:root[data-motion="reduced"] :is(.usage-glyph-spin, .usage-card-spin) { animation: none; }
