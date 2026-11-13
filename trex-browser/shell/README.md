@@ -32,11 +32,24 @@ The worker launches the shell exactly like it launched Chrome:
   **Shell → worker:** human controls (`pause`, `resume`, `takeover`, `focus`) and
   center open/close, delivered through a Playwright binding. Human controls reuse
   the explicit pause semantics: the agent's next page action gets `PAUSED`.
+  Thumbnails exist only while the center is open (the worker drops them when it
+  closes), and only the full-window document receives `spaces`: the bar, dock and
+  cursor views get the state without it.
 
 Native views retain their bounds, visibility and parent while agent status changes.
 New background tabs are inserted below the foreground, and view ordering changes
 in place only when the selected tab or agents center changes. Overlay updates
 patch existing controls so focus, pressed buttons and CSS animations survive.
+
+**Idle agent tabs are hidden (shared window).** A tab under the foreground page used to
+stay visible so it always had a render surface, and an animated page nobody looks at
+cost about a third of a core. The worker now sends `setLive {live, seq}` when a space's
+agent starts and stops acting; the shell shows that space's tabs while it acts (plus a
+3 s tail, 150 s lease) and hides them otherwise (`tabShown` in `view-layout.mjs`). The
+foreground tab, the person's own tabs, every tab while the agents center is open, and
+any space whose worker never sent `setLive` stay visible. `hello` reports `idleTabs`.
+On by default on Linux; Windows and macOS keep every tab visible (untested there) unless
+`TREX_BROWSER_IDLE_TABS=hide`. `TREX_BROWSER_IDLE_TABS=show` turns it off on Linux.
 
 ## UI
 

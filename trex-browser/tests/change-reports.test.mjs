@@ -57,6 +57,26 @@ test('diff reports added elements, removed count, changed values or states, new 
   assert.deepEqual(diff(before, before, 'tab-1'), {});
 });
 
+test('a page without a required field skips the per-field reads; one with required fields still marks them', async t => {
+  const { call, page } = fixture(t);
+  const none = (await call('browser_snapshot')).data;
+  assert.equal(page.requiredReads || 0, 0, 'no per-field read when the page has nothing required');
+  assert.ok(none.elements.includes('tab-1-e3 textbox Name'), 'the field is still listed, without [required]');
+  page.required = new Set(['e3']);
+  const some = (await call('browser_snapshot')).data;
+  assert.ok(some.elements.includes('tab-1-e3 textbox Name [required]'));
+  assert.ok(page.requiredReads > 0 && page.requiredReads <= 3, 'only the listed fields are read');
+});
+
+test('when the required count cannot be read, every field is asked as before', async t => {
+  const { call, page } = fixture(t);
+  page.required = new Set(['e3']);
+  const frame = page.mainFrame(), locator = frame.locator;
+  frame.locator = selector => selector.includes('required') ? { count: async () => { throw new Error('context was destroyed'); } } : locator(selector);
+  const snap = (await call('browser_snapshot')).data;
+  assert.ok(snap.elements.includes('tab-1-e3 textbox Name [required]'));
+});
+
 test('a click reports what changed and leaves every ref and the revision valid', async t => {
   const { call, page, service, state } = fixture(t);
   page.required = new Set(['e3']);

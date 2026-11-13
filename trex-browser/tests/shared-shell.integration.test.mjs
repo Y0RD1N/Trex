@@ -197,4 +197,27 @@ describe('one project window with concurrent agent tabs', { skip: !available && 
     assert.equal(service.state(C).sharedHost, service.state(A).sharedHost);
     await call(C, 'browser_close');
   });
+  it('hides the tabs of an idle space behind the foreground, shows them while their agent acts, and keeps both working', { skip: process.platform !== 'linux' && 'idle tab hiding is on by default only on Linux' }, async () => {
+    await Promise.all([call(A, 'browser_navigate', { url: `${base}/a` }), call(B, 'browser_navigate', { url: `${base}/b` })]);
+    const link = service.state(A).shell, key = ctx => service.key(ctx);
+    const tabsNow = async () => Object.fromEntries((await link.call('tabs')).map(tab => [tab.profile, tab]));
+    const until = async (check, ms = 9000) => { const end = Date.now() + ms; for (;;) { if (await check()) return; if (Date.now() > end) throw new Error('timed out waiting for the tab visibility to change'); await new Promise(resolve => setTimeout(resolve, 100)); } };
+    const ui = await state(), foreground = ui.tabs.find(tab => tab.id === ui.activeTab).profile;
+    const [front, behind] = foreground === key(A) ? [A, B] : [B, A];
+    // Idle: the page behind stops being drawn once the agent has been quiet for a moment; the foreground page never does.
+    await until(async () => { const tabs = await tabsNow(); return tabs[key(behind)].shown === false && tabs[key(front)].shown === true; });
+    // Acting: the agent's tab is back on screen for as long as the action lasts.
+    const waiting = call(behind, 'browser_wait_for', { time: 1.5 });
+    await until(async () => (await tabsNow())[key(behind)].shown === true, 3000);
+    await waiting;
+    await until(async () => (await tabsNow())[key(behind)].shown === false);
+    // It acts normally on a page that was hidden a moment ago.
+    assert.equal((await call(behind, 'browser_click', { selector: '#click' })).data.clicked, true);
+    assert.equal((await call(behind, 'browser_evaluate', { function: '() => document.body.dataset.clicked' })).data.value, 'yes');
+    assert.ok((await call(behind, 'browser_take_screenshot', {})).image?.data.length > 100);
+    // The bar, dock and cursor never receive the agents-center inventory; the full-window document does.
+    const island = service.state(A).sharedHost.context.pages().find(page => page.url().includes('part=island'));
+    assert.deepEqual(await island.evaluate(() => window.trexShell.state().then(shellState => shellState.spaces)), []);
+    assert.ok((await state()).spaces.length >= 2);
+  });
 });

@@ -27,7 +27,7 @@ export function fakePage({ tree = [], url = 'http://localhost/', title = 'Fixtur
     // Read-back of a field and "required": answered from page.fields / page.required.
     evaluate: async fn => {
       const source = String(fn);
-      if (source.includes('required')) return page.required?.has(ref) || false;
+      if (source.includes('required')) { page.requiredReads = (page.requiredReads || 0) + 1; return page.required?.has(ref) || false; }
       if (source.includes('selectedOptions')) return (page.fields.get(ref) || []).map(v => page.labels?.[v] ?? v);
       // fill_form asks what kind of field it is; the select pre-check lists its options; read-back asks what is chosen.
       if (source.includes('tag:e.tagName')) return page.kinds?.get(ref) ?? {};
@@ -53,7 +53,8 @@ export function fakePage({ tree = [], url = 'http://localhost/', title = 'Fixtur
       first() { return this; },
       ariaSnapshotJSON: async () => { const tree = page.read ? await page.read : page.tree; return selector === 'body' ? tree : page.scoped?.(selector) ?? tree; },
       ariaSnapshot: async () => '- tree',
-      count: async () => page.selectors?.[selector]?.length ?? 0,
+      // The one-read check for "does this page have a required field at all" (worker/browser.mjs REQUIRED_FIELD).
+      count: async () => selector.includes('required') ? page.required?.size ?? 0 : page.selectors?.[selector]?.length ?? 0,
       nth: i => locatorFor(page.selectors?.[selector]?.[i]),
       click: async () => { page.actions.push(['click', selector]); },
       fill: async value => { page.actions.push(['fill', selector, value]); },

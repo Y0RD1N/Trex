@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { scopePath } from './scope-path.mjs';
 import { humanControls } from './human-controls.mjs';
 import { storageCommand, scopedDownload, grantedPermission } from './scope-storage.mjs';
-import { setBounds, setVisible, keepOnTop, usableArea } from './view-layout.mjs';
+import { setBounds, setVisible, keepOnTop, usableArea, tabShown } from './view-layout.mjs';
 import { readTheme, watchTheme, themeCss, BUILTIN_THEME } from './theme.mjs';
 import { PERSISTABLE, permissionKey, permissionState, decisionFor, isGranted, recordDecision, chooserCancelled, chooserAnswered, hasSiteDecisions, forgetSite } from './site-permissions.mjs';
 
@@ -21,6 +21,12 @@ const UI_ORIGIN = 'trex://ui';
 const FRAME = 7;                 // visible glass frame around the page
 const RADIUS = 12;
 const OVERLAY_PAD = 16;          // matches #root padding in ui/overlay.html
+// In the shared window, the tabs of an idle agent space are hidden and shown while its agent acts (setLive, see
+// tabShown). Measured on Linux only; Windows and macOS keep every tab visible unless TREX_BROWSER_IDLE_TABS=hide,
+// because re-applying native view visibility has caused blank surfaces there before (see view-layout.mjs).
+const IDLE_TABS_OVERRIDE = process.env.TREX_BROWSER_IDLE_TABS;
+const LIVE_TAIL = 3000;          // a space stays shown this long after its agent's last action
+const LIVE_LEASE = 150_000;      // ...and never longer than this without hearing from the worker (a call lasts up to 90 s)
 
 /** The private Browser home (engine.json, theme.json, the profiles).
  * Mirrors privateHomePath() in worker/security.mjs. */
@@ -55,6 +61,7 @@ const HEADLESS = process.argv.some(a => a === '--headless' || a.startsWith('--he
 // Launched by the worker (Playwright over the CDP pipe) rather than by a person.
 const AUTOMATION = process.argv.includes('--remote-debugging-pipe');
 const SHARED_ROOT = AUTOMATION && process.env.TREX_SHARED_BROWSER_ROOT && path.isAbsolute(process.env.TREX_SHARED_BROWSER_ROOT) ? path.resolve(process.env.TREX_SHARED_BROWSER_ROOT) : null;
+const HIDE_IDLE_TABS = !!SHARED_ROOT && (IDLE_TABS_OVERRIDE ? IDLE_TABS_OVERRIDE === 'hide' : process.platform === 'linux');
 // Desktop launches join the broker-owned application window. No browser data
 // or debugger endpoint is exposed to another process by this handoff.
 if (!AUTOMATION && !userDataDir && app.isPackaged) {
@@ -106,6 +113,7 @@ let agent = { label: process.env.TREX_SPACE_LABEL || 'Agente', model: '', state:
 let spaces = [];                                     // agents center inventory, pushed by the worker
 let find = { open: false, query: '', active: 0, total: 0 };
 let cursor = null, cursorShown = null, cursorTimer = null;      // agent pointer, in page CSS px
+const live = { acting: new Set(), eligible: new Set(), timers: new Map(), seq: new Map() };   // idle-tab hiding, per space profile
 const downloads = new Map();                         // id -> {id, name, state, received, total, path, item}
 const prompts = new Map();                           // id -> {id, tabId, origin, permission, label, done, timer}
 let nextId = 1;
@@ -227,14 +235,18 @@ function snapshot() {
     platform: process.platform,
   };
 }
+// Only the full-window document draws the agents center. The top bar, dock and cursor never read `spaces` (the
+// thumbnails and activity of every agent), so they get the state without it: each of those views used to receive it in full.
+const withoutSpaces = state => ({ ...state, spaces: [] });
 let broadcastQueued = false;
 function broadcast() {
   if (broadcastQueued || closing) return; broadcastQueued = true;
   queueMicrotask(() => {
     broadcastQueued = false;
-    const state = snapshot();
+    const state = snapshot(), slim = withoutSpaces(state);
     saveSession();
-    for (const v of [chromeView, ...[...overlays.values()].map(o => o.view)]) if (v && !v.webContents.isDestroyed()) v.webContents.send('shell:state', state);
+    if (chromeView && !chromeView.webContents.isDestroyed()) chromeView.webContents.send('shell:state', state);
+    for (const { view } of overlays.values()) if (view && !view.webContents.isDestroyed()) view.webContents.send('shell:state', slim);
   });
 }
 
@@ -249,9 +261,10 @@ function layout() {
   if (sized) setBounds(chromeView, { x: 0, y: 0, width, height });
   const page = { x: FRAME, y: FRAME, width: Math.max(0, width - FRAME * 2), height: Math.max(0, height - FRAME * 2) };
   for (const t of tabs.values()) {
-    // Background agent tabs must keep a live input/render surface. Their views
-    // stay underneath the selected page instead of being hidden by Electron.
-    setVisible(t.view, SHARED_ROOT ? true : t.id === activeTab && !centerOpen);
+    // Background agent tabs must keep a live input/render surface while their agent acts: they stay underneath the
+    // selected page instead of being hidden by Electron. Once the agent has been idle for a moment (setLive) the
+    // view is hidden, so a page nobody looks at stops painting (tabShown explains who stays visible).
+    setVisible(t.view, tabShown({ shared: !!SHARED_ROOT, hideIdle: HIDE_IDLE_TABS, tab: t, activeTab, centerOpen, live: live.acting, eligible: live.eligible }));
     if (sized) setBounds(t.view, page);
   }
   const front = centerOpen ? chromeView : tabs.get(activeTab)?.view;
@@ -270,8 +283,12 @@ function layout() {
     }
     if (part === 'cursor') { placeCursor(); continue; }
     setVisible(o.view, !centerOpen && (part !== 'dock' || agent.state !== 'idle'));
-    debug('overlay', part, JSON.stringify(o.view.getBounds()), 'visible', o.view.getVisible());
+    if (DEBUG) debug('overlay', part, JSON.stringify(o.view.getBounds()), 'visible', o.view.getVisible());   // not built when debugging is off: layout() runs on every agent action
   }
+}
+function forgetLive(profile) {
+  clearTimeout(live.timers.get(profile));
+  live.timers.delete(profile); live.seq.delete(profile); live.acting.delete(profile); live.eligible.delete(profile);
 }
 /** Show the top bar (Ctrl+L, new tab) and optionally focus the address field. */
 function revealBar(focus = false, panel = null) {
@@ -487,7 +504,8 @@ function restoreSession() {
   } catch { return false; }
 }
 
-const debug = (...a) => { if (process.env.TREX_SHELL_DEBUG === '1') console.log('[shell]', ...a); };
+const DEBUG = process.env.TREX_SHELL_DEBUG === '1';
+const debug = (...a) => { if (DEBUG) console.log('[shell]', ...a); };
 // Our own documents load again if their renderer dies: without them the window kept no frame, bar or
 // buttons, only the page. A document that keeps dying stops being reloaded (3 times a minute at most).
 function reviveOnCrash(wc, url) {
@@ -725,7 +743,7 @@ ipcMain.handle('shell:command', async (event, name, args) => {
   if (!isUi(event.sender) || !Object.hasOwn(commands, name)) throw new Error('Command rejected');
   return commands[name](args ?? {}, event.sender);
 });
-ipcMain.handle('shell:state', event => { if (!isUi(event.sender)) throw new Error('rejected'); return snapshot(); });
+ipcMain.handle('shell:state', event => { if (!isUi(event.sender)) throw new Error('rejected'); return event.sender === chromeView?.webContents ? snapshot() : withoutSpaces(snapshot()); });
 
 // CDP target ids let the worker map Playwright pages to shell tabs and
 // recognise our own UI documents without trusting page URLs.
@@ -784,12 +802,28 @@ const workerApi = {
     closingScopes.add(profile);
     for (const item of scopes.get(profile).downloads || []) item.cancel();
     for (const tab of [...tabs.values()]) if (tab.profile === profile) closeTab(tab.id);
+    forgetLive(profile);
     scopes.get(profile).session.flushStorageData(); await scopes.get(profile).session.cookies.flushStore();
     return true;
   },
   scopeStorage: ({ profile, method, params }) => { const scope=scopes.get(profile);if(!scope)throw new Error('Unknown native session');return storageCommand(scope,method,params); },
   controlResult: payload => controls.complete(payload),
-  hello: () => ({ version: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome, scopeProtocol: SHARED_ROOT ? 1 : 0 }),
+  hello: () => ({ version: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome, scopeProtocol: SHARED_ROOT ? 1 : 0, idleTabs: HIDE_IDLE_TABS }),
+  // The worker says when a space's agent starts and stops acting. The first call also tells the shell that this worker
+  // understands the protocol: until then the space's tabs are never hidden. `seq` rises with every message of a space,
+  // so a "stopped" that arrives after the next "acting" cannot hide a tab in the middle of an action.
+  setLive: ({ profile, live: acting, seq }) => {
+    if (!HIDE_IDLE_TABS || typeof profile !== 'string' || !scopes.has(profile)) return false;
+    if (Number.isSafeInteger(seq) && seq <= (live.seq.get(profile) ?? 0)) return false;
+    if (Number.isSafeInteger(seq)) live.seq.set(profile, seq);
+    live.eligible.add(profile);
+    clearTimeout(live.timers.get(profile));
+    if (acting) live.acting.add(profile);
+    // Acting: shown until told otherwise (the lease only covers a worker that vanished). Stopped: shown a little longer.
+    const timer = setTimeout(() => { live.timers.delete(profile); live.acting.delete(profile); layout(); }, acting ? LIVE_LEASE : LIVE_TAIL);
+    timer.unref?.(); live.timers.set(profile, timer);
+    layout(); return true;
+  },
   setAgent: next => {
     if (SHARED_ROOT && next.profile) {
       const scope = scopes.get(next.profile); if (!scope) return false; scope.agent = { ...scope.agent, ...next };
@@ -827,7 +861,7 @@ const workerApi = {
     if (HEADLESS) return true;
     if (win.isMinimized()) win.restore(); win.show(); win.focus(); tabs.get(activeTab)?.view.webContents.focus(); return true;
   },
-  tabs: () => snapshot().tabs,
+  tabs: () => snapshot().tabs.map(t => ({ ...t, shown: tabs.get(t.id)?.view.getVisible() ?? false })),
   // Development only: compose the window from its layers (no desktop capture
   // permission needed). Returns a PNG data URL.
   ...(process.env.TREX_SHELL_DEV === '1' ? { debugCapture: async () => {

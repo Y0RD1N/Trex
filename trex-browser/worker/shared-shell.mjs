@@ -34,7 +34,10 @@ export class SharedShell {
         if(message?.type==='scope-target-close'){host.targets.get(message.profile)?.delete(message.targetId);host.scopes.get(message.profile)?.transport?.removeTarget(message.targetId);return;}
         return onEvent(message);
       });
-      if ((await host.link.call('hello')).scopeProtocol !== 1) throw new Error('Actualiza Trex Browser para compartir una ventana entre agentes.');
+      const hello = await host.link.call('hello');
+      if (hello.scopeProtocol !== 1) throw new Error('Actualiza Trex Browser para compartir una ventana entre agentes.');
+      // The shell hides the tabs of idle agent spaces and shows them while the agent acts (see BrowserService.syncLive).
+      host.idleTabs = hello.idleTabs === true;
       host.context.on('close', () => {
         host.closed = true; for (const scope of host.scopes.values()) scope.transport?.close();
         onClosed(host);

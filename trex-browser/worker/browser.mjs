@@ -55,6 +55,8 @@ const refPrefix=ref=>/^(f\d+)?/.exec(String(ref))[1]||'';
 const stale=message=>Object.assign(new Error(message),{code:'STALE_SNAPSHOT'});
 const NEW_PAGE='Stale revision: this tab loaded a new page; take a new browser_snapshot';
 const escapeRegExp=v=>v.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+// Elements a page marks as required; the same two signals fieldStates reads from a field.
+const REQUIRED_FIELD='[required], [aria-required="true"]';
 // A target resolved differently than asked (re-rendered ref, case-insensitive name) says so.
 const noted=(target,data)=>target?.trexNote?{...data,note:target.trexNote}:data;
 // Playwright's trial run performs the actionability checks without any input.
@@ -183,7 +185,7 @@ export class BrowserService {
   async openSharedShell(s,ctx,browser){
     s.startupStage='shared-window';const host=await this.applicationShell(browser);s.sharedHost=host;
     const scope=await host.open({profile:s.key,label:s.spaceLabel,project:path.basename(ctx.cwd),model:s.spaceModel,clientId:s.spaceClientId||ctx.clientId});
-    s.browser=scope.context;s.shell=scope.link;s.supervisorError=null;
+    s.browser=scope.context;s.shell=scope.link;s.supervisorError=null;s.liveSent=undefined;
     s.cdps=new Map();s.networkConditions=new WeakMap();s.emulationOffline=false;
     const opened=s.browser;
     opened.on('page',page=>this.attachPage(s,page));
@@ -224,6 +226,18 @@ export class BrowserService {
     if(!['browser_status','browser_artifact','browser_wait_for'].includes(op.name)){s.activity||=[];s.activity.push({id:op.id,at:Date.now(),tool:op.name,detail:op.detail});if(s.activity.length>20)s.activity.shift();}
     this.notifyShell(s);
   }
+  /** In the shared window the shell draws a space's tabs only while its agent acts (plus a short tail): a tab
+   * under the foreground that nobody looks at used to animate at full rate (about a third of a core per animated page).
+   * Only the transitions are sent. A shell that does not announce `idleTabs` keeps every tab visible as before. */
+  async syncLive(s){
+    if(!s.shell||!s.sharedHost?.idleTabs)return;
+    const want=(s.liveOps||0)>0;
+    if(s.liveSent===want)return;
+    s.liveSent=want;
+    // Bounded: a stuck shell UI must not hold up the agent's action.
+    // `seq` lets the shell drop a "stopped" that overtook the next "acting".
+    await Promise.race([s.shell.call('setLive',{live:want,seq:s.liveSeq=(s.liveSeq||0)+1}),sleep(1500)]).catch(()=>{s.liveSent=undefined;});
+  }
   notifyShell(s){
     clearTimeout(s.shellTimer);
     const state=agentState(s),op=s.active||s.lastOp;
@@ -247,11 +261,18 @@ export class BrowserService {
   /** Live thumbnails only while the shared agents center is open. */
   thumbnails(projectId){
     this.thumbTimers||=new Map();const open=()=>[...this.sessions.values()].some(x=>x.shell&&x.centerOpen);
-    if(!open()){clearInterval(this.thumbTimers.get('global'));this.thumbTimers.delete('global');return;}
+    if(!open()){
+      clearInterval(this.thumbTimers.get('global'));this.thumbTimers.delete('global');
+      // A thumbnail is ~70 KB and only the agents center draws it. Kept after the center closed, it rode along in
+      // every state the shell broadcast (each page event of every agent tab), so it goes when the center does.
+      let dropped=false;for(const x of this.sessions.values())if(x.thumbnail){x.thumbnail=null;dropped=true;}
+      if(dropped)this.pushSpaces(projectId);
+      return;
+    }
     if(this.thumbTimers.has('global'))return;
     const tick=async()=>{if(!open())return this.thumbnails(projectId);
       await Promise.all([...this.sessions.values()].filter(x=>x.browser&&(!x.centerOpen||x.shell?.shared)).map(async x=>{const p=x.tabs.get(x.selected);if(!p||p.isClosed())return;
-        try{const jpeg=await p.screenshot({type:'jpeg',quality:45,scale:'css',timeout:2500});x.thumbnail=`data:image/jpeg;base64,${jpeg.toString('base64')}`;}catch{}}));
+        try{const jpeg=await p.screenshot({type:'jpeg',quality:45,scale:'css',timeout:2500});if(open())x.thumbnail=`data:image/jpeg;base64,${jpeg.toString('base64')}`;}catch{}}));
       this.pushSpaces(projectId);};
     tick();const timer=setInterval(tick,2500);timer.unref?.();this.thumbTimers.set('global',timer);
   }
@@ -404,7 +425,12 @@ export class BrowserService {
   /** required is not part of the aria snapshot: read it for listed fields, in parallel. */
   async fieldStates(p,entries){
     const extra=new Map();if(typeof p.getByRef!=='function')return extra;
-    await Promise.all(entries.filter(e=>FIELDS.has(e.role)&&!e.framed).slice(0,60).map(async e=>{try{if(await p.getByRef(e.ref).evaluate(el=>!!(el.required||el.getAttribute('aria-required')==='true'),undefined,{timeout:1000}))extra.set(e.ref,['required']);}catch{}}));
+    const fields=entries.filter(e=>FIELDS.has(e.role)&&!e.framed).slice(0,60);
+    if(!fields.length)return extra;
+    // One read first: most pages have no required field, and one read per field (about 1.5 ms each through the
+    // scoped CDP link) cost 90 ms of a 113 ms snapshot on a 150-input page. If the count cannot be read, ask each field.
+    if(await p.mainFrame().locator(REQUIRED_FIELD).count().catch(()=>1)===0)return extra;
+    await Promise.all(fields.map(async e=>{try{if(await p.getByRef(e.ref).evaluate(el=>!!(el.required||el.getAttribute('aria-required')==='true'),undefined,{timeout:1000}))extra.set(e.ref,['required']);}catch{}}));
     return extra;
   }
   dialogOpen(s,p){return !!s.dialog&&s.tabs.get(s.dialog.tabId)===p;}
@@ -497,11 +523,12 @@ export class BrowserService {
       if(s.owner&&s.owner!==ctx.clientId&&!['browser_status','browser_takeover','browser_artifact'].includes(name))throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});
       op.started=true;if(!observation&&!recoveryTakeover)s.active=op;this.recordActivity(s,op);const abort=()=>{if(!observation){this.pause(s,'uncertain',op);this.interrupt(s).catch(()=>{});}};controller.signal.addEventListener('abort',abort,{once:true});
       if(EFFECT_TOOLS.has(name)||name==='browser_batch')s.lastActionAt=Date.now();
-      try{const before=EFFECT_TOOLS.has(name)&&s.browser?await this.pageFacts(s,args).catch(()=>null):null;
+      s.liveOps=(s.liveOps||0)+1;
+      try{await this.syncLive(s);const before=EFFECT_TOOLS.has(name)&&s.browser?await this.pageFacts(s,args).catch(()=>null):null;
         const pending=this.execute(s,ctx,name,args,controller.signal,operationId);const result=observation?await abortableRead(pending,controller.signal):await pending;
         if(before&&result?.data&&typeof result.data==='object'&&!controller.signal.aborted){const effect=await this.effectOf(s,args,before,result.reported).catch(()=>null);if(effect&&Object.keys(effect).length)result.data={...result.data,effect:{...effect,...result.data.effect}};}if(controller.signal.aborted)throw cancelled();if(observation&&name!=='browser_artifact'&&s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Browser ownership changed during observation'),{code:'OWNERSHIP'});return {...result,generation:s.generation,revision:this.resultRevision(s,args,result)};}
       catch(e){if(observation&&(controller.signal.aborted||e.name==='TimeoutError'))throw controller.signal.aborted?cancelled():Object.assign(new Error('Observation timed out; browser remains available. Retry the read with a new operationId.'),{code:'READ_TIMEOUT'});if(e.name==='TimeoutError'){this.pause(s,'uncertain',op);await this.interrupt(s);throw Object.assign(new Error('Browser action timed out and may have affected the page; inspect before resuming, do not replay'),{code:'UNCERTAIN',...(e.batchSteps?{batchSteps:e.batchSteps,batchTools:e.batchTools}:{})});}throw e;}
-      finally{controller.signal.removeEventListener('abort',abort);if(s.active===op)s.active=null;this.notifyShell(s);}
+      finally{controller.signal.removeEventListener('abort',abort);if(s.active===op)s.active=null;s.liveOps--;void this.syncLive(s);this.notifyShell(s);}
     };
     // Page actions stay serialized; a hung action must not hide the page from
     // screenshots, snapshots, logs or status used to diagnose its outcome.
@@ -557,7 +584,7 @@ export class BrowserService {
     // Inventory queries are passive. A fresh profile has no tabs until the
     // agent navigates, creates a tab, or requests another page operation.
     if(name==='browser_tabs'&&(!a.action||a.action==='list')&&!s.browser&&!s.opening)return out({tabs:[]});
-    await this.ensure(s,ctx);signal.throwIfAborted();if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});// Closing the last tab left every tool failing with "Tab not found" (even new and list) until browser_close.
+    await this.ensure(s,ctx);await this.syncLive(s);signal.throwIfAborted();if(s.owner&&s.owner!==ctx.clientId)throw Object.assign(new Error('Profile owned by another client; explicit browser_takeover required'),{code:'OWNERSHIP'});// Closing the last tab left every tool failing with "Tab not found" (even new and list) until browser_close.
     // Listing and creating tabs do not need a current page, and navigating opens one when none is left.
     if(!s.tabs.size&&name==='browser_navigate'){const tab=s.shell?await s.shell.newTab():await s.browser.newPage();this.attachPage(s,tab);s.selected=[...s.tabs].find(([,v])=>v===tab)[0];}
     const tabsOnly=name==='browser_tabs'&&(!a.action||a.action==='list'||a.action==='new');
