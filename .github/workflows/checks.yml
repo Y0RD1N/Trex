@@ -65,7 +65,12 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run browser:build -- --debug
       - name: Native backend tests
+        if: runner.os != 'Windows'
         run: cargo +stable test --locked --manifest-path src-tauri/Cargo.toml --lib
+      # On Windows the test binary needs the common-controls manifest beside it; see the script.
+      - name: Native backend tests (Windows)
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File scripts/cargo-test-windows.ps1
 
   fedora:
     name: Fedora 44 native components and RPM
