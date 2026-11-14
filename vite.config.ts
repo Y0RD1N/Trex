@@ -27,7 +27,10 @@ export default defineConfig(() => ({
     watch: {
       // 3. Native Rust sources and build artifacts are outside frontend HMR, and so
       //    are local QA fixtures: rebuilding them must not reload the running app.
-      ignored: ["**/src-tauri/**", "**/trex-cli/**", "**/trex-browser/**", "**/.clipboard-qa.local/**"],
+      //    Agent worktrees under .claude/ hold whole copies of the repo (their own
+      //    tsconfig and vite.config): a change there restarted this server and left
+      //    the window blank.
+      ignored: ["**/src-tauri/**", "**/trex-cli/**", "**/trex-browser/**", "**/.clipboard-qa.local/**", "**/.claude/**"],
     },
   },
 
