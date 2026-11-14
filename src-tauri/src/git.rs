@@ -49,6 +49,18 @@ fn git(cwd: &str, args: &[&str]) -> Option<String> {
     run_git(cwd, args, Duration::from_secs(3)).ok().filter(|text| !text.is_empty())
 }
 
+/// Commits de las últimas `hours` horas («asunto (hace cuánto)»), los más recientes
+/// primero. Vacío si la carpeta no es un repositorio. Lo usa el resumen del modo llamada.
+pub fn recent_commits(cwd: &str, hours: u32) -> Vec<String> {
+    if !std::path::Path::new(cwd).is_dir() {
+        return Vec::new();
+    }
+    let since = format!("--since={hours} hours ago");
+    git(cwd, &["log", &since, "--max-count=40", "--no-merges", "--pretty=format:%s (%cr)"])
+        .map(|text| text.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 /// Nombre de la rama actual; con HEAD separado, el commit abreviado.
 pub fn branch(cwd: &str) -> Option<String> {
     if !std::path::Path::new(cwd).is_dir() {

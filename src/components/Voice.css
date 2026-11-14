@@ -1,0 +1,49 @@
+/* Ajustes › Voz y el indicador del modo llamada. Las tarjetas son las de BrowserSettings.css. */
+.voice-progress { display:grid; gap:var(--sp-1-5); font:var(--fs-xs) var(--font-mono); color:var(--text-muted); }
+.voice-progress-track { height:6px; border-radius:var(--radius-xs); background:var(--border); overflow:hidden; }
+.voice-progress-fill { height:100%; border-radius:inherit; background:var(--accent); transition:width .4s linear; }
+
+.voice-level { display:grid; grid-template-columns:1fr auto; align-items:center; gap:var(--sp-3); font:var(--fs-xs) var(--font-mono); color:var(--text-muted); }
+.voice-level-track { height:8px; border-radius:var(--radius-xs); background:var(--border); overflow:hidden; }
+.voice-level-fill { height:100%; border-radius:inherit; background:var(--text-dim); transition:width .2s linear, background var(--t); }
+.voice-level.is-voice .voice-level-fill { background:var(--accent); }
+.voice-level.is-voice span { color:var(--accent-strong); }
+
+.voice-heard { list-style:none; margin:0; padding:0; display:grid; }
+.voice-heard li { display:grid; grid-template-columns:auto 1fr; column-gap:var(--sp-3); row-gap:2px; padding:var(--sp-2) 0; border-bottom:1px solid var(--border-subtle); }
+.voice-heard li:last-child { border-bottom:0; }
+.voice-heard time { grid-row:span 2; font:var(--fs-xs) var(--font-mono); color:var(--text-dim); padding-top:2px; }
+.voice-heard span { font-size:var(--fs-md); color:var(--text); overflow-wrap:anywhere; }
+.voice-heard small { font:var(--fs-xs) var(--font-mono); color:var(--text-dim); overflow-wrap:anywhere; }
+
+/* Indicador: una etiqueta discreta en la esquina mientras trex escucha. */
+.voice-indicator { position:fixed; left:var(--sp-4); bottom:var(--sp-4); z-index:40; display:flex; align-items:center; gap:var(--sp-2); max-width:min(420px, calc(100vw - var(--sp-4) * 2)); padding:var(--sp-1-5) var(--sp-3) var(--sp-1-5) var(--sp-2); border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--bg-elevated); color:var(--text-muted); font-size:var(--fs-sm); pointer-events:none; transition:border-color var(--t), color var(--t); }
+.voice-indicator svg { flex:none; }
+.voice-indicator-label { font:var(--fs-xs) var(--font-mono); white-space:nowrap; }
+.voice-indicator-heard { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); padding-left:var(--sp-2); border-left:1px solid var(--border); }
+.voice-indicator.is-hearing, .voice-indicator.is-transcribing, .voice-indicator.is-thinking, .voice-indicator.is-speaking { border-color:color-mix(in srgb, var(--accent) 55%, var(--border)); color:var(--accent-strong); }
+.voice-indicator.is-live { pointer-events:auto; border-color:color-mix(in srgb, var(--accent) 55%, var(--border)); color:var(--accent-strong); }
+.voice-indicator.is-live .voice-indicator-bars i { animation:voice-bar .7s ease-in-out infinite alternate; }
+.voice-indicator.is-live .voice-indicator-bars i:nth-child(2) { animation-delay:.15s; }
+.voice-indicator.is-live .voice-indicator-bars i:nth-child(3) { animation-delay:.3s; }
+.voice-indicator-hangup { flex:none; margin-left:var(--sp-1); padding:2px var(--sp-2); border:1px solid var(--border); border-radius:var(--radius-md); background:transparent; color:var(--text-muted); font:var(--fs-xs) var(--font-mono); cursor:pointer; transition:border-color var(--t), color var(--t); }
+.voice-indicator-hangup:hover { border-color:var(--danger-text); color:var(--danger-text); }
+.voice-key { display:flex; gap:var(--sp-2); align-items:center; flex-wrap:wrap; }
+.voice-key .input { flex:1; min-width:200px; font-family:var(--font-mono); }
+.voice-choice { display:grid; gap:var(--sp-1-5); }
+.voice-choice label { display:flex; align-items:flex-start; gap:var(--sp-2-5); padding:var(--sp-2) var(--sp-3); border:1px solid var(--border); border-radius:var(--radius-lg); cursor:pointer; transition:border-color var(--t), background var(--t); }
+.voice-choice label:hover { background:var(--hover); }
+.voice-choice label.is-selected { border-color:color-mix(in srgb, var(--accent) 55%, var(--border)); background:color-mix(in srgb, var(--accent) 6%, transparent); }
+.voice-choice input { accent-color:var(--accent); margin:3px 0 0; }
+.voice-choice span { display:grid; gap:2px; }
+.voice-choice strong { font-size:var(--fs-md); font-weight:500; }
+.voice-choice small { color:var(--text-muted); font-size:var(--fs-sm); line-height:1.5; }
+@media (prefers-reduced-motion: reduce) { .voice-indicator.is-live .voice-indicator-bars i { animation:none; height:8px; } }
+/* Tres barras que suben mientras te oye: movimiento solo cuando hay voz. */
+.voice-indicator-bars { display:flex; align-items:flex-end; gap:2px; height:12px; }
+.voice-indicator-bars i { width:2px; height:3px; border-radius:1px; background:currentColor; }
+.voice-indicator.is-hearing .voice-indicator-bars i { animation:voice-bar .7s ease-in-out infinite alternate; }
+.voice-indicator.is-hearing .voice-indicator-bars i:nth-child(2) { animation-delay:.15s; }
+.voice-indicator.is-hearing .voice-indicator-bars i:nth-child(3) { animation-delay:.3s; }
+@keyframes voice-bar { from { height:3px; } to { height:12px; } }
+@media (prefers-reduced-motion: reduce) { .voice-indicator.is-hearing .voice-indicator-bars i { animation:none; height:8px; } }

@@ -140,6 +140,30 @@ class RemoteBridge {
     if (theme) void invoke("remote_publish_theme", { theme }).catch(() => undefined);
   }
 
+  // --- Acceso directo desde el escritorio (modo llamada), sin pasar por un móvil ---
+
+  /** Resumen de todas las sesiones abiertas ahora mismo. */
+  sessions(): RemoteSession[] {
+    const list: RemoteSession[] = [];
+    for (const entry of this.entries.values()) {
+      try { list.push(entry.summary()); } catch { /* una sesión rota no deja sin lista a las demás */ }
+    }
+    return list;
+  }
+
+  detailOf(id: string): RemoteDetail | null {
+    try { return this.entries.get(id)?.detail() ?? null; } catch { return null; }
+  }
+
+  has(id: string): boolean { return this.entries.has(id); }
+
+  /** Ejecuta una orden en una sesión por el mismo camino que el móvil. */
+  async run(id: string, action: RemoteAction): Promise<void> {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error("Esa sesión ya no está abierta.");
+    await entry.run(action);
+  }
+
   private async execute(payload: unknown): Promise<void> {
     const command = parseRemoteCommand(payload);
     if (!command) return;

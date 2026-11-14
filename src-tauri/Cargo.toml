@@ -45,6 +45,37 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-version = "0.1"
+# Modo llamada (apagado por defecto): detector de voz y Whisper locales.
+# `shared`: las bibliotecas estáticas precompiladas usan el CRT estático y
+# chocan con el dinámico de Rust. Los DLL se cargan bajo demanda (ver build.rs).
+sherpa-onnx = { version = "2.0.1", default-features = false, features = ["shared"] }
+# Conversación en tiempo real con Gemini Live por WebSocket (ver voice_live.rs).
+# Ya venían con axum y reqwest; aquí solo se usan directamente.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+webpki-roots = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# La voz de trex se descarga como un paquete .tar.bz2 (ver voice.rs).
+tar = { version = "0.4", default-features = false }
+bzip2 = "0.6"
+# Captura del micrófono con WASAPI en modo crudo (ver voice_capture.rs) y
+# voz de respuesta con el sintetizador de Windows (ver voice_speech.rs).
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Core",
+    "Media_Playback",
+    "Media_SpeechSynthesis",
+    "Storage_Streams",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

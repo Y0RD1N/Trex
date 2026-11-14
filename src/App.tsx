@@ -66,6 +66,10 @@ import ChatView, { type ChatViewProps } from "./components/ChatView";
 import AgentRoomView from "./components/AgentRoomView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Toast from "./components/Toast";
+import VoiceIndicator from "./components/VoiceIndicator";
+import { useVoiceCall } from "./hooks/useVoiceCall";
+
+const NO_PROJECTS: Project[] = [];
 import TooltipProvider from "./components/TooltipProvider";
 import ImageViewerProvider from "./components/ImageViewer";
 import FileViewerProvider from "./components/FileViewer";
@@ -811,7 +815,15 @@ function AppShell() {
     return tab.id;
   }, []);
 
-  const requestHandoff = useCallback((context: HandoffContext) => {
+  // Modo llamada: las órdenes habladas abren proyectos y sesiones por el mismo camino que la interfaz.
+  const openVoiceSession = useCallback((projectId: string): string | null => {
+    const settings = configRef.current?.settings;
+    if (!settings) return null;
+    return openTab(projectId, defaultProfile({ ...settings, profiles: profilesForInstallation(settings, trexInstalledRef.current) }).id) ?? null;
+  }, [openTab]);
+  useVoiceCall({ projects: config?.projects ?? NO_PROJECTS, activeProjectId, selectProject, openSession: openVoiceSession });
+
+  const requestHandoff =useCallback((context: HandoffContext) => {
     const source = tabsRef.current.find(tab => tab.id === context.source.sessionId);
     if (!source || source.projectId !== context.source.projectId || source.activity === "working" || source.activity === "waiting") {
       showToast("Espera a que termine la respuesta o detenla antes de continuar en otro perfil.");
@@ -1675,6 +1687,7 @@ function AppShell() {
       {toast && (
         <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />
       )}
+      <VoiceIndicator />
       {workflowPresence.value && <Suspense fallback={null}><AgentWorkflowDialog project={workflowPresence.value} profiles={availableProfiles}
         initialExecutor={(() => { const source = workflowSourceRef.current; const tab = source && tabs.find(item => item.id === source.context.source.sessionId);
           return tab?.profileId ? { profileId: tab.profileId, model: tab.chatModel ?? null, effort: tab.chatEffort ?? null } : undefined; })()}

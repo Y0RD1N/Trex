@@ -31,6 +31,18 @@ mod shared_files;
 mod terminal_env;
 mod trex_cli;
 mod trex_browser;
+mod voice;
+mod voice_brain;
+#[cfg(windows)]
+mod voice_capture;
+mod voice_cloud;
+mod voice_keys;
+mod voice_live;
+#[cfg(windows)]
+mod voice_playback;
+#[cfg(windows)]
+mod voice_speech;
+mod voice_wake;
 mod window_material;
 mod memory;
 
@@ -361,8 +373,11 @@ pub fn run() {
         .manage(PtyState::default())
         .manage(AgentState::default())
         .manage(remote::RemoteState::default())
+        .manage(voice::VoiceState::default())
+        .manage(voice_live::LiveState::default())
         .setup(|app| {
             remote::init(app.handle());
+            voice::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -493,6 +508,19 @@ pub fn run() {
             remote::remote_publish_detail,
             remote::remote_publish_theme,
             remote::remote_command_result,
+            voice::voice_status,
+            voice::voice_configure,
+            voice::voice_download_models,
+            voice::voice_microphones,
+            voice::voice_cloud_voices,
+            voice_keys::voice_key_set,
+            voice_keys::voice_key_clear,
+            voice_live::voice_live_tool_result,
+            voice_live::voice_live_hangup,
+            voice::voice_speak,
+            voice::voice_hush,
+            voice_brain::voice_think,
+            voice_brain::voice_recent_commits,
         ])
         .on_window_event(|window, event| {
             // Al cerrarse la ventana principal se terminan todas las sesiones.
