@@ -36,6 +36,7 @@ mod voice_brain;
 #[cfg(windows)]
 mod voice_capture;
 mod voice_cloud;
+mod voice_dictation;
 mod voice_keys;
 mod voice_live;
 #[cfg(windows)]
@@ -513,6 +514,9 @@ pub fn run() {
             voice::voice_download_models,
             voice::voice_microphones,
             voice::voice_cloud_voices,
+            voice::voice_dictation_start,
+            voice::voice_dictation_stop,
+            voice::voice_download_dictation,
             voice_keys::voice_key_set,
             voice_keys::voice_key_clear,
             voice_live::voice_live_tool_result,

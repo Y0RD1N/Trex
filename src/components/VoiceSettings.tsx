@@ -13,7 +13,7 @@ import {
   type VoiceCloudVoice, type VoiceKeyProvider, type VoiceLevel, type VoiceMicrophone, type VoiceSettingsPatch, type VoiceStatus, type VoiceUtterance,
 } from "../voice";
 import {
-  voiceCloudVoices, voiceConfigure, voiceDownloadModels, voiceKeyClear, voiceKeySet, voiceMicrophones, voiceStatus,
+  voiceCloudVoices, voiceConfigure, voiceDownloadDictation, voiceDownloadModels, voiceKeyClear, voiceKeySet, voiceMicrophones, voiceStatus,
   VOICE_LEVEL_EVENT, VOICE_STATUS_EVENT, VOICE_UTTERANCE_EVENT,
 } from "../voiceApi";
 import Select from "./Select";
@@ -98,6 +98,14 @@ export default function VoiceSettings() {
     try { setStatus(await voiceConfigure({ ...voiceSettingsOf(status), ...patch })); }
     catch (failure) { setError(formatError(failure)); }
     finally { setBusy(false); }
+  };
+
+  const downloadDictation = async (): Promise<void> => {
+    if (!status) return;
+    setError(null);
+    setStatus({ ...status, downloading: true, downloadedBytes: 0, totalBytes: status.dictationBytes });
+    try { setStatus(await voiceDownloadDictation()); }
+    catch (failure) { setError(formatError(failure)); await refresh(); }
   };
 
   const loadCloudVoices = async (): Promise<void> => {
@@ -216,6 +224,18 @@ export default function VoiceSettings() {
           options={cloudVoiceOptions(cloudVoices ?? [], status.cloudVoice)} onChange={cloudVoice => void apply({ cloudVoice })} />}
         {speechBlocker && <p className="browser-settings-note">{speechBlocker}</p>}
       </>}
+    </div>}
+
+    {status.supported && <div className="browser-settings-card">
+      <div className="browser-settings-heading"><div><h4>Dictado</h4><p>{status.dictationInstalled
+        ? "Modelo de dictado instalado: acierta más con nombres y palabras técnicas."
+        : `El micrófono del campo de texto de cada chat escribe lo que dices. Ahora usa el modelo básico; el de dictado (${megabytes(status.dictationBytes)}) se equivoca menos.`}</p></div>
+        {!status.dictationInstalled && !status.downloading && <button type="button" className="btn btn-small btn-primary" disabled={!status.modelsInstalled}
+          onClick={() => void downloadDictation()}>Descargar modelo</button>}
+        {status.dictationInstalled && <span className="browser-settings-status is-ready">Listo</span>}
+      </div>
+      {!status.modelsInstalled && <p className="browser-settings-note">Para dictar hacen falta primero los modelos de voz de arriba.</p>}
+      <p className="settings-hint">Funciona aunque el modo llamada esté apagado: el micrófono solo se abre mientras dictas. Todo se transcribe en este equipo.</p>
     </div>}
 
     {status.supported && status.enabled && <div className="browser-settings-card">

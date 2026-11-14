@@ -48,7 +48,9 @@ import { dispatchQueuedMessage, INBOX_WAKE, type QueuedMessage } from "../messag
 import { createHandoffContext, type HandoffContext, type HandoffReference } from "../handoff";
 import AgentIcon from "./AgentIcon";
 import Select, { type SelectOption } from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, ListIcon, MapIcon, PaperclipIcon, PencilIcon, ProfilesIcon, RotateIcon, SessionsIcon, ShieldIcon, StopIcon } from "./Icons";
+import { useDictation } from "../hooks/useDictation";
+import { insertDictated } from "../voice";
+import { AlertIcon, ArrowDownIcon, ArrowUpIcon, CloseIcon, ListIcon, MapIcon, MicIcon, PaperclipIcon, PencilIcon, ProfilesIcon, RotateIcon, SessionsIcon, ShieldIcon, StopIcon } from "./Icons";
 import { AssistantText, Notice, PermissionCard, Thinking, ToolRow, UserMessage } from "./chat/ChatItems";
 import { ModelMenu } from "./chat/ModelMenu";
 import ComposerSettings, { ComposerMoreMenu, type ComposerAction } from "./chat/ComposerSettings";
@@ -714,6 +716,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   const insertionPoint = () => ({ text: draftRef.current,
     start: nextSelectionRef.current?.start ?? inputRef.current?.selectionStart ?? draftRef.current.length,
     end: nextSelectionRef.current?.end ?? inputRef.current?.selectionEnd ?? draftRef.current.length });
+  // Dictado por voz: cada frase se escribe donde está el cursor.
+  const dictation = useDictation(sessionId, text => {
+    const next = insertDictated(draftRef.current, insertionPoint(), text);
+    nextSelectionRef.current = next.selection;
+    setDraft(next.text);
+  });
   const removeImage = (id: string): void => {
     const current = attachmentsRef.current;
     const index = current.findIndex(image => image.id === id);
@@ -948,6 +956,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
     if ((!text && !images.length && !attached.length) || images.some(image => image.preparing)
       || attached.some(file => file.preparing) || editSendingRef.current) return;
     const message = withAttachedFiles(text, attached.map(file => file.path));
+    // Al enviar se deja de dictar: lo siguiente que se diga no es para este mensaje.
+    dictation.stop();
     if (editing) {
       if (running) return;
       editSendingRef.current = true;
@@ -1564,6 +1574,11 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
           <button type="button" className="chat-icon-btn tip" data-tip="Adjuntar imágenes o archivos" aria-label="Adjuntar imágenes o archivos"
             disabled={submittingEdit || queueSaving || handoffPending}
             onClick={() => void attachFiles()}><PaperclipIcon size={17} /></button>
+          <button type="button" className={`chat-icon-btn chat-dictate tip${dictation.active ? " is-active" : ""}`} aria-pressed={dictation.active}
+            data-tip={dictation.error ?? (dictation.active ? "Dejar de dictar" : "Dictar por voz")} aria-label={dictation.active ? "Dejar de dictar" : "Dictar por voz"}
+            disabled={dictation.starting || workflowLocked || submittingEdit || queueSaving || handoffPending}
+            onClick={dictation.toggle}><MicIcon size={17} /></button>
+          {dictation.error && <span className="sr-only" role="alert">{dictation.error}</span>}
           {(running || hasQueued) && !editing && (provider === "trex" || provider === "antigravity" ? <span className="chat-tray-chip chat-message-delivery" title={provider === "antigravity" ? "Los mensajes en cola se entregan con sus adjuntos al terminar la respuesta" : "El agente consulta tus mensajes en cola cuando llega a un punto adecuado"}>En cola</span> : <Select className="chat-tray-chip chat-tray-select chat-message-delivery" menuClassName="chat-glass-menu" value={sendDuringWork}
             options={[{ value: "queue", label: "En cola", description: "El agente decide cuándo leer el mensaje" },
               { value: "now", label: "Enviar ahora", description: "Entrega el mensaje durante el trabajo en curso" }]}

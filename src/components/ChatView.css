@@ -1851,6 +1851,9 @@ pre.chat-ask-preview-body {
 .chat-icon-btn:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .chat-icon-btn:active:not(:disabled) { transform: scale(0.92); }
 .chat-icon-btn:disabled { opacity: .4; cursor: default; }
+/* Dictado: el micrófono queda marcado mientras escucha. */
+.chat-dictate.is-active { color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.chat-dictate.is-active:hover:not(:disabled) { color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 22%, transparent); }
 /* Enviar: el único control sólido de la caja, con el acento. Parar conserva
    la tinta del tema para que no se confunda con enviar. */
 .chat-send {

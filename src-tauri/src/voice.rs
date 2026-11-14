@@ -26,6 +26,8 @@ const EVENT_STATUS: &str = "voice://status";
 const EVENT_UTTERANCE: &str = "voice://utterance";
 #[cfg(windows)]
 const EVENT_LEVEL: &str = "voice://level";
+#[cfg(windows)]
+const EVENT_DICTATION: &str = "voice://dictation";
 /// Tras llamar a trex, cuánto tiempo se sigue escuchando sin repetir su nombre.
 #[cfg(windows)]
 const CONVERSATION_WINDOW: Duration = Duration::from_secs(20);
@@ -70,6 +72,40 @@ fn total_bytes() -> u64 {
     MODEL_FILES.iter().map(|file| file.size).sum()
 }
 
+/// Modelo del dictado: Whisper small cuantizado. Opcional y con su propia descarga;
+/// sin él se dicta con el modelo base, que se equivoca más con nombres y tecnicismos.
+const DICTATION_DIR: &str = "whisper-small-1";
+const DICTATION_FILES: &[ModelFile] = &[
+    ModelFile {
+        name: "small-encoder.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/8f3c18b358db4d1f2fc1eae49d75cd20989e4309/small-encoder.int8.onnx",
+        sha256: "4cbe7b22fa9026b843b60a68640c747de05bafb1a11b57edc0e66c232d9f33a9",
+        size: 112_442_483,
+    },
+    ModelFile {
+        name: "small-decoder.int8.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/8f3c18b358db4d1f2fc1eae49d75cd20989e4309/small-decoder.int8.onnx",
+        sha256: "acad50b5c782696e91b55914cc5ab4f756f1532f76e22aa6fc615f39fb69a8ee",
+        size: 262_226_114,
+    },
+    ModelFile {
+        name: "small-tokens.txt",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/8f3c18b358db4d1f2fc1eae49d75cd20989e4309/small-tokens.txt",
+        sha256: "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+        size: 816_730,
+    },
+];
+
+fn dictation_bytes() -> u64 {
+    DICTATION_FILES.iter().map(|file| file.size).sum()
+}
+
+fn dictation_installed(dir: &Path) -> bool {
+    DICTATION_FILES.iter().all(|file| {
+        std::fs::metadata(dir.join(file.name)).is_ok_and(|meta| meta.is_file() && meta.len() == file.size)
+    })
+}
+
 /// La voz de trex: Supertonic 3 (MIT), del paquete que publica sherpa-onnx. Es
 /// opcional: sin ella trex habla con la voz que trae Windows.
 const SPEECH_DIR: &str = "supertonic-3-1";
@@ -94,6 +130,21 @@ const SPEECH_FILES: &[SpeechFile] = &[
     SpeechFile { name: "tts.json", sha256: "42078d3aef1cd43ab43021f3c54f47d2d75ceb4e75f627f118890128b06a0d09", size: 8_253 },
     SpeechFile { name: "unicode_indexer.bin", sha256: "8402ca48e5189a8950138580b0fff64db6f072f24ac07cd54ba8b2fbb9883b30", size: 262_144 },
     SpeechFile { name: "voice.bin", sha256: "67d5209b0ee8ce6c74105ffbe12fe6a7628aea3b4ba2fcb308a4a67938a93ce8", size: 517_168 },
+];
+
+/// Bibliotecas de reconocimiento (sherpa-onnx y onnxruntime), del mismo paquete
+/// oficial con el que se compila trex. No van en el instalador: quien no usa la
+/// voz no las descarga.
+const RUNTIME_DIR: &str = "runtime-2.0.1";
+const RUNTIME_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-win-x64-shared-MT-Release-lib.tar.bz2";
+const RUNTIME_ARCHIVE_SHA256: &str = "afa4de3ca4ab0afd53bb4aab40d28ee15608364b549ffc0fe0caf6489bfc39a5";
+const RUNTIME_ARCHIVE_SIZE: u64 = 7_899_712;
+#[cfg(windows)]
+const RUNTIME_ARCHIVE_DIR: &str = "sherpa-onnx-v2.0.1-win-x64-shared-MT-Release-lib/lib";
+const RUNTIME_FILES: &[SpeechFile] = &[
+    SpeechFile { name: "onnxruntime.dll", sha256: "7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25", size: 17_799_168 },
+    SpeechFile { name: "onnxruntime_providers_shared.dll", sha256: "551d0e1fe4c227d8542314ba718d52f4379e0c7bfe729a37c59833a884e27b4d", size: 104_960 },
+    SpeechFile { name: "sherpa-onnx-c-api.dll", sha256: "0965a6e4c0254da2beff489cf7a8aaffaf7dc94f90b43b3e66448b8cab4177ea", size: 4_294_656 },
 ];
 
 fn speech_installed(dir: &Path) -> bool {
@@ -159,11 +210,13 @@ fn save_config(app: &AppHandle, config: &VoiceConfig) -> Result<(), String> {
 pub struct Inner {
     app: Mutex<Option<AppHandle>>,
     config: Mutex<VoiceConfig>,
-    /// "off" | "loading" | "idle" | "hearing" | "transcribing" | "speaking" | "live"
+    /// "off" | "loading" | "idle" | "hearing" | "transcribing" | "speaking" | "live" | "dictating"
     phase: Mutex<&'static str>,
     error: Mutex<Option<String>>,
     /// Último fallo de la voz de nube; se borra cuando vuelve a sonar bien.
     speech_error: Mutex<Option<String>>,
+    /// Chat al que se está dictando (su id). Mientras hay uno, todo lo que se oye se escribe allí.
+    dictation: Mutex<Option<String>>,
     downloading: AtomicBool,
     downloaded: AtomicU64,
     /// Bytes de la descarga en curso (lo que faltaba al empezarla).
@@ -183,7 +236,7 @@ impl Default for VoiceState {
     fn default() -> Self {
         Self(Arc::new(Inner {
             app: Mutex::new(None), config: Mutex::new(VoiceConfig::default()), phase: Mutex::new("off"),
-            error: Mutex::new(None), speech_error: Mutex::new(None), downloading: AtomicBool::new(false), downloaded: AtomicU64::new(0),
+            error: Mutex::new(None), speech_error: Mutex::new(None), dictation: Mutex::new(None), downloading: AtomicBool::new(false), downloaded: AtomicU64::new(0),
             download_total: AtomicU64::new(0), speaking: AtomicBool::new(false), speech: AtomicU64::new(0),
             generation: AtomicU64::new(0),
         }))
@@ -216,6 +269,14 @@ impl Inner {
     fn speech_dir(&self) -> Option<PathBuf> {
         Some(self.models_dir()?.parent()?.join(SPEECH_DIR))
     }
+
+    fn runtime_dir(&self) -> Option<PathBuf> {
+        Some(self.models_dir()?.parent()?.join(RUNTIME_DIR))
+    }
+
+    fn dictation_dir(&self) -> Option<PathBuf> {
+        Some(self.models_dir()?.parent()?.join(DICTATION_DIR))
+    }
 }
 
 fn models_installed(dir: &Path) -> bool {
@@ -224,13 +285,48 @@ fn models_installed(dir: &Path) -> bool {
     })
 }
 
-/// Las bibliotecas de reconocimiento se cargan bajo demanda (ver `build.rs`):
-/// si faltan junto al ejecutable, trex arranca igual y la voz avisa aquí.
+/// Las bibliotecas de reconocimiento se cargan bajo demanda (ver `build.rs`), así
+/// que trex arranca sin ellas. En desarrollo están junto al ejecutable; en una
+/// instalación se descargan con los modelos.
 #[cfg(windows)]
-fn runtime_present() -> bool {
+fn runtime_beside_exe() -> bool {
     let Ok(exe) = std::env::current_exe() else { return false };
     let Some(dir) = exe.parent() else { return false };
     ["sherpa-onnx-c-api.dll", "onnxruntime.dll"].iter().all(|name| dir.join(name).is_file())
+}
+
+fn runtime_installed(dir: &Path) -> bool {
+    RUNTIME_FILES.iter().all(|file| {
+        std::fs::metadata(dir.join(file.name)).is_ok_and(|meta| meta.is_file() && meta.len() == file.size)
+    })
+}
+
+/// Hay bibliotecas de reconocimiento que usar (junto al ejecutable o descargadas).
+fn runtime_ready(inner: &Inner) -> bool {
+    #[cfg(windows)]
+    if runtime_beside_exe() { return true; }
+    inner.runtime_dir().is_some_and(|dir| runtime_installed(&dir))
+}
+
+/// Deja las bibliotecas listas para el primer uso. Las descargadas se cargan por su
+/// ruta completa y tras comprobar su SHA-256: así no se usa por error otra
+/// `onnxruntime.dll` del sistema ni un archivo cambiado después de instalarlo.
+#[cfg(windows)]
+fn load_runtime(inner: &Inner) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::System::LibraryLoader::{LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH};
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if runtime_beside_exe() || LOADED.load(Ordering::SeqCst) { return true; }
+    let Some(dir) = inner.runtime_dir().filter(|dir| runtime_installed(dir)) else { return false };
+    if !RUNTIME_FILES.iter().all(|file| digest_file(&dir.join(file.name)).is_ok_and(|digest| digest == file.sha256)) { return false; }
+    // Primero onnxruntime: la otra biblioteca la importa por nombre y encuentra la ya cargada.
+    for name in ["onnxruntime.dll", "sherpa-onnx-c-api.dll"] {
+        let path: Vec<u16> = dir.join(name).as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        if unsafe { LoadLibraryExW(PCWSTR(path.as_ptr()), None, LOAD_WITH_ALTERED_SEARCH_PATH) }.is_err() { return false; }
+    }
+    LOADED.store(true, Ordering::SeqCst);
+    true
 }
 
 fn stop(inner: &Arc<Inner>) {
@@ -244,7 +340,8 @@ fn start(state: &VoiceState) {
     stop(&inner);
     *lock(&inner.error) = None;
     let config = lock(&inner.config).clone();
-    if !config.enabled { return; }
+    // Con el modo llamada apagado, el motor solo corre mientras se dicta.
+    if !config.enabled && lock(&inner.dictation).is_none() { return; }
     #[cfg(not(windows))]
     {
         *lock(&inner.error) = Some("El modo llamada solo funciona en Windows por ahora.".into());
@@ -255,8 +352,8 @@ fn start(state: &VoiceState) {
             *lock(&inner.error) = Some("Faltan los modelos de voz: descárgalos para empezar a escuchar.".into());
             return;
         };
-        if !runtime_present() {
-            *lock(&inner.error) = Some("Falta el componente de reconocimiento de voz junto a trex.".into());
+        if !load_runtime(&inner) {
+            *lock(&inner.error) = Some("Falta el componente de reconocimiento de voz: descárgalo con los modelos en Ajustes › Voz.".into());
             return;
         }
         let generation = inner.generation.load(Ordering::SeqCst);
@@ -264,7 +361,8 @@ fn start(state: &VoiceState) {
         let spawned = std::thread::Builder::new().name("trex-voice".into()).spawn({
             let inner = inner.clone();
             move || {
-                let result = engine::run(&inner, generation, &models, &config);
+                let dictation_models = inner.dictation_dir().filter(|dir| dictation_installed(dir));
+                let result = engine::run(&inner, generation, &models, dictation_models.as_deref(), &config);
                 if cfg!(debug_assertions) { eprintln!("[voz] el motor terminó: {result:?}"); }
                 // Un motor reemplazado no toca el estado del que lo sustituyó.
                 if inner.generation.load(Ordering::SeqCst) != generation { return; }
@@ -292,7 +390,7 @@ pub fn init(app: &AppHandle) {
 
 #[cfg(windows)]
 mod engine {
-    use super::{Inner, VoiceConfig, CONVERSATION_WINDOW, EVENT_LEVEL, EVENT_UTTERANCE};
+    use super::{Inner, VoiceConfig, CONVERSATION_WINDOW, EVENT_DICTATION, EVENT_LEVEL, EVENT_UTTERANCE};
     use crate::voice_live::{self, LiveLink, LiveOptions};
     use crate::{voice_capture, voice_keys, voice_wake};
     use tauri::Manager;
@@ -350,24 +448,40 @@ mod engine {
         }))
     }
 
-    pub fn run(inner: &Arc<Inner>, generation: u64, models: &Path, settings: &VoiceConfig) -> Result<(), String> {
-        let (raw, device) = (settings.raw_capture, settings.device.clone());
-        // Con una llamada en tiempo real abierta, el micrófono va directo a ella.
-        let mut live: Option<LiveLink> = None;
-        let alive = || inner.generation.load(Ordering::SeqCst) == generation;
-
+    /// Carga un Whisper cuantizado («base» o «small») de `dir`.
+    fn whisper(dir: &Path, size: &str) -> Option<OfflineRecognizer> {
         let mut config = OfflineRecognizerConfig::default();
         config.model_config.whisper = OfflineWhisperModelConfig {
-            encoder: path(models, "base-encoder.int8.onnx"),
-            decoder: path(models, "base-decoder.int8.onnx"),
+            encoder: path(dir, &format!("{size}-encoder.int8.onnx")),
+            decoder: path(dir, &format!("{size}-decoder.int8.onnx")),
             language: Some("es".into()),
             task: Some("transcribe".into()),
             ..Default::default()
         };
-        config.model_config.tokens = path(models, "base-tokens.txt");
+        config.model_config.tokens = path(dir, &format!("{size}-tokens.txt"));
         config.model_config.num_threads = 4;
-        let recognizer = OfflineRecognizer::create(&config)
-            .ok_or("No se pudo cargar el modelo de reconocimiento de voz.")?;
+        OfflineRecognizer::create(&config)
+    }
+
+    fn transcribe(recognizer: &OfflineRecognizer, speech: &[f32]) -> String {
+        let stream = recognizer.create_stream();
+        stream.accept_waveform(RATE, speech);
+        recognizer.decode(&stream);
+        stream.get_result().map(|result| result.text.trim().to_string()).unwrap_or_default()
+    }
+
+    #[derive(Clone, Serialize)]
+    struct Dictated { target: String, text: String }
+
+    pub fn run(inner: &Arc<Inner>, generation: u64, models: &Path, dictation_models: Option<&Path>, settings: &VoiceConfig) -> Result<(), String> {
+        let (raw, device) = (settings.raw_capture, settings.device.clone());
+        // El modelo del dictado es más pesado: se carga la primera vez que se dicta.
+        let mut dictation_recognizer: Option<OfflineRecognizer> = None;
+        // Con una llamada en tiempo real abierta, el micrófono va directo a ella.
+        let mut live: Option<LiveLink> = None;
+        let alive = || inner.generation.load(Ordering::SeqCst) == generation;
+
+        let recognizer = whisper(models, "base").ok_or("No se pudo cargar el modelo de reconocimiento de voz.")?;
 
         let vad = VoiceActivityDetector::create(
             &VadModelConfig {
@@ -406,6 +520,9 @@ mod engine {
         let mut deaf_until = Instant::now();
         loop {
             if !alive() { return Ok(()); }
+            let dictating = super::lock(&inner.dictation).clone();
+            // Arrancado solo para dictar: al terminar el dictado, el micrófono se cierra.
+            if !settings.enabled && dictating.is_none() { return Ok(()); }
             let chunk = match audio.recv_timeout(Duration::from_millis(250)) {
                 Ok(chunk) => chunk,
                 Err(RecvTimeoutError::Timeout) => continue,
@@ -450,8 +567,9 @@ mod engine {
                 vad.accept_waveform(&pending[..VAD_WINDOW]);
                 pending.drain(..VAD_WINDOW);
             }
+            let resting = if dictating.is_some() { "dictating" } else { "idle" };
             if vad.is_empty() {
-                inner.set_phase(if vad.detected() { "hearing" } else { "idle" });
+                inner.set_phase(if vad.detected() { "hearing" } else { resting });
                 continue;
             }
 
@@ -462,10 +580,19 @@ mod engine {
                 if !alive() { return Ok(()); }
 
                 inner.set_phase("transcribing");
-                let stream = recognizer.create_stream();
-                stream.accept_waveform(RATE, &speech);
-                recognizer.decode(&stream);
-                let text = stream.get_result().map(|result| result.text.trim().to_string()).unwrap_or_default();
+                if let Some(target) = &dictating {
+                    // Dictado: todo se escribe en el chat, sin "oye trex" y sin abrir llamadas.
+                    if dictation_recognizer.is_none() {
+                        dictation_recognizer = dictation_models.and_then(|dir| whisper(dir, "small"));
+                    }
+                    let text = transcribe(dictation_recognizer.as_ref().unwrap_or(&recognizer), &speech);
+                    if cfg!(debug_assertions) { eprintln!("[voz] dictado ({:.1} s): «{text}»", speech.len() as f32 / RATE as f32); }
+                    if let Some(text) = crate::voice_dictation::clean(&text) {
+                        inner.emit(EVENT_DICTATION, Dictated { target: target.clone(), text });
+                    }
+                    continue;
+                }
+                let text = transcribe(&recognizer, &speech);
                 if cfg!(debug_assertions) { eprintln!("[voz] oído ({:.1} s): «{text}»", speech.len() as f32 / RATE as f32); }
                 if text.is_empty() { continue; }
 
@@ -491,7 +618,7 @@ mod engine {
                 let at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
                 inner.emit(EVENT_UTTERANCE, Utterance { text, command, wake, at });
             }
-            if live.is_none() { inner.set_phase("idle"); }
+            if live.is_none() { inner.set_phase(resting); }
         }
     }
 }
@@ -549,19 +676,23 @@ fn fetch(inner: &Inner, client: &reqwest::blocking::Client, url: &str, name: &st
     Ok(())
 }
 
-/// Lo que falta por descargar, en bytes: los modelos de escucha y, aparte, la voz de trex.
-fn pending_download(listen: &Path, speech: &Path) -> (bool, bool, u64) {
+/// Lo que falta por descargar, en bytes: los modelos de escucha y, aparte, la voz de
+/// trex y las bibliotecas de reconocimiento.
+fn pending_download(listen: &Path, speech: &Path, runtime_missing: bool) -> (bool, bool, u64) {
     let need_listen = !models_installed(listen);
     let need_speech = cfg!(windows) && !speech_installed(speech);
-    let bytes = if need_listen { total_bytes() } else { 0 } + if need_speech { SPEECH_ARCHIVE_SIZE } else { 0 };
+    let bytes = if need_listen { total_bytes() } else { 0 }
+        + if need_speech { SPEECH_ARCHIVE_SIZE } else { 0 }
+        + if runtime_missing { RUNTIME_ARCHIVE_SIZE } else { 0 };
     (need_listen, need_speech, bytes)
 }
 
-fn download_models(inner: &Inner, listen: &Path, speech: &Path) -> Result<(), String> {
-    let (need_listen, need_speech, bytes) = pending_download(listen, speech);
+/// Descarga lo que falte. `runtime` es la carpeta de las bibliotecas si no están instaladas.
+fn download_models(inner: &Inner, listen: &Path, speech: &Path, runtime: Option<&Path>) -> Result<(), String> {
+    let (need_listen, need_speech, bytes) = pending_download(listen, speech, runtime.is_some());
     inner.downloaded.store(0, Ordering::SeqCst);
     inner.download_total.store(bytes, Ordering::SeqCst);
-    if !need_listen && !need_speech { return Ok(()); }
+    if !need_listen && !need_speech && runtime.is_none() { return Ok(()); }
     let root = listen.parent().ok_or("Carpeta de modelos no válida.")?;
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let token = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
@@ -569,9 +700,11 @@ fn download_models(inner: &Inner, listen: &Path, speech: &Path) -> Result<(), St
     std::fs::create_dir(&stage).map_err(|e| e.to_string())?;
     let result = (|| {
         let client = http_client()?;
+        #[cfg(windows)]
+        if let Some(target) = runtime { download_archive(inner, &client, &stage, target, &RUNTIME_ARCHIVE)?; }
         if need_listen { download_listen(inner, &client, &stage, listen)?; }
         #[cfg(windows)]
-        if need_speech { download_speech(inner, &client, &stage, speech)?; }
+        if need_speech { download_archive(inner, &client, &stage, speech, &SPEECH_ARCHIVE)?; }
         Ok(())
     })();
     let _ = std::fs::remove_dir_all(&stage);
@@ -579,12 +712,31 @@ fn download_models(inner: &Inner, listen: &Path, speech: &Path) -> Result<(), St
 }
 
 fn download_listen(inner: &Inner, client: &reqwest::blocking::Client, stage: &Path, target: &Path) -> Result<(), String> {
-    for file in MODEL_FILES {
+    download_files(inner, client, stage, target, MODEL_FILES)
+}
+
+/// Descarga el modelo del dictado. Solo se llama tras un clic explícito en Ajustes.
+fn download_dictation(inner: &Inner, target: &Path) -> Result<(), String> {
+    inner.downloaded.store(0, Ordering::SeqCst);
+    inner.download_total.store(dictation_bytes(), Ordering::SeqCst);
+    if dictation_installed(target) { return Ok(()); }
+    let root = target.parent().ok_or("Carpeta de modelos no válida.")?;
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    let token = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+    let stage = root.join(format!("download-{}-{token}", std::process::id()));
+    std::fs::create_dir(&stage).map_err(|e| e.to_string())?;
+    let result = http_client().and_then(|client| download_files(inner, &client, &stage, target, DICTATION_FILES));
+    let _ = std::fs::remove_dir_all(&stage);
+    result
+}
+
+fn download_files(inner: &Inner, client: &reqwest::blocking::Client, stage: &Path, target: &Path, files: &[ModelFile]) -> Result<(), String> {
+    for file in files {
         fetch(inner, client, file.url, file.name, file.size, file.sha256, &stage.join(file.name))?;
     }
     // Todo verificado: se publica archivo a archivo en la carpeta definitiva.
     std::fs::create_dir_all(target).map_err(|e| e.to_string())?;
-    for file in MODEL_FILES {
+    for file in files {
         let destination = target.join(file.name);
         let _ = std::fs::remove_file(&destination);
         std::fs::rename(stage.join(file.name), &destination)
@@ -593,39 +745,64 @@ fn download_listen(inner: &Inner, client: &reqwest::blocking::Client, stage: &Pa
     Ok(())
 }
 
-/// La voz viene en un paquete: se verifica entero, se sacan solo los archivos
-/// esperados (nunca rutas del paquete) y cada uno se vuelve a verificar.
+/// Un paquete .tar.bz2 del que solo interesan unos archivos concretos.
 #[cfg(windows)]
-fn download_speech(inner: &Inner, client: &reqwest::blocking::Client, stage: &Path, target: &Path) -> Result<(), String> {
-    let archive = stage.join("voice.tar.bz2");
-    fetch(inner, client, SPEECH_ARCHIVE_URL, "la voz de trex", SPEECH_ARCHIVE_SIZE, SPEECH_ARCHIVE_SHA256, &archive)?;
-    let unpacked = stage.join("speech");
+struct Archive {
+    /// Cómo se nombra en los mensajes de error.
+    label: &'static str,
+    url: &'static str,
+    sha256: &'static str,
+    size: u64,
+    /// Carpeta dentro del paquete donde están los archivos.
+    dir: &'static str,
+    files: &'static [SpeechFile],
+}
+
+#[cfg(windows)]
+const SPEECH_ARCHIVE: Archive = Archive {
+    label: "la voz de trex", url: SPEECH_ARCHIVE_URL, sha256: SPEECH_ARCHIVE_SHA256, size: SPEECH_ARCHIVE_SIZE,
+    dir: SPEECH_ARCHIVE_DIR, files: SPEECH_FILES,
+};
+
+#[cfg(windows)]
+const RUNTIME_ARCHIVE: Archive = Archive {
+    label: "el componente de reconocimiento", url: RUNTIME_ARCHIVE_URL, sha256: RUNTIME_ARCHIVE_SHA256, size: RUNTIME_ARCHIVE_SIZE,
+    dir: RUNTIME_ARCHIVE_DIR, files: RUNTIME_FILES,
+};
+
+/// Se verifica el paquete entero, se sacan solo los archivos esperados (nunca
+/// rutas del paquete) y cada uno se vuelve a verificar antes de instalarlo.
+#[cfg(windows)]
+fn download_archive(inner: &Inner, client: &reqwest::blocking::Client, stage: &Path, target: &Path, archive: &Archive) -> Result<(), String> {
+    let packed = stage.join(format!("{}.tar.bz2", archive.sha256));
+    fetch(inner, client, archive.url, archive.label, archive.size, archive.sha256, &packed)?;
+    let unpacked = stage.join(archive.sha256);
     std::fs::create_dir(&unpacked).map_err(|e| e.to_string())?;
-    let reader = std::io::BufReader::new(std::fs::File::open(&archive).map_err(|e| e.to_string())?);
+    let reader = std::io::BufReader::new(std::fs::File::open(&packed).map_err(|e| e.to_string())?);
     let mut tar = tar::Archive::new(bzip2::read::BzDecoder::new(reader));
-    let broken = || "El paquete de la voz no se pudo leer; no se instaló.".to_string();
+    let broken = || format!("No se pudo leer {}; no se instaló.", archive.label);
     for entry in tar.entries().map_err(|_| broken())? {
         let mut entry = entry.map_err(|_| broken())?;
         if !entry.header().entry_type().is_file() { continue; }
         let path = entry.path().map_err(|_| broken())?.into_owned();
-        let Some(file) = SPEECH_FILES.iter().find(|file| path == Path::new(SPEECH_ARCHIVE_DIR).join(file.name)) else { continue };
+        let Some(file) = archive.files.iter().find(|file| path == Path::new(archive.dir).join(file.name)) else { continue };
         if entry.size() != file.size { return Err(broken()); }
         let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(unpacked.join(file.name)).map_err(|e| e.to_string())?;
         std::io::copy(&mut entry.by_ref().take(file.size), &mut output).map_err(|_| broken())?;
         output.sync_all().map_err(|e| e.to_string())?;
     }
-    for file in SPEECH_FILES {
+    for file in archive.files {
         let path = unpacked.join(file.name);
         if !std::fs::metadata(&path).is_ok_and(|meta| meta.len() == file.size) || digest_file(&path)? != file.sha256 {
             return Err(format!("La verificación SHA-256 de {} falló; no se instaló.", file.name));
         }
     }
     std::fs::create_dir_all(target).map_err(|e| e.to_string())?;
-    for file in SPEECH_FILES {
+    for file in archive.files {
         let destination = target.join(file.name);
         let _ = std::fs::remove_file(&destination);
         std::fs::rename(unpacked.join(file.name), &destination)
-            .map_err(|_| "No se pudo instalar la voz verificada.".to_string())?;
+            .map_err(|_| format!("No se pudo instalar {}.", archive.label))?;
     }
     Ok(())
 }
@@ -657,6 +834,11 @@ pub struct VoiceStatus {
     models_installed: bool,
     /// La voz neuronal de trex está instalada; si no, habla con la de Windows.
     speech_installed: bool,
+    /// El modelo del dictado está instalado; si no, se dicta con el modelo base.
+    dictation_installed: bool,
+    dictation_bytes: u64,
+    /// Chat al que se está dictando ahora, si hay alguno.
+    dictating: Option<String>,
     downloading: bool,
     downloaded_bytes: u64,
     total_bytes: u64,
@@ -668,7 +850,7 @@ fn status_of(state: &VoiceState) -> VoiceStatus {
     let downloading = inner.downloading.load(Ordering::SeqCst);
     let app = lock(&inner.app).clone();
     let missing = match (inner.models_dir(), inner.speech_dir()) {
-        (Some(listen), Some(speech)) => pending_download(&listen, &speech).2,
+        (Some(listen), Some(speech)) => pending_download(&listen, &speech, cfg!(windows) && !runtime_ready(inner)).2,
         _ => 0,
     };
     VoiceStatus {
@@ -687,8 +869,12 @@ fn status_of(state: &VoiceState) -> VoiceStatus {
         speech_error: lock(&inner.speech_error).clone(),
         phase: *lock(&inner.phase),
         error: lock(&inner.error).clone(),
-        models_installed: inner.models_dir().is_some_and(|dir| models_installed(&dir)),
+        // Sin las bibliotecas de reconocimiento los modelos no sirven: cuentan como una sola descarga.
+        models_installed: inner.models_dir().is_some_and(|dir| models_installed(&dir)) && runtime_ready(inner),
         speech_installed: inner.speech_dir().is_some_and(|dir| speech_installed(&dir)),
+        dictation_installed: inner.dictation_dir().is_some_and(|dir| dictation_installed(&dir)),
+        dictation_bytes: dictation_bytes(),
+        dictating: lock(&inner.dictation).clone(),
         downloading,
         downloaded_bytes: inner.downloaded.load(Ordering::SeqCst),
         // Durante la descarga, lo que faltaba al empezar; si no, lo que falta ahora.
@@ -784,7 +970,7 @@ pub async fn voice_speak(state: State<'_, VoiceState>, text: String) -> Result<(
             let listening = !matches!(*lock(&inner.phase), "off" | "loading");
             if listening { inner.set_phase("speaking"); }
             // Con la voz neuronal instalada se usa esa; si no (o si falla), la de Windows.
-            let neural = inner.speech_dir().filter(|dir| speech_installed(dir) && runtime_present());
+            let neural = inner.speech_dir().filter(|dir| speech_installed(dir) && load_runtime(&inner));
             if cfg!(debug_assertions) { eprintln!("[voz] hablando (neuronal: {}): «{text}»", neural.is_some()); }
             let cancelled = || inner.speech.load(Ordering::SeqCst) != turn;
             // Voz de nube, si está elegida y hay clave. Si no llega a sonar, se dice con la voz local.
@@ -821,6 +1007,60 @@ pub fn voice_hush(state: State<'_, VoiceState>) {
     if *lock(&state.inner().0.phase) == "speaking" { state.inner().0.set_phase("idle"); }
 }
 
+/// Empieza a dictar en un chat: desde ahora, lo que se oiga se escribe allí.
+#[tauri::command]
+pub fn voice_dictation_start(state: State<'_, VoiceState>, live: State<'_, crate::voice_live::LiveState>, target: String) -> Result<VoiceStatus, String> {
+    let state = state.inner().clone();
+    if !cfg!(windows) { return Err("El dictado solo funciona en Windows por ahora.".into()); }
+    if target.is_empty() || target.len() > 128 { return Err("Chat no válido para dictar.".into()); }
+    if live.active() { return Err("Hay una llamada en curso: cuelga para poder dictar.".into()); }
+    if !state.0.models_dir().is_some_and(|dir| models_installed(&dir)) || !runtime_ready(&state.0) {
+        return Err("Para dictar hacen falta los modelos de voz: descárgalos en Ajustes › Voz.".into());
+    }
+    *lock(&state.0.dictation) = Some(target);
+    // Con el modo llamada apagado el motor no está corriendo: se enciende solo para dictar.
+    if *lock(&state.0.phase) == "off" {
+        start(&state);
+        if let Some(error) = lock(&state.0.error).clone() {
+            *lock(&state.0.dictation) = None;
+            return Err(error);
+        }
+    }
+    Ok(status_of(&state))
+}
+
+/// Deja de dictar. Si el motor solo estaba encendido para eso, se apaga solo.
+#[tauri::command]
+pub fn voice_dictation_stop(state: State<'_, VoiceState>) -> VoiceStatus {
+    *lock(&state.inner().0.dictation) = None;
+    status_of(state.inner())
+}
+
+/// Descarga el modelo del dictado (Whisper small). Solo se llama tras un clic explícito en Ajustes.
+#[tauri::command]
+pub async fn voice_download_dictation(state: State<'_, VoiceState>) -> Result<VoiceStatus, String> {
+    let state = state.inner().clone();
+    if state.0.downloading.swap(true, Ordering::SeqCst) {
+        return Err("Ya hay una descarga de modelos de voz en curso.".into());
+    }
+    struct Guard(Arc<Inner>);
+    impl Drop for Guard {
+        fn drop(&mut self) { self.0.downloading.store(false, Ordering::SeqCst); }
+    }
+    let guard = Guard(state.0.clone());
+    let target = state.0.dictation_dir().ok_or("No se encontró la carpeta de datos de la app.")?;
+    let inner = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        download_dictation(&inner, &target)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    // El motor en marcha no conoce el modelo nuevo: se reinicia para que el próximo dictado lo use.
+    if *lock(&state.0.phase) != "off" { start(&state); }
+    Ok(status_of(&state))
+}
+
 /// Descarga los modelos. Solo se llama tras un clic explícito en Ajustes.
 #[tauri::command]
 pub async fn voice_download_models(state: State<'_, VoiceState>) -> Result<VoiceStatus, String> {
@@ -835,11 +1075,12 @@ pub async fn voice_download_models(state: State<'_, VoiceState>) -> Result<Voice
     let guard = Guard(state.0.clone());
     let listen = state.0.models_dir().ok_or("No se encontró la carpeta de datos de la app.")?;
     let speech = state.0.speech_dir().ok_or("No se encontró la carpeta de datos de la app.")?;
-    let was_listening = models_installed(&listen);
+    let was_listening = models_installed(&listen) && runtime_ready(&state.0);
     let inner = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
-        download_models(&inner, &listen, &speech)
+        let runtime = inner.runtime_dir().filter(|_| cfg!(windows) && !runtime_ready(&inner));
+        download_models(&inner, &listen, &speech, runtime.as_deref())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -882,10 +1123,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let (listen, speech) = (dir.join("listen"), dir.join("speech"));
         std::fs::create_dir_all(&listen).unwrap();
-        let (need_listen, need_speech, bytes) = pending_download(&listen, &speech);
+        let (need_listen, need_speech, bytes) = pending_download(&listen, &speech, false);
         assert!(need_listen);
         assert_eq!(need_speech, cfg!(windows));
         assert_eq!(bytes, total_bytes() + if cfg!(windows) { SPEECH_ARCHIVE_SIZE } else { 0 });
+        // Las bibliotecas de reconocimiento se suman cuando faltan.
+        assert_eq!(pending_download(&listen, &speech, true).2, bytes + RUNTIME_ARCHIVE_SIZE);
+        assert!(!runtime_installed(&dir));
+        assert!(RUNTIME_ARCHIVE_URL.starts_with("https://") && RUNTIME_ARCHIVE_SHA256.len() == 64);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

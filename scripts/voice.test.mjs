@@ -3,7 +3,7 @@ import test from 'node:test';
 import { load } from './ts-loader.mjs';
 const {
   voiceStateLabel, voiceListening, voiceDownloadOffer, microphoneOptions, levelPercent, voiceModeBlocker, voiceSpeechBlocker, voiceSettingsOf,
-  cloudVoiceOptions, downloadPercent, megabytes, heardLabel, pushHeard,
+  cloudVoiceOptions, insertDictated, downloadPercent, megabytes, heardLabel, pushHeard,
 } = await load('voice');
 
 const status = patch => ({
@@ -87,6 +87,23 @@ test('the cloud voice picker keeps the chosen voice visible before the list load
   assert.deepEqual(cloudVoiceOptions(list, 'a1'), [{ value: 'a1', label: 'Valentina', description: 'es · mexican' }, { value: 'b2', label: 'Mateo', description: undefined }]);
   assert.deepEqual(cloudVoiceOptions([], 'zz9')[0], { value: 'zz9', label: 'Voz elegida', description: 'Carga las voces para ver su nombre' });
   assert.deepEqual(cloudVoiceOptions([], ''), []);
+});
+
+test('dictated phrases land at the cursor with the spacing they need', () => {
+  const at = n => ({ start: n, end: n });
+  assert.deepEqual(insertDictated('', at(0), ' Corre los tests. '), { text: 'Corre los tests.', selection: at(16) });
+  // Tras texto pegado se añade un espacio; tras un espacio o un salto de línea, no.
+  assert.equal(insertDictated('Hola.', at(5), 'Corre los tests.').text, 'Hola. Corre los tests.');
+  assert.equal(insertDictated('Hola. ', at(6), 'Sigue.').text, 'Hola. Sigue.');
+  assert.equal(insertDictated('Lista:\n', at(7), 'primero').text, 'Lista:\nprimero');
+  // En medio de una frase se separa por los dos lados y el cursor queda tras lo dictado.
+  assert.deepEqual(insertDictated('abre archivo', at(4), 'el'), { text: 'abre el archivo', selection: at(7) });
+  assert.equal(insertDictated('revisa esto.', at(11), 'bien').text, 'revisa esto bien.');
+  // Una selección se sustituye.
+  assert.deepEqual(insertDictated('borra ESTO ya', { start: 6, end: 10 }, 'eso'), { text: 'borra eso ya', selection: at(9) });
+  // Nada que escribir, o un cursor fuera de rango, no rompe el texto.
+  assert.deepEqual(insertDictated('igual', at(2), '   '), { text: 'igual', selection: at(2) });
+  assert.equal(insertDictated('corto', at(99), 'fin').text, 'corto fin');
 });
 
 test('heard utterances show the command and keep a short history', () => {

@@ -1,6 +1,6 @@
 /** Modo llamada: tipos y textos del estado de la voz (ver `src-tauri/src/voice.rs`). Sin Tauri, para poder probarlo. */
 
-export type VoicePhase = "off" | "loading" | "idle" | "hearing" | "transcribing" | "speaking" | "live";
+export type VoicePhase = "off" | "loading" | "idle" | "hearing" | "transcribing" | "speaking" | "live" | "dictating";
 
 /** Quién conversa: lo local (Whisper + Claude, sin costo) o Gemini Live (de pago). */
 export type VoiceMode = "local" | "live";
@@ -34,6 +34,11 @@ export type VoiceStatus = {
   modelsInstalled: boolean;
   /** La voz neuronal de trex está instalada; si no, habla con la de Windows. */
   speechInstalled: boolean;
+  /** El modelo del dictado está instalado; si no, se dicta con el modelo base. */
+  dictationInstalled: boolean;
+  dictationBytes: number;
+  /** Chat al que se está dictando ahora, si hay alguno. */
+  dictating: string | null;
   downloading: boolean;
   downloadedBytes: number;
   totalBytes: number;
@@ -77,7 +82,29 @@ export const VOICE_PHASE_LABEL: Record<VoicePhase, string> = {
   transcribing: "Entendiendo…",
   speaking: "Hablando",
   live: "En llamada",
+  dictating: "Dictando",
 };
+
+/** Una frase dictada para un chat concreto. */
+export type VoiceDictated = { target: string; text: string };
+
+/**
+ * Inserta una frase dictada donde está el cursor (o sustituye la selección). Añade el
+ * espacio que la separa de lo anterior y deja el cursor al final de lo insertado.
+ */
+export function insertDictated(draft: string, point: { start: number; end: number }, text: string): { text: string; selection: { start: number; end: number } } {
+  const start = Math.max(0, Math.min(point.start, draft.length));
+  const end = Math.max(start, Math.min(point.end, draft.length));
+  const before = draft.slice(0, start);
+  const after = draft.slice(end);
+  const phrase = text.trim();
+  if (!phrase) return { text: draft, selection: { start, end } };
+  const lead = before && !/\s$/.test(before) ? " " : "";
+  // Si lo que sigue empieza pegado, también se separa.
+  const tail = after && !/^[\s.,;:!?)]/.test(after) ? " " : "";
+  const caret = before.length + lead.length + phrase.length;
+  return { text: `${before}${lead}${phrase}${tail}${after}`, selection: { start: caret, end: caret } };
+}
 
 /** Lo que se guarda al aplicar un cambio en Ajustes: todo menos el estado. */
 export type VoiceSettingsPatch = Pick<VoiceStatus, "enabled" | "rawCapture" | "device" | "mode" | "liveVoice" | "bargeIn" | "speech" | "cloudVoice">;

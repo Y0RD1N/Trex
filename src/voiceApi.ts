@@ -19,6 +19,13 @@ export const voiceLiveToolResult = (id: string, result: unknown): Promise<void> 
 /** Cuelga la llamada en tiempo real. */
 export const voiceLiveHangup = (): Promise<void> => invoke("voice_live_hangup");
 
+/** Empieza a dictar en un chat (por su id de sesión) o deja de dictar. */
+export const voiceDictationStart = (target: string): Promise<VoiceStatus> => invoke("voice_dictation_start", { target });
+export const voiceDictationStop = (): Promise<VoiceStatus> => invoke("voice_dictation_stop");
+/** Descarga el modelo del dictado (~360 MB). Solo tras un clic explícito. */
+export const voiceDownloadDictation = (): Promise<VoiceStatus> => invoke("voice_download_dictation");
+
+export const VOICE_DICTATION_EVENT = "voice://dictation";
 export const VOICE_STATUS_EVENT = "voice://status";
 export const VOICE_UTTERANCE_EVENT = "voice://utterance";
 export const VOICE_LEVEL_EVENT = "voice://level";
