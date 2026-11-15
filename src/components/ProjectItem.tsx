@@ -7,7 +7,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import type { AgentActivity, LauncherProfile, Project } from "../types";
-import { ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, MapIcon, PencilIcon, StarIcon, TerminalIcon, TrashIcon } from "./Icons";
+import { AlertIcon, ChevronIcon, CopyIcon, EllipsisIcon, FolderIcon, MapIcon, PencilIcon, StarIcon, TerminalIcon, TrashIcon } from "./Icons";
 import DropdownMenu from "./DropdownMenu";
 import ProfileMenuItems from "./ProfileMenuItems";
 import ProjectCore from "./ProjectCore";
@@ -92,6 +92,7 @@ export default function ProjectItem({
         setMenu({ x: event.clientX, y: event.clientY });
       }}
     >
+      {active && <span className="row-pointer" aria-hidden="true"><ChevronIcon size={12} strokeWidth={2} /></span>}
       {tabCount > 0 ? (
         <button
           type="button"
@@ -108,7 +109,7 @@ export default function ProjectItem({
         {logo && logo !== brokenLogo
           ? <img src={logo} alt="" draggable={false} onError={() => setBrokenLogo(logo)} />
           : <ProjectCore seed={project.id} />}
-        {activity !== "idle" && <span className={`project-activity is-${activity}`} />}
+        {activity !== "idle" && <span className={`project-activity is-${activity}`}>{activity === "waiting" && <AlertIcon size={11} strokeWidth={2} />}</span>}
       </span>
       <span id={activityId} className="sr-only">{activityText}</span>
 

@@ -2,15 +2,14 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Reac
 import { createPortal } from "react-dom";
 import { useFloatingPosition } from "../../hooks/useFloatingPosition";
 import { usePresence } from "../../hooks/usePresence";
-import { CloseIcon } from "../Icons";
+import { AlertIcon, ChevronIcon, CloseIcon } from "../Icons";
 import "./ComposerPanel.css";
 
 type Props = {
   label: string;
   title: string;
-  /** Glifo de texto de la pestaña (`$`, `≡`…); sin él se usa `icon`. */
-  glyph?: string;
-  icon?: ReactNode;
+  /** Icono de la pestaña, del set de `Icons.tsx` (unos 13 px). */
+  icon: ReactNode;
   count?: string | number;
   detail?: string;
   attention?: boolean;
@@ -26,7 +25,7 @@ const PANEL_OPEN = "trex:composer-panel-open";
 
 /** Attached tabs keep auxiliary work outside the writing area. Children stay
  * mounted when folded so queue drafts and their conflict checks survive. */
-export default function ComposerPanel({ label, title, glyph, icon, count, detail, attention = false, live = false,
+export default function ComposerPanel({ label, title, icon, count, detail, attention = false, live = false,
   visible = true, open: controlledOpen, onOpenChange, actions, children }: Props) {
   const id = useId(), trigger = useRef<HTMLButtonElement>(null), surface = useRef<HTMLDivElement>(null);
   const [localOpen, setLocalOpen] = useState(false);
@@ -96,9 +95,10 @@ export default function ComposerPanel({ label, title, glyph, icon, count, detail
     {visible && <button ref={trigger} type="button" className={`composer-tab${attention ? " needs-attention" : ""}`}
       aria-expanded={open} aria-controls={id} aria-label={`${label}${count !== undefined ? `: ${count}` : ""}${attention ? ", requiere atención" : ""}`}
       onClick={() => change.current(!open)}>
-      {glyph ? <span className="composer-tab-glyph" aria-hidden="true">{glyph}</span> : icon}{live && <span className="composer-tab-live" aria-hidden="true" />}
+      <span className="composer-tab-glyph" aria-hidden="true">{icon}</span>{live && <span className="composer-tab-live" aria-hidden="true" />}
       <span>{label}</span>{count !== undefined && <span className="composer-tab-count">{count}</span>}
-      <span className="composer-tab-caret" aria-hidden="true" />
+      {attention && <span className="composer-tab-alert" aria-hidden="true"><AlertIcon size={12} /></span>}
+      <span className="composer-tab-caret" aria-hidden="true"><ChevronIcon size={10} strokeWidth={2} direction={open ? "down" : "up"} /></span>
     </button>}
     {createPortal(<div ref={surface} id={id} role="region" tabIndex={-1} aria-label={title} hidden={presence.value === null} inert={!open} aria-hidden={!open || undefined}
       className={`composer-panel motion-popover${presence.entering ? " entering" : ""}${presence.leaving ? " leaving" : ""}`}

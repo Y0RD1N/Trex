@@ -1,11 +1,22 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import type { AgentTerminal, TerminalOwner } from "../../agentTerminals";
-import { RefreshIcon } from "../Icons";
+import { CheckIcon, ChevronIcon, CloseIcon, QuestionIcon, RefreshIcon, StopIcon, TerminalIcon } from "../Icons";
 import ComposerPanel from "./ComposerPanel";
 import "./BackgroundTerminals.css";
 
 const STATES: Record<AgentTerminal["state"], string> = { running: "Activa", stopping: "Deteniendo…", completed: "Finalizada", failed: "Falló", stopped: "Detenida", unknown: "Sin confirmar" };
 const plain = (value: string): string => value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+/** Icono de estado de cada fila; mientras corre o se detiene, la rueda de trex (CSS). */
+function StateIcon({ state }: { state: AgentTerminal["state"] }) {
+  switch (state) {
+    case "completed": return <CheckIcon size={13} strokeWidth={2} />;
+    case "failed": return <CloseIcon size={12} strokeWidth={2} />;
+    case "stopped": return <StopIcon size={12} />;
+    case "unknown": return <QuestionIcon size={13} />;
+    default: return null;
+  }
+}
+
 function BackgroundTerminals({ owners }: { owners: TerminalOwner[] }) {
   const [open, setOpen] = useState(false), [selected, setSelected] = useState<string | null>(null), [message, setMessage] = useState("");
   const [stopping, setStopping] = useState(new Set<string>());
@@ -43,25 +54,25 @@ function BackgroundTerminals({ owners }: { owners: TerminalOwner[] }) {
   };
   const refreshing = owners.some(owner => owner.session.snapshot.status === "loading");
   const count = unknown ? active.length ? `${active.length}+` : "?" : String(active.length);
-  return <ComposerPanel label="Terminales" title="Terminales en segundo plano" glyph="$" count={count}
+  return <ComposerPanel label="Terminales" title="Terminales en segundo plano" icon={<TerminalIcon size={13} />} count={count}
     visible={available} open={open} onOpenChange={setOpen} live={active.length > 0}
     detail={`${active.length} ${active.length === 1 ? "activa" : "activas"} · ${owners.length > 1 ? "este equipo" : "este chat"}${unknown ? " · estado parcial" : ""}`}
     actions={<button type="button" className="icon-btn" aria-label="Actualizar terminales" disabled={refreshing} onClick={() => { setMessage(""); void Promise.all(owners.map(owner => owner.session.refresh())).catch(() => setMessage("No se pudo actualizar el estado.")); }}><RefreshIcon size={13} /></button>}>
     <section className="chat-background-panel" aria-label="Terminales de los agentes">
       {rows.length ? <div className="chat-background-list">{rows.map(row => <div key={row.key} className={`chat-background-row${current?.key === row.key ? " is-selected" : ""}`}>
         <button type="button" className="chat-background-select" aria-pressed={current?.key === row.key} onClick={() => { setSelected(row.key); setMessage(""); }} aria-label={`Ver salida de ${row.entry.command} (${STATES[row.entry.state]})`}>
-          <span className="chat-background-state" data-state={row.entry.state} aria-hidden="true" />
+          <span className="chat-background-state" data-state={row.entry.state} aria-hidden="true"><StateIcon state={row.entry.state} /></span>
           <span className="chat-background-copy"><strong title={row.entry.command}>{row.entry.command}</strong>{owners.length > 1 && <small>{row.owner.label}</small>}</span>
           <span className="chat-background-status">{STATES[row.entry.state]}</span>
         </button>
-        {row.entry.canStop && <button type="button" className="chat-background-stop" disabled={row.entry.state !== "running" || stopping.has(row.key)} aria-label={`Detener ${row.entry.command}`} onClick={() => void stop(row)}>{row.entry.state === "stopping" || stopping.has(row.key) ? "Deteniendo…" : "Detener"}</button>}
+        {row.entry.canStop && <button type="button" className="chat-background-stop" disabled={row.entry.state !== "running" || stopping.has(row.key)} aria-label={`Detener ${row.entry.command}`} onClick={() => void stop(row)}>{row.entry.state === "running" && !stopping.has(row.key) && <StopIcon size={11} />}{row.entry.state === "stopping" || stopping.has(row.key) ? "Deteniendo…" : "Detener"}</button>}
       </div>)}</div> : <p className="chat-background-empty">{unknown ? "No se pudo confirmar la lista. Actualiza el proveedor para disponer del control de terminales." : "Los servidores, pruebas y monitores aparecerán aquí cuando el agente los deje en segundo plano."}</p>}
       {current && <div className="chat-background-output">
         <div className="chat-background-bar"><code className="chat-background-cwd" title={current.entry.cwd}>{current.entry.cwd}</code><span>{STATES[current.entry.state]}{current.entry.exitCode != null ? ` · código ${current.entry.exitCode}` : ""}</span></div>
         <pre tabIndex={0} aria-label={`Salida de ${current.entry.command}`}>{plain(current.entry.output) || "El proveedor todavía no ha publicado salida de esta terminal."}</pre>
         {current.entry.truncated && <small>Se muestran los últimos 64 KiB de salida.</small>}
         {current.entry.canWrite && current.owner.session.write && <form className="chat-background-input" onSubmit={event => { event.preventDefault(); void sendInput(); }}>
-          <span aria-hidden="true">›</span>
+          <span aria-hidden="true"><ChevronIcon size={12} strokeWidth={2} /></span>
           <input aria-label="Entrada para la terminal seleccionada" placeholder="Escribe una respuesta o un comando…" value={input} maxLength={16_000} disabled={writing} onChange={event => setInput(event.target.value)} />
           <button type="submit" disabled={writing || !input}>{writing ? "Enviando…" : "Enviar"}</button>
         </form>}

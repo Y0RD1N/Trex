@@ -9,7 +9,7 @@ import { loadProfileModels } from "../profileModels";
 import type { LauncherProfile, Settings } from "../types";
 import AgentIcon from "./AgentIcon";
 import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
-import { ArrowRightIcon } from "./Icons";
+import { ArrowRightIcon, ChevronIcon } from "./Icons";
 import Select from "./Select";
 import "./HandoffDialog.css";
 
@@ -134,7 +134,7 @@ export default function HandoffDialog({ context, prepared, loading, error, profi
         <span>El nuevo asistente verificará el estado actual antes de continuar.</span>
       </p>}
     <details className="handoff-preview">
-      <summary tabIndex={0}>Revisar contexto</summary>
+      <summary tabIndex={0} className="disclosure"><span className="disclosure-chevron" aria-hidden="true"><ChevronIcon size={11} strokeWidth={2} /></span>Revisar contexto</summary>
       <pre tabIndex={0} aria-label="Contexto para el nuevo asistente">{prepared?.content ?? context.content}</pre>
     </details>
   </FeatureDialog>;

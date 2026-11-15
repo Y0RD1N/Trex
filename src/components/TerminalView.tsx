@@ -34,7 +34,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { IS_WINDOWS } from "../platform";
 import { applyCursorOptions, cursorOptions, installCursorPolicy } from "../cursor";
 import { TerminalResizeCoordinator } from "../terminalResize";
-import { CloseIcon, SearchIcon } from "./Icons";
+import { ArrowDownIcon, ArrowUpIcon, CloseIcon, SearchIcon } from "./Icons";
 import { getSearchDecorations, getTerminalTheme, getThemeMode, onThemeChange } from "../theme";
 import type { AgentActivity, AgentNoticeKind, Settings, TabKind } from "../types";
 import { ACTIVITY_FOOTER_ROWS, ACTIVITY_SAMPLE_MS, ACTIVITY_SETTLE_MS, activitySignal, screenActivity } from "../agentActivity";
@@ -829,7 +829,7 @@ function TerminalView({
             aria-label="Resultado anterior"
             onClick={() => runSearch("prev")}
           >
-            ↑
+            <ArrowUpIcon size={14} strokeWidth={1.8} />
           </button>
           <button
             type="button"
@@ -838,7 +838,7 @@ function TerminalView({
             aria-label="Resultado siguiente"
             onClick={() => runSearch("next")}
           >
-            ↓
+            <ArrowDownIcon size={14} />
           </button>
           <button
             type="button"

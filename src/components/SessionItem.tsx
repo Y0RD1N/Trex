@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { TabState } from "../types";
-import { CloseIcon } from "./Icons";
+import { ChevronIcon, CloseIcon } from "./Icons";
 import AgentIcon from "./AgentIcon";
 import { activityLabel } from "../agentActivity";
 import { sessionTitle } from "../sessionTitle";
@@ -30,6 +30,7 @@ export default function SessionItem({ tab, number, active, onSelect, onClose, on
 
   return (
     <div className={`session-row${active ? " active" : ""}${tab.exited ? " exited" : ""}`}>
+      {active && <span className="row-pointer" aria-hidden="true"><ChevronIcon size={12} strokeWidth={2} /></span>}
       {editing ? (
         <input
           className="session-rename-input"

@@ -23,7 +23,7 @@
 .chat-browser-recent { display:grid; gap:var(--sp-1-5); margin-top:var(--sp-3-5); }
 .chat-browser-recent>small { font-size:var(--fs-xs); color:var(--text-muted); }
 .chat-browser-recent button { display:flex; justify-content:space-between; gap:var(--sp-2-5); }
-.chat-browser-recent button span { color:var(--text-muted); font-size:var(--fs-xs); }
+.chat-browser-recent button span { display:inline-flex; align-items:center; gap:var(--sp-1-5); color:var(--text-muted); font-size:var(--fs-xs); }
 .browser-spaces { display:grid; gap:var(--sp-1); max-height:180px; overflow-y:auto; margin:0 0 var(--sp-3-5); padding:var(--sp-0-5); }
 .browser-space { display:flex; align-items:center; gap:var(--sp-2); width:100%; padding:var(--sp-2) var(--sp-2-5); border:1px solid transparent; border-radius:var(--radius-lg); background:transparent; color:var(--text); text-align:left; cursor:pointer; }
 .browser-space>span { display:grid; gap:var(--sp-0-5); flex:1; min-width:0; }

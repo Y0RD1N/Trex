@@ -38,6 +38,6 @@ export default function AgentActivity({ author, items, children, live, attention
   }
   return <details className="chat-agent-activity" data-member-id={author.memberId} data-live={live || undefined} open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>{summary}<ChevronIcon size={13} /></summary>
-    <div className="chat-agent-body">{lastUser?.kind === "user" && <details className="chat-agent-instruction"><summary>Instrucción recibida</summary><p>{lastUser.text}</p></details>}{children}</div>
+    <div className="chat-agent-body">{lastUser?.kind === "user" && <details className="chat-agent-instruction"><summary className="disclosure"><span className="disclosure-chevron" aria-hidden="true"><ChevronIcon size={11} strokeWidth={2} /></span>Instrucción recibida</summary><p>{lastUser.text}</p></details>}{children}</div>
   </details>;
 }

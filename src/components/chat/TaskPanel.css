@@ -60,13 +60,10 @@
   border: 1px solid var(--text-dim);
   border-radius: 50%;
   color: var(--text-dim);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  line-height: 1;
 }
 .chat-task-mark > svg { display: block; }
 .chat-task-list [data-status="completed"] .chat-task-mark { border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok); }
-.chat-task-list [data-status="in_progress"] .chat-task-mark { border: 0; color: var(--accent-strong); }
+.chat-task-list [data-status="in_progress"] .chat-task-mark { border-color: currentColor; color: var(--accent-strong); }
 .chat-task-list [data-status="failed"] .chat-task-mark { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger); }
 .chat-task-list [data-status="uncertain"] .chat-task-mark { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn); }
 .chat-task-copy { flex: 1; min-width: 0; }

@@ -81,10 +81,9 @@
   .r-picon { display: inline-grid; place-items: center; flex: none; color: var(--text-dim); }
   .r-picon img { width: 100%; height: 100%; object-fit: contain; border-radius: var(--radius-xs); }
   .project-core { display: block; }
-  .r-chev { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--text-dim); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
-    transition: transform var(--dur) var(--ease-out); }
+  /* Los iconos son los del escritorio (components/Icons.tsx): trazo redondeado y currentColor. */
+  .r-chev { display: grid; place-items: center; width: 14px; height: 14px; flex: none; color: var(--text-dim); transition: transform var(--dur) var(--ease-out); }
   .r-chev.is-open { transform: rotate(90deg); }
-  .r-ico { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 
   .r-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 14px; border-radius: var(--radius-md);
     background: var(--bg-inset); border: 1px solid var(--border); font-size: 14.5px; font-weight: 500; transition: filter var(--t), opacity var(--t); }
@@ -128,7 +127,7 @@
   .r-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 6px; font: 12.5px var(--font-mono); color: var(--text-muted); }
   .r-summary span { display: inline-flex; align-items: center; gap: 6px; }
   .r-summary .is-warn { color: var(--warn-text); }
-  .r-summary button { min-height: 28px; font: inherit; }
+  .r-summary button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; font: inherit; }
   .r-mono { font: 12.5px var(--font-mono) !important; color: var(--text-muted); }
 
   .r-project { border-bottom: 1px solid var(--line); }
@@ -143,7 +142,7 @@
   .r-session-main { display: flex; gap: 10px; align-items: flex-start; width: 100%; min-width: 0; padding: 10px 8px 10px 4px; text-align: left; border-radius: inherit; }
   .r-session.is-need .r-session-main { padding: 11px 11px 8px 10px; }
   .r-session-main:active { background: color-mix(in srgb, var(--text) 5%, transparent); }
-  .r-glyph { width: 16px; height: 22px; display: grid; place-items: center; flex: none; font: 12px var(--font-mono); color: var(--text-muted); }
+  .r-glyph { width: 16px; height: 22px; display: grid; place-items: center; flex: none; color: var(--text-muted); }
   .r-glyph.is-warn { color: var(--warn-text); }
   .r-glyph.is-dim { color: var(--text-dim); }
   .r-sbody { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -169,7 +168,7 @@
     font: 500 10.5px var(--font-sans); letter-spacing: .01em; color: var(--text-dim); }
   .r-tab.is-on { color: var(--text); }
   .r-tab.is-on::before { content: ""; position: absolute; top: -1px; left: 50%; width: 28px; margin-left: -14px; height: 2px; border-radius: 0 0 2px 2px; background: var(--accent); }
-  .r-tab svg { width: 23px; height: 23px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .r-tab svg { flex: none; }
   .r-tab > span { display: inline-flex; align-items: center; }
   .r-badge { font: 600 10px/1 var(--font-mono); background: var(--warn); color: #16130e; border-radius: var(--radius-pill); padding: 2px 5px; margin-left: 4px; }
 
@@ -177,13 +176,12 @@
   .r-chat-head { flex: none; border-bottom: 1px solid var(--line); -webkit-user-select: none; user-select: none; }
   .r-chat-top { display: flex; align-items: center; gap: 4px; min-height: 54px; padding: 4px var(--pad-r) 4px calc(4px + var(--safe-left)); }
   .r-back { width: 44px; height: 44px; border-radius: var(--radius-md); display: grid; place-items: center; color: var(--accent-ink); flex: none; }
-  .r-back svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .r-back:active { background: color-mix(in srgb, var(--text) 6%, transparent); }
   .r-who { flex: 1; min-width: 0; padding-right: 6px; }
   .r-who b { display: block; font-weight: 600; font-size: 16px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .r-who > span { display: flex; align-items: center; gap: 5px; font: 11.5px var(--font-mono); color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .r-stop { height: 36px; padding: 0 12px; border-radius: var(--radius-pill); border: 1px solid var(--border); font-size: 13.5px; display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); flex: none; }
-  .r-stop i { width: 9px; height: 9px; background: var(--danger-text); border-radius: 2px; }
+  .r-stop svg { flex: none; color: var(--danger-text); }
 
   .r-tasks { margin: 0 var(--pad-r) 10px var(--pad-l); padding: 9px 11px; border-radius: var(--radius-lg); background: var(--bg-surface); border: 1px solid var(--border); }
   .r-tasks-h { display: flex; justify-content: space-between; gap: 10px; font: 12px var(--font-mono); color: var(--text-dim); }
@@ -196,9 +194,11 @@
   .r-thread { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 16px var(--pad-r) 14px var(--pad-l);
     display: flex; flex-direction: column; gap: 14px; font-size: 15.5px; line-height: 1.55; }
   .r-me { padding: 10px 13px; border-radius: var(--radius-lg); background: var(--bg-inset); display: grid; gap: 8px; position: relative; padding-left: 28px; }
-  .r-me::before { content: "›"; position: absolute; left: 12px; top: 9px; color: var(--accent-ink); font-family: var(--font-mono); }
+  /* El galón marca tus mensajes, alineado con la primera línea. */
+  .r-me-mark { position: absolute; left: 10px; top: 10px; height: calc(15.5px * 1.55); display: grid; place-items: center; color: var(--accent-ink); }
   .r-me-text { white-space: pre-wrap; overflow-wrap: anywhere; }
   .r-me-files { display: flex; flex-wrap: wrap; gap: 6px; }
+  .r-file-tag svg { flex: none; }
   .r-file-tag { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 3px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border);
     font: 12px var(--font-mono); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .r-ai { overflow-wrap: anywhere; min-width: 0; }
@@ -217,8 +217,9 @@
   .r-tree { font: 12.5px/1.85 var(--font-mono); color: var(--text-muted); min-width: 0; }
   .r-tree-row { display: flex; gap: 6px; align-items: center; min-width: 0; }
   .r-tree-branch { color: var(--text-dim); flex: none; }
-  .r-tree-ok { color: var(--ok-text); flex: none; }
-  .r-tree-err { color: var(--danger-text); flex: none; }
+  .r-tree-ok, .r-tree-err { display: grid; place-items: center; width: 13px; flex: none; }
+  .r-tree-ok { color: var(--ok-text); }
+  .r-tree-err { color: var(--danger-text); }
   .r-tree-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .r-diff { font: 11.5px var(--font-mono); flex: none; }
   .r-diff .is-add { color: var(--diff-add-text); } .r-diff .is-del { color: var(--diff-del-text); }
@@ -228,8 +229,9 @@
   .r-notice.is-info { border-color: var(--info-border); color: var(--info-text); background: var(--info-bg); }
   .r-turn { font: 11.5px var(--font-mono); color: var(--text-dim); text-align: center; }
   .r-working { display: flex; align-items: center; gap: 8px; font: 12.5px var(--font-mono); color: var(--text-muted); }
-  .r-pending-bar { align-self: stretch; min-height: 44px; padding: 10px 12px; border-radius: var(--radius-lg); border: 1px solid var(--warn-border); background: var(--warn-bg);
+  .r-pending-bar { align-self: stretch; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 12px; border-radius: var(--radius-lg); border: 1px solid var(--warn-border); background: var(--warn-bg);
     color: var(--warn-text); font: 13px var(--font-mono); text-align: left; }
+  .r-pending-bar svg { flex: none; }
 
   .r-composer { flex: none; padding: 8px var(--pad-r) max(10px, var(--safe-bottom)) var(--pad-l); border-top: 1px solid var(--line); background: var(--bg-app); }
   /* Con el teclado abierto el indicador de inicio queda tapado: sin hueco debajo. */
@@ -240,12 +242,10 @@
   .r-box:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--border-strong)); }
   .r-attach { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: var(--text-muted); flex: none; }
   .r-attach:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
-  .r-attach svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
   .r-box textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: transparent; padding: 8px 2px; font-size: 16px; line-height: 1.4; max-height: 150px; }
   .r-box textarea::placeholder { color: var(--text-dim); }
   .r-send { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-contrast); flex: none; }
   .r-send:disabled { background: var(--bg-inset); color: var(--text-dim); }
-  .r-send svg { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
   .r-atts { display: flex; gap: 8px; overflow-x: auto; margin: 0 calc(-1 * var(--pad-r)) 8px calc(-1 * var(--pad-l)); padding: 2px var(--pad-r) 2px var(--pad-l);
     scrollbar-width: none; overscroll-behavior-x: contain; }
@@ -255,7 +255,6 @@
   .r-att.is-error { border-color: var(--danger-border); background: var(--danger-bg); }
   .r-att-thumb { width: 40px; height: 40px; border-radius: var(--radius-md); background: var(--bg-inset); display: grid; place-items: center; overflow: hidden; flex: none; color: var(--text-muted); }
   .r-att-thumb img { width: 100%; height: 100%; object-fit: cover; }
-  .r-att-thumb .r-ico { width: 20px; height: 20px; }
   .r-att-body { flex: 1; min-width: 0; display: grid; }
   .r-att-ref { display: flex; gap: 6px; font: 11.5px var(--font-mono); color: var(--accent-ink); white-space: nowrap; }
   .r-att-ref small { font: inherit; color: var(--text-dim); }
@@ -263,7 +262,6 @@
   .r-att.is-error .r-att-name { color: var(--danger-text); }
   .r-att-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--accent); transform-origin: left; transition: transform var(--t); }
   .r-att-x { width: 32px; height: 32px; display: grid; place-items: center; flex: none; border-radius: 50%; color: var(--text-dim); }
-  .r-att-x svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 
   /* ----- D/E · Hojas inferiores ---------------------------------------------- */
   .r-sheet-wrap { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; justify-content: flex-end; }
@@ -299,7 +297,7 @@
   .r-opt span span { display: block; font-size: 14px; color: var(--text-muted); }
   .r-opt.is-sel { border-color: var(--accent); background: var(--accent-soft); }
   .r-opt.is-sel .r-opt-k { color: var(--accent-ink); }
-  .r-other { min-height: 46px; padding: 11px 12px; border-radius: var(--radius-lg); border: 1px dashed var(--border-strong); color: var(--text-dim); font-size: 15px; text-align: left; }
+  .r-other { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 11px 12px; border-radius: var(--radius-lg); border: 1px dashed var(--border-strong); color: var(--text-dim); font-size: 15px; text-align: left; }
   .r-other-input { width: 100%; padding: 10px 12px; border-radius: var(--radius-lg); border: 1px solid var(--accent); background: var(--bg-surface); resize: vertical; font-size: 16px; outline: none; }
   .r-row { display: flex; gap: 8px; margin-top: 12px; }
   .r-grow { flex: 1; }

@@ -3,7 +3,7 @@ import { useTimeFormat } from "../../hooks/useTimeFormat";
 import { useEffect, useId, useState } from "react";
 import { formatDuration } from "../../chatState";
 import { TASK_STATES, type ChatTask } from "../../chatTasks";
-import { CheckIcon, ChevronIcon, ListIcon, CloseIcon } from "../Icons";
+import { CheckIcon, ChevronIcon, DotIcon, ExclamationIcon, ListIcon, CloseIcon } from "../Icons";
 import "./TaskPanel.css";
 
 export default function TaskPanel({ tasks, author, paused, onClose, onReveal, panelId }: {
@@ -46,10 +46,8 @@ export default function TaskPanel({ tasks, author, paused, onClose, onReveal, pa
       </div>
       <ol className="chat-task-list">{tasks.map((task, index) => <li key={task.id} data-status={task.status}>
         <button type="button" aria-current={selected?.id === task.id ? "step" : undefined} onClick={() => setSelected(task.id)}>
-          <span className="chat-task-mark" aria-hidden="true">{task.status === "in_progress" ? <svg width="16" height="16" viewBox="0 0 16 16">
-            <circle cx="8" cy="8" r="7.5" fill="none" stroke="currentColor" />
-            <circle cx="8" cy="8" r="2.5" fill="currentColor" />
-          </svg> : task.status === "completed" ? <CheckIcon size={11} /> : ["failed", "uncertain"].includes(task.status) ? "!" : null}</span>
+          <span className="chat-task-mark" aria-hidden="true">{task.status === "in_progress" ? <DotIcon filled size={13} />
+            : task.status === "completed" ? <CheckIcon size={11} /> : ["failed", "uncertain"].includes(task.status) ? <ExclamationIcon size={12} /> : null}</span>
           <span className="chat-task-copy"><strong>{task.title}</strong><small>{task.owner}<span aria-hidden="true"> · </span>{paused && task.status === "in_progress" ? "En pausa" : TASK_STATES[task.status]}
             {elapsed(task) !== null && <><span aria-hidden="true"> · </span><span className={`chat-task-time${task.status === "in_progress" ? " live" : ""}`}
               title={task.approximate ? "Aproximado: el agente no marcó la tarea como «en curso» al empezarla." : undefined}>
@@ -61,7 +59,7 @@ export default function TaskPanel({ tasks, author, paused, onClose, onReveal, pa
           {selected.approximate ? "Inicio aprox." : "Inicio"} {clock(selected.startedAt)}
           {selected.completedAt !== undefined ? ` · Fin ${clock(selected.completedAt)}` : ""}
           {elapsed(selected) !== null ? ` · ${formatDuration(elapsed(selected)!)}` : ""}</p>}
-        {selected.report && <details><summary>Resultado de la tarea</summary><p>{selected.report}</p></details>}
+        {selected.report && <details><summary className="disclosure"><span className="disclosure-chevron" aria-hidden="true"><ChevronIcon size={11} strokeWidth={2} /></span>Resultado de la tarea</summary><p>{selected.report}</p></details>}
         <button type="button" onClick={() => onReveal(selected)}>Ver actividad en el chat <ChevronIcon size={12} /></button></section>}
     </> : <div className="chat-task-empty"><ListIcon size={24} /><p>Todo el trabajo, paso a paso</p><small>Pide al agente una lista de tareas en este chat. Aquí verás lo que está haciendo y lo que ya terminó, sin cambiar de modo.</small></div>}
     <footer><span aria-hidden="true" />{paused ? "Flujo en pausa. Se conserva el progreso." : "Se actualiza con el progreso del agente."}</footer>

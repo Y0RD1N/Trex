@@ -23,16 +23,15 @@
 .composer-tab > svg { flex-shrink: 0; }
 .composer-tab > span:not([class]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-tab:hover, .composer-tab[aria-expanded="true"] { background: var(--bg-elevated); color: var(--text); }
-/* Glifos de texto, como en el resto del chat: nada de iconos en recuadros. El contador es solo un número. */
-.composer-tab-glyph { color: var(--text-dim); font: var(--fw-medium) var(--fs-sm)/1 var(--font-mono); }
+/* Icono suelto, sin recuadro, como en el resto del chat. El contador es solo un número. */
+.composer-tab-glyph { display: grid; flex-shrink: 0; place-items: center; color: var(--text-dim); }
 .composer-tab:hover .composer-tab-glyph, .composer-tab[aria-expanded="true"] .composer-tab-glyph { color: var(--text-muted); }
 .composer-tab-count { color: var(--text); font: var(--fw-medium) var(--fs-xs)/1 var(--font-mono); font-variant-numeric: tabular-nums; }
 .composer-tab.needs-attention .composer-tab-count { color: var(--danger-text); }
 .composer-tab.needs-attention .composer-tab-glyph { color: var(--danger-text); }
-/* El panel se abre hacia arriba: ▴ promete desplegar, ▾ recoger. */
-.composer-tab-caret { color: var(--text-dim); font: var(--fs-xs)/1 var(--font-mono); }
-.composer-tab-caret::before { content: "▴"; }
-.composer-tab[aria-expanded="true"] .composer-tab-caret::before { content: "▾"; }
+.composer-tab-alert { display: grid; flex-shrink: 0; place-items: center; color: var(--danger-text); }
+/* El panel se abre hacia arriba: el galón apunta arriba para desplegar y abajo para recoger. */
+.composer-tab-caret { display: grid; flex-shrink: 0; place-items: center; color: var(--text-dim); }
 .composer-tab-live { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .composer-panel {
   position: fixed;

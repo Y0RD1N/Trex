@@ -1,5 +1,5 @@
 import { memo, useEffect, useId, useRef, useState } from "react";
-import { ArrowUpIcon, CloseIcon, ListIcon, PencilIcon } from "../Icons";
+import { ArrowUpIcon, CloseIcon, LinesIcon, ListIcon, PencilIcon } from "../Icons";
 import type { ChatMessageQueue } from "../../hooks/useMessageQueue";
 import type { QueuedMessage } from "../../messageQueue";
 import ComposerPanel from "./ComposerPanel";
@@ -209,8 +209,8 @@ function QueuedMessages({ queue, running, busy, onRemove, onContinue, onEdit, on
     </ol>
     <div className="chat-queue-announcement" role="status" aria-live="polite">{notice}</div>
   </section>;
-  return compact ? <ComposerPanel label="Cola" title="Mensajes pendientes" glyph="≡"
-    count={rows.length || "!"} visible={available} attention={!!queue.error || !!Object.keys(errors).length}>{content}</ComposerPanel>
+  return compact ? <ComposerPanel label="Cola" title="Mensajes pendientes" icon={<LinesIcon size={13} />}
+    count={rows.length || undefined} visible={available} attention={!!queue.error || !!Object.keys(errors).length}>{content}</ComposerPanel>
     : available ? content : null;
 }
 

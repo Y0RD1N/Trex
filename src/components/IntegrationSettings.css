@@ -34,3 +34,6 @@
 /* Blender en vivo: estado del puente y sus acciones. */
 .integration-bridge-lines { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.5; }
 .integration-bridge-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.integration-runtime-mark { display: inline-flex; vertical-align: -1px; }
+.integration-runtime-mark.is-ok { color: var(--ok-text); }
+.integration-runtime-mark.is-missing { color: var(--danger-text); }

@@ -21,7 +21,7 @@ import { PROVIDER_NAMES } from "../profiles";
 import { formatClock, type TimeFormat } from "../timeFormat";
 import type { AgentProvider, LauncherProfile } from "../types";
 import AgentIcon from "./AgentIcon";
-import { BoltIcon, RefreshIcon } from "./Icons";
+import { AlertIcon, BoltIcon, GaugeIcon, RefreshIcon } from "./Icons";
 import "./AccountUsage.css";
 import { formatDate } from "../intl";
 
@@ -131,15 +131,15 @@ type Severity = "normal" | "warning" | "critical";
 const severityOf = (window: PlanWindow, percent: number): Severity =>
   percent >= 90 || window.severity === "critical" && percent === window.percent ? "critical" : percent >= 75 ? "warning" : "normal";
 const SEVERITY_NOTES: Record<Exclude<Severity, "normal">, string> = { warning: "cerca del límite", critical: "al límite" };
-/** El ritmo siempre con su glifo, nunca solo con color. */
-const PACE_GLYPHS: Record<NonNullable<UsagePace["tone"]>, string> = { easy: "○", even: "●", fast: "▲" };
+/** El ritmo siempre con su icono (un medidor con la aguja baja, media o alta), nunca solo con color. */
+const PACE_LEVELS = { easy: "low", even: "mid", fast: "high" } as const satisfies Record<NonNullable<UsagePace["tone"]>, string>;
 
-/** «↻ en 4 h 53 min»: el lector de pantalla oye «reinicia» en lugar del glifo. */
+/** «↻ en 4 h 53 min»: el lector de pantalla oye «reinicia» en lugar del icono. */
 function ResetNote({ text }: { text: string }) {
-  return <span className="usage-reset"><span aria-hidden="true">↻ </span><span className="sr-only">reinicia </span>{text}</span>;
+  return <span className="usage-reset"><RefreshIcon size={11} /><span className="sr-only">reinicia </span>{text}</span>;
 }
 function PaceNote({ tone }: { tone: NonNullable<UsagePace["tone"]> }) {
-  return <span className={`usage-pace is-${tone}`}><span aria-hidden="true">{PACE_GLYPHS[tone]} </span>{PACE_LABELS[tone].toLowerCase()}</span>;
+  return <span className={`usage-pace is-${tone}`}><GaugeIcon size={12} level={PACE_LEVELS[tone]} />{PACE_LABELS[tone].toLowerCase()}</span>;
 }
 
 /** Alto de una fila de etiquetas de la regla y tramo mínimo de mástil (px). */
@@ -206,13 +206,13 @@ function UsageHero({ peaks, hues, readings, now, loading, newest, timeFormat }: 
   return <section className="usage-hero" aria-label="Resumen del uso de las cuentas">
     <header className="usage-rule">
       <span>Uso · {peaks.length} {peaks.length === 1 ? "cuenta" : "cuentas"}</span>
-      <em>{loading ? "leyendo…" : newest ? <><span aria-hidden="true">↻ </span>{agoLabel(newest, now)}</> : "sin leer"}</em>
+      <em>{loading ? "leyendo…" : newest ? <><RefreshIcon size={11} />{agoLabel(newest, now)}</> : "sin leer"}</em>
     </header>
     <div className={`usage-hero-read is-${severity}`}>
       <strong>{top ? <>{top.percent}<small> %</small></> : "—"}</strong>
       <div>
         <b>{top ? `${top.profile.name} · ${shortWindow(top.window)}` : loading ? "Leyendo el uso…" : "Sin datos todavía"}</b>
-        {severity !== "normal" ? <span className={`usage-hero-state is-${severity}`}><span aria-hidden="true">▲ </span>{SEVERITY_NOTES[severity]}</span>
+        {severity !== "normal" ? <span className={`usage-hero-state is-${severity}`}><AlertIcon size={12} />{SEVERITY_NOTES[severity]}</span>
           : pace?.tone && <PaceNote tone={pace.tone} />}
         {reset && <ResetNote text={reset} />}
       </div>
@@ -244,7 +244,7 @@ function WindowRow({ window, now, timeFormat }: { window: PlanWindow; now: numbe
   return <li className={`usage-window is-${severity}`}>
     <div className="usage-window-head">
       <span>{shortWindow(window)}</span>
-      <b>{severity !== "normal" && <span aria-hidden="true">▲ </span>}{percent} %</b>
+      <b>{severity !== "normal" && <AlertIcon size={12} />}{percent} %</b>
     </div>
     <UsageCells percent={percent} elapsed={pace?.elapsed ?? null} label={label} />
     {(reset || pace?.tone) && <small>

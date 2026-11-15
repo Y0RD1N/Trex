@@ -10,7 +10,7 @@ import AccentPicker from "./AccentPicker";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
-import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MicIcon, MoonIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
+import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MicIcon, MinusIcon, MoonIcon, PlusIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
 import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
 import AutoCompactSettings from "./AutoCompactSettings";
@@ -287,9 +287,9 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 </div>
                 <SettingField label="Tamaño del texto" labelId={`${id}-font-size`}>
                   <div className="settings-stepper" role="group" aria-labelledby={`${id}-font-size`}>
-                    <button type="button" aria-label="Reducir tamaño del texto" disabled={draft.fontSize <= 10} onClick={() => patch({ fontSize: Math.max(10, draft.fontSize - 1) })}>−</button>
+                    <button type="button" aria-label="Reducir tamaño del texto" disabled={draft.fontSize <= 10} onClick={() => patch({ fontSize: Math.max(10, draft.fontSize - 1) })}><MinusIcon size={14} /></button>
                     <output aria-live="polite">{draft.fontSize}<span>px</span></output>
-                    <button type="button" aria-label="Aumentar tamaño del texto" disabled={draft.fontSize >= 24} onClick={() => patch({ fontSize: Math.min(24, draft.fontSize + 1) })}>+</button>
+                    <button type="button" aria-label="Aumentar tamaño del texto" disabled={draft.fontSize >= 24} onClick={() => patch({ fontSize: Math.min(24, draft.fontSize + 1) })}><PlusIcon size={14} /></button>
                   </div>
                 </SettingField>
                 <SettingField label="Shell" controlId={`${id}-shell`}>

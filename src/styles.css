@@ -324,6 +324,12 @@ input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color:
 .chat-spinner, .chat-working-dot { color: var(--accent-strong); }
 @keyframes trex-spin { to { transform: rotate(360deg); } }
 
+/* Desplegables <details>: el galón del set en lugar del triángulo del navegador; gira al abrir. */
+summary.disclosure { display: flex; align-items: center; gap: var(--sp-1-5); list-style: none; }
+summary.disclosure::-webkit-details-marker { display: none; }
+.disclosure-chevron { display: grid; flex-shrink: 0; place-items: center; color: var(--text-dim); transition: transform var(--dur) var(--ease-out); }
+details[open] > summary.disclosure > .disclosure-chevron { transform: rotate(90deg); }
+
 .badge {
   flex: 0 0 auto;
   display: flex;
@@ -726,11 +732,11 @@ body.dragging-sidebar .sidebar { transition: none; }
   transition: background-color var(--dur-fast) var(--ease-out);
 }
 .project-item:hover { background: var(--hover); }
-/* El proyecto activo lleva un «›» en el margen, como el indicador de línea de una terminal. */
+/* El proyecto activo lleva un galón (.row-pointer) en el margen, como el indicador de línea de una terminal. */
 .project-item.active { background: var(--selected); }
 /* Carpeta del proyecto con sus estratos (ProjectCore): el contorno sigue al color del icono. */
 .project-core { display: block; }
-.project-item.active::before { content: "›"; position: absolute; left: -9px; top: 50%; translate: 0 -50%; color: var(--accent-strong); font-size: var(--fs-md); line-height: 1; }
+.row-pointer { position: absolute; top: 50%; left: -11px; display: grid; place-items: center; translate: 0 -50%; color: var(--accent-strong); pointer-events: none; }
 .project-disclosure, .project-disclosure-placeholder {
   flex: 0 0 auto;
   display: flex;
@@ -772,21 +778,22 @@ body.dragging-sidebar .sidebar { transition: none; }
   transition: opacity var(--t), filter var(--t);
 }
 .project-item:is(:hover, .active) .project-icon.has-logo img { opacity: 1; filter: none; }
-/* El estado sigue visible aunque las sesiones estén contraídas: un glifo, no un punto que late.
-   Trabajando = el loader de trex (la «t» en estratos); esperándote = ▲. */
+/* El estado sigue visible aunque las sesiones estén contraídas: un icono, no un punto que late.
+   Trabajando = el loader de trex (la «t» en estratos); esperándote = el triángulo de aviso. */
 .project-activity {
   position: absolute;
   right: -9px;
   bottom: -3px;
   padding: 0 1px;
   background: var(--bg-sidebar);
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-xs);
   color: var(--accent-strong);
-  font: var(--fs-xs) / 1 var(--font-mono);
   pointer-events: none;
 }
 .project-item.active .project-activity { background: var(--selected); }
 .project-activity.is-waiting { color: var(--warn); }
-.project-activity.is-waiting::before { content: "▲"; }
 .project-activity.is-working::before { content: ""; display: block; width: 10px; height: 10px; background: currentColor; -webkit-mask: var(--loader-mask); mask: var(--loader-mask); animation: var(--loader-motion); }
 .project-info { flex: 1; min-width: 0; }
 .project-name {
@@ -879,7 +886,6 @@ body.dragging-sidebar .sidebar { transition: none; }
 }
 .session-row:hover { background: var(--hover); color: var(--text-muted); }
 .session-row.active { background: var(--selected); color: var(--text); }
-.session-row.active::before { content: "›"; position: absolute; left: -9px; top: 50%; translate: 0 -50%; color: var(--accent-strong); font-size: var(--fs-md); line-height: 1; }
 .session-select {
   flex: 1;
   display: flex;
@@ -1378,7 +1384,6 @@ body.dragging-sidebar .sidebar { transition: none; }
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  font-size: var(--fs-md);
   cursor: pointer;
   transition: background-color var(--t), color var(--t);
 }
@@ -1616,6 +1621,7 @@ body.dragging-sidebar .sidebar { transition: none; }
 .welcome-rule::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
 .welcome-assistants { align-self: stretch; margin: 0 0 var(--sp-1); padding: 0; list-style: none; font-family: var(--font-mono); font-size: var(--fs-md); }
 .welcome-assistants li { display: grid; grid-template-columns: 140px 160px 1fr; align-items: center; min-height: 32px; }
+.welcome-assistants li > span:nth-child(2) { display: inline-flex; align-items: center; gap: var(--sp-1-5); }
 .welcome-assistants .found > span:nth-child(2) { color: var(--ok-text); }
 .welcome-assistants .missing > span:nth-child(2), .welcome-assistants .checking > span:nth-child(2) { color: var(--text-dim); }
 .claude-card {
@@ -1677,6 +1683,8 @@ body.dragging-sidebar .sidebar { transition: none; }
 .candidates { color: var(--text-dim); font-size: var(--fs-sm); }
 .candidates summary { color: var(--text-muted); cursor: pointer; }
 .candidates ul { display: flex; flex-direction: column; gap: var(--sp-1); margin: var(--sp-2) 0 0; padding-left: var(--sp-4); word-break: break-all; }
+.candidates li { display: flex; align-items: center; gap: var(--sp-1-5); }
+.candidates li > span { display: grid; flex-shrink: 0; place-items: center; width: 14px; }
 .candidates .exists { color: var(--ok-text); }
 .candidates .missing { color: var(--text-dim); }
 

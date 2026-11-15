@@ -5,10 +5,9 @@
 import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   a11yVerified, answersOf, describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
-  type DiffLine, type PermissionItem, type ToolItem, type ToolSummary,
+  type DiffLine, type PermissionItem, type ToolItem,
 } from "../../chatState";
-import { CheckIcon, ChevronIcon, CloseIcon, FileIcon, GlobeIcon, ImageIcon, ListIcon, MapIcon, PencilIcon,
-  QuestionIcon, RotateIcon, SearchIcon, ShieldIcon, SparkIcon, TerminalIcon, WrenchIcon } from "../Icons";
+import { AlertIcon, CheckIcon, ChevronIcon, CloseIcon, FileIcon, ImageIcon, ListIcon, MapIcon, PencilIcon, RotateIcon } from "../Icons";
 import Markdown, { CopyButton } from "./Markdown";
 import { FileBadge, SharedFilesContext } from "./SharedFiles";
 import { referenceParts, splitAttachedFiles } from "../../imageReferences";
@@ -20,12 +19,13 @@ import { brokerArtifactId, type BrowserArtifact } from "../../browser";
 import { formatClock, formatDateTime } from "../../timeFormat";
 import { useTimeFormat } from "../../hooks/useTimeFormat";
 import { peerNotice } from "../../coordination";
-import { PeerNotice } from "./PeerNotice";
+import { NoticeGlyph, PeerNotice } from "./PeerNotice";
 
-const TOOL_ICONS: Record<ToolSummary["icon"], ReactNode> = {
-  read: <FileIcon />, edit: <PencilIcon size={15} />, run: <TerminalIcon size={15} />, search: <SearchIcon size={15} />,
-  web: <GlobeIcon />, task: <SparkIcon />, todo: <ListIcon />, plan: <MapIcon />, question: <QuestionIcon />, tool: <WrenchIcon />,
-};
+/** Estado de una herramienta en el árbol: hecha, con error o en curso (la rueda de trex, dibujada en CSS). */
+function ToolStatusIcon({ status }: { status: ToolItem["status"] }) {
+  if (status === "running") return null;
+  return status === "error" ? <CloseIcon size={12} strokeWidth={2} /> : <CheckIcon size={13} strokeWidth={2} />;
+}
 
 export const UserMessage = memo(function UserMessage({ id, text, images, previews, at, onEdit, onResend, disabled, editing, editable = true, animate = false, fromQueue = false }: {
   id: string; text: string; images: number; previews: string[]; at?: number; onEdit: (id: string) => void; onResend: (id: string) => void;
@@ -77,7 +77,7 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
     </div>}
     {(body || (images > 0 && !previews.length)) && <div className="chat-user">
       {body && <div className="chat-user-text">{body.includes("<!-- trex-handoff:")
-        ? <details className="chat-handoff-message"><summary>Contexto para continuar el trabajo</summary><pre>{body}</pre></details>
+        ? <details className="chat-handoff-message"><summary className="disclosure"><span className="disclosure-chevron" aria-hidden="true"><ChevronIcon size={11} strokeWidth={2} /></span>Contexto para continuar el trabajo</summary><pre>{body}</pre></details>
         : parts.map((part, index) => {
         if (!("kind" in part)) return part.text;
         if (part.kind === "Archivo") {
@@ -260,7 +260,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onIm
   const description = item.name === "Bash" && typeof item.input.description === "string" ? item.input.description : undefined;
   return <div className={`chat-tool${open ? " open" : ""}`} data-status={item.status}>
     <button type="button" className="chat-tool-row" aria-expanded={open} onClick={() => setOpen(!open)} title={description}>
-      <span className="chat-tool-icon" aria-hidden="true">{TOOL_ICONS[summary.icon]}</span>
+      <span className="chat-tool-icon" aria-hidden="true"><ToolStatusIcon status={item.status} /></span>
       <span className="chat-tool-verb">{summary.verb}</span>
       {summary.target && <span className={`chat-tool-target${summary.icon === "run" || summary.icon === "search" ? " mono" : ""}`}>{summary.target}</span>}
       {answer && <span className={`chat-tool-answer${answer === "Sin respuesta" ? " empty" : ""}`}>{answer}</span>}
@@ -332,7 +332,7 @@ export const PermissionCard = memo(function PermissionCard({ item, cwd, agent, o
   const remember = rememberLabel(item.suggestions);
   return <div className="chat-permission" role="group" aria-label={title}>
     <div className="chat-permission-head">
-      <span className="chat-permission-icon" aria-hidden="true">{plan ? <MapIcon size={16} /> : <ShieldIcon />}</span>
+      <span className="chat-permission-icon" aria-hidden="true">{plan ? <MapIcon size={16} /> : <AlertIcon size={16} />}</span>
       <div>
         <div className="chat-permission-title">{title}</div>
         {item.description && !plan && <div className="chat-permission-sub">{item.description}</div>}
@@ -364,7 +364,7 @@ export const Notice = memo(function Notice({ tone, text }: { tone: "info" | "war
   const multiline = text.includes("\n");
   const compact = tone !== "error" && !multiline && text.length <= COMPACT_NOTICE_CHARS;
   return <div className={`chat-notice ${tone}${multiline ? " multiline" : ""}${compact ? " is-compact" : ""}`} role={tone === "error" ? "alert" : "status"}>
-    <span className="chat-notice-glyph" aria-hidden="true" />
+    <NoticeGlyph tone={tone} />
     <span>{text}</span>
   </div>;
 });

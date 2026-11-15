@@ -7,6 +7,7 @@ import { CLAUDE_INSTALL_COMMANDS } from "../api";
 import { MOD_LABEL } from "../platform";
 import type { AppInfo, ClaudeInfo } from "../types";
 import BrandMark from "./BrandMark";
+import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, DotIcon, ExclamationIcon } from "./Icons";
 
 type WelcomeProps = {
   claudeInfo: ClaudeInfo | null;
@@ -56,7 +57,7 @@ export default function WelcomeScreen({
           {assistants.map(({ name, info }) => (
             <li key={name} className={!info ? "checking" : info.found ? "found" : "missing"}>
               <span>{name}</span>
-              <span>{!info ? <><span className="loader" aria-hidden="true" /> comprobando</> : info.found ? "● disponible" : "○ no detectado"}</span>
+              <span>{!info ? <><span className="loader" aria-hidden="true" /> comprobando</> : info.found ? <><DotIcon filled size={12} />disponible</> : <><DotIcon size={12} />no detectado</>}</span>
               <span className="welcome-note">{info?.found ? (info.version ?? "") : ""}</span>
             </li>
           ))}
@@ -125,7 +126,7 @@ export function ClaudeStatusCard({ claudeInfo, appInfo, onRedetect }: ClaudeStat
     return (
       <section className="claude-card ok">
         <div className="claude-card-head">
-          <span className="badge badge-ok">✓</span>
+          <span className="badge badge-ok" aria-hidden="true"><CheckIcon size={12} strokeWidth={2} /></span>
           <span className="claude-card-title">Claude Code detectado</span>
         </div>
         <dl className="claude-rows">
@@ -156,7 +157,7 @@ export function ClaudeStatusCard({ claudeInfo, appInfo, onRedetect }: ClaudeStat
   return (
     <section className="claude-card warn">
       <div className="claude-card-head">
-        <span className="badge badge-warn">!</span>
+        <span className="badge badge-warn" aria-hidden="true"><ExclamationIcon size={13} /></span>
         <span className="claude-card-title">Claude Code no detectado</span>
       </div>
       <p className="claude-card-text">
@@ -204,13 +205,13 @@ export function ClaudeStatusCard({ claudeInfo, appInfo, onRedetect }: ClaudeStat
 
       {claudeInfo.candidates.length > 0 && (
         <details className="candidates">
-          <summary>Rutas comprobadas ({claudeInfo.candidates.length})</summary>
+          <summary className="disclosure"><span className="disclosure-chevron" aria-hidden="true"><ChevronIcon size={11} strokeWidth={2} /></span>Rutas comprobadas ({claudeInfo.candidates.length})</summary>
           <ul>
             {claudeInfo.candidates.map((candidate) => (
               <li key={candidate.path} className="mono">
-                <span className={candidate.exists ? "exists" : "missing"}>
-                  {candidate.exists ? "✓" : "✕"}
-                </span>{" "}
+                <span className={candidate.exists ? "exists" : "missing"} aria-label={candidate.exists ? "Existe" : "No existe"}>
+                  {candidate.exists ? <CheckIcon size={12} strokeWidth={2} /> : <CloseIcon size={11} strokeWidth={2} />}
+                </span>
                 {candidate.path}
               </li>
             ))}
@@ -239,7 +240,7 @@ function InstallRow({ label, command, highlighted, copied, onCopy }: InstallRowP
       <div className="install-cmd">
         <code>{command}</code>
         <button type="button" className="copy-btn" title="Copiar" onClick={onCopy}>
-          {copied ? "✓" : "⧉"}
+          {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
         </button>
       </div>
     </div>

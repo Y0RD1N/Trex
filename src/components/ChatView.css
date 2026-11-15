@@ -800,20 +800,17 @@
 .chat-tool-row > .chat-spinner,
 .chat-tool-row > .chat-status { flex-shrink: 0; }
 
-/* Las llamadas a herramientas forman un árbol: «├─ ✓ Leyó src/tokens.css». El glifo de estado
-   sustituye al icono (✓ hecho, ⠋ en curso, ✕ con error) y la última rama cierra con «└─». */
+/* Las llamadas a herramientas forman un árbol: «├─ ✓ Leyó src/tokens.css». El icono de estado
+   (marca hecha, la rueda de trex en curso, aspa con error) va en la rama y la última cierra con «└─». */
 .chat-tool { position: relative; padding-left: 30px; }
 .chat-tool::before { content: "├─"; position: absolute; top: 5px; left: 2px; color: var(--border-strong); font: var(--fs-sm) / 20px var(--font-mono); }
 /* Cada herramienta llega envuelta en su propia fila del hilo: la última de una racha cierra el árbol. */
 .chat-thread > :has(> .chat-tool):not(:has(+ * > .chat-tool)) > .chat-tool::before { content: "└─"; }
 .chat-thread > :has(> .chat-tool):has(+ * > .chat-tool) { margin-bottom: -8px; }
 .chat-tool-row { font-family: var(--font-mono); font-size: var(--fs-sm); }
-.chat-tool-icon { flex-basis: 14px; color: var(--ok); font: var(--fs-sm) / 1 var(--font-mono); }
-.chat-tool-icon > svg { display: none; }
-.chat-tool-icon::before { content: "✓"; }
+.chat-tool-icon { flex-basis: 14px; color: var(--ok); }
 .chat-tool[data-status="running"] .chat-tool-icon::before { content: ""; display: block; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--loader-mask); mask: var(--loader-mask); animation: var(--loader-motion); }
 .chat-tool[data-status="running"] .chat-tool-icon { color: var(--accent-strong); }
-.chat-tool[data-status="error"] .chat-tool-icon::before { content: "✕"; }
 /* Las marcas del final (rueda y círculo) sobran: el estado ya está en el glifo; siguen para lectores de pantalla. */
 .chat-tool-row > .chat-spinner, .chat-tool-row > .chat-status.error { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .chat-diff-count {
@@ -991,10 +988,8 @@
   display: flex;
   gap: var(--sp-2-5);
 }
-/* El aviso lleva un glifo de texto, no un icono dentro de un recuadro de color. */
+/* El icono va suelto, del color del aviso, centrado en la línea del título (nada de recuadros de color). */
 .chat-permission-icon { display: grid; flex: 0 0 18px; place-items: center; height: 28px; color: var(--warn); }
-.chat-permission-icon > svg { display: none; }
-.chat-permission-icon::before { content: "▲"; font: var(--fs-md) / 1 var(--font-mono); }
 .chat-permission-title {
   font-weight: 600;
   line-height: 28px;
@@ -1030,8 +1025,8 @@
 }
 
 /* --- Avisos, fin de turno y trabajo en curso -----------------------------
-   Como la tarjeta de permisos: superficie neutra, borde fino del color del aviso y un glifo de
-   texto (▲ ◆ ✕) en vez de un icono; nada de barras ni recuadros de color. Una línea corta es una
+   Como la tarjeta de permisos: superficie neutra, borde fino del color del aviso y su icono suelto
+   (información, atención, error); nada de barras ni recuadros de color. Una línea corta es una
    píldora centrada (.is-compact); lo demás (frases largas, listas, choques entre sesiones) es una tarjeta. */
 .chat-notice {
   --notice: var(--info);
@@ -1060,11 +1055,9 @@
   --notice-bg: var(--danger-bg);
   white-space: pre-wrap;
 }
-/* El glifo ocupa una línea de texto: queda alineado con la primera línea, sea cual sea el largo. */
-.chat-notice-glyph { display: grid; flex: 0 0 18px; place-items: center; height: calc(1em * 1.5); color: var(--notice); font: var(--fs-md) / 1 var(--font-mono); }
-.chat-notice-glyph::before { content: "◆"; font-size: 0.9em; }
-.chat-notice.warn .chat-notice-glyph::before { content: "▲"; font-size: 1em; }
-.chat-notice.error .chat-notice-glyph::before { content: "✕"; font-size: 1.05em; font-weight: var(--fw-semibold); }
+/* El icono ocupa una línea de texto: queda alineado con la primera línea, sea cual sea el largo. */
+.chat-notice-glyph { display: grid; flex: 0 0 18px; place-items: center; height: calc(1em * 1.5); color: var(--notice); }
+.chat-notice-glyph > svg { display: block; }
 .chat-notice.is-compact {
   align-self: center;
   align-items: center;

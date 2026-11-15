@@ -6,7 +6,16 @@ import { describeHyperframes, type HyperframesAction, type HyperframesStatus } f
 import "./BrowserSettings.css";
 import "./IntegrationSettings.css";
 import type { ApplicationIntegrations } from "../types";
-import { SystemIcon } from "./Icons";
+import { CheckIcon, CloseIcon, SystemIcon } from "./Icons";
+
+/** Marca de si una pieza del navegador está instalada, con el mismo set de iconos que el resto. */
+function RuntimeMark({ ok }: { ok: boolean }) {
+  return (
+    <span className={`integration-runtime-mark ${ok ? "is-ok" : "is-missing"}`} role="img" aria-label={ok ? "instalado" : "falta"}>
+      {ok ? <CheckIcon size={12} strokeWidth={2} /> : <CloseIcon size={12} strokeWidth={2} />}
+    </span>
+  );
+}
 import SettingInfo from "./SettingInfo";
 
 const guides = {
@@ -128,7 +137,7 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
         <p>{app.description}</p><div className="integration-app-footer"><span>{status ? app.found ? "Detectado" : "No detectado" : "Comprobando…"}</span><button type="button" className="btn btn-small" onClick={() => guide(app.url)}>Guía</button></div>
       </div>)}</div>
       {integrations.github && status?.githubCli && <div className="browser-settings-foot"><span>GitHub: {github === "connected" ? "conectado" : github === "timeout" ? "sin respuesta" : github ? "sin sesión" : "sin comprobar"}</span><button type="button" className="btn btn-small" disabled={checkingGithub} onClick={() => void checkGithub()}>{checkingGithub ? "Comprobando…" : "Comprobar"}</button></div>}
-      {status && <p className="browser-settings-note">Node {status.node ? "✓" : "✕"} · FFmpeg {status.ffmpeg ? "✓" : "✕"}</p>}
+      {status && <p className="browser-settings-note">Node <RuntimeMark ok={status.node} /> · FFmpeg <RuntimeMark ok={status.ffmpeg} /></p>}
       {error && <p className="browser-settings-error" role="alert">{error}</p>}
     </div>
     <div className="browser-settings-card integration-bridge">

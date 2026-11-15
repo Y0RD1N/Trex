@@ -1,12 +1,19 @@
 /**
  * Aviso de otra sesión del proyecto en el hilo: un choque de edición (dos sesiones tocan el mismo archivo)
  * o un mensaje suyo. Misma tarjeta que los demás avisos (.chat-notice) y el mismo lenguaje que las
- * herramientas: un glifo, un título con su regla fina y los datos como ramas de un árbol (├─ └─).
+ * herramientas: un icono de aviso, un título con su regla fina y los datos como ramas de un árbol (├─ └─).
  */
 import { Fragment, memo } from "react";
 import type { PeerNoticeView } from "../../coordination";
-import { FileIcon } from "../Icons";
+import { AlertIcon, ErrorIcon, FileIcon, InfoIcon } from "../Icons";
 import "./PeerNotice.css";
+
+/** El icono de un aviso según su tono (información, atención o error); lo comparten todos los avisos del hilo. */
+export function NoticeGlyph({ tone }: { tone: "info" | "warn" | "error" }) {
+  return <span className="chat-notice-glyph" aria-hidden="true">
+    {tone === "error" ? <ErrorIcon size={15} /> : tone === "warn" ? <AlertIcon size={15} /> : <InfoIcon size={15} />}
+  </span>;
+}
 
 /** «Agente · título de la sesión» (el título puede faltar). */
 export function sessionLabel(label: string): { agent: string; session: string | null } {
@@ -29,9 +36,9 @@ function Advice({ text }: { text: string }) {
     part === "trex_message" ? <code key={index}>{part}</code> : <Fragment key={index}>{part}</Fragment>)}</>;
 }
 
-function Head({ children, age }: { children: React.ReactNode; age: string }) {
+function Head({ children, age, tone }: { children: React.ReactNode; age: string; tone: "info" | "warn" | "error" }) {
   return <div className="peer-notice-head">
-    <span className="chat-notice-glyph" aria-hidden="true" />
+    <NoticeGlyph tone={tone} />
     <span className="peer-notice-title">{children}</span>
     <span className="peer-notice-rule" aria-hidden="true" />
     <span className="peer-notice-age">{age}</span>
@@ -42,7 +49,7 @@ export const PeerNotice = memo(function PeerNotice({ tone, view }: { tone: "info
   if (view.kind === "message") {
     const { agent, session } = sessionLabel(view.from);
     return <div className={`chat-notice ${tone} is-peer`} role="status">
-      <Head age={view.age}>Mensaje de <strong>{agent}</strong>{session && <span className="peer-notice-session"> · {session}</span>}</Head>
+      <Head age={view.age} tone={tone}>Mensaje de <strong>{agent}</strong>{session && <span className="peer-notice-session"> · {session}</span>}</Head>
       <p className="peer-notice-text">{view.text}</p>
     </div>;
   }
@@ -57,7 +64,7 @@ export const PeerNotice = memo(function PeerNotice({ tone, view }: { tone: "info
   if (view.reason) rows.push(["reserva", view.reason]);
   rows.push(["qué hacer", <Advice text={view.advice} />]);
   return <div className={`chat-notice ${tone} is-peer`} role="status">
-    <Head age={view.age}><strong>Posible choque de edición</strong></Head>
+    <Head age={view.age} tone={tone}><strong>Posible choque de edición</strong></Head>
     <PathChip path={view.path} />
     <p className="peer-notice-text">{what}</p>
     <dl className="peer-notice-tree">

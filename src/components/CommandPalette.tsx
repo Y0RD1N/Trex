@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { filterCommands, type PaletteCommand } from "../commandPalette";
 import { shortcutLabel } from "../shortcuts";
 import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
-import { ArrowRightIcon, CloseIcon, FolderIcon, FolderPlusIcon, GaugeIcon, GridIcon, MapIcon, PanelIcon, ProfilesIcon, RefreshIcon, RotateIcon, SearchIcon, SettingsIcon, SparkIcon, SplitIcon, SunIcon, TerminalIcon } from "./Icons";
+import { ArrowRightIcon, ChevronIcon, CloseIcon, FolderIcon, FolderPlusIcon, GaugeIcon, GridIcon, MapIcon, PanelIcon, ProfilesIcon, RefreshIcon, RotateIcon, SearchIcon, SettingsIcon, SparkIcon, SplitIcon, SunIcon, TerminalIcon } from "./Icons";
 import "./CommandPalette.css";
 
 const commandIcons = {
@@ -149,6 +149,7 @@ export default function CommandPalette({
                 onMouseMove={() => setSelected(position)}
                 onClick={() => execute(command)}
               >
+                {index === position && <span className="row-pointer" aria-hidden="true"><ChevronIcon size={12} strokeWidth={2} /></span>}
                 <span className="command-icon" aria-hidden="true"><CommandIcon command={command} /></span>
                 <span className="command-label">
                   <strong title={command.label}>{command.label}</strong>

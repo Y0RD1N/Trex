@@ -2,7 +2,7 @@ import { useId, type KeyboardEvent } from "react";
 import { CURSOR_PRESETS, MAX_CURSOR_WIDTH, MIN_CURSOR_WIDTH, type CursorAppearance } from "../cursor";
 import { DEFAULT_FONT_FAMILY } from "../api";
 import type { CursorStyle, Settings } from "../types";
-import { CheckIcon } from "./Icons";
+import { CheckIcon, MinusIcon, PlusIcon } from "./Icons";
 import Select from "./Select";
 
 function CursorSample({ settings, blink = false }: { settings: CursorAppearance; blink?: boolean }) {
@@ -59,9 +59,9 @@ export default function CursorSettings({ settings, onChange }: { settings: Setti
     {settings.cursorStyle === "bar" && <div className="setting-field">
       <div className="setting-field-info"><span id={`${id}-width`}>Grosor</span></div>
       <div className="settings-stepper" role="group" aria-labelledby={`${id}-width`}>
-        <button type="button" aria-label="Reducir grosor del cursor" disabled={settings.cursorWidth <= MIN_CURSOR_WIDTH} onClick={() => onChange({ cursorWidth: settings.cursorWidth - 1 })}>−</button>
+        <button type="button" aria-label="Reducir grosor del cursor" disabled={settings.cursorWidth <= MIN_CURSOR_WIDTH} onClick={() => onChange({ cursorWidth: settings.cursorWidth - 1 })}><MinusIcon size={14} /></button>
         <output aria-live="polite">{settings.cursorWidth}<span>px</span></output>
-        <button type="button" aria-label="Aumentar grosor del cursor" disabled={settings.cursorWidth >= MAX_CURSOR_WIDTH} onClick={() => onChange({ cursorWidth: settings.cursorWidth + 1 })}>+</button>
+        <button type="button" aria-label="Aumentar grosor del cursor" disabled={settings.cursorWidth >= MAX_CURSOR_WIDTH} onClick={() => onChange({ cursorWidth: settings.cursorWidth + 1 })}><PlusIcon size={14} /></button>
       </div>
     </div>}
     <label className="settings-toggle">

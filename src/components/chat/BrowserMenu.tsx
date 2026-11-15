@@ -3,7 +3,7 @@ import { trexBrowserCall, trexBrowserFocus, trexBrowserOpen, trexBrowserOpenArti
 import { browserErrorText, browserFocusNotice, browserOpenFailure, browserResultArtifacts, brokerArtifactId, type BrowserArtifact, type BrowserOptions, type BrowserStatus, type BrowserSpace } from "../../browser";
 import type { FloatingAnchor } from "../../hooks/useFloatingPosition";
 import DropdownMenu from "../DropdownMenu";
-import { CloseIcon, GlobeIcon, ImageIcon } from "../Icons";
+import { CloseIcon, ExternalIcon, GlobeIcon, ImageIcon, PlusIcon, StopIcon, TargetIcon } from "../Icons";
 import "./BrowserMenu.css";
 import { formatDate } from "../../intl";
 
@@ -193,13 +193,13 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
         </form>
         {(loadingTabs||!!tabs.length)&&<div className="browser-space-tabs" aria-label="Pestañas del espacio">{loadingTabs?<small className="browser-space-loading" role="status">Consultando pestañas…</small>:tabs.map(tab=><button type="button" key={tab.tabId} disabled={locked||paused} aria-pressed={tab.selected} title={tab.url} onClick={()=>void openTab(tab.tabId)}><span>{tab.title||tab.url||"Nueva pestaña"}</span><small>{tab.selected?"Activa":"Abrir"}</small></button>)}</div>}
         <div className="chat-browser-actions">
-          <button type="button" disabled={locked||paused} onClick={()=>void call("browser_tabs",{action:"new",url})}>+ Nueva pestaña</button>
+          <button type="button" disabled={locked||paused} onClick={()=>void call("browser_tabs",{action:"new",url})}><PlusIcon size={14} />Nueva pestaña</button>
           {selected?.running&&<button type="button" onClick={()=>void raiseWindow()} title="Trae al frente la ventana de este espacio">Mostrar ventana</button>}
           {!selected?.running&&<button type="button" onClick={()=>void signInForAgent()} title="Abre el espacio de este agente en la ventana compartida para revisar sus cuentas">Iniciar sesión para este agente</button>}
           <button type="button" onClick={()=>void openPersonal()} title="Pestañas personales en la misma ventana de Trex Browser, separadas de los agentes">Abrir Trex Browser personal</button>
           <button type="button" disabled={locked} onClick={()=>void refreshStatus()}>Actualizar estado</button>
           <button type="button" disabled={locked} onClick={() => void call("browser_take_screenshot")}><ImageIcon size={15} />Tomar captura</button>
-          <button type="button" disabled={locked || (paused && !recording)} onClick={() => void call(recording ? "browser_stop_video" : "browser_start_video")}>{recording ? "■ Detener vídeo" : "○ Grabar vídeo"}</button>
+          <button type="button" disabled={locked || (paused && !recording)} onClick={() => void call(recording ? "browser_stop_video" : "browser_start_video")}>{recording ? <><StopIcon size={12} />Detener vídeo</> : <><TargetIcon size={14} />Grabar vídeo</>}</button>
           <button type="button" disabled={locked || needsRestart} onClick={() => void call(paused ? "browser_resume" : "browser_pause")}>{paused ? "Reanudar automatización" : "Pausar para revisar"}</button>
           {needsRestart && <button type="button" className="browser-action-wide" disabled={locked} onClick={() => void call("browser_close")}>Reiniciar perfil del navegador</button>}
           {!!tabs.length&&<button type="button" disabled={locked} onClick={()=>void (async()=>{if(await call("browser_pause"))await call("browser_close");})()}>Cerrar este espacio</button>}
@@ -211,7 +211,7 @@ export default function BrowserMenu({ cwd, browser, spaces, onStopAgent }: { cwd
           : "Controles pausados para revisión. Las capturas y consultas siguen disponibles; reanuda cuando termines."
           : recording ? "Grabación en curso. Detén el vídeo para guardarlo." : "El agente puede revisar consola, red, rendimiento y contenido de la página."}</p>
         {needsRestart && <p className="chat-browser-hint">Reiniciar cierra las pestañas de este perfil y descarta la ejecución pendiente. Tus sesiones guardadas y los archivos se conservan; después puedes abrir la página de nuevo.</p>}
-        {!!artifacts.length && <div className="chat-browser-recent"><small>Archivos recientes</small>{artifacts.map(artifact => <button type="button" key={artifact.id} disabled={locked || !brokerArtifactId(artifact)} onClick={() => void open(artifact)}>{artifact.mimeType.startsWith("video/") ? "Abrir vídeo" : "Abrir captura"}<span>{artifact.sizeBytes === undefined ? "" : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB `}↗</span></button>)}</div>}
+        {!!artifacts.length && <div className="chat-browser-recent"><small>Archivos recientes</small>{artifacts.map(artifact => <button type="button" key={artifact.id} disabled={locked || !brokerArtifactId(artifact)} onClick={() => void open(artifact)}>{artifact.mimeType.startsWith("video/") ? "Abrir vídeo" : "Abrir captura"}<span>{artifact.sizeBytes === undefined ? "" : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB`}<ExternalIcon size={12} /></span></button>)}</div>}
       </> : <p className="chat-browser-hint">{!status ? "Comprobando instalación…" : status.error?.message ?? "Selecciona Trex Browser al instalar trex o utiliza su instalador independiente."}</p>}
       {(error||inventoryError||statusError) && <p className="chat-browser-error" role="alert">{error||inventoryError||statusError}</p>}
       {openNote && !error && !inventoryError && !statusError && <p className="chat-browser-note" role="status">{openNote}</p>}

@@ -64,7 +64,7 @@
 }
 .command-dialog .command-result:hover { background: var(--hover); }
 .command-dialog .command-result.selected { border-color: var(--border); background: var(--session-selected); }
-.command-dialog .command-result.selected::before { content: "›"; position: absolute; top: 50%; left: var(--sp-1); translate: 0 -50%; color: var(--accent-strong); font: var(--fs-md) / 1 var(--font-mono); }
+.command-dialog .command-result > .row-pointer { left: var(--sp-1); }
 /* El icono va suelto, sin recuadro de color. */
 .command-dialog .command-result > .command-icon { display: grid; place-items: center; width: 32px; height: 32px; color: var(--text-muted); }
 .command-dialog .command-result.selected .command-icon { color: var(--accent-strong); }

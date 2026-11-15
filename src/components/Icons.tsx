@@ -222,7 +222,7 @@ export function TrashIcon({ size = 16, strokeWidth = 1.5 }: IconProps) {
   );
 }
 
-/** Aviso: atención. */
+/** Aviso: atención, o algo que te espera. */
 export function AlertIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return (
     <svg {...svgProps(size, strokeWidth)}>
@@ -230,6 +230,36 @@ export function AlertIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
       <path d="M12 10.2v3.6M12 16.7v.5" />
     </svg>
   );
+}
+
+/** Círculo con aspa: error. Hace juego con `InfoIcon` y `AlertIcon`. */
+export function ErrorIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return (
+    <svg {...svgProps(size, strokeWidth)}>
+      <circle cx="12" cy="12" r="8.6" />
+      <path d="m9.4 9.4 5.2 5.2M14.6 9.4l-5.2 5.2" />
+    </svg>
+  );
+}
+
+/** Exclamación sola, para marcas que ya van dentro de un círculo (insignias, estado de una tarea). */
+export function ExclamationIcon({ size = 16, strokeWidth = 2.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 5.6v8.2M12 18.2v.1" /></svg>;
+}
+
+/** Punto de estado: lleno (sí, disponible) o hueco (no, sin detectar). */
+export function DotIcon({ size = 16, strokeWidth = 1.6, filled = false }: IconProps & { filled?: boolean }) {
+  return <svg {...svgProps(size, strokeWidth)}>{filled ? <circle cx="12" cy="12" r="4.6" fill="currentColor" stroke="none" /> : <circle cx="12" cy="12" r="4" />}</svg>;
+}
+
+/** Anillo con un punto: lo que está en curso (una tarea) o grabar. */
+export function TargetIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><circle cx="12" cy="12" r="8.4" /><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none" /></svg>;
+}
+
+/** Renglones: una lista (la cola de mensajes, las sesiones). */
+export function LinesIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M4.5 7h15M4.5 12h15M4.5 17h9" /></svg>;
 }
 
 /** Engranaje: acceso a los ajustes de la app. */
@@ -309,8 +339,11 @@ export function ArrowRightIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><path d="M5 12h14m-5-5 5 5-5 5" /></svg>;
 }
 
-export function ChevronIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
-  return <svg {...svgProps(size, strokeWidth)}><path d="m9 5 7 7-7 7" /></svg>;
+const CHEVRON_TURN = { right: undefined, down: "rotate(90 12 12)", left: "rotate(180 12 12)", up: "rotate(-90 12 12)" } as const;
+
+/** Galón: desplegar, avanzar o volver. Apunta a la derecha salvo que se pida otra dirección. */
+export function ChevronIcon({ size = 16, strokeWidth = 1.6, direction = "right" }: IconProps & { direction?: keyof typeof CHEVRON_TURN }) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="m9 5 7 7-7 7" transform={CHEVRON_TURN[direction]} /></svg>;
 }
 
 export function FolderPlusIcon({ size = 18, strokeWidth = 1.7 }: IconProps) {
@@ -390,9 +423,11 @@ export function BoltIcon({ size = 14, strokeWidth = 1.7 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><path d="M13.2 3.5 5.5 13.4h6l-1 7.1 8-10.2h-6.1Z" /></svg>;
 }
 
-/** Indicador de uso: un medidor con la aguja a dos tercios. */
-export function GaugeIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
-  return <svg {...svgProps(size, strokeWidth)}><path d="M4.2 17.5a8.5 8.5 0 1 1 15.6 0" /><path d="m12 14 4.2-4.6" /><circle cx="12" cy="14" r="1.4" /></svg>;
+const GAUGE_NEEDLE = { default: "m12 14 4.2-4.6", low: "M12 14 8.04 10.04", mid: "M12 14V8.4", high: "m12 14 3.96-3.96" } as const;
+
+/** Medidor: el uso (aguja a dos tercios) o el ritmo de consumo (aguja baja, media o alta). */
+export function GaugeIcon({ size = 16, strokeWidth = 1.6, level = "default" }: IconProps & { level?: keyof typeof GAUGE_NEEDLE }) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M4.2 17.5a8.5 8.5 0 1 1 15.6 0" /><path d={GAUGE_NEEDLE[level]} /><circle cx="12" cy="14" r="1.4" /></svg>;
 }
 
 export function RefreshIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
@@ -405,4 +440,26 @@ export function MicIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
 
 export function PhoneIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
   return <svg {...svgProps(size, strokeWidth)}><rect x="6.5" y="2.5" width="11" height="19" rx="2.5" /><path d="M10.5 18.5h3" /></svg>;
+}
+
+// --- Asistentes (AgentIcon) ---------------------------------------------------
+
+/** Claude: el asterisco de ocho brazos de su indicador de actividad. */
+export function AsteriskIcon({ size = 16, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 3.6v16.8M3.6 12h16.8M6.06 6.06l11.88 11.88M17.94 6.06 6.06 17.94" /></svg>;
+}
+
+/** Trex (agente): una estrella de ocho puntas, las de los ejes más largas. */
+export function StarburstIcon({ size = 16, strokeWidth = 1.5 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="M12 3 12.96 9.69 16.38 7.62 14.31 11.04 21 12 14.31 12.96 16.38 16.38 12.96 14.31 12 21 11.04 14.31 7.62 16.38 9.69 12.96 3 12 9.69 11.04 7.62 7.62 11.04 9.69Z" /></svg>;
+}
+
+/** Codex y asistentes genéricos: código, «</>». */
+export function CodeIcon({ size = 16, strokeWidth = 1.6 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></svg>;
+}
+
+/** Antigravity: su «A». */
+export function AntigravityIcon({ size = 16, strokeWidth = 1.7 }: IconProps) {
+  return <svg {...svgProps(size, strokeWidth)}><path d="m5 19 7-14 7 14M8 14h8" /></svg>;
 }

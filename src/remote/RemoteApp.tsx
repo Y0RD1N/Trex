@@ -10,6 +10,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ProjectCore from "../components/ProjectCore";
+import { AlertIcon, ArrowUpIcon, CheckIcon, ChevronIcon, CloseIcon, DotIcon, FileIcon, ImageIcon, LinesIcon, MapIcon, PencilIcon, PhoneIcon, PlusIcon, QuestionIcon, StopIcon } from "../components/Icons";
 import { MAX_IMAGES, prepareImage } from "../chatImages";
 import { insertImageReferences, removeImageReference, type ReferenceKind } from "../imageReferences";
 import { timeAgo, type RemoteChoice, type RemoteDetail, type RemoteItem, type RemotePending, type RemoteQuestion, type RemoteSession } from "../remoteProtocol";
@@ -55,7 +56,7 @@ const ProjectIcon = memo(function ProjectIcon({ id, size = 18 }: { id: string; s
   </span>;
 });
 
-const Chevron = ({ open }: { open?: boolean }) => <svg className={`r-chev${open ? " is-open" : ""}`} viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>;
+const Chevron = ({ open }: { open?: boolean }) => <span className={`r-chev${open ? " is-open" : ""}`} aria-hidden="true"><ChevronIcon size={14} strokeWidth={2} /></span>;
 
 const safeUrl = (url: string): string => {
   const value = defaultUrlTransform(url);
@@ -160,12 +161,12 @@ function LinkChip({ state, host, latency }: { state: ConnectionState; host: stri
 // --- B · Sesiones, agrupadas por proyecto como en la barra lateral del PC ----------------
 
 const ORDER: Record<RemoteSession["status"], number> = { needs: 0, working: 1, idle: 2, exited: 3 };
-/** Glifo de estado: el mismo idioma que la barra lateral (▲ te espera, la «t» en estratos trabaja). */
+/** Icono de estado: el mismo idioma que la barra lateral (el triángulo te espera, la «t» en estratos trabaja). */
 function StatusGlyph({ session }: { session: RemoteSession }) {
-  if (session.status === "needs") return <span className="r-glyph is-warn" aria-label="Te necesita">{session.need?.kind === "question" ? "?" : "▲"}</span>;
+  if (session.status === "needs") return <span className="r-glyph is-warn" aria-label="Te necesita">{session.need?.kind === "question" ? <QuestionIcon size={15} /> : <AlertIcon size={15} />}</span>;
   if (session.status === "working") return <span className="r-glyph" aria-label="Trabajando"><Loader size={13} /></span>;
-  if (session.status === "exited") return <span className="r-glyph is-dim" aria-label="Cerrada">✕</span>;
-  return <span className="r-glyph is-dim" aria-hidden="true">·</span>;
+  if (session.status === "exited") return <span className="r-glyph is-dim" aria-label="Cerrada"><CloseIcon size={13} /></span>;
+  return <span className="r-glyph is-dim" aria-hidden="true"><DotIcon filled size={8} /></span>;
 }
 
 function SessionRow({ session, now, onOpen, onQuick }: { session: RemoteSession; now: number; onOpen: () => void; onQuick: (allowed: boolean) => Promise<void> }) {
@@ -221,12 +222,12 @@ function SessionList({ sessions, onlyWaiting, expanded, onToggle, onShowWaiting,
   return <div className="r-scroll">
     <div className="r-rule r-sec"><span>{onlyWaiting ? "Te esperan" : "Proyectos"}</span><span className="r-n">{groups.length}</span></div>
     {!onlyWaiting && (waiting > 0 || working > 0) && <p className="r-summary">
-      {waiting > 0 && <button type="button" className="is-warn" onClick={onShowWaiting}>▲ {waiting} {waiting === 1 ? "te espera" : "te esperan"} ›</button>}
+      {waiting > 0 && <button type="button" className="is-warn" onClick={onShowWaiting}><AlertIcon size={13} />{waiting} {waiting === 1 ? "te espera" : "te esperan"}<ChevronIcon size={12} strokeWidth={2} /></button>}
       {working > 0 && <span><Loader size={12} />{working} trabajando</span>}
     </p>}
     {!groups.length && <div className="r-empty">{onlyWaiting ? "Nada te espera ahora mismo." : "No hay sesiones de chat abiertas en el PC."}</div>}
     {groups.map(group => {
-      // Plegado solo queda la cabecera con su estado (▲ te espera, la «t» trabaja), como en el PC.
+      // Plegado solo queda la cabecera con su estado (el triángulo te espera, la «t» trabaja), como en el PC.
       const open = onlyWaiting || expanded.has(group.id);
       const needs = group.sessions.filter(session => session.status === "needs").length;
       const busy = group.sessions.some(session => session.status === "working");
@@ -236,7 +237,7 @@ function SessionList({ sessions, onlyWaiting, expanded, onToggle, onShowWaiting,
           {!onlyWaiting && <Chevron open={open} />}
           <ProjectIcon id={group.id} size={20} />
           <span className="r-project-name">{group.name}</span>
-          {needs > 0 ? <span className="r-glyph is-warn" aria-label={`${needs} te esperan`}>▲</span> : busy ? <Loader size={13} /> : null}
+          {needs > 0 ? <span className="r-glyph is-warn" aria-label={`${needs} te esperan`}><AlertIcon size={14} /></span> : busy ? <Loader size={13} /> : null}
           <span className="r-n">{group.sessions.length}</span>
         </button>
         {shown.length > 0 && <div className="r-project-sessions">
@@ -250,16 +251,14 @@ function SessionList({ sessions, onlyWaiting, expanded, onToggle, onShowWaiting,
 
 // --- C · Chat en vivo ------------------------------------------------------------------------
 
-const ImageGlyph = () => <svg className="r-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><circle cx="9" cy="10" r="1.6" /><path d="m4.5 18 5-5 3.5 3.5 2.5-2.5 4 4" /></svg>;
-const FileGlyph = () => <svg className="r-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h6.5L18.5 8.5v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1Z" /><path d="M13.5 3.5v5h5" /></svg>;
-
 const ItemRow = memo(function ItemRow({ item }: { item: RemoteItem }) {
   switch (item.kind) {
     case "user": return <div className="r-me">
+      <span className="r-me-mark" aria-hidden="true"><ChevronIcon size={13} strokeWidth={2} /></span>
       {item.text && <span className="r-me-text">{item.text}</span>}
       {(item.images > 0 || item.files.length > 0) && <span className="r-me-files">
-        {item.images > 0 && <span className="r-file-tag"><ImageGlyph />{item.images} imagen{item.images === 1 ? "" : "es"}</span>}
-        {item.files.map((name, index) => <span key={index} className="r-file-tag"><FileGlyph />{name}</span>)}
+        {item.images > 0 && <span className="r-file-tag"><ImageIcon size={15} />{item.images} imagen{item.images === 1 ? "" : "es"}</span>}
+        {item.files.map((name, index) => <span key={index} className="r-file-tag"><FileIcon size={15} />{name}</span>)}
       </span>}
     </div>;
     case "text": return <div className="r-ai"><Markdown text={item.text} /></div>;
@@ -269,11 +268,11 @@ const ItemRow = memo(function ItemRow({ item }: { item: RemoteItem }) {
   }
 });
 
-/** Herramientas seguidas, en un solo árbol ├─ ✓. */
+/** Herramientas seguidas, en un solo árbol: «├─ ✓ Leyó …». */
 function ToolTree({ tools }: { tools: Extract<RemoteItem, { kind: "tool" }>[] }) {
   return <div className="r-tree">{tools.map((tool, index) => <div key={tool.id} className="r-tree-row">
     <span className="r-tree-branch">{index === tools.length - 1 ? "└─" : "├─"}</span>
-    {tool.status === "running" ? <Loader size={12} /> : <span className={tool.status === "error" ? "r-tree-err" : "r-tree-ok"}>{tool.status === "error" ? "✕" : "✓"}</span>}
+    {tool.status === "running" ? <Loader size={12} /> : <span className={tool.status === "error" ? "r-tree-err" : "r-tree-ok"}>{tool.status === "error" ? <CloseIcon size={12} strokeWidth={2} /> : <CheckIcon size={13} strokeWidth={2} />}</span>}
     <span className="r-tree-text">{tool.verb} {tool.target}</span>
     {(tool.added > 0 || tool.removed > 0) && <span className="r-diff"><span className="is-add">+{tool.added}</span> <span className="is-del">−{tool.removed}</span></span>}
   </div>)}</div>;
@@ -350,14 +349,14 @@ async function shrinkPhoto(file: File, name: string): Promise<{ blob: Blob; type
 function AttachmentChip({ item, index, onRemove }: { item: Attachment; index: number; onRemove: () => void }) {
   const uploading = !item.id && !item.error;
   return <div className={`r-att${item.error ? " is-error" : ""}`} title={item.error ?? item.name}>
-    <span className="r-att-thumb">{item.preview ? <img src={item.preview} alt="" /> : <FileGlyph />}</span>
+    <span className="r-att-thumb">{item.preview ? <img src={item.preview} alt="" /> : <FileIcon size={20} />}</span>
     <span className="r-att-body">
       <span className="r-att-ref">[{item.kind} {index + 1}]<small>{item.error ? "no se subió" : uploading ? `${Math.round(item.progress * 100)} %` : formatSize(item.size)}</small></span>
       <span className="r-att-name">{item.error ?? item.name}</span>
     </span>
     {uploading && <span className="r-att-bar" style={{ transform: `scaleX(${Math.max(0.04, item.progress)})` }} />}
     <button type="button" className="r-att-x" aria-label={`Quitar ${item.name}`} onClick={onRemove}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" /></svg></button>
+      <CloseIcon size={16} strokeWidth={2} /></button>
   </div>;
 }
 
@@ -474,7 +473,7 @@ function Composer({ detail, onSend, onToast }: { detail: RemoteDetail; onSend: (
     </div>}
     <div className="r-box">
       <button type="button" className="r-attach" aria-label="Adjuntar fotos o archivos" onClick={() => picker.current?.click()}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+        <PlusIcon size={22} />
       </button>
       <input ref={picker} type="file" multiple hidden onChange={event => {
         const files = [...(event.currentTarget.files ?? [])];
@@ -484,7 +483,7 @@ function Composer({ detail, onSend, onToast }: { detail: RemoteDetail; onSend: (
       <textarea ref={area} rows={1} value={text} placeholder={detail.queues ? "Escribe para encolar…" : "Escribe una indicación…"} aria-label="Mensaje"
         onChange={event => setText(event.currentTarget.value)} />
       <button type="button" className="r-send" aria-label={detail.queues ? "Añadir a la cola" : "Enviar"} disabled={!ready || busy} onClick={() => void send()}>
-        {busy || uploading ? <Loader /> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" /></svg>}
+        {busy || uploading ? <Loader /> : <ArrowUpIcon size={19} />}
       </button>
     </div>
   </div>;
@@ -519,10 +518,10 @@ function ChatScreen({ session, detail, onBack, onCommand, onToast }: {
     <header className="r-chat-head">
       <div className="r-chat-top">
         <button type="button" className="r-back" aria-label="Volver a las sesiones" onClick={onBack}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" /></svg></button>
+          <ChevronIcon size={24} strokeWidth={2} direction="left" /></button>
         <div className="r-who"><b>{title}</b>
           <span>{session ? <><ProjectIcon id={session.project.id} size={13} />{session.project.name} · {session.agent}{session.model ? ` · ${session.model}` : ""}</> : "cargando…"}</span></div>
-        {detail?.running && <button type="button" className="r-stop" onClick={() => void run({ kind: "interrupt" }).catch(() => undefined)}><i />Detener</button>}
+        {detail?.running && <button type="button" className="r-stop" onClick={() => void run({ kind: "interrupt" }).catch(() => undefined)}><StopIcon size={13} />Detener</button>}
       </div>
       {detail && detail.tasks.total > 0 && <div className="r-tasks">
         <div className="r-tasks-h"><b>{detail.tasks.current ?? (detail.tasks.done === detail.tasks.total ? "Tareas completadas" : "Tareas")}</b><span>{detail.tasks.done}/{detail.tasks.total}</span></div>
@@ -544,7 +543,7 @@ function ChatScreen({ session, detail, onBack, onCommand, onToast }: {
       {detail && <Thread items={detail.items} />}
       {detail?.running && <WorkingLine since={detail.turnStartedAt} />}
       {pending && !sheetOpen && <button type="button" className="r-pending-bar" onClick={() => setSheetClosed(null)}>
-        {pending.kind === "question" ? "? Te hace una pregunta" : pending.kind === "plan" ? "▲ Propone un plan" : "▲ Pide permiso"} · ver</button>}
+        {pending.kind === "question" ? <><QuestionIcon size={15} />Te hace una pregunta</> : pending.kind === "plan" ? <><MapIcon size={15} />Propone un plan</> : <><AlertIcon size={15} />Pide permiso</>} · ver</button>}
     </div>
     {detail && <Composer detail={detail} onToast={onToast} onSend={(text, attachments) => run({ kind: "send", text, attachments })} />}
     {sheetOpen && pending && <Sheet agent={PROVIDER_NAME[session?.provider ?? ""] ?? session?.agent ?? "El agente"} pending={pending}
@@ -639,7 +638,7 @@ function QuestionSheet({ agent, pending, onAnswer }: { agent: string; pending: E
       {question.other && (writing || !question.options.length
         ? <textarea className="r-other-input" autoFocus={question.options.length > 0} rows={2} value={choice.other} placeholder="Tu respuesta…"
             onChange={event => update({ ...choice, other: event.currentTarget.value, selected: question.multiSelect ? choice.selected : [] })} />
-        : <button type="button" className="r-other" onClick={() => setWriting(true)}>› Otra respuesta…</button>)}
+        : <button type="button" className="r-other" onClick={() => setWriting(true)}><PencilIcon size={15} />Otra respuesta…</button>)}
     </div>
     <div className="r-row">
       <button type="button" className="r-btn is-ghost is-tall" disabled={!!busy} onClick={() => act("skip", () => onAnswer(false, false, choices))}>Omitir</button>
@@ -776,12 +775,12 @@ export default function RemoteApp() {
             onShowWaiting={() => setTab("waiting")} onOpen={openSession} onQuick={quick} />}
         <nav className="r-dock" aria-label="Secciones">
           <button type="button" className={`r-tab${tab === "sessions" ? " is-on" : ""}`} aria-current={tab === "sessions" ? "page" : undefined} onClick={() => setTab("sessions")}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg>Sesiones</button>
+            <LinesIcon size={23} />Sesiones</button>
           <button type="button" className={`r-tab${tab === "waiting" ? " is-on" : ""}`} aria-current={tab === "waiting" ? "page" : undefined} onClick={() => setTab("waiting")}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v5M12 17.5v.5" /><path d="M3.5 20 12 4l8.5 16Z" /></svg>
+            <AlertIcon size={23} />
             <span>Esperan{waiting > 0 && <span className="r-badge">{waiting}</span>}</span></button>
           <button type="button" className={`r-tab${tab === "device" ? " is-on" : ""}`} aria-current={tab === "device" ? "page" : undefined} onClick={() => setTab("device")}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5" /><path d="M10.5 18.5h3" /></svg>Este móvil</button>
+            <PhoneIcon size={23} />Este móvil</button>
         </nav>
       </div>}
     {offline && open && <div className="r-offline" role="status">{state === "connecting" ? "Reconectando…" : "Sin conexión con el PC. Reintentando…"}</div>}

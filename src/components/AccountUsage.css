@@ -1,7 +1,7 @@
 /* --- Uso de las cuentas, como un cuaderno de campo ------------------------------
    Cada cuenta lleva el tono de su asistente (siempre junto a su nombre e
    icono, nunca solo el color). Aviso (≥ 75 %) y crítico (≥ 90 %) usan los
-   colores de estado con su glifo ▲. Las barras son celdas de la retícula y la
+   colores de estado con su icono de aviso. Las barras son celdas de la retícula y la
    celda con contorno marca cuánto ha pasado de la ventana. */
 /* Mini órbita de la pestaña */
 .usage-glyph { flex: 0 0 auto; overflow: visible; }
@@ -22,11 +22,11 @@
 
 /* Cabecera: la lectura más alta y la regla ------------------------------------- */
 .usage-hero { position: relative; padding: var(--sp-3-5) var(--sp-3-5) var(--sp-2-5); border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--bg-elevated); }
-/* Regla con etiqueta: «USO · 3 CUENTAS ───── ↻ hace 1 min» */
+/* Regla con etiqueta: «USO · 3 CUENTAS ───── ↻ hace 1 min» (el ↻ es RefreshIcon) */
 .usage-rule { display: flex; align-items: center; gap: var(--sp-2); color: var(--text-dim); font: var(--fw-medium) var(--fs-xs)/1.4 var(--font-mono); }
 .usage-rule > span { text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
 .usage-rule::after { content: ""; flex: 1; order: 1; min-width: var(--sp-3); border-top: 1px solid var(--border); }
-.usage-rule > em { order: 2; font-style: normal; white-space: nowrap; }
+.usage-rule > em { order: 2; display: inline-flex; align-items: center; gap: var(--sp-1); font-style: normal; white-space: nowrap; }
 .usage-hero-read { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3); }
 .usage-hero-read > strong { flex: 0 0 auto; color: var(--text); font: var(--fw-semibold) 44px/1 var(--font-mono); letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
 .usage-hero-read > strong small { font-size: 22px; letter-spacing: 0; }
@@ -130,6 +130,10 @@
 .usage-window.is-warning .usage-window-head b { color: var(--warn-text); }
 .usage-window.is-critical .usage-window-head b { color: var(--danger-text); }
 .usage-window small { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--sp-1-5); min-height: 20px; color: var(--text-dim); font: var(--fs-xs) var(--font-mono); }
+/* Icono + texto en línea: el icono, centrado con la altura de la x del texto. */
+.usage-reset, .usage-pace, .usage-hero-state { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.usage-window-head b { display: inline-flex; align-items: center; gap: var(--sp-1); }
+:is(.usage-reset, .usage-pace, .usage-hero-state, .usage-window-head b, .usage-rule > em) > svg { flex-shrink: 0; }
 .usage-pace { flex: 0 0 auto; }
 .usage-pace.is-easy { color: var(--ok-text); }
 .usage-pace.is-even { color: var(--text-muted); }
