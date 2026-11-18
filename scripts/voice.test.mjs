@@ -3,7 +3,7 @@ import test from 'node:test';
 import { load } from './ts-loader.mjs';
 const {
   voiceStateLabel, voiceListening, voiceDownloadOffer, microphoneOptions, levelPercent, voiceModeBlocker, voiceSpeechBlocker, voiceSettingsOf,
-  cloudVoiceOptions, insertDictated, downloadPercent, megabytes, heardLabel, pushHeard,
+  cloudVoiceOptions, insertDictated, voiceIndicator, downloadPercent, megabytes, heardLabel, pushHeard,
 } = await load('voice');
 
 const status = patch => ({
@@ -104,6 +104,23 @@ test('dictated phrases land at the cursor with the spacing they need', () => {
   // Nada que escribir, o un cursor fuera de rango, no rompe el texto.
   assert.deepEqual(insertDictated('igual', at(2), '   '), { text: 'igual', selection: at(2) });
   assert.equal(insertDictated('corto', at(99), 'fin').text, 'corto fin');
+});
+
+test('the top-bar microphone shows one state at a time, the most specific first', () => {
+  const quiet = { thinking: false, live: null };
+  assert.deepEqual(voiceIndicator('idle', quiet), { kind: 'idle', label: 'En espera: di «oye trex»' });
+  assert.equal(voiceIndicator('hearing', quiet).kind, 'hearing');
+  assert.equal(voiceIndicator('transcribing', quiet).kind, 'working');
+  assert.equal(voiceIndicator('speaking', quiet).kind, 'speaking');
+  assert.equal(voiceIndicator('dictating', quiet).kind, 'dictating');
+  // Claude pensando: el micrófono ya volvió a espera, pero trex sigue ocupado.
+  assert.deepEqual(voiceIndicator('idle', { thinking: true, live: null }), { kind: 'working', label: 'Pensando…' });
+  // Si ya te está oyendo otra vez, eso manda sobre «pensando».
+  assert.equal(voiceIndicator('hearing', { thinking: true, live: null }).kind, 'hearing');
+  // Una llamada en tiempo real manda sobre todo lo demás.
+  assert.equal(voiceIndicator('idle', { thinking: false, live: { state: 'connecting' } }).label, 'Conectando la llamada…');
+  assert.equal(voiceIndicator('hearing', { thinking: true, live: { state: 'talking' } }).kind, 'live');
+  assert.equal(voiceIndicator('live', quiet).kind, 'live');
 });
 
 test('heard utterances show the command and keep a short history', () => {

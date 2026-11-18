@@ -66,7 +66,6 @@ import ChatView, { type ChatViewProps } from "./components/ChatView";
 import AgentRoomView from "./components/AgentRoomView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Toast from "./components/Toast";
-import VoiceIndicator from "./components/VoiceIndicator";
 import { useVoiceCall } from "./hooks/useVoiceCall";
 
 const NO_PROJECTS: Project[] = [];
@@ -1687,7 +1686,6 @@ function AppShell() {
       {toast && (
         <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />
       )}
-      <VoiceIndicator />
       {workflowPresence.value && <Suspense fallback={null}><AgentWorkflowDialog project={workflowPresence.value} profiles={availableProfiles}
         initialExecutor={(() => { const source = workflowSourceRef.current; const tab = source && tabs.find(item => item.id === source.context.source.sessionId);
           return tab?.profileId ? { profileId: tab.profileId, model: tab.chatModel ?? null, effort: tab.chatEffort ?? null } : undefined; })()}

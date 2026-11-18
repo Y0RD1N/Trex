@@ -16,18 +16,6 @@
 .voice-heard span { font-size:var(--fs-md); color:var(--text); overflow-wrap:anywhere; }
 .voice-heard small { font:var(--fs-xs) var(--font-mono); color:var(--text-dim); overflow-wrap:anywhere; }
 
-/* Indicador: una etiqueta discreta en la esquina mientras trex escucha. */
-.voice-indicator { position:fixed; left:var(--sp-4); bottom:var(--sp-4); z-index:40; display:flex; align-items:center; gap:var(--sp-2); max-width:min(420px, calc(100vw - var(--sp-4) * 2)); padding:var(--sp-1-5) var(--sp-3) var(--sp-1-5) var(--sp-2); border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--bg-elevated); color:var(--text-muted); font-size:var(--fs-sm); pointer-events:none; transition:border-color var(--t), color var(--t); }
-.voice-indicator svg { flex:none; }
-.voice-indicator-label { font:var(--fs-xs) var(--font-mono); white-space:nowrap; }
-.voice-indicator-heard { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); padding-left:var(--sp-2); border-left:1px solid var(--border); }
-.voice-indicator.is-hearing, .voice-indicator.is-transcribing, .voice-indicator.is-thinking, .voice-indicator.is-speaking { border-color:color-mix(in srgb, var(--accent) 55%, var(--border)); color:var(--accent-strong); }
-.voice-indicator.is-live { pointer-events:auto; border-color:color-mix(in srgb, var(--accent) 55%, var(--border)); color:var(--accent-strong); }
-.voice-indicator.is-live .voice-indicator-bars i { animation:voice-bar .7s ease-in-out infinite alternate; }
-.voice-indicator.is-live .voice-indicator-bars i:nth-child(2) { animation-delay:.15s; }
-.voice-indicator.is-live .voice-indicator-bars i:nth-child(3) { animation-delay:.3s; }
-.voice-indicator-hangup { flex:none; margin-left:var(--sp-1); padding:2px var(--sp-2); border:1px solid var(--border); border-radius:var(--radius-md); background:transparent; color:var(--text-muted); font:var(--fs-xs) var(--font-mono); cursor:pointer; transition:border-color var(--t), color var(--t); }
-.voice-indicator-hangup:hover { border-color:var(--danger-text); color:var(--danger-text); }
 .voice-key { display:flex; gap:var(--sp-2); align-items:center; flex-wrap:wrap; }
 .voice-key .input { flex:1; min-width:200px; font-family:var(--font-mono); }
 .voice-choice { display:grid; gap:var(--sp-1-5); }
@@ -38,12 +26,31 @@
 .voice-choice span { display:grid; gap:2px; }
 .voice-choice strong { font-size:var(--fs-md); font-weight:500; }
 .voice-choice small { color:var(--text-muted); font-size:var(--fs-sm); line-height:1.5; }
-@media (prefers-reduced-motion: reduce) { .voice-indicator.is-live .voice-indicator-bars i { animation:none; height:8px; } }
-/* Tres barras que suben mientras te oye: movimiento solo cuando hay voz. */
-.voice-indicator-bars { display:flex; align-items:flex-end; gap:2px; height:12px; }
-.voice-indicator-bars i { width:2px; height:3px; border-radius:1px; background:currentColor; }
-.voice-indicator.is-hearing .voice-indicator-bars i { animation:voice-bar .7s ease-in-out infinite alternate; }
-.voice-indicator.is-hearing .voice-indicator-bars i:nth-child(2) { animation-delay:.15s; }
-.voice-indicator.is-hearing .voice-indicator-bars i:nth-child(3) { animation-delay:.3s; }
-@keyframes voice-bar { from { height:3px; } to { height:12px; } }
-@media (prefers-reduced-motion: reduce) { .voice-indicator.is-hearing .voice-indicator-bars i { animation:none; height:8px; } }
+
+/* Micrófono de la barra superior. Solo el icono: lo que cambia es el dibujo. */
+.voice-mic.window-btn { color:var(--text-muted); cursor:default; transition:color var(--t), background var(--t); }
+.voice-mic.window-btn[aria-disabled="true"]:hover { background:transparent; color:var(--text-muted); }
+.voice-mic.window-btn:is(.is-live, .is-speaking) { cursor:pointer; }
+.voice-mic.window-btn:is(.is-hearing, .is-dictating, .is-live, .is-working, .is-speaking),
+.voice-mic.window-btn:is(.is-hearing, .is-dictating, .is-live, .is-working, .is-speaking):hover { color:var(--accent-strong); }
+.voice-mic svg { overflow:visible; }
+/* La cápsula se llena desde abajo con el volumen real de la voz. */
+.voice-mic-level { transform-box:fill-box; transform-origin:50% 100%; opacity:.85; transition:transform .2s linear; }
+.voice-mic-wave { opacity:0; }
+/* En espera: el soporte respira despacio. */
+.voice-mic.is-idle .voice-mic-cradle { animation:voice-breathe 3.6s ease-in-out infinite; }
+/* Entendiendo o pensando: un trazo recorre el soporte de lado a lado. */
+.voice-mic.is-working .voice-mic-cradle { stroke-dasharray:30 70; animation:voice-travel 1.1s linear infinite; }
+/* Hablando: salen dos ondas, una tras otra. */
+.voice-mic.is-speaking .voice-mic-wave { animation:voice-wave 1.3s ease-out infinite; }
+.voice-mic.is-speaking .voice-mic-wave-2 { animation-delay:.24s; }
+/* En llamada: la base se atenúa, como un micrófono descolgado. */
+.voice-mic.is-live .voice-mic-stand { opacity:.5; }
+@keyframes voice-breathe { 0%, 100% { opacity:.4; } 50% { opacity:1; } }
+@keyframes voice-travel { from { stroke-dashoffset:100; } to { stroke-dashoffset:0; } }
+@keyframes voice-wave { 0% { opacity:0; transform:translateX(-1.5px); } 35% { opacity:1; } 100% { opacity:0; transform:translateX(1px); } }
+@media (prefers-reduced-motion: reduce) {
+  .voice-mic * { animation:none !important; transition:none !important; }
+  .voice-mic.is-speaking .voice-mic-wave { opacity:1; }
+  .voice-mic.is-working .voice-mic-cradle { stroke-dasharray:none; }
+}

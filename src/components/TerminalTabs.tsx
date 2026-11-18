@@ -23,6 +23,7 @@ import DropdownMenu from "./DropdownMenu";
 import AgentIcon from "./AgentIcon";
 import ProfileMenuItems from "./ProfileMenuItems";
 import NotificationCenter from "./NotificationCenter";
+import VoiceIndicator from "./VoiceIndicator";
 import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 
 /** Alto de la barra en px: `--header-h` (42) más el borde de la ventana. */
@@ -154,6 +155,7 @@ export default function TerminalTabs({
         }
       </div>
 
+      <VoiceIndicator />
       <NotificationCenter notices={notices} soundEnabled={soundEnabled} liveTabIds={liveTabIds}
         onOpenSession={onOpenNotice} onMarkRead={onMarkNoticesRead} onClear={onClearNotices}
         onToggleSound={onToggleSound} onPreviewSound={onPreviewSound} />

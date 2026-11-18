@@ -85,6 +85,24 @@ export const VOICE_PHASE_LABEL: Record<VoicePhase, string> = {
   dictating: "Dictando",
 };
 
+/** Qué dibuja el micrófono de la barra superior y qué dice al pasar el ratón. */
+export type VoiceIndicatorKind = "idle" | "hearing" | "working" | "speaking" | "live" | "dictating";
+
+export function voiceIndicator(
+  phase: VoicePhase,
+  call: { thinking: boolean; live: { state: "connecting" | "talking" } | null },
+): { kind: VoiceIndicatorKind; label: string } {
+  if (call.live) return { kind: "live", label: call.live.state === "connecting" ? "Conectando la llamada…" : "En llamada · clic para colgar" };
+  if (phase === "live") return { kind: "live", label: "En llamada · clic para colgar" };
+  if (phase === "dictating") return { kind: "dictating", label: "Dictando" };
+  if (phase === "hearing") return { kind: "hearing", label: "Te oigo…" };
+  if (phase === "transcribing") return { kind: "working", label: "Entendiendo…" };
+  // Mientras Claude prepara la respuesta el micrófono ya está en espera: se dice que piensa.
+  if (call.thinking) return { kind: "working", label: "Pensando…" };
+  if (phase === "speaking") return { kind: "speaking", label: "Hablando · clic para callar" };
+  return { kind: "idle", label: "En espera: di «oye trex»" };
+}
+
 /** Una frase dictada para un chat concreto. */
 export type VoiceDictated = { target: string; text: string };
 

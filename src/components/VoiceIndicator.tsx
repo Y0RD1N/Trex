@@ -1,22 +1,25 @@
 /**
- * Indicador del modo llamada: una etiqueta en la esquina mientras trex escucha.
- * No se pinta nada si la voz está apagada (su estado por defecto).
+ * Micrófono del modo llamada en la barra superior: solo el icono, que cambia según lo
+ * que hace trex. En espera respira despacio; cuando te oye, la cápsula se llena con el
+ * volumen real de tu voz; mientras entiende o piensa, un trazo recorre el soporte; y
+ * cuando habla salen ondas. No se pinta nada si la voz está apagada (su estado por defecto).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { heardLabel, voiceListening, VOICE_PHASE_LABEL, type VoicePhase, type VoiceStatus, type VoiceUtterance } from "../voice";
-import { voiceLiveHangup, voiceStatus, VOICE_STATUS_EVENT, VOICE_UTTERANCE_EVENT } from "../voiceApi";
+import { levelPercent, voiceIndicator, voiceListening, type VoiceLevel, type VoicePhase, type VoiceStatus } from "../voice";
+import { voiceLiveHangup, voiceStatus, VOICE_LEVEL_EVENT, VOICE_STATUS_EVENT } from "../voiceApi";
 import { useVoiceCallState } from "../hooks/useVoiceCall";
-import { MicIcon } from "./Icons";
 import "./Voice.css";
 
-/** Cuánto se queda a la vista lo último que entendió. */
-const HEARD_MS = 6000;
+/** Alto interior de la cápsula del micrófono, en unidades del dibujo. */
+const CAPSULE = 11;
 
 export default function VoiceIndicator() {
   const [status, setStatus] = useState<VoiceStatus | null>(null);
-  const [heard, setHeard] = useState<VoiceUtterance | null>(null);
+  const [level, setLevel] = useState<VoiceLevel | null>(null);
   const call = useVoiceCallState();
+  const clip = useId();
 
   useEffect(() => {
     let alive = true;
@@ -29,39 +32,31 @@ export default function VoiceIndicator() {
         if (phase) setStatus(current => current ? { ...current, phase } : current);
         if (phase === "off" || phase === "loading" || phase === "idle") refresh();
       }),
-      listen<VoiceUtterance>(VOICE_UTTERANCE_EVENT, event => setHeard(event.payload)),
+      listen<VoiceLevel>(VOICE_LEVEL_EVENT, event => setLevel(event.payload)),
     ]);
     return () => { alive = false; void unlisten.then(list => list.forEach(stop => stop())); };
   }, []);
 
-  useEffect(() => {
-    if (!heard) return;
-    const timer = window.setTimeout(() => setHeard(null), HEARD_MS);
-    return () => window.clearTimeout(timer);
-  }, [heard]);
-
   if (!status || !voiceListening(status)) return null;
 
-  // Llamada en tiempo real: lo que se va diciendo y un botón para colgar.
-  if (call.live) {
-    const caption = call.live.said || call.live.heard;
-    return <div className="voice-indicator is-live" role="status" aria-live="off">
-      <MicIcon size={14} />
-      <span className="voice-indicator-bars" aria-hidden="true"><i /><i /><i /></span>
-      <span className="voice-indicator-label">{call.live.state === "connecting" ? "Conectando…" : "En llamada"}</span>
-      {caption && <span className="voice-indicator-heard">{caption}</span>}
-      <button type="button" className="voice-indicator-hangup" onClick={() => void voiceLiveHangup().catch(() => undefined)}>Colgar</button>
-    </div>;
-  }
+  const { kind, label } = voiceIndicator(status.phase, call);
+  // La cápsula se llena con tu voz: solo cuando hay alguien hablando o la llamada está abierta.
+  const heard = kind === "live" || kind === "dictating" || (kind === "hearing" && level?.voice);
+  const fill = heard && level && !level.deaf ? levelPercent(level.peak) / 100 : 0;
+  const onClick = kind === "live" ? () => void voiceLiveHangup().catch(() => undefined)
+    : kind === "speaking" ? () => void invoke("voice_hush").catch(() => undefined)
+    : undefined;
 
-  // Mientras Claude prepara la respuesta el micrófono sigue en espera: se dice que está pensando.
-  const thinking = call.thinking && status.phase === "idle";
-  const detail = call.thinking ? (heard ? heardLabel(heard) : null) : call.reply ?? (heard ? heardLabel(heard) : null);
-
-  return <div className={`voice-indicator is-${thinking ? "thinking" : status.phase}`} role="status" aria-live="polite">
-    <MicIcon size={14} />
-    <span className="voice-indicator-bars" aria-hidden="true"><i /><i /><i /></span>
-    <span className="voice-indicator-label">{thinking ? "Pensando…" : VOICE_PHASE_LABEL[status.phase]}</span>
-    {detail && <span className="voice-indicator-heard">{detail}</span>}
-  </div>;
+  return <button type="button" className={`window-btn voice-mic tip tip-below is-${kind}`} data-tip={label} aria-label={`Voz de trex: ${label}`}
+    aria-disabled={!onClick || undefined} onClick={onClick}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <defs><clipPath id={clip}><rect x="9" y="3" width="6" height={CAPSULE} rx="3" /></clipPath></defs>
+      <g clipPath={`url(#${clip})`}><rect className="voice-mic-level" x="9" y="3" width="6" height={CAPSULE} stroke="none" fill="currentColor" style={{ transform: `scaleY(${fill})` }} /></g>
+      <rect className="voice-mic-capsule" x="9" y="3" width="6" height={CAPSULE} rx="3" />
+      <path className="voice-mic-cradle" d="M5.5 11.5a6.5 6.5 0 0 0 13 0" pathLength={100} />
+      <path className="voice-mic-stand" d="M12 18v3M8.5 21h7" />
+      <path className="voice-mic-wave voice-mic-wave-1" d="M18.4 6.2a4 4 0 0 1 0 4.6" />
+      <path className="voice-mic-wave voice-mic-wave-2" d="M20.8 4.4a7 7 0 0 1 0 8.2" />
+    </svg>
+  </button>;
 }
