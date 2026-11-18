@@ -14,23 +14,30 @@ import { MAX_IMAGES, prepareImage } from "../chatImages";
 import { insertImageReferences, removeImageReference, type ReferenceKind } from "../imageReferences";
 import { timeAgo, type RemoteChoice, type RemoteDetail, type RemoteItem, type RemotePending, type RemoteQuestion, type RemoteSession } from "../remoteProtocol";
 import { viewportReport } from "./viewport";
+import { SKULL_BONE, SKULL_BOX, SKULL_EYE, SKULL_SHADE } from "../components/brandSkull";
 import { RemoteClient, defaultDeviceName, forgetToken, pairDevice, projectIcon, storedToken, uploadFile, type ConnectionState, type PhoneAction, type RemoteTheme } from "./client";
 
-const T_PATH = "M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z";
 const PROVIDER_NAME: Record<string, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity", trex: "Trex" };
 
 // --- Piezas pequeñas -------------------------------------------------------------
 
+/** El cráneo de la marca, igual que en el PC. `size` es el alto. */
 function Brand({ size = 18 }: { size?: number }) {
-  return <svg className="r-brand" width={size} height={size} viewBox="240 248 544 544" aria-hidden="true"><path d={T_PATH} /></svg>;
+  const [x, y, width, height] = SKULL_BOX;
+  return <svg className="r-brand" width={Math.round((size * width) / height)} height={size} viewBox={`${x} ${y} ${width} ${height}`} aria-hidden="true">
+    <path d={SKULL_BONE} /><path d={SKULL_SHADE} opacity=".55" /><path d={SKULL_EYE} className="r-brand-eye" />
+  </svg>;
 }
 
-/** La «t» cortada en cuatro estratos que se encienden de arriba abajo. */
+// Una huella de tres dedos sobre una retícula de 11 x 11, y las esquinas en el orden en que
+// se pisan (el mismo dibujo que el loader del PC, scripts/make_loader_sprite.py).
+const PRINT_CELLS = [[0, 0], [2, 0], [4, 0], [0, 1], [2, 1], [4, 1], [1, 2], [2, 2], [3, 2], [2, 3]];
+const PRINT_CORNERS = [[0, 0], [6, 0], [6, 7], [0, 7]];
+
+/** Cuatro huellas que dan la vuelta por las esquinas: la más reciente marcada y las anteriores apagándose. */
 function Loader({ size = 14 }: { size?: number }) {
-  const id = useMemo(() => `t${Math.random().toString(36).slice(2, 8)}`, []);
-  return <svg className="r-loader" width={size} height={size} viewBox="240 248 544 544" aria-hidden="true">
-    <defs><clipPath id={id}><path d={T_PATH} /></clipPath></defs>
-    <g clipPath={`url(#${id})`}>{[0, 1, 2, 3].map(i => <rect key={i} x="240" y={248 + i * 136} width="544" height="136" />)}</g>
+  return <svg className="r-loader" width={size} height={size} viewBox="0 0 11 11" aria-hidden="true">
+    {PRINT_CORNERS.map(([ox, oy], i) => <g key={i}>{PRINT_CELLS.map(([cx, cy]) => <rect key={`${cx}-${cy}`} x={ox + cx + .05} y={oy + cy + .05} width=".9" height=".9" />)}</g>)}
   </svg>;
 }
 

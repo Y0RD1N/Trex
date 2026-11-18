@@ -1,69 +1,74 @@
 """Genera el sprite del loader de trex (`--loader-sprite` en src/styles.css).
 
-El loader es la «t» de trex cortada en cuatro estratos que se iluminan de arriba
-abajo (ciclo de 1,4 s, ease-in-out, cada estrato .14 s después del anterior).
+El loader son cuatro huellas de tres dedos, en pixel art, que dan la vuelta por
+las esquinas de un cuadrado: la más reciente a plena opacidad y las anteriores
+desvaneciéndose, como el rastro de alguien que camina en círculo.
 
-Antes era un SVG con la animación dentro, usado como máscara CSS. WebKit anima
-esas imágenes con su propio reloj a 60 fps y repinta cada elemento enmascarado en
-cada fotograma; con el agente trabajando eso costaba ~17 % de CPU (proceso web y
-ventana). Ahora el SVG es estático: N fotogramas apilados en vertical con las
-opacidades ya calculadas, que el CSS recorre con `mask-position` a saltos
-(`steps()`), una propiedad que no se acelera en el compositor: WebKit solo pinta
-cuando cambia el fotograma (10 veces por segundo con N = 14).
+Se dibuja sobre una retícula de 11 x 11 celdas y se usa como máscara CSS, así que
+toma el color del texto (`currentColor`).
+
+Rendimiento: el SVG es estático, con los fotogramas apilados en vertical y las
+opacidades ya calculadas; el CSS lo recorre con `mask-position` a saltos
+(`steps()`), una propiedad que no se acelera en el compositor, de modo que WebKit
+solo pinta cuando cambia el fotograma. Un SVG animado dentro de la máscara
+obligaba a repintar a 60 fps mientras el agente trabajaba (~17 % de CPU).
 
 Uso:
-    python scripts/make_loader_sprite.py [fotogramas]
-Imprime el valor `url("data:...")` para pegarlo en `--loader-sprite`; si cambias
-el número de fotogramas, ajusta también el tamaño (`100% N00%`) y `steps(N, ...)`.
+    python scripts/make_loader_sprite.py
+Imprime `--loader-sprite` y `--loader-mask-still` listos para pegar. Si cambias el
+número de fotogramas, ajusta también el tamaño de la máscara (`100% N00%`) y
+`steps(N, ...)` en `--loader-motion`.
 """
 
 from __future__ import annotations
 
-import sys
 import urllib.parse
 
-CYCLE = 1.4
-DELAYS = [0, 0.14, 0.28, 0.42]
-# Fotogramas clave de cada estrato: (progreso, opacidad), con ease-in-out entre ellos.
-KEYS = [(0, 0.25), (0.35, 1), (0.55, 1), (1, 0.25)]
-BANDS = [(248, 104), (360, 104), (472, 152), (632, 160)]
-SIZE = 544
-T_PATH = "M432 248h120v104h200v112H552v160q0 56 56 56h128v112H592q-160 0-160-160V464H272V352h160Z"
+GRID = 11
+# Una huella de terópodo: tres dedos, la planta y el talón.
+PRINT = ["#.#.#", "#.#.#", ".###.", "..#.."]
+# Esquinas en el orden en que se pisan: arriba izquierda y en el sentido del reloj.
+CORNERS = [(0, 0), (6, 0), (6, 7), (0, 7)]
+# Opacidad de una huella según cuántos pasos hace que se pisó.
+FADE = [1.0, 0.5, 0.22, 0.0]
+# Con el movimiento reducido se ven las cuatro: la primera marcada y el resto tenues.
+STILL = [1.0, 0.3, 0.3, 0.3]
+FRAMES = len(CORNERS)
+# Cada celda deja una rendija, para que se lea como píxeles y no como una mancha.
+CELL = 0.9
+INSET = (1 - CELL) / 2
 
 
-def ease_in_out(t: float) -> float:
-    """cubic-bezier(.42, 0, .58, 1) resuelto por bisección."""
-    lo, hi = 0.0, 1.0
-    for _ in range(60):
-        m = (lo + hi) / 2
-        x = 3 * (1 - m) ** 2 * m * 0.42 + 3 * (1 - m) * m * m * 0.58 + m**3
-        lo, hi = (m, hi) if x < t else (lo, m)
-    m = (lo + hi) / 2
-    return 3 * (1 - m) * m * m + m**3
+def cells(corner: tuple[int, int], opacity: float, row_offset: int) -> str:
+    if opacity <= 0:
+        return ""
+    ox, oy = corner
+    return "".join(
+        f"<rect x='{ox + x + INSET:.2f}' y='{oy + y + row_offset + INSET:.2f}' width='{CELL}' height='{CELL}' opacity='{opacity:.2f}'/>"
+        for y, row in enumerate(PRINT)
+        for x, char in enumerate(row)
+        if char == "#"
+    )
 
 
-def opacity(progress: float) -> float:
-    for (a, va), (b, vb) in zip(KEYS, KEYS[1:]):
-        if a <= progress <= b:
-            return va + (vb - va) * ease_in_out((progress - a) / (b - a))
-    return KEYS[0][1]
-
-
-def sprite(frames: int) -> str:
-    parts = []
-    for k in range(frames):
-        t = k * CYCLE / frames
-        rects = "".join(
-            f"<rect x='240' y='{y + k * SIZE}' width='544' height='{h}' opacity='{opacity(((t - d) % CYCLE) / CYCLE):.2f}'/>"
-            for (y, h), d in zip(BANDS, DELAYS)
-        )
-        parts.append(
-            f"<clipPath id='t{k}'><path transform='translate(0 {k * SIZE})' d='{T_PATH}'/></clipPath>"
-            f"<g clip-path='url(#t{k})'>{rects}</g>"
-        )
-    svg = f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='240 248 {SIZE} {SIZE * frames}'>{''.join(parts)}</svg>"
+def data_url(svg: str) -> str:
     return 'url("data:image/svg+xml,' + urllib.parse.quote(svg, safe="/:=' ,.-") + '")'
 
 
+def sprite() -> str:
+    body = "".join(
+        cells(corner, FADE[(frame - index) % FRAMES], frame * GRID)
+        for frame in range(FRAMES)
+        for index, corner in enumerate(CORNERS)
+    )
+    return data_url(f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {GRID} {GRID * FRAMES}'>{body}</svg>")
+
+
+def still() -> str:
+    body = "".join(cells(corner, STILL[index], 0) for index, corner in enumerate(CORNERS))
+    return data_url(f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {GRID} {GRID}'>{body}</svg>")
+
+
 if __name__ == "__main__":
-    print(sprite(int(sys.argv[1]) if len(sys.argv) > 1 else 14))
+    print(f"  --loader-sprite: {sprite()};")
+    print(f"  --loader-mask-still: {still()};")

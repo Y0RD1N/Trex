@@ -75,8 +75,10 @@ También puedes generarlos en GitHub Actions: pestaña **Actions → Installers 
 workflow**. Al subir una etiqueta (`git tag v0.2.0 && git push origin v0.2.0`), los
 instalables se adjuntan a un borrador de release.
 
-El icono parte de `public/trex.svg`; ejecuta `python scripts/make_icon.py` tras
-modificarlo para regenerar los PNG, ICO e ICNS.
+El logo (el cráneo en pixel art) se dibuja en `scripts/make_logo.py`, que escribe
+`public/trex.svg` y los trazos que usa la interfaz. Tras cambiarlo, ejecuta
+`python scripts/make_logo.py` y después `python scripts/make_icon.py` para
+regenerar los PNG, ICO e ICNS y los iconos de la app remota.
 
 ## Convenciones
 

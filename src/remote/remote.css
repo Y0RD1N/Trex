@@ -51,6 +51,7 @@
 
   /* ----- Marca, cabecera y conexión ------------------------------------------ */
   .r-brand { fill: var(--text); flex: none; }
+  .r-brand-eye { fill: var(--accent-strong, var(--accent)); }
   .r-top { display: flex; align-items: center; gap: 9px; height: 52px; padding: 0 var(--pad-r) 0 var(--pad-l); flex: none; -webkit-user-select: none; user-select: none; }
   .r-wordmark { font-weight: 600; font-size: 18px; letter-spacing: -.015em; }
   .r-link { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: var(--radius-pill);
@@ -69,11 +70,13 @@
   .r-n { font: 12px var(--font-mono); color: var(--text-dim); flex: none; }
 
   /* ----- Piezas ---------------------------------------------------------------- */
-  .r-loader { flex: none; }
-  .r-loader rect { fill: var(--accent); opacity: .22; animation: r-stratum 1.2s infinite; }
-  .r-loader rect:nth-child(2) { animation-delay: .15s; } .r-loader rect:nth-child(3) { animation-delay: .3s; } .r-loader rect:nth-child(4) { animation-delay: .45s; }
-  @keyframes r-stratum { 0%, 60%, 100% { opacity: .22; } 20% { opacity: 1; } }
-  @media (prefers-reduced-motion: reduce) { .r-loader rect { animation: none; opacity: .7; } }
+  /* Las huellas se pisan una tras otra: cada una aparece de golpe y se apaga en tres pasos. */
+  .r-loader { flex: none; fill: var(--accent); }
+  .r-loader g { animation: r-step 1.2s steps(1) infinite; }
+  .r-loader g:nth-child(1) { animation-delay: -1.2s; } .r-loader g:nth-child(2) { animation-delay: -.9s; }
+  .r-loader g:nth-child(3) { animation-delay: -.6s; } .r-loader g:nth-child(4) { animation-delay: -.3s; }
+  @keyframes r-step { 0% { opacity: 1; } 25% { opacity: .5; } 50% { opacity: .22; } 75%, 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .r-loader g { animation: none; opacity: .3; } .r-loader g:first-child { opacity: 1; } }
 
   .r-picon { display: inline-grid; place-items: center; flex: none; color: var(--text-dim); }
   .r-picon img { width: 100%; height: 100%; object-fit: contain; border-radius: var(--radius-xs); }
