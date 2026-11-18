@@ -9,14 +9,11 @@
 @keyframes usage-spin { to { transform: rotate(360deg); } }
 
 /* Pestaña «Uso» junto a Tareas y Git (la forma la pone .chat-side-tabs) */
-.chat-side-tabs .chat-usage-toggle { gap: 7px; padding-left: var(--sp-2-5); }
-.chat-side-tabs .chat-usage-toggle .chat-usage-peak { display: inline-flex; align-items: center; gap: 3px; color: var(--text); font-weight: var(--fw-semibold); }
-/* En aviso, un tinte ámbar plano y opaco: sin degradado ni reflejo. */
-.chat-side-tabs .chat-usage-toggle.is-alert { border-color: var(--warn-border); background: color-mix(in srgb, var(--warn) 10%, var(--bg-surface)); }
-.chat-side-tabs .chat-usage-toggle.is-alert .chat-usage-peak { max-width: 160px; overflow: hidden; color: var(--warn-text); text-overflow: ellipsis; }
-.chat-side.is-open .chat-usage-toggle .chat-usage-peak { display: none; }
-.chat-side.is-open .chat-side-tabs > .chat-usage-toggle.is-alert { background: transparent; }
-.chat-side.is-open .chat-side-tabs > .chat-usage-toggle.is-alert[aria-expanded="true"] { background: var(--selected); }
+.chat-side-tabs .chat-usage-toggle { gap: 7px; }
+.chat-side-tabs .chat-usage-toggle .chat-usage-peak { color: var(--text-muted); }
+/* En aviso lo dice el color del porcentaje, sin teñir la pestaña. */
+.chat-side-tabs .chat-usage-toggle.is-alert .chat-usage-peak,
+.chat-side.is-open > .chat-side-tabs > .chat-usage-toggle.is-alert[aria-expanded="true"] .chat-usage-peak { color: var(--warn-text); }
 
 /* Contenedor dentro del panel lateral */
 .chat-side-usage { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }

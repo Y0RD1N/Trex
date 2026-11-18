@@ -21,7 +21,7 @@ import { PROVIDER_NAMES } from "../profiles";
 import { formatClock, type TimeFormat } from "../timeFormat";
 import type { AgentProvider, LauncherProfile } from "../types";
 import AgentIcon from "./AgentIcon";
-import { AlertIcon, BoltIcon, RefreshIcon } from "./Icons";
+import { BoltIcon, RefreshIcon } from "./Icons";
 import "./AccountUsage.css";
 import { formatDate } from "../intl";
 
@@ -121,8 +121,7 @@ export function UsageToggle({ profiles, expanded, controls, onClick, ref }: {
     aria-expanded={expanded} aria-controls={controls} onClick={onClick}>
     <UsageOrbitGlyph peaks={alert ? [alert, ...peaks.filter(peak => peak !== alert)] : peaks} hues={hues} busy={busy} alert={!!alert} />
     <span className="chat-side-label">Uso</span>
-    {alert ? <small className="chat-usage-peak"><AlertIcon size={12} />{alert.profile.name} {alert.percent} %</small>
-      : top && <small className="chat-usage-peak">{top.percent} %</small>}
+    {top && <small className="chat-usage-peak">{top.percent} %</small>}
   </button>;
 }
 

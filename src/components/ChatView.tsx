@@ -1319,7 +1319,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   const sideToggle = (tab: SideTab): { current: HTMLButtonElement | null } =>
     tab === "team" ? teamToggle : tab === "git" ? gitToggle : tab === "usage" ? usageToggle : tab === "peers" ? peersToggle : tab === "memory" ? memoryToggle : taskToggle;
   // Con el panel abierto, las pestañas que no se ven quedan en icono: su nombre va en el tooltip.
-  const sideTip = (tab: SideTab, text: string): string | undefined => activeSide && activeSide !== tab ? text : undefined;
+  const sideTip = (tab: SideTab, text: string): string | undefined => activeSide !== tab ? text : undefined;
   const closeSide = (focus: { current: HTMLButtonElement | null }): void => {
     setSideTab(null);
     focus.current?.focus({ preventScroll: true });
@@ -1614,7 +1614,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
      </div>
     </div>
     </div>
-    {/* Equipo, uso, tareas y Git: un solo panel con pestañas. Contraído, solo quedan las pestañas. */}
+    {/* Equipo, uso, tareas y Git: un solo panel con pestañas. Contraído, queda un riel de iconos. */}
     <div className={`chat-side${activeSide ? " is-open" : ""}`} data-side={activeSide ?? undefined}
       onKeyDown={event => {
         if (event.key !== "Escape" || event.defaultPrevented || !activeSide) return;
@@ -1622,33 +1622,30 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         closeSide(sideToggle(activeSide));
       }}>
       <div className="chat-side-tabs" role="group" aria-label="Paneles del chat">
-        {props.toolbar && <button ref={teamToggle} type="button" className="chat-side-tab chat-team-toggle tip-below" aria-label="Equipo"
+        {props.toolbar && <button ref={teamToggle} type="button" className={`chat-side-tab chat-team-toggle tip-below${running ? " is-live" : ""}`} aria-label="Equipo"
           data-tip={sideTip("team", "Equipo")} aria-expanded={activeSide === "team"} aria-controls={activeSide === "team" ? `team-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "team" ? null : "team")}>
-          <ProfilesIcon size={14} /><span className="chat-side-label">Equipo</span>{running && <i className="chat-side-live" aria-hidden="true" />}</button>}
+          <ProfilesIcon size={14} /><span className="chat-side-label">Equipo</span></button>}
         <UsageToggle ref={usageToggle} profiles={props.settings.profiles} expanded={usageOpen} controls={usageOpen ? `usage-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "usage" ? null : "usage")} />
         <button ref={taskToggle} type="button" className="chat-task-toggle tip-below" aria-label={tasks.length ? `Tareas: ${tasksDone} de ${tasks.length} completadas` : "Tareas"}
           data-tip={sideTip("tasks", tasks.length ? `Tareas · ${tasksDone} de ${tasks.length}` : "Tareas")} aria-expanded={tasksOpen} aria-controls={tasksOpen ? `tasks-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "tasks" ? null : "tasks")}>
           <ListIcon size={14} /><span className="chat-side-label">Tareas</span>{tasks.length > 0 && <small>{tasksDone}/{tasks.length}</small>}</button>
-        {peers.length > 0 && <button ref={peersToggle} type="button" className="chat-task-toggle chat-peers-toggle tip-below"
+        {peers.length > 0 && <button ref={peersToggle} type="button" className={`chat-task-toggle chat-peers-toggle tip-below${peers.some(peer => peer.working) ? " is-live" : ""}`}
           data-tip={sideTip("peers", peers.length === 1 ? "Sesiones · otra sesión en este proyecto" : `Sesiones · ${peers.length} más en este proyecto`)}
           aria-label={peers.length === 1 ? "Sesiones: otra sesión trabaja en este proyecto" : `Sesiones: ${peers.length} sesiones más trabajan en este proyecto`}
           aria-expanded={peersOpen} aria-controls={peersOpen ? `peers-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "peers" ? null : "peers")}>
-          <SessionsIcon size={14} /><span className="chat-side-label">Sesiones</span><small>{peers.length}</small>
-          {peers.some(peer => peer.working) && <i className="chat-side-live" aria-hidden="true" />}</button>}
+          <SessionsIcon size={14} /><span className="chat-side-label">Sesiones</span><small>{peers.length}</small></button>}
         {branch && <button ref={gitToggle} type="button" className="chat-task-toggle chat-git-toggle tip-below" aria-label={`Git · ${branch}`} data-tip={`Git · ${branch}`}
           aria-expanded={gitOpen} aria-controls={gitOpen ? `git-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "git" ? null : "git")}>
-          <BranchIcon size={14} /><span className="chat-side-label">Git</span><small>{branch}</small></button>}
+          <BranchIcon size={14} /><span className="chat-side-label">Git</span></button>}
         <button ref={memoryToggle} type="button" className="chat-task-toggle chat-memory-toggle tip-below" aria-label="Memoria compartida de los agentes"
           data-tip={sideTip("memory", "Memoria · lo que recuerdan todos los agentes")} aria-expanded={memoryOpen} aria-controls={memoryOpen ? `memory-${sessionId}` : undefined}
           onClick={() => setSideTab(tab => tab === "memory" ? null : "memory")}>
           <MemoryIcon size={14} /><span className="chat-side-label">Memoria</span></button>
-        {activeSide && <button type="button" className="icon-btn chat-side-collapse tip tip-below" aria-label="Contraer panel" data-tip="Contraer panel (Esc)"
-          onClick={() => closeSide(sideToggle(activeSide))}><CloseIcon size={14} /></button>}
       </div>
       {props.toolbar && <div id={`team-${sessionId}`} className="chat-side-team" hidden={activeSide !== "team"}>{props.toolbar}</div>}
       {usageOpen && <div className="chat-side-usage"><AccountUsagePanel id={`usage-${sessionId}`} profiles={props.settings.profiles} /></div>}

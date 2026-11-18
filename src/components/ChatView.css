@@ -1106,8 +1106,9 @@
 /* Indicadores de trabajo: solo transformaciones y opacidad, que la GPU anima sin
    volver a dibujar. Un halo de sombra o un degradado que recorre el texto obligaban
    a repintar en cada fotograma mientras el asistente trabajaba (≈ 20 % de CPU). */
-/* El indicador es el loader de trex (la «t» en estratos), no un punto que late: ver `--loader-mask` en styles.css. */
-.chat-working-dot { width: 16px; height: 16px; }
+/* El indicador es el loader de trex (huellas que dan la vuelta), no un punto que late: ver `--loader-mask`
+   en styles.css. 22 px son dos píxeles por celda de su retícula de 11. */
+.chat-working-dot { width: 22px; height: 22px; }
 .chat-working-label { color: var(--text); }
 .chat-working-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .chat-working-since { color: var(--text-dim); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
@@ -2447,33 +2448,55 @@ pre.chat-ask-preview-body {
   pointer-events: none;
 }
 .chat-side > * { pointer-events: auto; }
-.chat-side-tabs { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-1-5); min-width: 0; }
-.chat-side-tabs > button:not(.chat-side-collapse) {
+.chat-side-tabs { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+.chat-side-tabs > button {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1-5);
   min-width: 0;
-  height: 34px;
-  padding: 0 var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  box-shadow: var(--shadow-1);
+  border: 0;
+  background: transparent;
   color: var(--text-muted);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color var(--t), color var(--t), border-color var(--t);
+  transition: background-color var(--t), color var(--t);
 }
-.chat-side-tabs > button:not(.chat-side-collapse) > svg { flex: 0 0 auto; }
-.chat-side-tabs > button:not(.chat-side-collapse):hover { border-color: var(--border-strong); color: var(--text); }
+.chat-side-tabs > button > svg { flex: 0 0 auto; }
+.chat-side-tabs > button:hover,
 .chat-side-tabs > button[aria-expanded="true"] { color: var(--text); }
 .chat-side-tabs small { color: var(--text-dim); font-size: var(--fs-xs); font-weight: var(--fw-regular); font-variant-numeric: tabular-nums; }
-.chat-side-tabs .chat-git-toggle small { max-width: 120px; overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; }
-/* Punto vivo: el equipo está trabajando. */
-.chat-side-live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+/* El riel: una sola pieza con divisiones finas; cada panel es su icono y, si tiene algo
+   que decir, un dato corto. Contraído flota con su borde; abierto es la cabecera del panel
+   y el que está a la vista añade su nombre. El resto de nombres va en el tooltip. */
+.chat-side-tabs > button {
+  flex: 0 0 auto;
+  justify-content: center;
+  height: 32px;
+  min-width: 36px;
+  padding: 0 var(--sp-2-5);
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+}
+.chat-side-tabs > button:first-child { border-left: 0; }
+.chat-side-tabs > button:hover { background: var(--hover); }
+.chat-side-tabs > button:not([aria-expanded="true"]) .chat-side-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.chat-side-tabs small { font-family: var(--font-mono); }
+/* Algo está trabajando ahí: lo dice el color del dato (o del icono, si no hay dato). */
+.chat-side-tabs > button.is-live > small,
+.chat-side-tabs > button.is-live:not(:has(small)) > svg { color: var(--accent-strong); }
+.chat-side:not(.is-open) > .chat-side-tabs {
+  align-self: flex-end;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-1);
+}
+.chat-side:not(.is-open) > .chat-side-tabs > button:first-child { border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px); }
+.chat-side:not(.is-open) > .chat-side-tabs > button:last-child { border-radius: 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0; }
 
 /* Abierto: columna fija junto al hilo. */
 .chat-side.is-open {
@@ -2494,56 +2517,14 @@ pre.chat-ask-preview-body {
   animation: chat-side-in var(--dur) var(--ease-out);
 }
 @keyframes chat-side-in { from { opacity: 0; transform: translateX(8px); } }
-.chat-side.is-open > .chat-side-tabs {
-  flex: 0 0 auto;
-  justify-content: flex-start;
-  gap: var(--sp-0-5);
-  padding: var(--sp-1-5);
-  border-bottom: 1px solid var(--border);
-}
-.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse) {
-  flex: 0 1 auto;
-  height: 30px;
-  padding: 0 var(--sp-2-5);
-  overflow: hidden;
-  border-color: transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  box-shadow: none;
-}
-.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):hover { background: var(--hover); border-color: transparent; }
-.chat-side.is-open > .chat-side-tabs > button[aria-expanded="true"] { background: var(--selected); color: var(--text); }
+.chat-side.is-open > .chat-side-tabs { flex: 0 0 auto; justify-content: flex-start; border-bottom: 1px solid var(--border); }
+/* Dentro del panel las celdas van un punto más ceñidas: así cabe entero el nombre del panel a la vista. */
+.chat-side.is-open > .chat-side-tabs > button { height: 36px; min-width: 32px; padding: 0 var(--sp-2); gap: var(--sp-1); }
+/* El panel a la vista se queda con el ancho que sobra: el riel llega de lado a lado. */
+.chat-side.is-open > .chat-side-tabs > button[aria-expanded="true"] { flex: 1 1 auto; justify-content: flex-start; padding-inline: var(--sp-3); overflow: hidden; background: var(--selected); color: var(--text); }
+.chat-side.is-open > .chat-side-tabs > button[aria-expanded="true"] small { margin-left: auto; }
 .chat-side.is-open > .chat-side-tabs > button[aria-expanded="true"] small { color: var(--text-muted); }
 .chat-side.is-open .chat-side-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* Abierto, solo la pestaña a la vista lleva su nombre; las demás quedan en icono
-   (y su número), con el nombre en el tooltip: cinco pestañas caben sin montarse. */
-.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) {
-  flex: 0 0 auto;
-  justify-content: center;
-  min-width: 30px;
-  padding: 0 var(--sp-2);
-}
-.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) .chat-side-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-}
-.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) small { display: none; }
-/* La actividad (equipo o sesiones trabajando) queda como punto en la esquina del icono. */
-.chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) .chat-side-live {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 5px;
-  height: 5px;
-  box-shadow: 0 0 0 2px var(--bg-surface);
-}
-/* Abierto, la rama ya se ve dentro de Git: la pestaña solo dice «Git». */
-.chat-side.is-open .chat-git-toggle small { display: none; }
-.chat-side-collapse { margin-left: auto; color: var(--text-dim); }
 /* Pestaña del equipo: la barra del equipo ocupa el panel sin su propia tarjeta. */
 .chat-side-team { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .chat-side-team[hidden] { display: none; }
@@ -2590,16 +2571,10 @@ pre.chat-ask-preview-body {
     box-shadow: var(--shadow-4);
     animation-name: chat-sheet-in;
   }
-  .chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse),
-  .chat-side.is-open > .chat-side-tabs > button:not(.chat-side-collapse):not([aria-expanded="true"]) { flex: 1 1 0; justify-content: center; }
+  .chat-side.is-open > .chat-side-tabs > button,
+  .chat-side.is-open > .chat-side-tabs > button:not([aria-expanded="true"]) { flex: 1 1 0; justify-content: center; }
 }
 @keyframes chat-sheet-in { from { opacity: 0; transform: translateY(10px); } }
-/* Muy estrecho: las pestañas contraídas muestran solo icono y recuento. */
-@container chat (max-width: 430px) {
-  .chat-side:not(.is-open) .chat-side-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-  .chat-side:not(.is-open) .chat-side-tabs > button { padding-inline: var(--sp-2-5); }
-  .chat-side-tabs .chat-git-toggle small { max-width: 72px; }
-}
 @media (prefers-reduced-motion: reduce) { .chat-side.is-open { animation: none; } }
 
 /* El agente está manejando tus aplicaciones (control por accesibilidad): el
