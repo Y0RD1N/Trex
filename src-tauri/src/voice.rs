@@ -414,6 +414,8 @@ mod engine {
     /// detector oye voz (la frase aún no ha terminado, así que la carga no se nota)
     /// y se libera tras este tiempo sin transcribir nada, fuera de una conversación.
     const WHISPER_IDLE: Duration = Duration::from_secs(120);
+    /// Muestras del arranque de una frase que bastan para saber si empieza por «oye trex» (3,5 s).
+    const WAKE_PROBE: usize = RATE as usize * 7 / 2;
 
     #[derive(Clone, Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -638,15 +640,31 @@ mod engine {
                     continue;
                 }
                 let Some(model) = recognizer.as_ref() else { continue };
-                let text = transcribe(model, &speech);
-                if cfg!(debug_assertions) { eprintln!("[voz] oído ({:.1} s): «{text}»", speech.len() as f32 / RATE as f32); }
-                if text.is_empty() { continue; }
-
                 let now = Instant::now();
                 let in_conversation = conversation_until.is_some_and(|until| now < until);
+                // Fuera de una conversación solo importa si la frase empieza llamando a trex: se
+                // transcribe su arranque y, solo si le llama, la frase entera. Lo que no va con
+                // trex (una tele, otra conversación) cuesta una fracción y nunca se transcribe completo.
+                let probe = !in_conversation && speech.len() > WAKE_PROBE + RATE as usize;
+                let started = Instant::now();
+                let mut text = transcribe(model, if probe { &speech[..WAKE_PROBE] } else { &speech });
+                if cfg!(debug_assertions) {
+                    eprintln!("[voz] oído ({:.1} s{} en {} ms): «{text}»", speech.len() as f32 / RATE as f32,
+                        if probe { ", solo el arranque" } else { "" }, started.elapsed().as_millis());
+                }
+                if probe {
+                    if voice_wake::wake_command(&text).is_none() { continue; }
+                    let started = Instant::now();
+                    text = transcribe(model, &speech);
+                    if cfg!(debug_assertions) { eprintln!("[voz] llamó a trex; frase entera en {} ms: «{text}»", started.elapsed().as_millis()); }
+                }
+                if text.is_empty() { continue; }
+
                 let (command, wake) = match voice_wake::wake_command(&text) {
                     Some(command) => (command, true),
                     None if in_conversation => (text.clone(), false),
+                    // El arranque sí le llamaba, aunque la frase entera se haya transcrito distinto.
+                    None if probe => (text.clone(), true),
                     // Nadie llamó a trex: la frase no sale de este hilo.
                     None => continue,
                 };
