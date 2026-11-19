@@ -58,6 +58,16 @@
 :root[data-material]:not([data-material="none"]) .chat-user-group {
   background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
 }
+/* Las tablas del hilo: sin fondo propio, el texto de las celdas competía con el color del
+   escritorio. Aquí la tabla es una lámina translúcida (la misma que la caja de tus mensajes),
+   con la cabecera un punto más densa y las reglas más marcadas; el material sigue asomando. */
+:root[data-material]:not([data-material="none"]) .chat-table {
+  --md-rule: var(--border-strong);
+  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+}
+:root[data-material]:not([data-material="none"]) .chat-table th {
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+}
 /* La fila activa y las elegidas son un tinte, no un gris opaco sobre el material. */
 :root[data-material]:not([data-material="none"]) .sidebar { --selected: color-mix(in srgb, var(--text) 9%, transparent); }
 /* Plegada, la barra es una capa que entra y sale por encima del hilo: es opaca siempre que
