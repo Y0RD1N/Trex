@@ -5,7 +5,7 @@
 
    - Material de Windows 11 (`data-material`: "mica", "mica-alt" o "acrylic"):
      el sistema lo pinta detrás de la ventana. Toda la ventana lo deja ver bajo
-     un gris grafito cuya opacidad elige el usuario (`--material-tint`, 20–90 %):
+     un gris grafito cuya opacidad elige el usuario (`--material-tint`, 45–90 %):
      sobrio por defecto, con un toque del color del fondo de escritorio. El área
      de trabajo suma una capa muy ligera, como las apps de Windows 11. El
      frontend solo pone el atributo cuando Tauri confirma el material: sin él
@@ -42,14 +42,38 @@
   background: var(--material-layer);
   box-shadow: inset 1px 0 0 var(--border-subtle);
 }
+/* El hilo se desvanece bajo la cabecera y sobre la caja de mensaje. Sin material lo hace
+   un velo del color del fondo; aquí el fondo es el material, y ese velo opaco se veía
+   como dos franjas oscuras. Se cambia por una máscara sobre el propio hilo: lo que se
+   desvanece es el texto, y detrás sigue el material. */
+:root[data-material]:not([data-material="none"]) .chat::before,
+:root[data-material]:not([data-material="none"]) .chat-composer-wrap::before { content: none; }
+:root[data-material]:not([data-material="none"]) .chat-scroll {
+  --thread-top: var(--chat-header-space, 0px);
+  --thread-bottom: calc(100% - var(--composer-space, 120px));
+  -webkit-mask-image: linear-gradient(to bottom, transparent calc(var(--thread-top) * .45), #000 var(--thread-top), #000 calc(var(--thread-bottom) - 28px), transparent calc(var(--thread-bottom) + 8px));
+  mask-image: linear-gradient(to bottom, transparent calc(var(--thread-top) * .45), #000 var(--thread-top), #000 calc(var(--thread-bottom) - 28px), transparent calc(var(--thread-bottom) + 8px));
+}
+/* La caja de tus mensajes deja ver un poco el material, sin desenfoque: se desplaza con el hilo. */
+:root[data-material]:not([data-material="none"]) .chat-user-group {
+  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+}
 /* La fila activa y las elegidas son un tinte, no un gris opaco sobre el material. */
 :root[data-material]:not([data-material="none"]) .sidebar { --selected: color-mix(in srgb, var(--text) 9%, transparent); }
-/* Plegada, la barra se asoma por encima del hilo: ahí vuelve a ser opaca. */
-:root[data-material]:not([data-material="none"]) .sidebar.collapsed.peek .sidebar-inner { background: var(--bg-sidebar); }
+/* Plegada, la barra es una capa que entra y sale por encima del hilo: es opaca siempre que
+   está plegada, no solo mientras se asoma. Si dependiera de `.peek`, al esconderse perdía el
+   fondo antes de terminar de deslizarse y su contenido se veía un momento sobre el chat. */
+:root[data-material]:not([data-material="none"]) .sidebar.collapsed .sidebar-inner { background: var(--bg-sidebar); }
 
 /* --- Cristal en lo que flota ----------------------------------------------- */
-/* Píldoras de la cabecera y botones que flotan sobre el hilo. */
-:root[data-glass="on"] :is(.tabs-bar > :is(.workspace-title, .session-create, .window-controls, button), .sidebar-reopen:not(:hover), .chat-to-bottom) {
+/* La barra de la cabecera y el botón que flota sobre el hilo. */
+:root[data-glass="on"] :is(.tabs-bar, .chat-to-bottom) {
+  background: var(--glass-bar);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* El riel de paneles del chat (y el panel, cuando flota sobre el hilo). */
+:root[data-glass="on"] :is(.chat-side:not(.is-open) > .chat-side-tabs, .chat-side.is-open) {
   background: var(--glass-bar);
   backdrop-filter: var(--glass-blur);
 }
@@ -63,7 +87,7 @@
 }
 
 /* Menús, paneles y avisos. */
-:root[data-glass="on"] :is(.context-menu, .composer-panel, .dialog-card.floating-surface, .toast) {
+:root[data-glass="on"] :is(.context-menu, .composer-panel, .dialog-card.floating-surface, .toast, .tooltip) {
   background: var(--glass-float);
   backdrop-filter: var(--glass-blur);
 }

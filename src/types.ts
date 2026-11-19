@@ -117,7 +117,7 @@ export type Settings = {
   glass: boolean;
   /** Fondo de la ventana: sólido o un material de Windows 11. */
   windowBackdrop: WindowMaterial;
-  /** Opacidad del gris grafito sobre el material (20–90). */
+  /** Opacidad del gris grafito sobre el material (45–90). */
   materialTint: number;
   /** Matiz (0–360°) del tono de la interfaz; 40 es el marrón «sedimento». */
   surfaceHue: number;

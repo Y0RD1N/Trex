@@ -32,7 +32,7 @@ test("old and malformed preferences preserve a usable terminal frame", () => {
   assert.equal(normalizeDesign({glass:true}).glass,true);
   for (const backdrop of ["solid","mica","mica-alt","acrylic"]) assert.equal(normalizeDesign({windowBackdrop:backdrop}).windowBackdrop,backdrop);
   assert.equal(normalizeDesign({windowMaterial:"mica-alt"}).windowBackdrop,"solid","the old key never brings back the material");
-  assert.equal(normalizeDesign({materialTint:5}).materialTint,20,"never fully see-through");
+  assert.equal(normalizeDesign({materialTint:5}).materialTint,45,"never see-through enough to lose the text");
   assert.equal(normalizeDesign({materialTint:100}).materialTint,90);
 });
 
@@ -154,8 +154,14 @@ test("glass stays behind its switch, on small floating surfaces, and readable", 
   assert.ok(blurred.some(rule => /\.chat-dock\s*$/.test(rule.selector)), "the composer is glass");
   // Suggestions open inside the composer: a blur there would only see the composer.
   for (const { selector } of blurred) assert.doesNotMatch(selector, /\.chat-suggest\b/);
-  // The band under the chat header stays an opaque gradient (no full-width blur on scroll).
-  assert.doesNotMatch(glass, /\.chat::before/);
+  // The veils over the thread are never blurred (no full-width blur on scroll). Over the
+  // material an opaque veil shows as a dark band, so there the thread fades with a mask.
+  const veils = rules.filter(rule => /\.chat::before/.test(rule.selector));
+  for (const { selector, body } of veils) {
+    assert.match(selector, /^:root\[data-material\]/, "the veil only goes away over the material");
+    assert.match(body, /content:\s*none/);
+  }
+  assert.ok(rules.some(rule => /^:root\[data-material\].*\.chat-scroll$/.test(rule.selector) && /mask-image/.test(rule.body)), "the thread fades with a mask over the material");
   // Glass surfaces keep most of their opaque color so text stays readable.
   const glassTokens = [...glass.matchAll(/--glass-[a-z]+:\s*color-mix\(in srgb, var\(--bg-[a-z]+\) (\d+)%, transparent\)/g)];
   assert.equal(glassTokens.length, 2);

@@ -944,6 +944,12 @@ body.dragging-sidebar .sidebar { transition: none; }
 .sidebar-footer { flex: 0 0 auto; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); }
 .sidebar-footer-row { display: flex; align-items: center; gap: 2px; padding: var(--sp-1) 0; }
 .sidebar-footer-control.icon-btn { flex: 0 0 var(--control-h); width: var(--control-h); height: var(--control-h); color: var(--text-muted); }
+/* Hay actualizaciones: un botón más en la fila, con el número, en el color de acento. */
+.sidebar-footer-control.sidebar-updates.icon-btn { flex: 0 0 auto; width: auto; gap: var(--sp-1); padding: 0 var(--sp-2); color: var(--accent-strong); font: var(--fw-semibold) var(--fs-sm)/1 var(--font-mono); }
+.sidebar-footer-control.sidebar-updates[aria-expanded="true"] { background: var(--selected); }
+.updates-menu { display: flex; flex-direction: column; gap: var(--sp-2); width: 280px; padding: var(--sp-2-5); }
+.updates-menu-head { padding: 0 var(--sp-1); color: var(--text-dim); font: var(--fs-xs) var(--font-mono); }
+.updates-menu .cli-update { animation: none; }
 .sidebar-footer-control.sidebar-add {
   flex: 1 1 auto;
   justify-content: flex-start;
@@ -1043,10 +1049,10 @@ body.dragging-sidebar .sidebar { transition: none; }
 @keyframes cli-update-in { from { opacity: 0; transform: translateY(4px); } }
 
 /* --- Área principal y cabecera ---------------------------------------------------- */
-/* Retícula de la cabecera: todas las cápsulas miden lo mismo, quedan centradas
-   en la barra, separadas por el mismo hueco y a la misma distancia de los dos
-   bordes. El botón de la barra lateral vive fuera de `.tabs-bar`, por eso las
-   medidas se definen aquí y no en la barra. */
+/* Medidas de la cabecera: una sola barra flotante, con el mismo margen a los dos
+   lados, cuyos grupos son celdas separadas por divisiones finas. El botón de la
+   barra lateral vive fuera de `.tabs-bar` (es la primera celda, superpuesta), por
+   eso las medidas se definen aquí y no en la barra. */
 .main {
   --bar-pill: 34px;
   --bar-btn: 30px;
@@ -1057,25 +1063,26 @@ body.dragging-sidebar .sidebar { transition: none; }
 .sidebar-reopen {
   position: absolute;
   z-index: 35;
-  top: calc((var(--header-h) - var(--bar-pill)) / 2);
-  left: var(--bar-inset);
+  /* Dentro del contorno de la barra, sin pisar su borde. */
+  top: calc((var(--header-h) - var(--bar-pill)) / 2 + 1px);
+  left: calc(var(--bar-inset) + 1px);
   display: grid;
   place-items: center;
-  width: var(--bar-pill);
-  height: var(--bar-pill);
+  width: calc(var(--bar-pill) - 1px);
+  height: calc(var(--bar-pill) - 2px);
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  box-shadow: var(--shadow-1);
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px);
+  background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   transition: background-color var(--t), color var(--t), transform 380ms var(--ease-layout), opacity 240ms var(--ease-out);
 }
 .sidebar-reopen[hidden] { display: none; }
 .sidebar-reopen:hover { background: var(--hover); color: var(--text); }
-.sidebar-reopen:active { transform: scale(.94); }
-.main:has(> .sidebar-reopen:not([hidden])) .tabs-bar { padding-left: calc(var(--bar-inset) + var(--bar-pill) + var(--bar-gap)); }
+/* La barra le deja sitio a su primera celda. */
+.main:has(> .sidebar-reopen:not([hidden])) .tabs-bar { padding-left: var(--bar-pill); }
 /* Modo inmersivo: el botón vive en el hueco reservado de la barra superior, así
    que se esconde y vuelve con ella en lugar de flotar sobre la terminal. Con el
    teclado sigue siendo alcanzable: al recibir el foco reaparece. */
@@ -1084,6 +1091,13 @@ body.dragging-sidebar .sidebar { transition: none; }
   transform: translate3d(0, calc(-100% - var(--sp-2)), 0);
   pointer-events: none;
   transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1), opacity 160ms var(--ease-out);
+}
+/* Con la barra escondida y el foco en el botón, este se queda solo: recupera su caja. */
+.main:has(> .bar-slot.auto-hide:not(.shown)) > .sidebar-reopen:focus-visible {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-1);
 }
 
 /* Aviso de Claude no detectado. */
@@ -1130,41 +1144,41 @@ body.dragging-sidebar .sidebar { transition: none; }
   transition: height var(--dur-layout) var(--ease-layout);
 }
 .bar-slot.auto-hide { height: 0; }
+/* Una sola barra flotante: título, hueco para arrastrar la ventana y los grupos de
+   controles, todo dentro del mismo contorno. Toda ella recibe el ratón: se arrastra
+   desde cualquier punto libre y el doble clic maximiza. */
 .tabs-bar {
   position: absolute;
-  inset: 0 0 auto;
+  inset: calc((var(--header-h) - var(--bar-pill)) / 2) var(--bar-inset) auto;
   display: flex;
-  align-items: center;
-  gap: var(--bar-gap);
-  height: var(--header-h);
-  padding: 0 var(--bar-inset);
-  transform: translate3d(0, 0, 0);
-  backface-visibility: hidden;
-}
-.bar-slot.auto-hide .tabs-bar { will-change: transform; transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1); }
-.bar-slot.auto-hide:not(.shown) .tabs-bar { transform: translate3d(0, calc(-100% - 2px), 0); pointer-events: none; }
-.bar-slot.auto-hide.shown .tabs-bar { transition: transform 380ms var(--ease-layout); }
-/* En el chat la cabecera flota sobre el hilo, que se desplaza por debajo. */
-.main.chat-canvas { --chat-header-space: calc(var(--header-h) + 8px); }
-.main.chat-canvas > .bar-slot { height: 0; transition: none; }
-.main.chat-canvas .tabs-bar { pointer-events: none; }
-/* Cada grupo de la cabecera es una píldora opaca con el mismo contorno y el
-   mismo alto. El alto es fijo (no sale del contenido más el borde): Chromium
-   redondea el grosor del borde según la escala de pantalla, y así ninguna
-   cápsula queda unas décimas más alta o más baja que las demás. */
-.tabs-bar > :is(.workspace-title, .session-create, .window-controls, button) {
-  pointer-events: auto;
+  align-items: stretch;
   height: var(--bar-pill);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
   box-shadow: var(--shadow-1);
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
 }
-/* Los botones dentro de una cápsula quedan a la misma distancia del contorno
-   por arriba, por abajo y por los lados. */
-.tabs-bar > :is(.session-create, .window-controls) {
-  padding: 0 calc((var(--bar-pill) - var(--bar-btn)) / 2 - 1px);
+.bar-slot.auto-hide .tabs-bar { will-change: transform; transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1); }
+.bar-slot.auto-hide:not(.shown) .tabs-bar { transform: translate3d(0, calc(-100% - var(--header-h)), 0); pointer-events: none; }
+.bar-slot.auto-hide.shown .tabs-bar { transition: transform 380ms var(--ease-layout); }
+/* En el chat la cabecera flota sobre el hilo, que se desplaza por debajo. */
+.main.chat-canvas { --chat-header-space: calc(var(--header-h) + 8px); }
+.main.chat-canvas > .bar-slot { height: 0; transition: none; }
+/* Cada grupo es una celda de la barra: sin contorno propio, separada de la anterior
+   por una división fina. La primera y la última siguen la esquina de la barra. */
+.tabs-bar > :is(.workspace-title, .session-create, .window-controls, button) {
+  height: auto;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
+.tabs-bar > :first-child { border-left: 0; border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px); }
+.tabs-bar > :last-child { border-radius: 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0; }
+.tabs-bar > :is(.session-create, .window-controls) { padding: 0 var(--sp-1); }
 .workspace-title {
   flex: 0 1 auto;
   display: flex;
@@ -1230,9 +1244,8 @@ body.dragging-sidebar .sidebar { transition: none; }
 .window-actions > .window-btn[data-window-action="close"]:hover, .window-btn.close:hover { background: var(--danger-bg); color: var(--danger); }
 /* Una misma caja, trazo y separación para todos los controles de la cabecera. */
 .tabs-bar :is(.icon-btn, .window-btn) { flex: 0 0 var(--bar-btn); width: var(--bar-btn); height: var(--bar-btn); margin: 0; color: var(--text-muted); }
-/* Un botón suelto en la barra (la campana) es su propia cápsula: mide lo mismo
-   que las demás en lugar de quedarse en el tamaño de un botón interior. */
-.tabs-bar > :is(.icon-btn, .window-btn) { flex-basis: var(--bar-pill); width: var(--bar-pill); height: var(--bar-pill); }
+/* Un botón suelto en la barra (el micrófono, la campana) es una celda entera. */
+.tabs-bar > :is(.icon-btn, .window-btn) { flex-basis: calc(var(--bar-pill) + var(--sp-1)); width: calc(var(--bar-pill) + var(--sp-1)); height: auto; }
 .tabs-bar :is(.icon-btn, .window-btn) svg { display: block; width: 18px; height: 18px; stroke-width: 1.6; }
 .tabs-bar :is(.icon-btn, .window-btn):hover { color: var(--text); }
 .tabs-bar .icon-btn.active { background: var(--selected); color: var(--text); }

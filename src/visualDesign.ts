@@ -15,7 +15,7 @@ export type DesignSettings = {
   /** Transparencias: Mica en Windows 11 y cristal en lo que flota sobre el chat. */
   glass: boolean;
   windowBackdrop: WindowMaterial;
-  /** Opacidad (20–90 %) del gris grafito que tiñe el material de la ventana. */
+  /** Opacidad (45–90 %) del gris grafito que tiñe el material de la ventana. */
   materialTint: number;
   /** Matiz (0–360°) del tono de la interfaz; 40 es el marrón «sedimento». */
   surfaceHue: number;
@@ -35,7 +35,7 @@ export const normalizeDesign = (raw: Partial<Record<keyof DesignSettings, unknow
   glass: typeof raw.glass === "boolean" ? raw.glass : false,
   windowBackdrop: raw.windowBackdrop === "mica" || raw.windowBackdrop === "mica-alt" || raw.windowBackdrop === "acrylic" ? raw.windowBackdrop : "solid",
   materialTint: typeof raw.materialTint === "number" && Number.isFinite(raw.materialTint)
-    ? Math.min(90, Math.max(20, Math.round(raw.materialTint))) : 60,
+    ? Math.min(90, Math.max(45, Math.round(raw.materialTint))) : 60,
   surfaceHue: bounded(raw.surfaceHue, DEFAULT_SURFACE_HUE, 360),
   surfaceTint: bounded(raw.surfaceTint, DEFAULT_SURFACE_TINT, 100),
 });
