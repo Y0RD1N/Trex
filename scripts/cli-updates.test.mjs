@@ -2,7 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { load } from "./ts-loader.mjs";
 
-const { parseVersion, compareVersions, isNewer, versionForChannel } = await load("cliUpdates");
+const { parseVersion, compareVersions, isNewer, versionForChannel, releaseVersion, releasePage } = await load("cliUpdates");
+
+test("la versión nueva de trex sale de la última release publicada", () => {
+  assert.equal(releaseVersion({ tag_name: "v0.7.0", draft: false, prerelease: false }), "0.7.0");
+  assert.equal(releaseVersion({ tag_name: "v0.7.0", draft: true }), null);
+  assert.equal(releaseVersion({ tag_name: "v0.7.0-beta.1", prerelease: true }), null);
+  assert.equal(releaseVersion({ tag_name: "nightly" }), null);
+  assert.equal(releaseVersion(null), null);
+  // La página se arma con la versión: no se abre una dirección que venga de la red.
+  assert.equal(releasePage("0.7.0"), "https://github.com/Y0RD1N/Trex/releases/tag/v0.7.0");
+  assert.ok(isNewer("0.7.0", "0.6.0") && !isNewer("0.6.0", "0.6.0"));
+});
 
 test("la versión instalada se lee de la salida de --version", () => {
   assert.equal(parseVersion("2.1.303 (Claude Code)"), "2.1.303");

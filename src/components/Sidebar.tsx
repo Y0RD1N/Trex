@@ -21,11 +21,11 @@ import { shortcutLabel, type ShortcutBindings } from "../shortcuts";
 import type { ClaudeInfo, LauncherProfile, Project, TabState } from "../types";
 import type { ThemeMode } from "../theme";
 import { projectSections } from "../sidebarGroups";
-import type { CliStatus } from "../hooks/useCliUpdates";
-import type { CliId } from "../cliUpdates";
+import type { UpdateKind, UpdateNotice } from "../cliUpdates";
+import DropdownMenu from "./DropdownMenu";
 import AgentIcon from "./AgentIcon";
 import BrandMark from "./BrandMark";
-import { AlertIcon, CloseIcon, FolderPlusIcon, MoonIcon, PanelIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
+import { AlertIcon, CloseIcon, DownloadIcon, FolderPlusIcon, MoonIcon, PanelIcon, SettingsIcon, SearchIcon, SunIcon } from "./Icons";
 import ProjectItem from "./ProjectItem";
 import SessionItem from "./SessionItem";
 import { sessionLabel } from "../sessionTitle";
@@ -75,10 +75,10 @@ type Props = {
   onToggleTheme: () => void;
   onToggleSidebar: () => void;
   onResize: (width: number) => void;
-  /** Versiones nuevas de Claude Code o Codex pendientes de instalar. */
-  updates: CliStatus[];
-  onUpdateCli: (id: CliId) => void;
-  onDismissUpdate: (id: CliId) => void;
+  /** Versiones nuevas pendientes: Claude Code, Codex, Antigravity y el propio trex (con Trex CLI). */
+  updates: UpdateNotice[];
+  onUpdate: (id: UpdateKind) => void;
+  onDismissUpdate: (id: UpdateKind) => void;
 };
 
 export default function Sidebar({
@@ -116,9 +116,13 @@ export default function Sidebar({
   onToggleSidebar,
   onResize,
   updates,
-  onUpdateCli,
+  onUpdate,
   onDismissUpdate,
 }: Props) {
+  const [updatesOpen, setUpdatesOpen] = useState<{ element: HTMLElement } | null>(null);
+  const updatesButton = useRef<HTMLButtonElement>(null);
+  // Sin avisos no hay botón: el panel se cierra con él.
+  useEffect(() => { if (!updates.length) setUpdatesOpen(null); }, [updates.length]);
   const [dragging, setDragging] = useState(false);
   // Al abrir la app todas las carpetas empiezan contraídas.
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
@@ -335,28 +339,6 @@ export default function Sidebar({
         </nav>
 
         <footer className="sidebar-footer">
-          {updates.map(update => (
-            <div key={update.id} className={`cli-update${update.error ? " has-error" : ""}`} role="status"
-              title={update.error ?? `Tienes la ${update.installed}; ya está disponible la ${update.latest}.`}>
-              <span className="cli-update-icon" aria-hidden="true"><AgentIcon kind={update.id} size={14} /></span>
-              <div className="cli-update-body">
-                <div className="cli-update-head">
-                  <strong>{update.name}</strong>
-                  {!update.updating && <button type="button" className="cli-update-close tip" data-tip="Ahora no"
-                    aria-label={`No actualizar ${update.name} ahora`} onClick={() => onDismissUpdate(update.id)}>
-                    <CloseIcon size={12} />
-                  </button>}
-                </div>
-                <div className="cli-update-row">
-                  <small>{update.updating ? "Actualizando…" : update.error ? "No se pudo actualizar" : `Nueva: ${update.latest}`}</small>
-                  <button type="button" className="cli-update-action" disabled={update.updating}
-                    aria-label={`Actualizar ${update.name} a la ${update.latest}`} onClick={() => onUpdateCli(update.id)}>
-                    {update.updating ? <span className="cli-update-spinner" aria-hidden="true" /> : update.error ? "Reintentar" : "Actualizar"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
           {claudeMissing && (
             <div
               className="claude-warn"
@@ -380,6 +362,40 @@ export default function Sidebar({
               <FolderPlusIcon size={17} />
               <span>{sidebarWidth < 260 ? "Nuevo" : "Nuevo proyecto"}</span>
             </button>
+            {updates.length > 0 && <>
+              <button ref={updatesButton} type="button" className="icon-btn sidebar-footer-control sidebar-updates tip"
+                data-tip={updates.length === 1 ? `Actualización: ${updates[0].name}` : `${updates.length} actualizaciones`}
+                aria-label={updates.length === 1 ? `Hay una actualización: ${updates[0].name}` : `Hay ${updates.length} actualizaciones`}
+                aria-expanded={updatesOpen !== null} aria-haspopup="dialog"
+                onClick={event => setUpdatesOpen(updatesOpen ? null : { element: event.currentTarget })}>
+                <DownloadIcon size={18} strokeWidth={1.7} /><span aria-hidden="true">{updates.length}</span>
+              </button>
+              <DropdownMenu anchor={updatesOpen} triggerRef={updatesButton} label="Actualizaciones" role="dialog" align="start"
+                className="updates-menu" onClose={() => setUpdatesOpen(null)}>
+                <div className="updates-menu-head">Actualizaciones</div>
+                {updates.map(update => (
+                  <div key={update.id} className={`cli-update${update.error ? " has-error" : ""}`} role="status" title={update.error ?? undefined}>
+                    <span className="cli-update-icon" aria-hidden="true"><AgentIcon kind={update.id} size={14} /></span>
+                    <div className="cli-update-body">
+                      <div className="cli-update-head">
+                        <strong>{update.name}</strong>
+                        {!update.updating && <button type="button" className="cli-update-close tip" data-tip="Ahora no"
+                          aria-label={`No actualizar ${update.name} ahora`} onClick={() => onDismissUpdate(update.id)}>
+                          <CloseIcon size={12} />
+                        </button>}
+                      </div>
+                      <div className="cli-update-row">
+                        <small>{update.updating ? "Actualizando…" : update.error ? "No se pudo actualizar" : `${update.installed ?? "?"} → ${update.latest ?? "?"}`}</small>
+                        <button type="button" className="cli-update-action" disabled={update.updating} data-menu-autofocus={update === updates[0] || undefined}
+                          aria-label={`${update.action} ${update.name} a la ${update.latest}`} onClick={() => onUpdate(update.id)}>
+                          {update.updating ? <span className="cli-update-spinner" aria-hidden="true" /> : update.error ? "Reintentar" : update.action}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </DropdownMenu>
+            </>}
             <button
               type="button"
               className="icon-btn sidebar-footer-control sidebar-theme tip"

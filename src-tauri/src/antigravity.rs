@@ -263,6 +263,52 @@ fn install(root: &Path) -> Result<Runtime, String> {
     let _ = fs::remove_dir(&stage);
     resolve(root, "antigravity-acp", "")
 }
+/// Estado de actualización del componente gestionado: la versión que trae este trex,
+/// si ya está instalada y, si no, qué versión anterior quedó de un trex más antiguo.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStatus {
+    pub current: String,
+    pub installed: bool,
+    pub previous: Option<String>,
+}
+/// Versión de otro componente gestionado ya instalado (`acp-<versión>-<so>-<arq>`), la más alta.
+fn previous_version(root: &Path) -> Option<String> {
+    let suffix = format!("-{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    let mut found: Vec<Vec<u32>> = fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let version = name.strip_prefix("acp-")?.strip_suffix(&suffix)?.to_string();
+            if version == VERSION || !regular(&entry.path().join(names().0)) {
+                return None;
+            }
+            let parts: Option<Vec<u32>> = version.split('.').map(|part| part.parse().ok()).collect();
+            parts.filter(|parts| !parts.is_empty())
+        })
+        .collect();
+    found.sort();
+    found.pop().map(|parts| parts.iter().map(u32::to_string).collect::<Vec<_>>().join("."))
+}
+fn update_status(root: &Path) -> UpdateStatus {
+    UpdateStatus {
+        current: VERSION.into(),
+        installed: resolve(root, "antigravity-acp", "").map(|runtime| runtime.installed).unwrap_or(false),
+        previous: previous_version(root),
+    }
+}
+#[tauri::command]
+pub async fn antigravity_update_status(app: AppHandle) -> Result<UpdateStatus, String> {
+    let root = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("antigravity");
+    tauri::async_runtime::spawn_blocking(move || update_status(&root))
+        .await
+        .map_err(|e| e.to_string())
+}
 #[tauri::command]
 pub async fn antigravity_install(app: AppHandle) -> Result<Runtime, String> {
     if INSTALLING.swap(true, Ordering::SeqCst) {
@@ -300,6 +346,28 @@ mod tests {
             .ends_with(&format!("accounts{}default", std::path::MAIN_SEPARATOR)));
         assert!(!status.env.contains_key("CLAUDE_CONFIG_DIR"));
         assert!(resolve(&root, "agy --print", "").is_err());
+    }
+    #[test]
+    fn an_older_managed_runtime_is_offered_an_update_and_a_missing_one_is_not() {
+        let root = std::env::temp_dir().join(format!("trex-acp-update-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        // Nunca se instaló: no hay nada que actualizar.
+        let status = update_status(&root);
+        assert_eq!(status.current, VERSION);
+        assert!(!status.installed);
+        assert_eq!(status.previous, None);
+        // Quedan dos versiones de un trex anterior: cuenta la más alta, y solo las de esta plataforma.
+        let suffix = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        for version in ["0.9.0", "0.10.2"] {
+            let dir = root.join(format!("acp-{version}-{suffix}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(names().0), b"x").unwrap();
+        }
+        fs::create_dir_all(root.join("acp-9.9.9-otro-sistema")).unwrap();
+        fs::create_dir_all(root.join(format!("acp-7.0.0-{suffix}"))).unwrap(); // sin ejecutable
+        assert_eq!(update_status(&root).previous.as_deref(), Some("0.10.2"));
+        let _ = fs::remove_dir_all(&root);
     }
     #[test]
     fn release_is_a_pinned_google_download() {

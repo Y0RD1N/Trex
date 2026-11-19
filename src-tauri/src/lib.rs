@@ -405,6 +405,7 @@ pub fn run() {
             detect_codex,
             antigravity::antigravity_runtime,
             antigravity::antigravity_install,
+            antigravity::antigravity_update_status,
             integrations::integration_dependencies,
             integrations::github_connection_status,
             trex_cli::trex_cli_status,

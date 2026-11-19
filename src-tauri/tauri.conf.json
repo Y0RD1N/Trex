@@ -35,7 +35,7 @@
         "img-src": "'self' data: blob:",
         "font-src": "'self' data:",
         "media-src": "'self' data: blob:",
-        "connect-src": "'self' ipc: http://ipc.localhost data: blob: https://registry.npmjs.org",
+        "connect-src": "'self' ipc: http://ipc.localhost data: blob: https://registry.npmjs.org https://api.github.com",
         "frame-src": "'self' blob: data:",
         "worker-src": "'self' blob:",
         "object-src": "'none'",

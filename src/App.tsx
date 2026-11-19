@@ -111,7 +111,8 @@ import { useNotificationSound } from "./hooks/useNotificationSound";
 import { useCliUpdates } from "./hooks/useCliUpdates";
 import { useAccountUsageUpkeep } from "./hooks/useAccountUsage";
 import { requestUsagePanel } from "./accountUsageStore";
-import type { CliId } from "./cliUpdates";
+import type { CliId, UpdateKind, UpdateNotice } from "./cliUpdates";
+import { useAgentUpdates } from "./hooks/useAgentUpdates";
 // Ajustes, paleta y diálogos poco frecuentes: en su propio fragmento (ver lazyComponent).
 const SettingsPanel = lazyComponent(() => import("./components/SettingsPanel"));
 const CommandPalette = lazyComponent(() => import("./components/CommandPalette"));
@@ -365,8 +366,23 @@ function AppShell() {
   const updateCli = useCallback((id: CliId) => {
     void runCliUpdate(id).then(showToast, (error: unknown) => showToast(formatError(error)));
   }, [runCliUpdate, showToast]);
-  const pendingUpdates = [cliUpdates.status.claude, cliUpdates.status.codex]
-    .filter(status => status.updating || (status.available && !status.dismissed));
+  // Antigravity y el propio trex (con Trex CLI) se comprueban aparte; todos van a la misma lista.
+  const agentUpdates = useAgentUpdates(appInfo?.version ?? null, trexInstalled);
+  const { run: runAgentUpdate, dismiss: dismissAgentUpdate } = agentUpdates;
+  const pendingUpdates: UpdateNotice[] = [
+    ...[cliUpdates.status.claude, cliUpdates.status.codex]
+      .filter(status => status.updating || (status.available && !status.dismissed))
+      .map(status => ({ id: status.id, name: status.name, installed: status.installed, latest: status.latest, updating: status.updating, error: status.error, action: "Actualizar" })),
+    ...agentUpdates.notices,
+  ];
+  const runUpdate = useCallback((id: UpdateKind) => {
+    if (id === "claude" || id === "codex") updateCli(id);
+    else void runAgentUpdate(id).then(showToast, (error: unknown) => showToast(formatError(error)));
+  }, [updateCli, runAgentUpdate, showToast]);
+  const dismissUpdate = useCallback((id: UpdateKind) => {
+    if (id === "claude" || id === "codex") dismissCliUpdate(id);
+    else dismissAgentUpdate(id);
+  }, [dismissCliUpdate, dismissAgentUpdate]);
 
   const openSettings = useCallback(() => { setSettingsInitialSection("appearance"); setSettingsOpen(true); }, []);
   const openProfiles = useCallback(() => { setSettingsInitialSection("profiles"); setSettingsOpen(true); }, []);
@@ -1473,8 +1489,8 @@ function AppShell() {
         onToggleSidebar={toggleSidebar}
         onResize={setSidebarWidth}
         updates={pendingUpdates}
-        onUpdateCli={updateCli}
-        onDismissUpdate={dismissCliUpdate}
+        onUpdate={runUpdate}
+        onDismissUpdate={dismissUpdate}
       />
 
       <main className={`main${chatCanvas ? " chat-canvas" : ""}`}>
