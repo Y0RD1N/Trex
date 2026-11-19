@@ -5,6 +5,7 @@
 //! ella, o si falla, se usa el sintetizador que trae Windows. Nada sale a la red.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,8 +22,44 @@ const MAX_SPEECH: Duration = Duration::from_secs(120);
 /// La voz elegida de las diez que trae el modelo.
 const NEURAL_VOICE: i32 = 9;
 
-/// El modelo tarda alrededor de un segundo en cargar: se conserva entre frases.
-static NEURAL: Mutex<Option<OfflineTts>> = Mutex::new(None);
+/// El modelo tarda alrededor de un segundo en cargar: se conserva entre frases, y
+/// con la última vez que habló para liberarlo (~150 MB) cuando trex lleva un rato callado.
+static NEURAL: Mutex<Option<(OfflineTts, Instant)>> = Mutex::new(None);
+/// Sin hablar durante este tiempo, la voz neuronal se descarga; la próxima frase la vuelve a cargar.
+const NEURAL_IDLE: Duration = Duration::from_secs(180);
+/// Hay un hilo vigilando cuándo liberar la voz neuronal.
+static WATCHING: AtomicBool = AtomicBool::new(false);
+
+fn neural_engine() -> std::sync::MutexGuard<'static, Option<(OfflineTts, Instant)>> {
+    NEURAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Libera la voz neuronal si no está hablando ahora mismo (si lo está, la libera el vigilante después).
+pub fn release() {
+    let engine = match NEURAL.try_lock() {
+        Ok(engine) => Some(engine),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    };
+    if let Some(mut engine) = engine { *engine = None; }
+}
+
+/// Un solo hilo dormido comprueba cada 30 s si la voz lleva `NEURAL_IDLE` sin usarse.
+fn watch_idle() {
+    if WATCHING.swap(true, Ordering::SeqCst) { return; }
+    let spawned = std::thread::Builder::new().name("trex-voice-idle".into()).spawn(|| loop {
+        std::thread::sleep(Duration::from_secs(30));
+        let mut engine = neural_engine();
+        let idle = engine.as_ref().is_none_or(|(_, used)| used.elapsed() >= NEURAL_IDLE);
+        if idle {
+            *engine = None;
+            // Con el cerrojo aún tomado: quien cargue después verá que no hay vigilante.
+            WATCHING.store(false, Ordering::SeqCst);
+            return;
+        }
+    });
+    if spawned.is_err() { WATCHING.store(false, Ordering::SeqCst); }
+}
 
 /// Lee `text` y vuelve cuando termina de sonar, o antes si `cancelled` pasa a dar `true`.
 pub fn speak(text: &str, neural: Option<&Path>, cancelled: impl Fn() -> bool + Sync) -> Result<(), String> {
@@ -74,9 +111,12 @@ fn speak_neural(text: &str, models: &Path, cancelled: &(impl Fn() -> bool + Sync
     std::thread::scope(|scope| {
         // Un hilo genera; este reproduce. Así la segunda frase se prepara mientras suena la primera.
         scope.spawn(move || {
-            let mut engine = NEURAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            if engine.is_none() { *engine = load_neural(models); }
-            let Some(tts) = engine.as_ref() else { let _ = tx.send(None); return };
+            let mut engine = neural_engine();
+            if engine.is_none() { *engine = load_neural(models).map(|tts| (tts, Instant::now())); }
+            let Some((tts, used)) = engine.as_mut() else { let _ = tx.send(None); return };
+            *used = Instant::now();
+            watch_idle();
+            let tts = &*tts;
             let config = GenerationConfig {
                 sid: NEURAL_VOICE,
                 extra: Some(std::collections::HashMap::from([("lang".to_string(), serde_json::json!("es"))])),

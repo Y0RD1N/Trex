@@ -32,7 +32,12 @@ export default function VoiceIndicator() {
         if (phase) setStatus(current => current ? { ...current, phase } : current);
         if (phase === "off" || phase === "loading" || phase === "idle") refresh();
       }),
-      listen<VoiceLevel>(VOICE_LEVEL_EVENT, event => setLevel(event.payload)),
+      // El nivel llega varias veces por segundo; solo se guarda lo que cambia el dibujo (si hay voz y
+      // cuánta, a pasos de un 5 %), para no volver a pintar el botón en silencio.
+      listen<VoiceLevel>(VOICE_LEVEL_EVENT, event => setLevel(previous => {
+        const { voice, deaf } = event.payload, peak = voice && !deaf ? Math.round(event.payload.peak * 20) / 20 : 0;
+        return previous && previous.voice === voice && previous.deaf === deaf && previous.peak === peak ? previous : { voice, deaf, peak };
+      })),
     ]);
     return () => { alive = false; void unlisten.then(list => list.forEach(stop => stop())); };
   }, []);

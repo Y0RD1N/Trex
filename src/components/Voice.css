@@ -37,8 +37,9 @@
 /* La cápsula se llena desde abajo con el volumen real de la voz. */
 .voice-mic-level { transform-box:fill-box; transform-origin:50% 100%; opacity:.85; transition:transform .2s linear; }
 .voice-mic-wave { opacity:0; }
-/* En espera: el soporte respira despacio. */
-.voice-mic.is-idle .voice-mic-cradle { animation:voice-breathe 3.6s ease-in-out infinite; }
+/* En espera: el soporte respira despacio, a saltos (ocho por ciclo). Es el estado en el que la
+   app pasa horas: una animación continua obligaba a repintar a 60 fps sin que nadie mirase. */
+.voice-mic.is-idle .voice-mic-cradle { animation:voice-breathe 3.6s steps(8, jump-none) infinite; }
 /* Entendiendo o pensando: un trazo recorre el soporte de lado a lado. */
 .voice-mic.is-working .voice-mic-cradle { stroke-dasharray:30 70; animation:voice-travel 1.1s linear infinite; }
 /* Hablando: salen dos ondas, una tras otra. */

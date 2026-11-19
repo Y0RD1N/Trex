@@ -6,6 +6,9 @@
 //! trex…") y las que siguen durante la ventana de conversación se envían al
 //! frontend; el resto se descarta aquí mismo.
 //!
+//! En silencio solo quedan abiertos el micrófono y el detector de voz: Whisper
+//! (~400 MB en memoria) se carga al oír voz y se libera tras dos minutos sin uso.
+//!
 //! Los modelos (~150 MB) no vienen con trex: se descargan tras un clic
 //! explícito, con URL y SHA-256 fijados.
 use serde::{Deserialize, Serialize};
@@ -407,6 +410,10 @@ mod engine {
 
     const RATE: i32 = 16_000;
     const VAD_WINDOW: usize = 512;
+    /// Whisper ocupa cientos de MB mientras está cargado. Se carga en cuanto el
+    /// detector oye voz (la frase aún no ha terminado, así que la carga no se nota)
+    /// y se libera tras este tiempo sin transcribir nada, fuera de una conversación.
+    const WHISPER_IDLE: Duration = Duration::from_secs(120);
 
     #[derive(Clone, Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -463,6 +470,13 @@ mod engine {
         OfflineRecognizer::create(&config)
     }
 
+    fn load_base(models: &Path) -> Result<OfflineRecognizer, String> {
+        let started = Instant::now();
+        let recognizer = whisper(models, "base").ok_or("No se pudo cargar el modelo de reconocimiento de voz.")?;
+        if cfg!(debug_assertions) { eprintln!("[voz] Whisper cargado en {} ms", started.elapsed().as_millis()); }
+        Ok(recognizer)
+    }
+
     fn transcribe(recognizer: &OfflineRecognizer, speech: &[f32]) -> String {
         let stream = recognizer.create_stream();
         stream.accept_waveform(RATE, speech);
@@ -475,13 +489,17 @@ mod engine {
 
     pub fn run(inner: &Arc<Inner>, generation: u64, models: &Path, dictation_models: Option<&Path>, settings: &VoiceConfig) -> Result<(), String> {
         let (raw, device) = (settings.raw_capture, settings.device.clone());
-        // El modelo del dictado es más pesado: se carga la primera vez que se dicta.
+        // Los modelos se cargan al oír voz y se liberan cuando ya no hacen falta: en silencio
+        // el motor solo tiene el detector de voz (~2 MB) y el micrófono abiertos.
+        let mut recognizer: Option<OfflineRecognizer> = None;
+        let mut used_at = Instant::now();
+        // El modelo del dictado es más pesado: vive solo mientras se dicta.
         let mut dictation_recognizer: Option<OfflineRecognizer> = None;
+        // Si no carga, no se reintenta en cada tramo de audio: se dicta con el base.
+        let mut dictation_failed = false;
         // Con una llamada en tiempo real abierta, el micrófono va directo a ella.
         let mut live: Option<LiveLink> = None;
         let alive = || inner.generation.load(Ordering::SeqCst) == generation;
-
-        let recognizer = whisper(models, "base").ok_or("No se pudo cargar el modelo de reconocimiento de voz.")?;
 
         let vad = VoiceActivityDetector::create(
             &VadModelConfig {
@@ -506,6 +524,8 @@ mod engine {
         if cfg!(debug_assertions) { eprintln!("[voz] micrófono abierto a {mic_rate} Hz (crudo: {raw})"); }
         let mut peak = 0f32;
         let mut level_at = Instant::now();
+        // El último nivel enviado fue de silencio: los siguientes iguales no se repiten.
+        let mut level_quiet = false;
         let resampler = if mic_rate as i32 != RATE {
             Some(LinearResampler::create(mic_rate as i32, RATE).ok_or("No se pudo adaptar el audio del micrófono.")?)
         } else {
@@ -523,6 +543,15 @@ mod engine {
             let dictating = super::lock(&inner.dictation).clone();
             // Arrancado solo para dictar: al terminar el dictado, el micrófono se cierra.
             if !settings.enabled && dictating.is_none() { return Ok(()); }
+            if dictating.is_none() {
+                dictation_failed = false;
+                if dictation_recognizer.take().is_some() && cfg!(debug_assertions) { eprintln!("[voz] modelo del dictado liberado"); }
+            }
+            let quiet = conversation_until.is_none_or(|until| Instant::now() >= until);
+            if recognizer.is_some() && quiet && !vad.detected() && used_at.elapsed() >= WHISPER_IDLE {
+                recognizer = None;
+                if cfg!(debug_assertions) { eprintln!("[voz] Whisper liberado tras {} s sin uso", WHISPER_IDLE.as_secs()); }
+            }
             let chunk = match audio.recv_timeout(Duration::from_millis(250)) {
                 Ok(chunk) => chunk,
                 Err(RecvTimeoutError::Timeout) => continue,
@@ -537,7 +566,13 @@ mod engine {
             // Medidor de Ajustes: unas cuatro veces por segundo, también mientras trex habla.
             peak = chunk.iter().fold(peak, |max, sample| max.max(sample.abs()));
             if level_at.elapsed() >= Duration::from_millis(250) {
-                inner.emit(EVENT_LEVEL, Level { peak: peak.min(1.0), voice: !deaf && vad.detected(), deaf });
+                let voice = !deaf && vad.detected();
+                // En silencio se avisa una vez y no cuatro por segundo: la ventana no tiene nada que pintar.
+                let quiet = !voice && !deaf && peak < 0.012;
+                if !(quiet && level_quiet) {
+                    inner.emit(EVENT_LEVEL, Level { peak: peak.min(1.0), voice, deaf });
+                }
+                level_quiet = quiet;
                 peak = 0.0;
                 level_at = Instant::now();
             }
@@ -567,6 +602,18 @@ mod engine {
                 vad.accept_waveform(&pending[..VAD_WINDOW]);
                 pending.drain(..VAD_WINDOW);
             }
+            // Alguien habla: el modelo se carga ya, mientras la frase sigue, para que la
+            // transcripción no tenga que esperarlo cuando termine.
+            if vad.detected() || !vad.is_empty() {
+                if dictating.is_some() && dictation_recognizer.is_none() && !dictation_failed {
+                    dictation_recognizer = dictation_models.and_then(|dir| whisper(dir, "small"));
+                    dictation_failed = dictation_recognizer.is_none();
+                }
+                // Sin el modelo del dictado se dicta con el base.
+                let needs_base = dictating.is_none() || dictation_recognizer.is_none();
+                if needs_base && recognizer.is_none() { recognizer = Some(load_base(models)?); }
+                used_at = Instant::now();
+            }
             let resting = if dictating.is_some() { "dictating" } else { "idle" };
             if vad.is_empty() {
                 inner.set_phase(if vad.detected() { "hearing" } else { resting });
@@ -582,17 +629,16 @@ mod engine {
                 inner.set_phase("transcribing");
                 if let Some(target) = &dictating {
                     // Dictado: todo se escribe en el chat, sin "oye trex" y sin abrir llamadas.
-                    if dictation_recognizer.is_none() {
-                        dictation_recognizer = dictation_models.and_then(|dir| whisper(dir, "small"));
-                    }
-                    let text = transcribe(dictation_recognizer.as_ref().unwrap_or(&recognizer), &speech);
+                    let Some(model) = dictation_recognizer.as_ref().or(recognizer.as_ref()) else { continue };
+                    let text = transcribe(model, &speech);
                     if cfg!(debug_assertions) { eprintln!("[voz] dictado ({:.1} s): «{text}»", speech.len() as f32 / RATE as f32); }
                     if let Some(text) = crate::voice_dictation::clean(&text) {
                         inner.emit(EVENT_DICTATION, Dictated { target: target.clone(), text });
                     }
                     continue;
                 }
-                let text = transcribe(&recognizer, &speech);
+                let Some(model) = recognizer.as_ref() else { continue };
+                let text = transcribe(model, &speech);
                 if cfg!(debug_assertions) { eprintln!("[voz] oído ({:.1} s): «{text}»", speech.len() as f32 / RATE as f32); }
                 if text.is_empty() { continue; }
 
@@ -945,7 +991,13 @@ pub fn voice_configure(app: AppHandle, state: State<'_, VoiceState>, settings: V
     save_config(&app, &snapshot)?;
     // Cambiar solo la voz de las respuestas no reinicia la escucha.
     let same_engine = VoiceConfig { speech: previous.speech.clone(), cloud_voice: previous.cloud_voice.clone(), ..snapshot.clone() } == previous;
-    if !snapshot.enabled { stop(&state.0); *lock(&state.0.error) = None; }
+    if !snapshot.enabled {
+        stop(&state.0);
+        *lock(&state.0.error) = None;
+        // Apagada la voz, su modelo neuronal tampoco tiene por qué seguir en memoria.
+        #[cfg(windows)]
+        crate::voice_speech::release();
+    }
     else if !same_engine || *lock(&state.0.phase) == "off" { start(&state); }
     if snapshot.speech != previous.speech || snapshot.cloud_voice != previous.cloud_voice { *lock(&state.0.speech_error) = None; }
     Ok(status_of(&state))
