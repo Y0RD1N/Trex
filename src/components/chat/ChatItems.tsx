@@ -43,7 +43,7 @@ export const UserMessage = memo(function UserMessage({ id, text, images, preview
   const open = (path: string): void => { void openFile(path).catch(() => undefined); };
   const parts = useMemo(() => referenceParts(body, { Imagen: images, Archivo: files.length }), [body, images, files.length]);
   return <div ref={entry.ref} className={`chat-user-group${editing ? " is-editing" : ""}${entry.entering ? " chat-enter" : ""}`}>
-    {/* Cada turno del usuario es una banda: quién habla, a qué hora y, a la derecha, qué se puede hacer con él. */}
+    {/* Quién habla, a qué hora y, a la derecha, qué se puede hacer con el mensaje (el CSS lo pone bajo el texto). */}
     <div className="chat-user-head">
       <span className="chat-user-who">Tú</span>
       {at !== undefined && Number.isFinite(at) && <time className="chat-user-time tip" data-tip={formatDateTime(at, timeFormat)}

@@ -105,29 +105,39 @@
 }
 
 /* --- Mensajes ------------------------------------------------------------ */
-/* Cada turno tuyo es una banda a todo el ancho del chat: «TÚ», la hora y tu mensaje sobre un tinte del
-   acento. Se distingue de la respuesta al primer vistazo y, como solo usa tokens, sigue el tema, el tono
-   de la interfaz y el acento elegido. La banda sale de la columna de lectura con un `border-image` (un
-   degradado vertical: regla, relleno, regla) cuyo `outset` horizontal lo extiende hasta los bordes. No mide
-   ningún ancho —sirve igual con el panel lateral abierto— y un `outset` es solo pintura: no añade
-   desbordamiento al área de desplazamiento. */
+/* Cada turno tuyo es una caja de orden: el eco de la caja donde lo escribiste, con el «❯» en el
+   color de acento. Se distingue de la respuesta por la forma (borde, fondo y sangría propios), no
+   solo por el color, y tiene principio y fin aunque el mensaje sea largo. Debajo del texto, quién
+   y cuándo, y a la derecha lo que se puede hacer con él. */
 .chat-user-group {
-  --user-band: color-mix(in srgb, var(--accent) 7%, var(--bg-surface));
-  --user-band-edge: color-mix(in srgb, var(--accent) 22%, var(--border));
+  --user-rule: var(--border-strong);
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1-5);
-  margin: var(--sp-4) 0 var(--sp-2);
-  padding: var(--sp-3) 0 var(--sp-3-5);
-  background: var(--user-band);
-  border-image: linear-gradient(to bottom, var(--user-band-edge) 0 1px, var(--user-band) 1px calc(100% - 1px), var(--user-band-edge) calc(100% - 1px)) 0 fill / 0 / 0 100vmax;
+  gap: var(--sp-1);
+  margin: var(--sp-5) 0 var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) var(--sp-2-5) calc(var(--sp-4) + var(--sp-6));
+  border: 1px solid var(--user-rule);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
 }
-/* En contraste forzado los colores del autor se ignoran: la banda se queda con sus dos reglas. */
+.chat-user-group::before {
+  content: "❯";
+  position: absolute;
+  top: var(--sp-3);
+  left: var(--sp-4);
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-relaxed);
+}
 @media (forced-colors: active) {
-  .chat-user-group { border-block: 1px solid CanvasText; border-image: none; }
+  .chat-user-group { border-color: CanvasText; }
 }
 .chat-thread > .chat-user-group:first-child { margin-top: 0; }
+/* La línea de quién y cuándo va debajo del mensaje. */
 .chat-user-head {
+  order: 1;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -137,17 +147,14 @@
 }
 .chat-user-who {
   flex: 0 0 auto;
-  color: var(--accent-strong);
-  font-weight: var(--fw-semibold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--text-dim);
+  text-transform: lowercase;
 }
 .chat-user-time,
 .chat-user-head .chat-queue-read {
   min-width: 0;
   overflow: hidden;
-  /* Sobre el tinte, --text-dim no llega a 4.5:1 con todos los acentos y tonos: un punto más claro. */
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -159,6 +166,7 @@
 }
 .chat-user {
   min-width: 0;
+  color: var(--text);
   line-height: var(--lh-relaxed);
 }
 .chat-user-text {

@@ -1,5 +1,5 @@
 /* Acciones discretas y resumen del turno: los mismos tokens en todas las paletas. Van a la derecha de
-   la cabecera de la banda; los márgenes negativos evitan que sus botones la hagan más alta. */
+   la línea de quién y cuándo; los márgenes negativos evitan que sus botones la hagan más alta. */
 .chat-user-actions {
   display: flex;
   align-items: center;
@@ -18,11 +18,8 @@
 .chat-changes button:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }
 .chat-copy:disabled { opacity: 0.35; cursor: default; }
 .chat-copy.copied { color: var(--ok-text); }
-/* El mensaje que se está editando: la misma banda, con más acento. */
-.chat-user-group.is-editing {
-  --user-band: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
-  --user-band-edge: color-mix(in srgb, var(--accent) 55%, var(--border));
-}
+/* El mensaje que se está editando: su borde toma el acento. */
+.chat-user-group.is-editing { --user-rule: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 .chat-user-actions [aria-pressed="true"] { color:  var(--accent-strong); }
 .chat-edit-banner {
   display: flex;
