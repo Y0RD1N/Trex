@@ -16,6 +16,7 @@ import { timeAgo } from "../remoteProtocol";
 import { PhoneIcon } from "./Icons";
 import "./BrowserSettings.css";
 import "./RemoteSettings.css";
+import SettingInfo from "./SettingInfo";
 
 /** El QR se dibuja con los colores del tema: módulos oscuros con el color del texto. */
 function QrCode({ qr, label }: { qr: NonNullable<RemotePairing["qr"]>; label: string }) {
@@ -110,11 +111,10 @@ export default function RemoteSettings() {
     <div className="browser-settings-card">
       <div className="browser-settings-heading">
         <span className="browser-settings-badge" aria-hidden="true"><PhoneIcon size={20} /></span>
-        <div><h4>Control remoto</h4><p>Tus sesiones siguen en este PC. Desde el móvil u otro equipo las ves y las diriges.</p></div>
+        <div><h4>Control remoto<SettingInfo text="Tus sesiones siguen en este PC; desde el móvil u otro equipo las ves y las diriges. Abre un servidor solo en la red que elijas y cada móvil se empareja una vez con un código." /></h4></div>
         <span className={`browser-settings-status${status.running ? " is-ready" : ""}`} role="status">{state}</span>
       </div>
-      <label className="browser-settings-toggle"><span><strong>Activar el control remoto</strong>
-        <small>Abre un servidor solo en la red que elijas. Cada móvil se empareja una vez con un código y puedes desvincularlo cuando quieras.</small></span>
+      <label className="browser-settings-toggle"><span><strong>Activar</strong></span>
         <input type="checkbox" role="switch" aria-label="Activar el control remoto" checked={status.enabled} disabled={busy}
           onChange={event => void apply({ enabled: event.currentTarget.checked })} /></label>
       {status.error && status.enabled && <p className="browser-settings-error" role="alert">{status.error}</p>}
@@ -124,8 +124,8 @@ export default function RemoteSettings() {
     </div>
 
     <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Red</h4><p>Dónde escucha. Fuera de casa usa tu túnel de WireGuard o Tailscale.</p></div>
-        <button type="button" className="btn btn-small" onClick={() => void refresh()}>Volver a buscar</button></div>
+      <div className="browser-settings-heading"><div><h4>Red</h4></div>
+        <button type="button" className="btn btn-small" onClick={() => void refresh()}>Buscar</button></div>
       <div className="remote-networks" role="radiogroup" aria-labelledby={`${id}-net`}>
         <span id={`${id}-net`} className="sr-only">Red del control remoto</span>
         {status.interfaces.map(item => <label key={`${item.name}-${item.ip}`} className={`remote-network${item.ip === status.address ? " is-selected" : ""}`}>
@@ -137,10 +137,10 @@ export default function RemoteSettings() {
         </label>)}
         {missing && <label className="remote-network is-selected is-missing"><input type="radio" checked readOnly />
           <span className="remote-network-name">No conectada ahora</span><code>{status.address}</code><span className="remote-kind">Se reintentará</span></label>}
-        {!status.interfaces.length && !missing && <p className="settings-hint">No se encontró ninguna red. Conecta tu VPN y pulsa «Volver a buscar».</p>}
+        {!status.interfaces.length && !missing && <p className="settings-hint">No hay ninguna red. Conecta tu VPN y pulsa «Buscar».</p>}
       </div>
-      {selected?.kind === "lan" && <p className="browser-settings-note">En la red local el tráfico no va cifrado: úsala solo en casa. Para entrar desde fuera, elige la red de WireGuard o de Tailscale.</p>}
-      {selected?.kind === "other" && <p className="browser-settings-note">Esta dirección podría ser accesible desde internet. Usa mejor WireGuard o Tailscale.</p>}
+      {selected?.kind === "lan" && <p className="browser-settings-note">Sin cifrar: úsala solo en casa. Desde fuera, WireGuard o Tailscale.</p>}
+      {selected?.kind === "other" && <p className="browser-settings-note">Podría ser accesible desde internet. Mejor WireGuard o Tailscale.</p>}
       <div className="remote-port">
         <label htmlFor={`${id}-port`}>Puerto</label>
         <input id={`${id}-port`} className="input" inputMode="numeric" value={port} aria-invalid={!validRemotePort(portValue)}
@@ -150,26 +150,24 @@ export default function RemoteSettings() {
     </div>
 
     <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Tailscale</h4><p>{status.tailscale.installed
-        ? status.tailscale.running ? `Conectado${status.tailscale.dnsName ? ` como ${status.tailscale.dnsName}` : ""}` : "Instalado, pero no conectado"
-        : "No está instalado en este PC"}</p></div>
-        <span className={`browser-settings-status${tailscaleReady ? " is-ready" : ""}`}>{tailscaleReady ? "Disponible" : "No disponible"}</span></div>
-      <label className="browser-settings-toggle"><span><strong>Publicar con HTTPS (tailscale serve)</strong>
-        <small>Tu móvil abre https://{status.tailscale.dnsName ?? "tu-pc.ts.net"} con un certificado válido: así la app se puede instalar en la pantalla de inicio. Requiere HTTPS activado en tu tailnet.</small></span>
+      <div className="browser-settings-heading"><div><h4>Tailscale</h4></div>
+        <span className={`browser-settings-status${tailscaleReady ? " is-ready" : ""}`}>{status.tailscale.installed
+          ? status.tailscale.running ? status.tailscale.dnsName ?? "Conectado" : "Sin conectar"
+          : "No instalado"}</span></div>
+      <label className="browser-settings-toggle"><span><strong>Publicar con HTTPS <SettingInfo text={`Tu móvil abre https://${status.tailscale.dnsName ?? "tu-pc.ts.net"} con un certificado válido, y así la app se puede instalar en la pantalla de inicio. Requiere HTTPS activado en tu tailnet.`} /></strong></span>
         <input type="checkbox" role="switch" aria-label="Publicar con HTTPS mediante tailscale serve" checked={status.tailscaleServe} disabled={busy || (!tailscaleReady && !status.tailscaleServe)}
           onChange={event => void apply({ tailscaleServe: event.currentTarget.checked })} /></label>
     </div>
 
     <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Dispositivos</h4><p>{status.devices.length ? `${status.devices.length} emparejado${status.devices.length === 1 ? "" : "s"}` : "Todavía no hay ningún móvil emparejado"}</p></div>
+      <div className="browser-settings-heading"><div><h4>Dispositivos</h4></div>
         {!pairing && <button type="button" className="btn btn-small btn-primary" disabled={!status.running} onClick={() => void pair()}>Emparejar un móvil</button>}</div>
       {pairing && <div className="remote-pairing">
         {pairing.qr && <QrCode qr={pairing.qr} label="Código QR para emparejar el móvil" />}
         <div className="remote-pairing-info">
           <ol className="remote-steps">
-            <li><span>01</span>En el móvil, escanea el código con la cámara.</li>
-            <li><span>02</span>O abre <code>{status.urls[0] ?? "la dirección de arriba"}</code> y escribe el código.</li>
-            <li><span>03</span>El móvil aparecerá aquí al terminar.</li>
+            <li><span>01</span>Escanea el código con el móvil.</li>
+            <li><span>02</span>O abre <code>{status.urls[0] ?? "la dirección de arriba"}</code> y escríbelo.</li>
           </ol>
           <div className="remote-code" aria-label={`Código ${pairing.code}`}>{pairing.code.slice(0, 3)}<i>–</i>{pairing.code.slice(3)}</div>
           <div className="remote-pairing-foot"><span>Caduca en {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</span>
@@ -183,7 +181,6 @@ export default function RemoteSettings() {
           <button type="button" className="btn btn-small btn-ghost" onClick={() => void revoke(device.id)}>Desvincular</button>
         </li>)}
       </ul>}
-      {!status.running && status.enabled && <p className="settings-hint">Cuando el servidor esté escuchando podrás emparejar un móvil.</p>}
     </div>
     {error && <p className="browser-settings-error" role="alert">{error}</p>}
   </div>;

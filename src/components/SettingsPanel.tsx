@@ -3,13 +3,13 @@ import IntegrationSettings from "./IntegrationSettings";
 import RemoteSettings from "./RemoteSettings";
 import VoiceSettings from "./VoiceSettings";
 /** Ajustes por tema, con cambios en borrador y opciones técnicas desplegables. */
-import { Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { DEFAULT_FONT_FAMILY, clamp } from "../api";
 import AccentPicker from "./AccentPicker";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
-import { BellIcon, CheckIcon, PhoneIcon, ChevronIcon, CloseIcon, CopyIcon, CursorIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MicIcon, MoonIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon, WrenchIcon } from "./Icons";
+import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MicIcon, MoonIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
 import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
 import AutoCompactSettings from "./AutoCompactSettings";
@@ -24,6 +24,7 @@ import ShortcutSettings from "./ShortcutSettings";
 import NotificationsSettings from "./NotificationsSettings";
 import AgentIcon from "./AgentIcon";
 import BrandMark from "./BrandMark";
+import SettingInfo from "./SettingInfo";
 import type { CliUpdates } from "../hooks/useCliUpdates";
 import type { CliId } from "../cliUpdates";
 import "./SettingsPanel.css";
@@ -46,21 +47,35 @@ type Props = {
   onUpdateCli: (id: CliId) => void;
 };
 
+// Las páginas de ajustes. En la lista lateral no aparecen sueltas: van agrupadas (GROUPS).
 const SECTIONS = [
-  { id: "appearance", label: "Apariencia", icon: <SunIcon size={16} />, description: "Elige el tema y el color de tu espacio." },
-  { id: "terminal", label: "Terminal", icon: <TerminalIcon size={16} />, description: "Personaliza el texto, el cursor y la terminal." },
-  { id: "cursor", label: "Cursor", icon: <CursorIcon />, description: "Ajusta la forma, el grosor y el parpadeo del cursor de texto." },
-  { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, description: "Personaliza las combinaciones del teclado." },
-  { id: "notifications", label: "Notificaciones", icon: <BellIcon size={16} strokeWidth={1.6} />, description: "Avisos del escritorio cuando tus asistentes necesitan atención." },
-  { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, description: "Perfiles independientes para Claude Code, Codex y Trex API." },
-  { id: "browser", label: "Navegador", icon: <GlobeIcon size={16} />, description: "Pruebas, capturas y grabaciones con tus agentes." },
-  { id: "integrations", label: "Integraciones", icon: <WrenchIcon size={16} />, description: "Estado de las aplicaciones y el control de computadora." },
-  { id: "remote", label: "Control remoto", icon: <PhoneIcon size={16} />, description: "Mira y dirige tus sesiones desde el móvil u otro equipo." },
-  { id: "voice", label: "Voz", icon: <MicIcon size={16} />, description: "Háblale a trex en voz alta con el modo llamada." },
-  { id: "sessions", label: "Sesiones", icon: <LayoutIcon size={16} />, description: "Decide qué ocurre al abrir y cerrar trex." },
-  { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, description: "Versión e información de tu instalación." },
+  { id: "appearance", label: "Apariencia" },
+  { id: "sessions", label: "Inicio" },
+  { id: "notifications", label: "Avisos" },
+  { id: "terminal", label: "Texto" },
+  { id: "cursor", label: "Cursor" },
+  { id: "profiles", label: "Asistentes" },
+  { id: "voice", label: "Voz" },
+  { id: "browser", label: "Navegador" },
+  { id: "integrations", label: "Integraciones" },
+  { id: "remote", label: "Remoto" },
+  { id: "shortcuts", label: "Atajos" },
+  { id: "about", label: "Acerca de trex" },
 ] as const;
 type SectionId = typeof SECTIONS[number]["id"];
+
+/** Lo que se ve en la lista lateral: seis apartados; los que reúnen varias páginas las muestran como pestañas. */
+const GROUPS: { id: string; label: string; icon: ReactNode; pages: SectionId[] }[] = [
+  { id: "general", label: "General", icon: <LayoutIcon size={16} />, pages: ["appearance", "sessions", "notifications"] },
+  { id: "terminal", label: "Terminal", icon: <TerminalIcon size={16} />, pages: ["terminal", "cursor"] },
+  { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, pages: ["profiles"] },
+  { id: "voice", label: "Voz", icon: <MicIcon size={16} />, pages: ["voice"] },
+  { id: "connections", label: "Conexiones", icon: <GlobeIcon size={16} />, pages: ["browser", "integrations", "remote"] },
+  { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, pages: ["shortcuts"] },
+];
+/** «Acerca de» no está en la lista: se abre desde la versión, al pie. */
+const ABOUT = { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, pages: ["about"] as SectionId[] };
+const groupOf = (section: SectionId) => GROUPS.find(group => group.pages.includes(section)) ?? ABOUT;
 
 export default function SettingsPanel({ entering, leaving, surfaceRef, settings, cwd, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect, cliUpdates, onUpdateCli }: Props) {
   const dialog = useDialog();
@@ -183,15 +198,16 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
 
   const navigate = (event: KeyboardEvent<HTMLButtonElement>, index: number): void => {
     let next: number;
-    if (["ArrowDown", "ArrowRight"].includes(event.key)) next = (index + 1) % SECTIONS.length;
-    else if (["ArrowUp", "ArrowLeft"].includes(event.key)) next = (index - 1 + SECTIONS.length) % SECTIONS.length;
+    if (["ArrowDown", "ArrowRight"].includes(event.key)) next = (index + 1) % GROUPS.length;
+    else if (["ArrowUp", "ArrowLeft"].includes(event.key)) next = (index - 1 + GROUPS.length) % GROUPS.length;
     else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = SECTIONS.length - 1;
+    else if (event.key === "End") next = GROUPS.length - 1;
     else return;
     event.preventDefault();
-    setSection(SECTIONS[next].id);
-    document.getElementById(`${id}-tab-${SECTIONS[next].id}`)?.focus();
+    setSection(GROUPS[next].pages[0]);
+    document.getElementById(`${id}-tab-${GROUPS[next].id}`)?.focus();
   };
+  const group = groupOf(section);
 
   const reviewHistory = (): void => {
     setSection("terminal");
@@ -219,80 +235,77 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
         <div className="settings-layout">
           <div className="settings-sidebar">
             <div className="settings-sidebar-heading"><span aria-hidden="true"><GearIcon size={19} /></span><h2 id={`${id}-title`}>Ajustes</h2></div>
-            {compact ? <Select className="settings-section-select" aria-label="Sección de ajustes" align="start" value={section}
-              options={SECTIONS.map(item => ({ value: item.id, label: item.label, icon: item.icon }))}
-              onChange={value => setSection(value as SectionId)} />
+            {compact ? <Select className="settings-section-select" aria-label="Sección de ajustes" align="start" value={group.id}
+              options={[...GROUPS, ABOUT].map(item => ({ value: item.id, label: item.label, icon: item.icon }))}
+              onChange={value => setSection(([...GROUPS, ABOUT].find(item => item.id === value) ?? GROUPS[0]).pages[0])} />
             : <nav className="settings-nav" role="tablist" aria-label="Secciones de ajustes" aria-orientation="vertical">
-              {SECTIONS.map((item, index) => (
-                <Fragment key={item.id}>
-                {(index === 0 || index === 3 || index === 7) && <span className="settings-nav-section" aria-hidden="true">{index === 0 ? "Tu espacio" : index === 3 ? "Herramientas" : "Aplicación"}</span>}
-                <button type="button" role="tab" id={`${id}-tab-${item.id}`} aria-selected={section === item.id}
-                  aria-controls={`${id}-panel-${item.id}`} tabIndex={section === item.id ? 0 : -1}
-                  className={`settings-nav-item${section === item.id ? " active" : ""}`}
-                  onClick={() => setSection(item.id)} onKeyDown={event => navigate(event, index)}>
+              {GROUPS.map((item, index) => (
+                <button key={item.id} type="button" role="tab" id={`${id}-tab-${item.id}`} aria-selected={group.id === item.id}
+                  aria-controls={`${id}-panel-${group.id === item.id ? section : item.pages[0]}`} tabIndex={group.id === item.id || (group === ABOUT && index === 0) ? 0 : -1}
+                  className={`settings-nav-item${group.id === item.id ? " active" : ""}`}
+                  onClick={() => { if (group.id !== item.id) setSection(item.pages[0]); }} onKeyDown={event => navigate(event, index)}>
                   <span aria-hidden="true">{item.icon}</span>{item.label}
                 </button>
-                </Fragment>
               ))}
             </nav>}
-            <span className="settings-sidebar-version">trex {appInfo?.version ?? ""}</span>
+            <button type="button" className={`settings-sidebar-version${section === "about" ? " active" : ""}`} aria-label="Acerca de trex" onClick={() => setSection("about")}>trex {appInfo?.version ?? ""}</button>
           </div>
 
           <div className="settings-content">
-            {SECTIONS.map(item => <section key={item.id} hidden={section !== item.id} className={`settings-page settings-page-${item.id}${item.id === "terminal" || item.id === "cursor" ? " settings-terminal-page" : ""}`} role="tabpanel" tabIndex={0} id={`${id}-panel-${item.id}`} aria-labelledby={compact ? undefined : `${id}-tab-${item.id}`} aria-label={compact ? item.label : undefined}>
+            {SECTIONS.map(item => <section key={item.id} hidden={section !== item.id} className={`settings-page settings-page-${item.id}${item.id === "terminal" || item.id === "cursor" ? " settings-terminal-page" : ""}`} role="tabpanel" tabIndex={0} id={`${id}-panel-${item.id}`} aria-label={`${groupOf(item.id).label}${groupOf(item.id).pages.length > 1 ? `: ${item.label}` : ""}`}>
               <div className="settings-page-heading">
-                <div className="settings-page-title"><h3>{item.label}</h3><p>{item.description}</p></div>
+                <h3>{groupOf(item.id).label}</h3>
+                {groupOf(item.id).pages.length > 1 && <div className="settings-subtabs" role="group" aria-label={`Páginas de ${groupOf(item.id).label}`}>
+                  {groupOf(item.id).pages.map(page => <button key={page} type="button" aria-pressed={page === item.id} onClick={() => setSection(page)}>
+                    {SECTIONS.find(entry => entry.id === page)?.label}</button>)}
+                </div>}
               </div>
 
               {item.id === "appearance" && <>
                 <div className="settings-block">
                   <h4 id={`${id}-theme`}>Tema</h4>
                   <AppearanceControl value={normalizeAppearance(draft.appearance)} labelledBy={`${id}-theme`} onChange={appearance => patch({ appearance })} />
-                  <p className="settings-note">Sistema se adapta al tema claro u oscuro de tu equipo.</p>
                 </div>
                 <WorkspaceAppearance settings={draft} onChange={patch} />
                 <div className="settings-block">
-                  <SettingField label="Formato de hora" hint="Se aplica a tareas, respuestas, notificaciones y uso de las cuentas.">
+                  <SettingField label="Formato de hora">
                     <Select aria-label="Formato de hora" value={draft.timeFormat} onChange={value => patch({ timeFormat: value === "12h" ? "12h" : "24h" })}
                       options={[{ value: "24h", label: "24 horas · 17:40" }, { value: "12h", label: "12 horas · 05:40 p. m." }]} />
                   </SettingField>
-                  <p className="settings-note">Vista previa: {formatClock(new Date(2026, 0, 1, 17, 40), draft.timeFormat)}</p>
                 </div>
                 <div className="settings-block">
-                  <h4 id={`${id}-accent`}>Color de acento</h4>
+                  <h4 id={`${id}-accent`}>Color de acento<SettingInfo text="Colorea los controles y el cursor del terminal. Si se confunde con el fondo, trex lo aclara u oscurece lo justo para que se lea." /></h4>
                   <AccentPicker value={draft.theme} labelledBy={`${id}-accent`} onChange={theme => patch({ theme })} />
-                  <p className="settings-note">Un toque de color para los controles y el cursor del terminal. Si el color elegido se confunde con el fondo, trex lo acerca al blanco o al negro lo justo para que se lea.</p>
                 </div>
-                <p className="settings-preview-note">Los cambios de apariencia se previsualizan al instante. Guarda para conservarlos.</p>
               </>}
 
               {item.id === "terminal" && <>
                 <div className="settings-terminal-preview" aria-label="Vista previa del terminal" style={{ fontSize: draft.fontSize, fontFamily: draft.fontFamily.trim() || DEFAULT_FONT_FAMILY }}>
-                  <span className="settings-preview-caption">Vista previa</span>
                   <span><span className="settings-prompt">❯</span> Tu próximo proyecto empieza aquí.</span>
                   <span className="settings-preview-muted">Un espacio para crear, a tu ritmo.</span>
                 </div>
-                <SettingField label="Tamaño del texto" hint="Se aplica a todas tus terminales al guardar." labelId={`${id}-font-size`}>
+                <SettingField label="Tamaño del texto" labelId={`${id}-font-size`}>
                   <div className="settings-stepper" role="group" aria-labelledby={`${id}-font-size`}>
                     <button type="button" aria-label="Reducir tamaño del texto" disabled={draft.fontSize <= 10} onClick={() => patch({ fontSize: Math.max(10, draft.fontSize - 1) })}>−</button>
                     <output aria-live="polite">{draft.fontSize}<span>px</span></output>
                     <button type="button" aria-label="Aumentar tamaño del texto" disabled={draft.fontSize >= 24} onClick={() => patch({ fontSize: Math.min(24, draft.fontSize + 1) })}>+</button>
                   </div>
                 </SettingField>
-                <SettingField label="Shell" hint="El programa que ejecuta tus comandos." controlId={`${id}-shell`}>
+                <SettingField label="Shell" controlId={`${id}-shell`}>
                   <Select id={`${id}-shell`} value={draft.shell} onChange={shell => patch({ shell })} options={[
                     ...(!shellOptions.some(option => option.id === draft.shell) ? [{ value: draft.shell, label: `${draft.shell} (actual)` }] : []),
                     ...shellOptions.map(option => ({ value: option.id, label: option.label, disabled: !option.available, description: option.available ? undefined : "No disponible" })),
                   ]} />
                 </SettingField>
                 <div className="settings-toggles">
-                  <SettingToggle label="Copiar al seleccionar" hint="Copia el texto en cuanto lo seleccionas con el ratón." checked={draft.copyOnSelect} onChange={copyOnSelect => patch({ copyOnSelect })} />
+                  <SettingToggle label="Copiar al seleccionar" checked={draft.copyOnSelect} onChange={copyOnSelect => patch({ copyOnSelect })} />
+                  <SettingToggle label="Revisar capturas antes de pegarlas" checked={draft.imagePastePreview} onChange={imagePastePreview => patch({ imagePastePreview })} />
                 </div>
-                <Advanced title="Opciones avanzadas del terminal" open={terminalAdvanced} onToggle={() => setTerminalAdvanced(previous => !previous)}>
-                  <SettingField label="Fuente personalizada" hint="Déjalo vacío para usar JetBrains Mono y las fuentes de símbolos de trex." controlId={`${id}-font-family`} stacked>
+                <Advanced title="Avanzado" open={terminalAdvanced} onToggle={() => setTerminalAdvanced(previous => !previous)}>
+                  <SettingField label="Fuente" hint="vacío: la de trex" controlId={`${id}-font-family`} stacked>
                     <input id={`${id}-font-family`} className="input settings-mono" value={draft.fontFamily} spellCheck={false} placeholder="Fuente predeterminada de trex" onChange={event => patch({ fontFamily: event.currentTarget.value })} />
                   </SettingField>
-                  <SettingField label="Historial del terminal" hint="Número de líneas que puedes recuperar al desplazarte. Entre 200 y 200.000." controlId={`${id}-history`} stacked>
+                  <SettingField label="Historial" hint="líneas, de 200 a 200.000" controlId={`${id}-history`} stacked>
                     <input ref={historyRef} id={`${id}-history`} className="input" type="number" min={200} max={200000} step={1} value={scrollbackText}
                       aria-invalid={!validHistory} aria-describedby={`${id}-history-hint`}
                       onChange={event => { const text = event.currentTarget.value; setScrollbackText(text); if (text.trim()) patch({ scrollback: Number(text) }); }} />
@@ -315,16 +328,15 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
               {item.id === "voice" && section === "voice" && <VoiceSettings />}
               {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
               {item.id === "notifications" && <NotificationsSettings settings={draft} onChange={patch} />}
-              {item.id === "terminal" && <SettingToggle label="Revisar capturas antes de pegarlas" hint="Muestra la imagen y permite confirmarla o cancelar. El texto se pega directamente con el mismo atajo." checked={draft.imagePastePreview} onChange={imagePastePreview=>patch({imagePastePreview})} />}
 
               {item.id === "sessions" && <div className="settings-toggles">
-                <SettingToggle label="Iniciar un asistente al abrir trex" hint="Si no hay sesiones para restaurar, abre el perfil predeterminado. Si lo desactivas, abre una terminal normal." checked={draft.autoRunClaude} onChange={autoRunClaude => patch({ autoRunClaude })} />
-                <SettingToggle label="Reabrir terminales al iniciar" hint="Abre de nuevo las terminales que dejaste abiertas al cerrar trex." checked={draft.restoreOnStart} onChange={restoreOnStart => patch({ restoreOnStart })} />
-                <SettingToggle label="Preguntar antes de cerrar una sesión activa" hint="Te permite cancelar el cierre si el proceso sigue en marcha." checked={draft.confirmCloseTab} onChange={confirmCloseTab => patch({ confirmCloseTab })} />
+                <SettingToggle label="Abrir con un asistente" info="Si no hay sesiones que restaurar, abre el perfil predeterminado. Apagado, abre una terminal normal." checked={draft.autoRunClaude} onChange={autoRunClaude => patch({ autoRunClaude })} />
+                <SettingToggle label="Reabrir lo que dejaste abierto" checked={draft.restoreOnStart} onChange={restoreOnStart => patch({ restoreOnStart })} />
+                <SettingToggle label="Preguntar antes de cerrar una sesión activa" checked={draft.confirmCloseTab} onChange={confirmCloseTab => patch({ confirmCloseTab })} />
               </div>}
 
               {item.id === "about" && <>
-                <div className="settings-about-brand"><BrandMark size={48} /><div><strong>trex</strong><span>Tu espacio para crear con Claude Code y Codex.</span></div></div>
+                <div className="settings-about-brand"><BrandMark size={48} /><div><strong>trex</strong></div></div>
                 <dl className="settings-details">
                   <div><dt>Versión</dt><dd>{appInfo?.version ?? "No disponible"}</dd></div>
                   <div><dt>Plataforma</dt><dd>{appInfo?.platform ?? "No disponible"}</dd></div>
@@ -360,9 +372,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                       </div>;
                     })}
                   </div>
-                  <p className="settings-hint">{cliUpdates.checkedAt
-                    ? `Última comprobación: ${formatClock(cliUpdates.checkedAt, draft.timeFormat)} · trex vuelve a mirar cada pocas horas.`
-                    : "trex busca versiones nuevas poco después de abrirse y cada pocas horas."}</p>
+                  {cliUpdates.checkedAt && <p className="settings-hint">Comprobado a las {formatClock(cliUpdates.checkedAt, draft.timeFormat)}</p>}
                 </div>
               </>}
             </section>)}
@@ -410,20 +420,22 @@ function AppearanceControl({ value, labelledBy, onChange }: { value: Appearance;
   </div>;
 }
 
-function SettingField({ label, hint, controlId, labelId, children, stacked = false }: { label: string; hint: string; controlId?: string; labelId?: string; children: ReactNode; stacked?: boolean }) {
-  const control = controlId && isValidElement<{ "aria-describedby"?: string }>(children)
+/** Una fila: nombre, pista de dos o tres palabras y, si hace falta explicar más, el icono de información. */
+function SettingField({ label, hint, info, controlId, labelId, children, stacked = false }: { label: string; hint?: string; info?: string; controlId?: string; labelId?: string; children: ReactNode; stacked?: boolean }) {
+  const control = controlId && hint && isValidElement<{ "aria-describedby"?: string }>(children)
     ? cloneElement(children, { "aria-describedby": children.props["aria-describedby"] ?? `${controlId}-hint` }) : children;
   return <div className={`setting-field${stacked ? " stacked" : ""}`}>
-    <div className="setting-field-info"><label htmlFor={controlId} id={labelId}>{label}</label><p id={controlId ? `${controlId}-hint` : undefined}>{hint}</p></div>
+    <div className="setting-field-info"><label htmlFor={controlId} id={labelId}>{label}</label>
+      {hint && <small id={controlId ? `${controlId}-hint` : undefined}>{hint}</small>}{info && <SettingInfo text={info} />}</div>
     <div className="setting-field-control">{control}</div>
   </div>;
 }
 
-function SettingToggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (checked: boolean) => void }) {
+function SettingToggle({ label, hint, info, checked, onChange }: { label: string; hint?: string; info?: string; checked: boolean; onChange: (checked: boolean) => void }) {
   const id = useId();
   return <label className="settings-toggle">
-    <span className="setting-field-info"><span id={`${id}-label`}>{label}</span><span id={`${id}-hint`}>{hint}</span></span>
-    <input type="checkbox" role="switch" className="settings-switch" checked={checked} aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`} onChange={event => onChange(event.currentTarget.checked)} />
+    <span className="setting-field-info"><span id={`${id}-label`}>{label}</span>{hint && <small id={`${id}-hint`}>{hint}</small>}{info && <SettingInfo text={info} />}</span>
+    <input type="checkbox" role="switch" className="settings-switch" checked={checked} aria-labelledby={`${id}-label`} aria-describedby={hint ? `${id}-hint` : undefined} onChange={event => onChange(event.currentTarget.checked)} />
   </label>;
 }
 

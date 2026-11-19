@@ -63,10 +63,6 @@ export default function ShortcutSettings({
   };
   return (
     <>
-      <p className="settings-note">
-        Selecciona un campo y pulsa el nuevo atajo. Se aplica a las terminales
-        abiertas al guardar.
-      </p>
       <div className="shortcut-list">
         {[
           { id: "paste" as const, label: "Pegar texto e imágenes" },
@@ -109,11 +105,10 @@ export default function ShortcutSettings({
           setError(null);
         }}
       >
-        Restablecer todos los atajos
+        Restablecer
       </button>
       <p className="settings-note">
-        Ctrl+1…9 selecciona sesiones. Ctrl+Shift+V mantiene el pegado
-        alternativo; Ctrl+C, Ctrl+D y Ctrl+Z conservan su función en el shell.
+        Fijos: Ctrl+1…9 cambia de sesión; Ctrl+C, Ctrl+D y Ctrl+Z son del shell.
       </p>
     </>
   );

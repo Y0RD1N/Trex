@@ -21,6 +21,7 @@ import { formatClock } from "../timeFormat";
 import { MicIcon } from "./Icons";
 import "./BrowserSettings.css";
 import "./Voice.css";
+import SettingInfo from "./SettingInfo";
 
 /**
  * Campo de una clave de API. La clave se escribe aquí y se guarda cifrada; después solo
@@ -134,25 +135,22 @@ export default function VoiceSettings() {
     <div className="browser-settings-card">
       <div className="browser-settings-heading">
         <span className="browser-settings-badge" aria-hidden="true"><MicIcon size={20} /></span>
-        <div><h4>Modo llamada</h4><p>Háblale a trex en voz alta. Empieza la frase con «oye trex» o «hola trex».</p></div>
+        <div><h4>Modo llamada<SettingInfo text="Háblale a trex en voz alta empezando con «oye trex» o «hola trex». El audio se transcribe en este equipo; lo que no llama a trex se descarta al momento." /></h4></div>
         <span className={`browser-settings-status${listening ? " is-ready" : ""}`} role="status">{voiceStateLabel(status)}</span>
       </div>
       {!status.supported
-        ? <p className="browser-settings-note">Por ahora el modo llamada solo funciona en Windows.</p>
-        : <label className="browser-settings-toggle"><span><strong>Escuchar el micrófono</strong>
-          <small>El audio se transcribe en este equipo y no sale de él. Solo se atienden las frases que llaman a trex; lo demás se descarta al momento.</small></span>
+        ? <p className="browser-settings-note">Por ahora, solo en Windows.</p>
+        : <label className="browser-settings-toggle"><span><strong>Escuchar «oye trex»</strong></span>
           <input type="checkbox" role="switch" aria-label="Escuchar el micrófono" checked={status.enabled} disabled={busy}
             onChange={event => void apply({ enabled: event.currentTarget.checked })} /></label>}
       {status.error && status.enabled && <p className="browser-settings-error" role="alert">{status.error}</p>}
     </div>
 
     {status.supported && <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Modelos de voz</h4><p>{offer === "none"
-        ? "Instalados en este equipo."
-        : offer === "speech"
-          ? `Falta la voz de trex (${megabytes(status.totalBytes)}). Sin ella responde con la voz de Windows.`
-          : `No vienen con trex. Se descargan una vez (${megabytes(status.totalBytes)}) y se verifican antes de instalarse.`}</p></div>
-        {offer !== "none" && !status.downloading && <button type="button" className="btn btn-small btn-primary" onClick={() => void download()}>{offer === "speech" ? "Descargar la voz" : "Descargar modelos"}</button>}
+      <div className="browser-settings-heading"><div><h4>Modelos de voz</h4>{offer !== "none" && <p>{offer === "speech"
+        ? `Falta la voz de trex · ${megabytes(status.totalBytes)}`
+        : `Se descargan una vez · ${megabytes(status.totalBytes)}`}</p>}</div>
+        {offer !== "none" && !status.downloading && <button type="button" className="btn btn-small btn-primary" onClick={() => void download()}>"Descargar"</button>}
         {offer === "none" && <span className="browser-settings-status is-ready">Listos</span>}
       </div>
       {status.downloading && <div className="voice-progress" role="progressbar" aria-label="Descarga de los modelos de voz" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
@@ -162,30 +160,29 @@ export default function VoiceSettings() {
     </div>}
 
     {status.supported && <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Micrófono</h4><p>Elige con cuál te escucha trex.</p></div>
-        <button type="button" className="btn btn-small" onClick={() => void loadMicrophones()}>Volver a buscar</button></div>
+      <div className="browser-settings-heading"><div><h4>Micrófono</h4></div>
+        <button type="button" className="btn btn-small" onClick={() => void loadMicrophones()}>Buscar</button></div>
       <Select value={status.device} options={microphoneOptions(microphones, status.device)} disabled={busy} aria-label="Micrófono"
         onChange={device => void apply({ device })} />
       {listening && <div className={`voice-level${level?.voice ? " is-voice" : ""}`} role="meter" aria-label="Nivel del micrófono" aria-valuemin={0} aria-valuemax={100} aria-valuenow={levelPercent(level?.peak ?? 0)}>
         <div className="voice-level-track"><div className="voice-level-fill" style={{ width: `${levelPercent(level?.peak ?? 0)}%` }} /></div>
         <span>{level?.deaf ? "trex está hablando" : level?.voice ? "Te oye" : level ? "Sin voz" : "Esperando al micrófono…"}</span>
       </div>}
-      <label className="browser-settings-toggle"><span><strong>Captar el sonido sin filtros del sistema</strong>
-        <small>Algunos portátiles silencian el micrófono entre frases y cortan el principio de lo que dices. Déjalo activado salvo que trex oiga demasiado ruido.</small></span>
+      <label className="browser-settings-toggle"><span><strong>Sin filtros del sistema <SettingInfo text="Algunos portátiles silencian el micrófono entre frases y cortan el principio de lo que dices. Déjalo activado salvo que trex oiga demasiado ruido." /></strong></span>
         <input type="checkbox" role="switch" aria-label="Captar el sonido sin filtros del sistema" checked={status.rawCapture} disabled={busy}
           onChange={event => void apply({ rawCapture: event.currentTarget.checked })} /></label>
     </div>}
 
     {status.supported && <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Conversación</h4><p>Quién escucha y responde después de «oye trex».</p></div></div>
+      <div className="browser-settings-heading"><div><h4>Conversación</h4></div></div>
       <div className="voice-choice" role="radiogroup" aria-label="Modo de conversación">
         <label className={status.mode === "local" ? "is-selected" : ""}>
           <input type="radio" name={`${id}-mode`} checked={status.mode === "local"} disabled={busy} onChange={() => void apply({ mode: "local" })} />
-          <span><strong>Local</strong><small>Todo se entiende en este equipo y Claude decide qué hacer. Sin costo; tarda unos segundos en responder.</small></span>
+          <span><strong>Local</strong><small>gratis · tarda unos segundos</small></span>
         </label>
         <label className={status.mode === "live" ? "is-selected" : ""}>
           <input type="radio" name={`${id}-mode`} checked={status.mode === "live"} disabled={busy} onChange={() => void apply({ mode: "live" })} />
-          <span><strong>Tiempo real (Gemini Live)</strong><small>Conversación fluida y puedes interrumpirle. De pago, con tu clave de Google: mientras dura la llamada tu voz se envía a Google.</small></span>
+          <span><strong>Tiempo real</strong><small>Gemini Live · de pago · fluido</small></span>
         </label>
       </div>
       {status.mode === "live" && <>
@@ -193,32 +190,31 @@ export default function VoiceSettings() {
         <label className="browser-settings-field">Voz de Gemini
           <Select value={status.liveVoice} options={status.liveVoices.map(voice => ({ value: voice, label: voice }))} disabled={busy} aria-label="Voz de Gemini"
             onChange={liveVoice => void apply({ liveVoice })} /></label>
-        <label className="browser-settings-toggle"><span><strong>Puedo interrumpirle</strong>
-          <small>Úsalo con auriculares. Con altavoces el micrófono oye a trex y se interrumpe solo; apagado, trex no te escucha mientras habla.</small></span>
+        <label className="browser-settings-toggle"><span><strong>Puedo interrumpirle</strong><small>con auriculares</small></span>
           <input type="checkbox" role="switch" aria-label="Puedo interrumpirle" checked={status.bargeIn} disabled={busy}
             onChange={event => void apply({ bargeIn: event.currentTarget.checked })} /></label>
         {liveBlocker && <p className="browser-settings-note">{liveBlocker}</p>}
-        <p className="settings-hint">La llamada se abre al decir «oye trex» y se cierra sola tras 30 segundos de silencio, al despedirte o con «Colgar».</p>
+        <p className="browser-settings-note">Tu voz se envía a Google durante la llamada, que se cierra sola tras 30 s de silencio.</p>
       </>}
     </div>}
 
     {status.supported && status.mode === "local" && <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Voz de las respuestas</h4><p>Con qué voz habla trex en el modo local.</p></div></div>
+      <div className="browser-settings-heading"><div><h4>Voz de las respuestas</h4></div></div>
       <div className="voice-choice" role="radiogroup" aria-label="Voz de las respuestas">
         <label className={status.speech === "local" ? "is-selected" : ""}>
           <input type="radio" name={`${id}-speech`} checked={status.speech === "local"} disabled={busy} onChange={() => void apply({ speech: "local" })} />
-          <span><strong>Local</strong><small>La voz se genera en este equipo. Sin costo y sin conexión.</small></span>
+          <span><strong>Local</strong><small>gratis · sin conexión</small></span>
         </label>
         <label className={status.speech === "elevenlabs" ? "is-selected" : ""}>
           <input type="radio" name={`${id}-speech`} checked={status.speech === "elevenlabs"} disabled={busy} onChange={() => void apply({ speech: "elevenlabs" })} />
-          <span><strong>ElevenLabs</strong><small>Voz de nube, de pago con tu clave. A ElevenLabs solo se envía el texto que trex va a decir.</small></span>
+          <span><strong>ElevenLabs</strong><small>de pago · solo se envía el texto</small></span>
         </label>
       </div>
       {status.speech === "elevenlabs" && <>
         <KeyField provider="elevenlabs" label="Clave de API de ElevenLabs" saved={status.hasCloudKey} onChanged={async () => { setCloudVoices(null); await refresh(); }} onError={setError} />
         {status.hasCloudKey && <div className="browser-settings-heading">
-          <div><p>{cloudVoices === null ? "Carga las voces de tu cuenta para elegir una." : cloudVoices.length ? `${cloudVoices.length} voces en tu cuenta` : "Tu cuenta no tiene voces disponibles."}</p></div>
-          <button type="button" className="btn btn-small" onClick={() => void loadCloudVoices()}>{cloudVoices === null ? "Cargar voces" : "Volver a cargar"}</button>
+          <div><p>{cloudVoices === null ? "" : cloudVoices.length ? `${cloudVoices.length} voces` : "Tu cuenta no tiene voces."}</p></div>
+          <button type="button" className="btn btn-small" onClick={() => void loadCloudVoices()}>{cloudVoices === null ? "Cargar voces" : "Recargar"}</button>
         </div>}
         {status.hasCloudKey && (cloudVoices?.length || status.cloudVoice) && <Select value={status.cloudVoice} placeholder="Elegir voz…" disabled={busy} aria-label="Voz de ElevenLabs"
           options={cloudVoiceOptions(cloudVoices ?? [], status.cloudVoice)} onChange={cloudVoice => void apply({ cloudVoice })} />}
@@ -227,19 +223,17 @@ export default function VoiceSettings() {
     </div>}
 
     {status.supported && <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Dictado</h4><p>{status.dictationInstalled
-        ? "Modelo de dictado instalado: acierta más con nombres y palabras técnicas."
-        : `El micrófono del campo de texto de cada chat escribe lo que dices. Ahora usa el modelo básico; el de dictado (${megabytes(status.dictationBytes)}) se equivoca menos.`}</p></div>
+      <div className="browser-settings-heading"><div><h4>Dictado<SettingInfo text="El micrófono del campo de texto de cada chat escribe lo que dices. Funciona aunque el modo llamada esté apagado y todo se transcribe en este equipo. El modelo de dictado acierta más con nombres y palabras técnicas que el básico." /></h4>
+        {!status.dictationInstalled && <p>Modelo mejorado · {megabytes(status.dictationBytes)}</p>}</div>
         {!status.dictationInstalled && !status.downloading && <button type="button" className="btn btn-small btn-primary" disabled={!status.modelsInstalled}
-          onClick={() => void downloadDictation()}>Descargar modelo</button>}
+          onClick={() => void downloadDictation()}>Descargar</button>}
         {status.dictationInstalled && <span className="browser-settings-status is-ready">Listo</span>}
       </div>
-      {!status.modelsInstalled && <p className="browser-settings-note">Para dictar hacen falta primero los modelos de voz de arriba.</p>}
-      <p className="settings-hint">Funciona aunque el modo llamada esté apagado: el micrófono solo se abre mientras dictas. Todo se transcribe en este equipo.</p>
+      {!status.modelsInstalled && <p className="browser-settings-note">Antes hacen falta los modelos de voz.</p>}
     </div>}
 
     {status.supported && status.enabled && <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Lo último que oyó</h4><p>{listening ? VOICE_PHASE_LABEL[status.phase] : "Cuando esté escuchando, aquí verás lo que entendió."}</p></div></div>
+      <div className="browser-settings-heading"><div><h4>Lo último que oyó</h4>{listening && <p>{VOICE_PHASE_LABEL[status.phase]}</p>}</div></div>
       {heard.length > 0
         ? <ul className="voice-heard">
           {heard.map(utterance => <li key={utterance.at}>
@@ -248,7 +242,7 @@ export default function VoiceSettings() {
             <small>{utterance.text}</small>
           </li>)}
         </ul>
-        : listening && <p className="settings-hint">Di «oye trex, ¿me oyes?» para probarlo.</p>}
+        : listening && <p className="settings-hint">Prueba: «oye trex, ¿me oyes?»</p>}
     </div>}
     {error && <p className="browser-settings-error" role="alert">{error}</p>}
   </div>;

@@ -31,9 +31,7 @@ export default function CursorSettings({ settings, onChange }: { settings: Setti
   };
   return <>
     <div className="settings-terminal-preview" aria-label="Vista previa del cursor" style={{ fontSize: settings.fontSize, fontFamily: settings.fontFamily.trim() || DEFAULT_FONT_FAMILY }}>
-      <span className="settings-preview-caption">Vista previa del cursor{settings.cursorStyle === "auto" ? " · ejemplo de bloque" : ""}</span>
       <span><span className="settings-prompt">❯</span> Escribe tu próxima idea <CursorSample settings={settings} blink /></span>
-      <span className="settings-preview-muted">El color sigue el acento que elijas en Apariencia.</span>
     </div>
     <div className="settings-block">
       <h4 id={`${id}-presets`}>Estilos predefinidos</h4>
@@ -51,7 +49,7 @@ export default function CursorSettings({ settings, onChange }: { settings: Setti
       </div>
     </div>
     <div className="setting-field">
-      <div className="setting-field-info"><label htmlFor={`${id}-shape`}>Forma del cursor</label><p id={`${id}-shape-hint`}>Automático permite que cada aplicación elija su cursor.</p></div>
+      <div className="setting-field-info"><label htmlFor={`${id}-shape`}>Forma</label><small id={`${id}-shape-hint`}>{settings.cursorStyle === "auto" ? "la elige cada aplicación" : ""}</small></div>
       <Select id={`${id}-shape`} value={settings.cursorStyle} aria-describedby={`${id}-shape-hint`}
         onChange={value => onChange({ cursorStyle: value as CursorStyle })} options={[
           { value: "auto", label: "Automático" }, { value: "bar", label: "Barra vertical" },
@@ -59,7 +57,7 @@ export default function CursorSettings({ settings, onChange }: { settings: Setti
         ]} />
     </div>
     {settings.cursorStyle === "bar" && <div className="setting-field">
-      <div className="setting-field-info"><span id={`${id}-width`}>Grosor de la barra</span><p>De 1 a 6 píxeles; elige lo que te resulte más cómodo.</p></div>
+      <div className="setting-field-info"><span id={`${id}-width`}>Grosor</span></div>
       <div className="settings-stepper" role="group" aria-labelledby={`${id}-width`}>
         <button type="button" aria-label="Reducir grosor del cursor" disabled={settings.cursorWidth <= MIN_CURSOR_WIDTH} onClick={() => onChange({ cursorWidth: settings.cursorWidth - 1 })}>−</button>
         <output aria-live="polite">{settings.cursorWidth}<span>px</span></output>
@@ -67,10 +65,9 @@ export default function CursorSettings({ settings, onChange }: { settings: Setti
       </div>
     </div>}
     <label className="settings-toggle">
-      <span className="setting-field-info"><span id={`${id}-blink`}>Cursor parpadeante</span><span id={`${id}-blink-hint`}>Hace más fácil encontrar dónde estás escribiendo.</span></span>
-      <input type="checkbox" role="switch" className="settings-switch" checked={settings.cursorBlink} aria-labelledby={`${id}-blink`} aria-describedby={`${id}-blink-hint`}
+      <span className="setting-field-info"><span id={`${id}-blink`}>Parpadeo</span></span>
+      <input type="checkbox" role="switch" className="settings-switch" checked={settings.cursorBlink} aria-labelledby={`${id}-blink`}
         onChange={event => onChange({ cursorBlink: event.currentTarget.checked })} />
     </label>
-    <p className="settings-note">Guarda para aplicar el estilo a las terminales abiertas de Claude Code, Codex y tus shells, en Windows y Linux.</p>
   </>;
 }

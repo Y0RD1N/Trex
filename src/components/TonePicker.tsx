@@ -17,7 +17,7 @@ export default function TonePicker({ settings, onChange }: Props) {
   const active = matchingTone(settings);
 
   return <div className="settings-block">
-    <h4 id={`${id}-tone`}>Tono de la interfaz <span className="design-custom-label">{active ? "" : "Personalizado"}</span></h4>
+    <h4 id={`${id}-tone`}>Tono <span className="design-custom-label">{active ? "" : "Personalizado"}</span></h4>
     <div className="design-palette-grid tone-grid" role="group" aria-labelledby={`${id}-tone`}>
       {TONE_PRESETS.map(preset => {
         const ui = toneUi(mode, { hue: preset.hue, tint: preset.tint });
@@ -51,6 +51,5 @@ export default function TonePicker({ settings, onChange }: Props) {
         style={{ "--tone-hue": settings.surfaceHue } as React.CSSProperties}
         onChange={event => onChange({ surfaceTint: Number(event.currentTarget.value) })} />
     </label>
-    <p className="settings-note">Cada combinación elige el tono y el acento a la vez; luego puedes retocar el acento aparte. Con intensidad 0 la interfaz es de grises puros. El contraste del texto es el mismo en todos los tonos.</p>
   </div>;
 }

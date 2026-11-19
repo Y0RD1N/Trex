@@ -6,7 +6,8 @@
 .browser-settings-heading { display:flex; align-items:center; gap:var(--sp-3); flex-wrap:wrap; }
 .browser-settings-heading > div { display:grid; gap:var(--sp-1); min-width:0; }
 .browser-settings-heading > .btn { margin-left:auto; }
-.browser-settings-heading h4,.browser-settings-card>h4 { margin:0; font-size:var(--fs-base); }
+.browser-settings-heading h4,.browser-settings-card>h4 { display:flex; align-items:center; gap:var(--sp-2); margin:0; font-size:var(--fs-base); }
+.browser-settings-toggle strong { display:flex; align-items:center; gap:var(--sp-2); }
 .browser-settings-heading p { margin:0; color:var(--text-muted); font-size:var(--fs-sm); }
 .browser-settings-badge { display:grid; place-items:center; flex:0 0 40px; width:40px; height:40px; line-height:0; border:1px solid var(--border); border-radius:var(--radius-xl); color: var(--accent-strong); background:color-mix(in srgb,var(--accent) 7%,transparent); }
 .browser-settings-badge > svg { display:block; }

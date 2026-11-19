@@ -115,28 +115,28 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
   const startMode = customStartId !== selected.id && startOptions.some(option => option.value === selected.args) ? selected.args : "custom";
 
   return <div className="launcher-profiles">
-    <p className="settings-note">Añade un perfil por cada comando o cuenta. Puedes abrir varios a la vez en el mismo proyecto.</p>
     <div className="profile-list" aria-label="Perfiles de asistentes">
       {profiles.map(profile => <button key={profile.id} id={`${id}-profile-${profile.id}`} type="button" className={`profile-card${!creatingTrex && profile.id === selected.id ? " selected" : ""}`} disabled={trexBusy}
         aria-pressed={!creatingTrex && profile.id === selected.id} onClick={() => { setSelectedId(profile.id); setCreatingTrex(false); setAdvanced(false); setTrexNotice(""); }}>
         <span className="profile-card-icon"><AgentIcon kind={profile.provider} size={16} /></span>
         <span className="profile-card-text"><span>{profile.name.trim() || "Sin nombre"}</span><span>{profile.provider === "trex" ? `${trexConnectionName(profile)} · ${trex.loading ? "Comprobando…" : trexReady ? "Trex API" : "No disponible"}` : profile.command.trim() || "Sin comando"}</span></span>
-        {profile.id === defaultProfileId && <span className="profile-default-badge">Predeterminado</span>}
+        {profile.id === defaultProfileId && <span className="profile-default-badge" title="Perfil predeterminado">por defecto</span>}
       </button>)}
     </div>
-    <div className="profile-add-actions">
-      <button type="button" className="btn btn-small btn-ghost" disabled={trexBusy} onClick={() => add("claude")}><PlusIcon size={13} /> Añadir Claude</button>
-      <button type="button" className="btn btn-small btn-ghost" disabled={trexBusy} onClick={() => add("codex")}><PlusIcon size={13} /> Añadir Codex</button>
-      <button type="button" className="btn btn-small btn-ghost" disabled={trexBusy} onClick={() => add("antigravity")}><PlusIcon size={13} /> Añadir Antigravity</button>
-      <button type="button" className="btn btn-small btn-ghost" disabled={!trexReady || trexBusy} aria-describedby={`${id}-trex-hint`}
-        onClick={() => { setCreatingTrex(true); setAdvanced(false); setTrexNotice(""); }}><PlusIcon size={13} /> Trex API</button>
+    <div className="profile-add-actions" role="group" aria-label="Añadir un asistente">
+      <span aria-hidden="true"><PlusIcon size={13} />Añadir</span>
+      <button type="button" aria-label="Añadir Claude" disabled={trexBusy} onClick={() => add("claude")}>Claude</button>
+      <button type="button" aria-label="Añadir Codex" disabled={trexBusy} onClick={() => add("codex")}>Codex</button>
+      <button type="button" aria-label="Añadir Antigravity" disabled={trexBusy} onClick={() => add("antigravity")}>Antigravity</button>
+      <button type="button" aria-label="Añadir Trex API" disabled={!trexReady || trexBusy} aria-describedby={`${id}-trex-hint`}
+        onClick={() => { setCreatingTrex(true); setAdvanced(false); setTrexNotice(""); }}>Trex API</button>
     </div>
 
     <div className="trex-cli-availability" aria-busy={trex.loading}>
       <div className="trex-cli-heading"><span className="profile-card-icon"><AgentIcon kind="trex" size={16} /></span>
         <div><strong>Trex API <span>Opcional</span></strong><span role="status">{trex.loading ? "Comprobando Trex CLI…" : trex.status?.installed ? `Trex CLI disponible${trex.status.version ? ` · ${trex.status.version}` : ""}` : trex.error ? "Trex CLI no disponible" : "Trex CLI no instalado"}</span></div>
         <button type="button" className="btn btn-small btn-ghost" disabled={trex.loading || trexBusy} onClick={() => void trex.refresh()}>Comprobar</button></div>
-      <p id={`${id}-trex-hint`}>{trex.error ?? (trex.status?.installed ? "Conecta DeepSeek, MiniMax, OpenRouter, Anthropic o una API compatible. Cada cuenta guarda su propio modelo y clave en Trex CLI." : "Trex CLI es opcional. Activa «Instalar Trex CLI» en el instalador de trex y pulsa Comprobar para añadir conexiones API. Tus perfiles de Claude y Codex siguen disponibles.")}</p>
+      <p id={`${id}-trex-hint`}>{trex.error ?? (trex.status?.installed ? "DeepSeek, MiniMax, OpenRouter, Anthropic o cualquier API compatible." : "Trex CLI no está instalado: actívalo en el instalador de trex.")}</p>
       {trex.status?.path && <code className="trex-cli-path">{trex.status.path}</code>}
     </div>
 
@@ -149,7 +149,7 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
         connections={trex.connections} launcherProfiles={profiles} onSaved={savedConnection} onRemoved={removedConnection} onBusyChange={changeTrexBusy}
         onCancel={creatingTrex ? () => setCreatingTrex(false) : undefined} />
         : <div className="trex-unavailable"><span className="trex-unavailable-badge">{!creatingTrex && selected.configDir.trim() ? "Carpeta personalizada" : trex.loading ? "Comprobando…" : "No disponible"}</span>
-          <p>{!creatingTrex && selected.configDir.trim() ? "Esta cuenta utiliza una carpeta TREX_HOME personalizada. Gestiona su conexión desde el CLI con esa misma carpeta; estos ajustes solo administran las conexiones de la carpeta predeterminada." : trex.loading ? "Buscando Trex CLI y sus conexiones guardadas." : "Este perfil se conserva en tus ajustes. Para consultar o editar la conexión, Trex CLI debe estar instalado y disponible."}</p>
+          <p>{!creatingTrex && selected.configDir.trim() ? "Usa una carpeta TREX_HOME propia: su conexión se gestiona desde el CLI." : trex.loading ? "Buscando Trex CLI…" : "Para ver o editar la conexión hace falta Trex CLI."}</p>
           {!creatingTrex && <dl><div><dt>Conexión</dt><dd>{trexConnectionName(selected)}</dd></div><div><dt>Comando</dt><dd>{selected.command}</dd></div><div><dt>Argumentos</dt><dd>{selected.args || "Sin argumentos"}</dd></div></dl>}
           {creatingTrex && <button type="button" className="btn btn-small btn-ghost" onClick={() => setCreatingTrex(false)}>Volver a los asistentes</button>}</div>}
       {!creatingTrex && <label className="profile-default-control"><input type="radio" name={`${id}-default-profile`} checked={selected.id === defaultProfileId} disabled={!trexReady || trexBusy} onChange={() => onChange(profiles, selected.id)} />
@@ -165,13 +165,13 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
       <div className="profile-field"><label htmlFor={`${id}-command`}>Comando</label>
         <input id={`${id}-command`} className="input settings-mono" value={selected.command} spellCheck={false} placeholder={selected.provider === "antigravity" ? "antigravity-acp" : selected.provider === "claude" ? "claude1" : "codex"}
           aria-invalid={!selected.command.trim()} aria-describedby={`${id}-command-hint`} onChange={event => patch({ command: event.currentTarget.value })} />
-        <small id={`${id}-command-hint`}>{selected.provider === "antigravity" ? "Usa antigravity-acp para gestionar el componente automáticamente, o indica la ruta completa del servidor oficial." : `Nombre, ruta, alias o función de tu shell. Por ejemplo: ${selected.provider === "claude" ? "claude1 o claude2" : "codex"}.`}</small></div>
+        <small id={`${id}-command-hint`}>{selected.provider === "antigravity" ? "antigravity-acp, o la ruta del servidor oficial" : "nombre, ruta o alias de tu shell"}</small></div>
       {selected.provider !== "antigravity" && <><div className="profile-status" role="status">
         <span className={`settings-status-dot${standard && info && !info.found ? " missing" : ""}`} aria-hidden="true" />
-        <span>{standard ? !info ? "Comprobando instalación…" : info.found ? `${PROVIDER_NAMES[selected.provider]} disponible${info.version ? ` · ${info.version}` : ""}` : `${PROVIDER_NAMES[selected.provider]} no detectado en el equipo` : "Comando personalizado · se ejecutará con tu shell"}</span>
+        <span>{standard ? !info ? "Comprobando instalación…" : info.found ? `Disponible${info.version ? ` · ${info.version}` : ""}` : "No detectado" : "Comando personalizado"}</span>
         {standard && <button type="button" className="btn btn-small btn-ghost" disabled={!info} onClick={onRedetect}>Comprobar</button>}
       </div>
-      {standard && info && !info.found && <p className="settings-note">Instala el CLI en tu equipo o indica la ruta de su ejecutable.</p>}
+      {standard && info && !info.found && <p className="settings-note">Instala el CLI o indica su ruta.</p>}
       <div className="profile-field"><label htmlFor={`${id}-start`}>Cómo empezar</label>
         <Select id={`${id}-start`} value={startMode} onChange={value => {
           if (value === "custom") { setCustomStartId(selected.id); setAdvanced(true); requestAnimationFrame(() => document.getElementById(`${id}-args`)?.focus()); }
@@ -179,7 +179,6 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
         }} options={[...startOptions, { value: "custom", label: "Argumentos personalizados" }]} /></div></>}
       <label className="profile-default-control"><input type="radio" name={`${id}-default-profile`} checked={selected.id === defaultProfileId} onChange={() => onChange(profiles, selected.id)} />
         <span>Usar este perfil con Ctrl+T y al iniciar trex</span></label>
-      <p className="settings-note">La cuenta se gestiona en el propio asistente. Cambiar un perfil solo afecta a las sesiones nuevas.</p>
 
       <div className="settings-advanced">
         <button type="button" className="settings-advanced-trigger" aria-expanded={advanced} aria-controls={`${id}-advanced`} onClick={() => setAdvanced(!advanced)}><ChevronIcon size={13} />Opciones avanzadas del perfil</button>
@@ -189,7 +188,7 @@ export default function LauncherProfiles({ profiles, defaultProfileId, appInfo, 
               placeholder={selected.provider === "codex" ? "Por ejemplo: --no-alt-screen" : "Sin argumentos adicionales"} onChange={event => patch({ args: event.currentTarget.value })} /></div>
             <div className="profile-field"><label htmlFor={`${id}-config-dir`}>Carpeta de configuración (opcional)</label><input id={`${id}-config-dir`} className="input settings-mono" value={selected.configDir} spellCheck={false}
               placeholder={selected.provider === "antigravity" ? "~/.gemini-trex-trabajo" : selected.provider === "codex" ? "~/.codex-trabajo" : "~/.claude-cuenta-2"} aria-describedby={`${id}-config-hint`} onChange={event => patch({ configDir: event.currentTarget.value })} />
-              <small id={`${id}-config-hint`}>{selected.provider === "antigravity" ? "Carpeta GEMINI_HOME para una cuenta de Google independiente. Vacía: usa la cuenta de Antigravity de Trex." : `Para separar la configuración y la cuenta mediante ${selected.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"}. Déjala vacía si tu comando ya lo gestiona.`}</small></div>
+              <small id={`${id}-config-hint`}>{selected.provider === "antigravity" ? "GEMINI_HOME, para otra cuenta de Google" : `${selected.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"}, para separar cuentas`}</small></div>
             <div className="profile-field"><label htmlFor={`${id}-shell`}>Shell del perfil</label><Select id={`${id}-shell`} value={selected.shell} disabled={selected.provider === "antigravity"} onChange={shell => patch({ shell })} options={[
               { value: "", label: "Usar el shell de trex" },
               ...(!appInfo?.shellOptions.some(option => option.id === selected.shell) && selected.shell ? [{ value: selected.shell, label: `${selected.shell} (actual)` }] : []),

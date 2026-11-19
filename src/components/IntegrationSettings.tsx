@@ -7,6 +7,7 @@ import "./BrowserSettings.css";
 import "./IntegrationSettings.css";
 import type { ApplicationIntegrations } from "../types";
 import { SystemIcon } from "./Icons";
+import SettingInfo from "./SettingInfo";
 
 const guides = {
   blender: "https://www.blender.org/download/",
@@ -101,38 +102,37 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
   ];
   return <div className="browser-settings integration-settings">
     <div className="browser-settings-card">
-      <div className="browser-settings-heading"><div><h4>Control de computadora</h4><p>Escritorio, ratón y teclado para tus agentes</p></div><span className={`browser-settings-status${desktop?.available ? " is-ready" : ""}`} role="status">{desktop?.available ? "Escritorio disponible" : desktopError ? "Revisar instalación" : desktop ? "No disponible" : "Comprobando…"}</span></div>
-      <label className="browser-settings-toggle"><span><strong>Permitir el control en nuevos chats</strong><small>Planificar permite observar; los demás modos aplican los permisos del agente.</small></span><input type="checkbox" role="switch" aria-label="Activar control de computadora para los agentes" checked={desktopEnabled} onChange={event => onDesktopChange(event.currentTarget.checked)} /></label>
+      <div className="browser-settings-heading"><div><h4>Control de computadora<SettingInfo text="Los agentes capturan la pantalla y manejan ratón y teclado. Experimental en Windows; no controla ventanas elevadas ni pantallas de seguridad. Vale para chats nuevos: cierra los abiertos para retirarles el acceso." /></h4></div><span className={`browser-settings-status${desktop?.available ? " is-ready" : ""}`} role="status">{desktop?.available ? "Escritorio disponible" : desktopError ? "Revisar instalación" : desktop ? "No disponible" : "Comprobando…"}</span></div>
+      <label className="browser-settings-toggle"><span><strong>Activar en chats nuevos</strong></span><input type="checkbox" role="switch" aria-label="Activar control de computadora para los agentes" checked={desktopEnabled} onChange={event => onDesktopChange(event.currentTarget.checked)} /></label>
       {desktop?.available && <div className="integration-displays" aria-label="Pantallas disponibles">{desktop.monitors.map(monitor => <div className="integration-display" key={monitor.id}><span aria-hidden="true"><SystemIcon size={21}/></span><div><strong>{monitor.primary ? "Pantalla principal" : monitor.name}</strong><small>{monitor.width} × {monitor.height} · {Math.round(monitor.scaleFactor * 100)} %</small></div></div>)}</div>}
-      {desktop && !desktop.available && <p className="browser-settings-note">{desktop.reason === "waylandUnsupported" ? "Esta sesión usa Wayland. El control completo requiere X11; la captura y la entrada no se simulan mediante XWayland." : "No se pudo conectar a un escritorio interactivo. Comprueba que la sesión esté abierta y vuelve a comprobar."}</p>}
+      {desktop && !desktop.available && <p className="browser-settings-note">{desktop.reason === "waylandUnsupported" ? "Esta sesión usa Wayland; el control necesita X11." : "No hay un escritorio interactivo al que conectarse."}</p>}
       {desktopError && <p className="browser-settings-error" role="alert">{desktopError}</p>}
-      <p className="browser-settings-note">Trex API, Claude y Codex pueden capturar la pantalla y controlar ratón y teclado. Windows utiliza coordenadas físicas y permite elegir pantalla, incluido el escalado DPI; sigue siendo experimental. No controla ventanas elevadas ni pantallas de seguridad. Se aplica a nuevas sesiones; cierra las sesiones abiertas para retirarles el acceso. La pantalla puede enviarse al proveedor del modelo y requiere visión. Esta comprobación no toma capturas ni envía entrada.</p>
+      {desktopEnabled && <p className="browser-settings-note">La pantalla se envía al proveedor del modelo.</p>}
     </div>
     <div className="browser-settings-card integration-a11y">
-      <div className="browser-settings-heading"><div><h4>Control por accesibilidad <span className="integration-badge">Experimental</span></h4><p>Tus agentes manejan las apps sin tu ratón ni tu teclado</p></div>
+      <div className="browser-settings-heading"><div><h4>Control por accesibilidad <span className="integration-badge">Experimental</span><SettingInfo text={`Los agentes leen los controles de las ventanas y actúan sobre ellos sin mover tu ratón, así puedes seguir trabajando. ${linux ? "En Linux usa AT-SPI." : "Un marco naranja muestra dónde actúan."} Si usas esa misma ventana, esperan. Se detiene con «Detener» o Esc.`} /></h4></div>
         <span className={`browser-settings-status${engineReady ? " is-ready" : ""}`} role="status">{engineLabel}</span></div>
-      <label className="browser-settings-toggle"><span><strong>Usar en nuevos chats</strong><small>Independiente del control de computadora: activa el que quieras usar. Planificar solo permite leer.</small></span><input type="checkbox" role="switch" aria-label="Activar el control por accesibilidad para los agentes" checked={a11yEnabled} onChange={event => onA11yChange(event.currentTarget.checked)} /></label>
-      <label className="browser-settings-toggle integration-keyboard"><span><strong>Permitir atajos de teclado</strong><small>{linux
-        ? "Para lo que no tiene botón ni menú (Ctrl+S, F5…). Solo si no estás tecleando y solo en la ventana que ya está activa (Linux no deja traer ventanas al frente); la primera vez el escritorio te pide permiso."
-        : "Para lo que no tiene botón ni menú (Ctrl+S, F5…). Solo si no estás tecleando: trae la ventana al frente un instante, pulsa y te devuelve el foco."}</small></span><input type="checkbox" role="switch" aria-label="Permitir atajos de teclado en el control por accesibilidad" checked={a11yKeyboard} onChange={event => onA11yKeyboardChange(event.currentTarget.checked)} /></label>
+      <label className="browser-settings-toggle"><span><strong>Activar en chats nuevos</strong></span><input type="checkbox" role="switch" aria-label="Activar el control por accesibilidad para los agentes" checked={a11yEnabled} onChange={event => onA11yChange(event.currentTarget.checked)} /></label>
+      <label className="browser-settings-toggle integration-keyboard"><span><strong>Permitir atajos de teclado <SettingInfo text={linux
+        ? "Para lo que no tiene botón ni menú (Ctrl+S, F5…). Solo si no estás tecleando y solo en la ventana activa; la primera vez el escritorio te pide permiso."
+        : "Para lo que no tiene botón ni menú (Ctrl+S, F5…). Solo si no estás tecleando: trae la ventana al frente un instante, pulsa y te devuelve el foco."} /></strong></span><input type="checkbox" role="switch" aria-label="Permitir atajos de teclado en el control por accesibilidad" checked={a11yKeyboard} onChange={event => onA11yKeyboardChange(event.currentTarget.checked)} /></label>
       {a11yError && <p className="browser-settings-error" role="alert">{a11yError}</p>}
-      {a11y && !engineReady && linux && <p className="browser-settings-note">No se pudo usar el bus de accesibilidad (AT-SPI). Instala at-spi2-core e inicia sesión en un escritorio gráfico, y vuelve a comprobar.</p>}
-      <p className="browser-settings-note">Claude, Codex, Trex CLI y Antigravity leen el árbol de accesibilidad de las ventanas y actúan sobre sus elementos (pulsar, escribir, elegir, desplegar) sin mover el ratón, así puedes seguir trabajando. {linux ? "En Linux usa AT-SPI (GNOME, KDE…) y, mientras lo usa, pide a las apps Chromium, Electron, Firefox y Qt que publiquen su árbol; no hay marco en pantalla. Cada" : "Un marco naranja muestra dónde actúa, cada"} acción se comprueba releyendo el control, y si estás usando esa misma ventana el agente espera; en un equipo, cada agente trabaja en su propia ventana. Lo que leen, incluido el texto visible de los documentos, llega al proveedor del modelo; los campos de contraseña nunca se leen. El motor de Trex no guarda nada en disco y, salvo los atajos de teclado, nunca trae ventanas al frente. Puedes detenerlo con «Detener» o Esc.</p>
+      {a11y && !engineReady && linux && <p className="browser-settings-note">Falta el bus de accesibilidad: instala at-spi2-core.</p>}
+      {a11yEnabled && <p className="browser-settings-note">Lo que leen en las ventanas se envía al proveedor del modelo; las contraseñas, nunca.</p>}
     </div>
-    <div className="browser-settings-card"><div className="browser-settings-heading"><div><h4>Aplicaciones</h4><p>Elige qué aplicaciones se anuncian a tus agentes.</p></div><button type="button" className="btn btn-small" onClick={() => setRevision(value => value + 1)}>Volver a comprobar</button></div>
+    <div className="browser-settings-card"><div className="browser-settings-heading"><div><h4>Aplicaciones<SettingInfo text="Las que actives se anuncian a tus agentes al abrir o reiniciar un chat." /></h4></div><button type="button" className="btn btn-small" onClick={() => setRevision(value => value + 1)}>Comprobar</button></div>
       <div className="integration-apps">{apps.map(app => <div className={`integration-app${integrations[app.id] ? " is-enabled" : ""}`} key={app.id}>
-        <div className="integration-app-title"><strong>{app.name}</strong><span className="integration-app-state">{integrations[app.id] ? "Activada" : "Desactivada"}</span></div>
+        <div className="integration-app-title"><strong>{app.name}</strong></div>
         <label className="integration-app-switch"><input type="checkbox" role="switch" aria-label={`Activar ${app.name} para los agentes`} checked={integrations[app.id]}
           onChange={event => onIntegrationsChange({ ...integrations, [app.id]: event.currentTarget.checked })} /></label>
-        <p>{app.description}</p><div className="integration-app-footer"><span>{status ? app.found ? "Detectado" : "No detectado" : "Comprobando…"}</span><button type="button" className="btn btn-small" onClick={() => guide(app.url)}>Guía de instalación</button></div>
+        <p>{app.description}</p><div className="integration-app-footer"><span>{status ? app.found ? "Detectado" : "No detectado" : "Comprobando…"}</span><button type="button" className="btn btn-small" onClick={() => guide(app.url)}>Guía</button></div>
       </div>)}</div>
-      <p className="integration-session-note">Se aplica al abrir o reiniciar un chat. Las sesiones activas conservan su configuración.</p>
-      {integrations.github && status?.githubCli && <div className="browser-settings-foot"><span>Conexión de GitHub<br />{github === "connected" ? "Sesión confirmada" : github === "timeout" ? "La comprobación agotó el tiempo" : github ? "No se pudo confirmar una sesión" : "Aún no comprobada"}</span><button type="button" className="btn btn-small" disabled={checkingGithub} onClick={() => void checkGithub()}>{checkingGithub ? "Comprobando…" : "Comprobar conexión"}</button></div>}
-      {status && <p className="browser-settings-note">Node: {status.node ? "detectado" : "no detectado"} · FFmpeg: {status.ffmpeg ? "detectado" : "no detectado"}. La detección no comprueba versiones. Las aplicaciones desactivadas no se anuncian como integraciones. Las herramientas generales de cada agente conservan sus propios permisos.</p>}
+      {integrations.github && status?.githubCli && <div className="browser-settings-foot"><span>GitHub: {github === "connected" ? "conectado" : github === "timeout" ? "sin respuesta" : github ? "sin sesión" : "sin comprobar"}</span><button type="button" className="btn btn-small" disabled={checkingGithub} onClick={() => void checkGithub()}>{checkingGithub ? "Comprobando…" : "Comprobar"}</button></div>}
+      {status && <p className="browser-settings-note">Node {status.node ? "✓" : "✕"} · FFmpeg {status.ffmpeg ? "✓" : "✕"}</p>}
       {error && <p className="browser-settings-error" role="alert">{error}</p>}
     </div>
     <div className="browser-settings-card integration-bridge">
-      <div className="browser-settings-heading"><div><h4>Blender en vivo</h4><p>Tus agentes ven y manejan el Blender que tienes abierto</p></div>
+      <div className="browser-settings-heading"><div><h4>Blender en vivo<SettingInfo text="Tus agentes ven y manejan el Blender que tienes abierto, ejecutando Python según su modo de permisos. Instalar el puente lo activa en cada Blender que abras; se pausa desde el indicador «Trex» de su barra de estado. Las capturas de la escena llegan al proveedor del modelo." /></h4></div>
         <span className={`browser-settings-status${summary.tone === "ready" ? " is-ready" : ""}`} role="status">{summary.label}</span></div>
       {summary.lines.length > 0 && <ul className="integration-bridge-lines" aria-label="Estado del puente con Blender">{summary.lines.map(line => <li key={line}>{line}</li>)}</ul>}
       <div className="integration-bridge-actions">
@@ -141,17 +141,15 @@ export default function IntegrationSettings({ cwd, desktopEnabled, onDesktopChan
         {summary.canUninstall && <button type="button" className="btn btn-small" disabled={bridgeBusy !== null} onClick={() => void runBridge("uninstall")}>{bridgeBusy === "uninstall" ? "Quitando…" : "Quitar el puente"}</button>}
       </div>
       {bridgeError && <p className="browser-settings-error" role="alert">{bridgeError}</p>}
-      <p className="browser-settings-note">Abrir Blender con Trex no cambia tu configuración de Blender. Instalar el puente lo activa en cada Blender que abras en este equipo y conserva tus preferencias; si ya tienes Blender abierto, reinícialo o actívalo en Preferencias → Add-ons. Puedes pausar el control en cualquier momento con el indicador «Trex» de la barra de estado de Blender (abajo a la derecha). Los agentes ejecutan Python en tu Blender: el modo de permisos del agente decide si pueden cambiar algo o solo mirar. Lo que ven (capturas de la escena) llega al proveedor del modelo.</p>
     </div>
     <div className="browser-settings-card integration-bridge">
-      <div className="browser-settings-heading"><div><h4>HyperFrames</h4><p>Vídeo con HTML: tus agentes lo crean, lo ven y lo renderizan</p></div>
+      <div className="browser-settings-heading"><div><h4>HyperFrames<SettingInfo text="Vídeo con HTML: tus agentes lo crean, lo ven y lo renderizan con la versión que tengas instalada. Las skills son sus instrucciones oficiales y solo se instalan al pulsar el botón. Los fotogramas llegan al proveedor del modelo." /></h4></div>
         <span className={`browser-settings-status${hyperframesSummary.tone === "ready" ? " is-ready" : ""}`} role="status">{hyperframesSummary.label}</span></div>
       {hyperframesSummary.lines.length > 0 && <ul className="integration-bridge-lines" aria-label="Estado de HyperFrames">{hyperframesSummary.lines.map(line => <li key={line}>{line}</li>)}</ul>}
       {hyperframesSummary.skillsLabel && <div className="integration-bridge-actions">
         <button type="button" className="btn btn-small" disabled={hyperframesBusy !== null} onClick={() => void runHyperframes("skillsUpdate")}>{hyperframesBusy === "skillsUpdate" ? "Instalando skills…" : hyperframesSummary.skillsLabel}</button>
       </div>}
       {hyperframesError && <p className="browser-settings-error" role="alert">{hyperframesError}</p>}
-      <p className="browser-settings-note">Los agentes usan HyperFrames con herramientas que validan la composición, te muestran los fotogramas, la renderizan y abren la vista previa; la versión es la que tengas instalada: Trex nunca instala ni actualiza HyperFrames, ni envía telemetría suya. Las skills son las instrucciones oficiales de HyperFrames para los modelos; instalarlas escribe en las carpetas de skills de tus agentes{hyperframesSummary.skillsLocation ? ` (por ejemplo ${hyperframesSummary.skillsLocation})` : ""} y solo ocurre cuando pulsas el botón. Sin ellas, los agentes leen la documentación integrada con hyperframes_docs. Lo que ven (fotogramas) llega al proveedor del modelo.</p>
     </div>
   </div>;
 }

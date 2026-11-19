@@ -6,6 +6,7 @@ import { resolveThemeMode } from "../theme";
 import { CheckIcon } from "./Icons";
 import { IS_WINDOWS } from "../platform";
 import TonePicker from "./TonePicker";
+import SettingInfo from "./SettingInfo";
 
 type Props = { settings: Settings; onChange: (patch: Partial<Settings>) => void };
 
@@ -49,11 +50,10 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
           </button>;
         })}
       </div>
-      <p className="settings-note">Estas paletas solo cambian los colores ANSI del terminal, en claro y oscuro; el tono y el acento los eliges arriba y abajo.</p>
     </div>
 
     <div className="settings-block">
-      <h4>Vista previa de tu terminal</h4>
+      <h4>Vista previa</h4>
       <div className="design-preview" style={previewStyle} aria-label="Vista previa del marco y los colores">
         <div className="design-preview-terminal">
           <span className="design-preview-caption">trex · tu espacio de trabajo</span>
@@ -66,7 +66,7 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
     </div>
 
     <div className="settings-block">
-      <h4 id={`${id}-frame`}>Estilo del marco <span className="design-custom-label">{preset ? "" : "Personalizado"}</span></h4>
+      <h4 id={`${id}-frame`}>Marco <span className="design-custom-label">{preset ? "" : "Personalizado"}</span></h4>
       <div className="design-frame-grid" role="group" aria-labelledby={`${id}-frame`}>
         {FRAME_PRESETS.map(frame => <button key={frame.id} type="button" className={`design-frame${preset === frame.id ? " selected" : ""}`}
           aria-pressed={preset === frame.id} onClick={() => onChange({ terminalRadius: frame.terminalRadius, terminalMargin: frame.terminalMargin, terminalBorder: frame.terminalBorder })}>
@@ -82,24 +82,23 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
         <input id={`${id}-radius`} type="range" min="0" max="36" value={settings.terminalRadius} onChange={event => onChange({ terminalRadius: Number(event.currentTarget.value) })} />
       </label>
       <label className="design-slider" htmlFor={`${id}-margin`}>
-        <span>Margen alrededor <output>{settings.terminalMargin} px</output></span>
+        <span>Margen <output>{settings.terminalMargin} px</output></span>
         <input id={`${id}-margin`} type="range" min="0" max="24" value={settings.terminalMargin} onChange={event => onChange({ terminalMargin: Number(event.currentTarget.value) })} />
       </label>
       <label className="settings-toggle">
-        <span className="setting-field-info"><span id={`${id}-border-label`}>Borde sutil</span><span id={`${id}-border-hint`}>Define el contorno con un borde y una sombra suave.</span></span>
-        <input type="checkbox" role="switch" className="settings-switch" checked={settings.terminalBorder} aria-labelledby={`${id}-border-label`} aria-describedby={`${id}-border-hint`} onChange={event => onChange({ terminalBorder: event.currentTarget.checked })} />
+        <span className="setting-field-info"><span id={`${id}-border-label`}>Borde</span></span>
+        <input type="checkbox" role="switch" className="settings-switch" checked={settings.terminalBorder} aria-labelledby={`${id}-border-label`} onChange={event => onChange({ terminalBorder: event.currentTarget.checked })} />
       </label>
-      <p className="settings-note">En ventanas pequeñas, el margen y el redondeado se ajustan para aprovechar el espacio.</p>
     </div>
 
     <div className="settings-block">
       <h4>Transparencias</h4>
       <label className="settings-toggle">
-        <span className="setting-field-info"><span id={`${id}-glass-label`}>Efecto cristal</span><span id={`${id}-glass-hint`}>{IS_WINDOWS ? "Mica de Windows 11 detrás de la ventana y un desenfoque suave" : "Un desenfoque suave"} en la cabecera del chat, la caja de mensaje y los menús. Si tu equipo pide reducir las transparencias, se respeta.</span></span>
-        <input type="checkbox" role="switch" className="settings-switch" checked={settings.glass} aria-labelledby={`${id}-glass-label`} aria-describedby={`${id}-glass-hint`} onChange={event => onChange({ glass: event.currentTarget.checked })} />
+        <span className="setting-field-info"><span id={`${id}-glass-label`}>Efecto cristal</span><SettingInfo text={`${IS_WINDOWS ? "Mica de Windows 11 detrás de la ventana y un desenfoque suave" : "Un desenfoque suave"} en la cabecera del chat, la caja de mensaje y los menús. Si tu equipo pide reducir las transparencias, se respeta.`} /></span>
+        <input type="checkbox" role="switch" className="settings-switch" checked={settings.glass} aria-labelledby={`${id}-glass-label`} onChange={event => onChange({ glass: event.currentTarget.checked })} />
       </label>
       {IS_WINDOWS && <>
-        <h4 id={`${id}-material`}>Fondo de la ventana</h4>
+        <h4 id={`${id}-material`}>Fondo de la ventana<SettingInfo text="Mica y Acrílico los pinta Windows 11 detrás de la ventana. Más gris lo vuelve más sobrio; menos deja ver el color de tu fondo de escritorio. En Windows 10 la ventana sigue opaca." /></h4>
         <div className="design-palette-grid design-material-grid" role="group" aria-labelledby={`${id}-material`}>
           {WINDOW_MATERIALS.map(material => <button key={material.id} type="button" disabled={!settings.glass && material.id !== "solid"}
             className={`design-frame${settings.windowBackdrop === material.id ? " selected" : ""}`}
@@ -109,19 +108,18 @@ export default function WorkspaceAppearance({ settings, onChange }: Props) {
           </button>)}
         </div>
         <label className="design-slider" htmlFor={`${id}-tint`}>
-          <span>Gris sobre el material <output>{settings.materialTint} %</output></span>
-          <input id={`${id}-tint`} type="range" min="20" max="90" step="5" value={settings.materialTint} disabled={!settings.glass || settings.windowBackdrop === "solid"}
+          <span>Gris <output>{settings.materialTint} %</output></span>
+          <input id={`${id}-tint`} type="range" min="45" max="90" step="5" value={settings.materialTint} disabled={!settings.glass || settings.windowBackdrop === "solid"}
             onChange={event => onChange({ materialTint: Number(event.currentTarget.value) })} />
         </label>
-        <p className="settings-note">Mica y Acrílico los pinta Windows 11 detrás de la ventana. Más gris lo vuelve más sobrio; menos deja ver más el color de tu fondo de escritorio. En Windows 10 la ventana sigue opaca y solo se difumina lo que flota.</p>
       </>}
     </div>
 
     <div className="settings-block">
       <h4>Movimiento</h4>
       <label className="settings-toggle">
-        <span className="setting-field-info"><span id={`${id}-motion-label`}>Reducir animaciones</span><span id={`${id}-motion-hint`}>Transiciones mínimas al cambiar de sesión o abrir paneles. También se respeta la preferencia de tu equipo.</span></span>
-        <input type="checkbox" role="switch" className="settings-switch" checked={settings.motion === "reduced"} aria-labelledby={`${id}-motion-label`} aria-describedby={`${id}-motion-hint`} onChange={event => onChange({ motion: event.currentTarget.checked ? "reduced" : "system" })} />
+        <span className="setting-field-info"><span id={`${id}-motion-label`}>Reducir animaciones</span></span>
+        <input type="checkbox" role="switch" className="settings-switch" checked={settings.motion === "reduced"} aria-labelledby={`${id}-motion-label`} onChange={event => onChange({ motion: event.currentTarget.checked ? "reduced" : "system" })} />
       </label>
     </div>
   </>;

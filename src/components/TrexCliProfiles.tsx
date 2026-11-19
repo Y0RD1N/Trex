@@ -338,8 +338,8 @@ function TrexConnectionForm({ profile, connections, launcherProfiles, connection
 
   return <form className="trex-connection-form" onSubmit={event => void save(event)} noValidate aria-label={profile ? "Editar conexión Trex API" : "Añadir conexión Trex API"} aria-busy={pending}>
     <div className="trex-form-intro"><span className="trex-section-label">{profile ? "Configuración de la conexión" : connection ? "Usar una conexión guardada" : "Nueva conexión API"}</span>
-      <p>{profile ? "El modelo y la clave pertenecen a esta conexión de Trex CLI." : "Una conexión por cuenta. Elige el proveedor y el modelo que quieras usar."}</p></div>
-    {profile && !connection && <p className="trex-inline-note warning" role="status">Esta conexión no aparece en Trex CLI. Puedes recuperarla con el mismo nombre y una nueva clave.</p>}
+      </div>
+    {profile && !connection && <p className="trex-inline-note warning" role="status">No aparece en Trex CLI. Recupérala con el mismo nombre y una clave nueva.</p>}
     <fieldset className="trex-provider-fieldset" disabled={pending}>
       <legend>Proveedor API</legend>
       <div className="trex-provider-options">{PROVIDERS.map(item => <button key={item.id} type="button" className={`trex-provider-option${provider === item.id ? " selected" : ""}`}
@@ -350,18 +350,18 @@ function TrexConnectionForm({ profile, connections, launcherProfiles, connection
     <div className="profile-field"><label htmlFor={`${id}-name`}>Nombre de conexión</label>
       <input id={`${id}-name`} className="input settings-mono" value={name} disabled={pending} readOnly={fixedName !== null} maxLength={64}
         aria-invalid={fieldError("name")} aria-describedby={hint("name")} spellCheck={false} autoComplete="off" onChange={event => { setName(event.currentTarget.value); setError(null); setNotice(""); }} />
-      <small id={`${id}-name-hint`}>{fixedName !== null ? "El nombre identifica esta cuenta. Para usar otro nombre, crea una conexión nueva." : "Por ejemplo: TREX1, TREX2 o TREX_trabajo. Usa un nombre distinto para cada cuenta."}</small></div>
+      <small id={`${id}-name-hint`}>{fixedName !== null ? "no se puede cambiar" : "uno por cuenta, p. ej. TREX_trabajo"}</small></div>
     <div className="profile-field"><label htmlFor={`${id}-url`}>Dirección base de la API</label>
       <input id={`${id}-url`} className="input settings-mono" type="url" value={baseUrl} disabled={pending} placeholder="https://tu-proveedor.com/v1" spellCheck={false} autoComplete="off"
         aria-invalid={fieldError("url")} aria-describedby={hint("url")} onChange={event => { setBaseUrl(event.currentTarget.value); clearSecret(); setError(null); setNotice(""); }} />
-      <small id={`${id}-url-hint`}>{provider === "custom" ? "Endpoint compatible con la API de OpenAI. Introduce solo la dirección base." : `Dirección de ${providerLabel(provider)}. Puedes adaptarla si tu cuenta usa otro endpoint.`}</small></div>
+      <small id={`${id}-url-hint`}>{provider === "custom" ? "dirección base, compatible con OpenAI" : ""}</small></div>
     <div className="profile-field trex-secret-field"><label htmlFor={`${id}-key`}>{provider === "minimax" ? "API Key o Subscription Key" : "Clave API"}{connection?.hasApiKey && !needsKey && <span className="trex-key-state"><CheckIcon size={11} /> Clave guardada</span>}</label>
       <input ref={passwordRef} id={`${id}-key`} className="input settings-mono" type="password" disabled={pending} autoComplete="new-password" spellCheck={false}
         autoCapitalize="none" aria-invalid={fieldError("key")} aria-describedby={hint("key")} placeholder={needsKey ? "Introduce la clave de esta API" : "Deja vacío para conservar la clave"}
         onChange={event => { invalidateCatalog(); setKeyEntered(!!event.currentTarget.value.trim()); setError(null); setNotice(""); }}
         onBlur={() => { if (passwordRef.current?.value.trim()) void queryModels(); }} />
-      <small id={`${id}-key-hint`}>{needsKey ? "Necesaria para esta conexión. " : "Escribe una clave solo si quieres reemplazarla. "}Se usa para consultar modelos; solo se guarda al guardar la conexión. El campo se vacía al guardar o salir de estos ajustes.
-        {provider === "minimax" && <> MiniMax acepta una API Key de pago por uso o una Subscription Key de M Plan / Token Plan: son productos distintos. Pega una sola credencial, sin «Bearer»; Trex lo añade automáticamente. <a href="https://platform.minimax.io/docs/m-plan/other-tools" target="_blank" rel="noreferrer">Documentación de MiniMax</a>.</>}
+      <small id={`${id}-key-hint`}>{needsKey ? "" : "solo si quieres reemplazarla. "}
+        {provider === "minimax" && <> API Key o Subscription Key, sin «Bearer». <a href="https://platform.minimax.io/docs/m-plan/other-tools" target="_blank" rel="noreferrer">Documentación de MiniMax</a>.</>}
         {provider === "anthropic" && <> Usa una clave de la API de Anthropic (empieza por sk-ant-), creada en la Consola de tu organización: es una clave distinta de la suscripción de Claude y consume el saldo y los créditos de esa organización. Pégala sin prefijos. <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noreferrer">Claves API</a>.</>}</small></div>
     <div className="profile-field trex-model-field"><label htmlFor={`${id}-model`}>{manualModel ? "ID del modelo (manual)" : "Modelo"}</label>
       {manualModel ? <input id={`${id}-model`} className="input settings-mono" value={model} disabled={pending} placeholder="ID exacto del proveedor" spellCheck={false} autoComplete="off"
@@ -377,8 +377,8 @@ function TrexConnectionForm({ profile, connections, launcherProfiles, connection
       <button type="button" className="trex-model-fallback" disabled={pending}
         aria-pressed={manualModel} onClick={() => { setManualModel(!manualModel); setError(null); }}>
         {manualModel ? "Volver al catálogo de modelos" : "Usar un ID manual si no hay catálogo"}</button>
-      <small id={`${id}-model-hint`}>{manualModel ? `Usa el identificador exacto de tu proveedor${provider === "openrouter" ? " con su prefijo: proveedor/modelo" : ""}. ` : "Elige el modelo que se guardará para esta conexión. "}
-        {missingModel && catalog.status === "ready" && "El modelo elegido no aparece en este catálogo y se conserva hasta que elijas otro. "}
+      <small id={`${id}-model-hint`}>{manualModel ? `identificador exacto${provider === "openrouter" ? ", con prefijo proveedor/modelo" : ""}. ` : ""}
+        {missingModel && catalog.status === "ready" && "No está en el catálogo; se conserva hasta que elijas otro. "}
         El catálogo no confirma saldo ni acceso a cada modelo. El esfuerzo se elige en el chat o en cada etapa.</small></div>
     {error && <p className="trex-inline-note error" id={`${id}-error`} role="alert">{error.message}</p>}
     {notice && <p className="trex-inline-note success" role="status"><CheckIcon size={14} />{notice}</p>}
@@ -390,6 +390,6 @@ function TrexConnectionForm({ profile, connections, launcherProfiles, connection
         <button id={`${id}-save`} type="submit" className="btn btn-small btn-primary" disabled={pending || (!!profile && !changed && !keyEntered)}>
           {pending ? "Procesando…" : isImport ? changed || keyEntered ? "Guardar y añadir" : "Añadir a asistentes" : "Guardar conexión"}</button></div>
     </div>
-    {connection && !canRemove && <p className="settings-note">Añade otro asistente antes de eliminar esta conexión: siempre debe quedar un perfil.</p>}
+    {connection && !canRemove && <p className="settings-note">Añade otro asistente antes: siempre debe quedar un perfil.</p>}
   </form>;
 }

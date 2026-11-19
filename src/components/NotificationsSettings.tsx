@@ -16,10 +16,7 @@ export default function NotificationsSettings({
       <label className="settings-toggle">
         <span className="setting-field-info">
           <span>Notificaciones del escritorio</span>
-          <span>
-            Avisa cuando Claude o Codex termine una tarea, pida atención o
-            encuentre un error.
-          </span>
+          <small>al terminar, pedir atención o fallar</small>
         </span>
         <input
           type="checkbox"
@@ -34,16 +31,12 @@ export default function NotificationsSettings({
       </label>
       <label className="settings-toggle">
         <span className="setting-field-info">
-          <span>Avisar también mientras uso TREX</span>
-          <span>
-            Si lo desactivas, los avisos del escritorio aparecen cuando trabajas
-            en otra ventana. El historial interno sigue disponible.
-          </span>
+          <span>Avisar también con trex en primer plano</span>
         </span>
         <input
           type="checkbox"
           role="switch"
-          aria-label="Avisar también mientras uso TREX"
+          aria-label="Avisar también con trex en primer plano"
           className="settings-switch"
           checked={settings.notifyWhenFocused}
           onChange={(event) =>
@@ -60,19 +53,16 @@ export default function NotificationsSettings({
           void testDesktopNotification()
             .then(() =>
               setStatus(
-                "Aviso enviado. Revisa el centro de notificaciones del sistema.",
+                "Aviso enviado.",
               ),
             )
             .catch((error) => setStatus(formatError(error)))
             .finally(() => setBusy(false));
         }}
       >
-        {busy ? "Enviando…" : "Probar y habilitar notificaciones"}
+        {busy ? "Enviando…" : "Enviar aviso de prueba"}
       </button>
-      <p role="status" className="settings-note">
-        {status ||
-          "Windows requiere la app instalada. En Linux se usa el servicio de notificaciones del escritorio."}
-      </p></div>
+      <p role="status" className="settings-note">{status}</p></div>
     </div>
   );
 }

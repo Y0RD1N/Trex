@@ -54,40 +54,37 @@ export default function BrowserSettings({ settings, cwd, onChange }: {
   };
   // BROWSER1 es el perfil manual de siempre; el resto lo reserva cada chat.
   const spaces = profiles && cwd ? profiles.filter(profile => profile.id !== "BROWSER1").length : null;
-  const label = loading ? "Comprobando…" : status?.ready ? "Listo para usar" : status?.installed ? "Necesita atención" : "Componente opcional";
+  const label = loading ? "Comprobando…" : status?.ready ? "Listo para usar" : status?.installed ? "Necesita atención" : "No instalado";
   return <div className="browser-settings">
     <div className="browser-settings-card">
       <div className="browser-settings-heading"><span className="browser-settings-badge" aria-hidden="true"><GlobeIcon size={20} /></span>
-        <div><h4>Trex Browser</h4><p>Un espacio independiente para cada agente.</p></div>
+        <div><h4>Trex Browser</h4></div>
         <span className={`browser-settings-status${status?.ready ? " is-ready" : ""}`}>{label}</span>
       </div>
-      <p className="settings-hint">Prueba tu aplicación con ratón y teclado, revisa consola y red, toma capturas y graba vídeos cuando lo necesites.</p>
-      <label className="browser-settings-toggle"><span><strong>Permitir navegador a los agentes</strong><small>Las nuevas sesiones lo abren al utilizar una herramienta. La planificación conserva acceso de observación.</small></span>
+      <label className="browser-settings-toggle"><span><strong>Los agentes pueden usar el navegador</strong></span>
         <input type="checkbox" role="switch" checked={settings.browserEnabled} onChange={event => onChange({ browserEnabled: event.target.checked })} />
       </label>
       {engine && <div className="browser-settings-field">
-        <label htmlFor={engineId}>Navegador para los agentes</label>
+        <label htmlFor={engineId}>Navegador</label>
         <Select id={engineId} value={engine.engine === "trex" ? "auto" : engine.engine} disabled={savingEngine} align="start"
           onChange={value => void chooseEngine(value as BrowserEngineChoice)}
           options={[
             { value: "auto", label: engine.engines.trex ? "Trex Browser (recomendado)" : "Trex Browser (no instalado: se usa Chrome)", icon: <GlobeIcon size={16} /> },
             { value: "chrome", label: engine.engines.chrome ? "Chrome o Chromium del sistema" : "Chrome del sistema (no encontrado)", icon: <GlobeIcon size={16} />, disabled: !engine.engines.chrome },
           ]} />
-        <small className="settings-hint">Se aplica a los espacios que se abran a partir de ahora; los que ya están abiertos siguen igual.</small>
       </div>}
-      {!loading && !status?.installed && <p className="browser-settings-note">Selecciona Trex Browser al instalar trex o utiliza su instalador independiente.</p>}
+      {!loading && !status?.installed && <p className="browser-settings-note">Se instala con trex o con su instalador aparte.</p>}
       {status?.installed && !status.ready && <p className="browser-settings-note">{status.error?.message ?? "Revisa la instalación y la disponibilidad de Chrome."}</p>}
-      <div className="browser-settings-foot"><span>{status?.version ? `Versión ${status.version}` : "Instalación independiente"}</span>
+      <div className="browser-settings-foot"><span>{status?.version ? `Versión ${status.version}` : ""}</span>
         <button type="button" className="btn btn-small btn-ghost" disabled={loading} onClick={() => void refresh()}><RefreshIcon size={14} />Comprobar</button>
       </div>
     </div>
-    <div className="browser-settings-card"><h4>Espacios de navegación</h4>
-      <p className="settings-hint">Cada chat recibe su propio perfil de navegación automáticamente, de modo que varios agentes pueden navegar en paralelo sin mezclar sus sesiones iniciadas. Desde el botón del navegador, en el chat, puedes revisar un espacio o iniciar sesión en él. Tus perfiles personales de Chrome permanecen separados.</p>
-      {spaces !== null && <p className="settings-hint">Este proyecto usa {spaces} de {BROWSER_SPACE_LIMIT} espacios.{spaces >= BROWSER_SPACE_LIMIT - 8 && " Quedan pocos: cuando se agoten, los chats nuevos de este proyecto no podrán conectar el navegador."}</p>}
-      {!cwd && <p className="settings-hint">Abre un proyecto para ver sus espacios de navegación.</p>}
+    <div className="browser-settings-card"><h4>Espacios</h4>
+      <p className="settings-hint">Cada chat recibe su propio perfil, separado de tu Chrome.</p>
+      {spaces !== null && <p className="settings-hint">Este proyecto usa {spaces} de {BROWSER_SPACE_LIMIT} espacios.{spaces >= BROWSER_SPACE_LIMIT - 8 && " Quedan pocos: sin espacios, los chats nuevos no podrán usar el navegador."}</p>}
     </div>
-    {folders && <div className="browser-settings-card"><h4>Carpetas para descargas</h4>
-      <p className="settings-hint">Con permisos completos, los agentes pueden guardar lo que descargan en el proyecto abierto y en estas carpetas. Nunca sobrescriben archivos ni escriben en carpetas ocultas.</p>
+    {folders && <div className="browser-settings-card"><h4>Descargas</h4>
+      <p className="settings-hint">Dónde pueden guardar los agentes con acceso total. Nunca sobrescriben archivos.</p>
       <ul className="browser-settings-folders">
         <li className="is-fixed"><FolderIcon size={15} /><span>{cwd ?? "Proyecto abierto"}</span><small>Siempre</small></li>
         {folders.map(folder => <li key={folder}><FolderIcon size={15} /><span title={folder}>{folder}</span>
