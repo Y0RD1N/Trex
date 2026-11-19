@@ -324,16 +324,17 @@ fn claude_path(config_dir: &str, id: &str) -> Result<PathBuf, String> {
 pub fn history(config_dir: &str, id: &str) -> Result<Vec<Value>, String> {
     let path = claude_path(config_dir, id)?;
     let file = fs::File::open(&path).map_err(|e| format!("No se pudo abrir el historial: {e}"))?;
-    let mut entries: Vec<Value> = BufReader::new(file.take(96 * 1024 * 1024))
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-        .filter_map(slim_entry)
-        .collect();
-    if entries.len() > HISTORY_ENTRIES {
-        entries.drain(..entries.len() - HISTORY_ENTRIES);
+    // Solo se conservan las últimas entradas mientras se lee: una conversación larga (hasta
+    // 96 MB en disco) ya no pasa entera por la memoria para quedarse con su final.
+    let mut entries: std::collections::VecDeque<Value> = std::collections::VecDeque::new();
+    for line in BufReader::new(file.take(96 * 1024 * 1024)).lines().map_while(Result::ok) {
+        let Some(entry) = serde_json::from_str::<Value>(&line).ok().and_then(slim_entry) else { continue };
+        if entries.len() == HISTORY_ENTRIES {
+            entries.pop_front();
+        }
+        entries.push_back(entry);
     }
-    Ok(entries)
+    Ok(entries.into())
 }
 
 /// Punto anterior al mensaje que se sustituye. Solo lee el historial; nunca lo modifica.
