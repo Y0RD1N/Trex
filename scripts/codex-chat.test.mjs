@@ -447,3 +447,32 @@ test("the fast service tier comes from the catalog and is sent with each turn", 
   assert.equal(codex.turnOverrides({ ...choices, fast: true }, { model: null, effort: null, fastTier: null }).serviceTier, "default",
     "un modelo sin velocidad rápida va a la estándar");
 });
+
+test("rebuilding a very long thread history stays linear", () => {
+  // 600 turns of 60 items: a thread like this used to block the window for many seconds,
+  // because every item searched and copied the whole list.
+  const turns = Array.from({ length: 600 }, (_, turn) => ({
+    id: `tu${turn}`, status: "completed", startedAt: 1_700_000_000 + turn, completedAt: 1_700_000_001 + turn, durationMs: 1000,
+    items: [
+      { type: "userMessage", id: `u${turn}`, content: [{ type: "text", text: `mensaje ${turn}` }] },
+      ...Array.from({ length: 58 }, (_, n) => ({ type: "commandExecution", id: `c${turn}-${n}`, command: `echo ${n}`, status: "completed", aggregatedOutput: "ok", exitCode: 0 })),
+      { type: "agentMessage", id: `a${turn}`, text: `respuesta ${turn}` },
+    ],
+  }));
+  const started = performance.now();
+  const state = codexReducer(initialChatState(), { type: "history", turns });
+  const elapsed = performance.now() - started;
+  assert.equal(state.items.filter(item => item.kind === "user").length, 600);
+  assert.equal(state.items.filter(item => item.kind === "tool").length, 600 * 58);
+  assert.equal(state.items.filter(item => item.kind === "turn").length, 600);
+  assert.equal(state.historyCount, state.items.length);
+  // Items keep their turn's order and date.
+  const first = state.items.findIndex(item => item.kind === "tool" && item.id === "c1-0");
+  assert.equal(state.items[first - 1].kind, "user");
+  assert.equal(state.items[first].at, 1_700_000_001_000);
+  // An item repeated later in the history replaces the earlier one in place instead of duplicating it.
+  const repeated = codexReducer(initialChatState(), { type: "history", turns: [
+    { id: "t1", status: "completed", items: [{ type: "agentMessage", id: "m", text: "uno" }, { type: "agentMessage", id: "n", text: "dos" }, { type: "agentMessage", id: "m", text: "tres" }] }] });
+  assert.deepEqual(repeated.items.filter(item => item.kind === "text").map(item => item.text), ["tres", "dos"]);
+  assert.ok(elapsed < 4000, `36,000 items took ${Math.round(elapsed)} ms`);
+});

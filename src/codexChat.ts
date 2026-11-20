@@ -453,31 +453,62 @@ function userItem(item: Json): ChatItem | null {
 const REVIEW = "review";
 
 /**
+ * Índice del historial mientras se reconstruye: dónde está cada elemento (`tipo:id`) y qué
+ * textos de revisión hay ya. Sin él, cada elemento recorría y copiaba el hilo entero, y un
+ * historial de decenas de miles de elementos bloqueaba la ventana durante muchos segundos.
+ */
+type HistoryIndex = { at: Map<string, number>; reviews: Set<string> };
+
+/**
  * Elemento empezado, terminado o guardado en el historial. Los mensajes del
  * usuario en directo ya están en el hilo (los añade el chat al enviarlos).
+ *
+ * Con `index` (solo al reconstruir el historial) la lista se modifica en su sitio y las
+ * búsquedas van por el índice; sin él, como en directo, cada cambio devuelve una lista nueva.
  */
-function applyItem(items: ChatItem[], item: Json, phase: "started" | "completed" | "history"): ChatItem[] {
+function applyItem(items: ChatItem[], item: Json, phase: "started" | "completed" | "history", index?: HistoryIndex): ChatItem[] {
   const id = text(item.id);
+  const find = (kind: "text" | "thinking" | "tool", entryId: string): ChatItem | undefined => {
+    if (!index) return items.find(entry => entry.kind === kind && entry.id === entryId);
+    const position = index.at.get(`${kind}:${entryId}`);
+    return position === undefined ? undefined : items[position];
+  };
+  const put = (list: ChatItem[], next: ChatItem): ChatItem[] => {
+    if (!index) return upsert(list, next);
+    const key = `${next.kind}:${next.id}`, position = index.at.get(key);
+    if (position === undefined) { index.at.set(key, list.length); list.push(next); }
+    else list[position] = next;
+    if (next.kind === "text" && next.messageId === REVIEW) index.reviews.add(next.text.trim());
+    return list;
+  };
   switch (item.type) {
     case "userMessage": {
       const user = phase === "history" ? userItem(item) : null;
-      return user ? [...items, user] : items;
+      if (!user) return items;
+      if (index) { items.push(user); return items; }
+      return [...items, user];
     }
     case "agentMessage": {
       const value = text(item.text);
       // El resultado de una revisión llega dos veces (fin de la revisión y mensaje): se queda el primero.
-      if (phase !== "started" && value.trim() && items.some(entry => entry.kind === "text" && entry.messageId === REVIEW && entry.text.trim() === value.trim())) {
-        return items.filter(entry => !(entry.kind === "text" && entry.id === id));
+      const reviewed = phase !== "started" && !!value.trim() && (index ? index.reviews.has(value.trim())
+        : items.some(entry => entry.kind === "text" && entry.messageId === REVIEW && entry.text.trim() === value.trim()));
+      if (reviewed) {
+        if (index && !index.at.has(`text:${id}`)) return items;
+        const kept = items.filter(entry => !(entry.kind === "text" && entry.id === id));
+        // Quitar un elemento desplaza a los siguientes: el índice se rehace (ocurre una vez por revisión).
+        if (index) reindex(kept, index);
+        return kept;
       }
-      const current = items.find(entry => entry.kind === "text" && entry.id === id);
+      const current = find("text", id);
       if (phase === "started" && !value && current) return items;
-      return upsert(items, { kind: "text", id, messageId: id, text: value || (current?.kind === "text" ? current.text : ""), final: phase !== "started" });
+      return put(items, { kind: "text", id, messageId: id, text: value || (current?.kind === "text" ? current.text : ""), final: phase !== "started" });
     }
     case "reasoning": {
       const value = reasoningText(item);
-      const current = items.find(entry => entry.kind === "thinking" && entry.id === id);
+      const current = find("thinking", id);
       if (phase === "started" && !value && current) return items;
-      return upsert(items, { kind: "thinking", id, messageId: id, text: value || (current?.kind === "thinking" ? current.text : ""), final: phase !== "started" });
+      return put(items, { kind: "thinking", id, messageId: id, text: value || (current?.kind === "thinking" ? current.text : ""), final: phase !== "started" });
     }
     case "contextCompaction":
       return phase === "started" ? items : addNotice(items, "info", "Conversación resumida para liberar contexto.", "c");
@@ -486,19 +517,27 @@ function applyItem(items: ChatItem[], item: Json, phase: "started" | "completed"
     case "exitedReviewMode": {
       const review = text(item.review).trim();
       const shown = items.some(entry => entry.kind === "text" && entry.id !== id && entry.text.trim() === review);
-      return review && !shown && phase !== "started" ? upsert(items, { kind: "text", id, messageId: REVIEW, text: review, final: true }) : items;
+      return review && !shown && phase !== "started" ? put(items, { kind: "text", id, messageId: REVIEW, text: review, final: true }) : items;
     }
     default: {
       let next = items;
       for (const tool of itemTools(item)) {
-        const current = next.find(entry => entry.kind === "tool" && entry.id === tool.id);
+        const current = index ? find("tool", tool.id) : next.find(entry => entry.kind === "tool" && entry.id === tool.id);
         // La salida en directo se conserva hasta que llega la definitiva.
         const output = tool.output ?? (current?.kind === "tool" ? current.output : null);
-        next = upsert(next, { ...tool, output, status: phase === "history" && tool.status === "running" ? "done" : tool.status });
+        next = put(next, { ...tool, output, status: phase === "history" && tool.status === "running" ? "done" : tool.status });
       }
       return next;
     }
   }
+}
+
+/** Rehace el índice del historial tras quitar un elemento de en medio. */
+function reindex(items: ChatItem[], index: HistoryIndex): void {
+  index.at.clear();
+  items.forEach((entry, position) => {
+    if (entry.kind === "text" || entry.kind === "thinking" || entry.kind === "tool") index.at.set(`${entry.kind}:${entry.id}`, position);
+  });
 }
 
 /** Añade texto en directo a un elemento que crece por partes. */
@@ -771,6 +810,8 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
     }
     case "history": {
       let items: ChatItem[] = [];
+      // La lista es local y se construye en su sitio, con un índice: el coste es lineal.
+      const index: HistoryIndex = { at: new Map(), reviews: new Set() };
       const completedTurnIds = new Set(state.completedTurnIds);
       for (const raw of action.turns) {
         const turn = record(raw);
@@ -779,11 +820,14 @@ export function codexReducer(state: ChatState, action: CodexAction): ChatState {
           completedTurnIds.add(`codex:${text(turn.id)}`);
         }
         const start = items.length, times = turnTimes(turn);
-        for (const item of list(turn.items).map(record)) if (item) items = applyItem(items, item, "history");
+        for (const item of list(turn.items).map(record)) if (item) items = applyItem(items, item, "history", index);
         // Codex history has no per-item times: its items are dated at their turn's start.
-        items = items.map((item, index) => index < start ? item : item.kind === "user"
-          ? { ...item, providerTurnId: text(turn.id), ...(times.startedAt !== undefined ? { at: times.startedAt } : {}) }
-          : item.kind === "tool" && times.startedAt !== undefined && item.at === undefined ? { ...item, at: times.startedAt } : item);
+        // Only this turn's items are visited (walking the whole list per turn was quadratic too).
+        for (let position = Math.min(start, items.length); position < items.length; position++) {
+          const item = items[position];
+          if (item.kind === "user") items[position] = { ...item, providerTurnId: text(turn.id), ...(times.startedAt !== undefined ? { at: times.startedAt } : {}) };
+          else if (item.kind === "tool" && times.startedAt !== undefined && item.at === undefined) items[position] = { ...item, at: times.startedAt };
+        }
         if (turn.status === "completed") items.push({ kind: "turn", id: `t-${text(turn.id) || items.length}`,
           durationMs: typeof turn.durationMs === "number" ? turn.durationMs
             : times.startedAt !== undefined && times.endedAt !== undefined ? Math.max(0, times.endedAt - times.startedAt) : 0,
