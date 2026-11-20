@@ -1903,7 +1903,9 @@ mod tests {
         let task = std::thread::spawn(move || {
             tool(&root, "team", "epoch", "trex_delegate_task", &request)
         });
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Generous on purpose: on a busy CI runner the delegating thread has taken more than 5 s to
+        // publish the task (three releases in a row failed here and passed on a rerun).
+        let deadline = Instant::now() + Duration::from_secs(60);
         while f.read().tasks.is_empty() {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
