@@ -183,12 +183,15 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     writeOrReport(controlLine(id, request));
   }, [writeOrReport]);
   const confirmDesktop = useCallback(async (procId: string, mode: ReturnType<typeof browserMode>, expected: { command: string; args: string[] }, signal: AbortSignal): Promise<void> => {
-    const deadline = Date.now() + 10_000;
+    // Recién arrancado, Claude puede tardar en contestar mientras conecta sus otros servidores:
+    // una pregunta sin respuesta se repite hasta el plazo, en vez de dar el arranque por fallido.
+    const deadline = Date.now() + 20_000;
+    let silent = false;
     while (Date.now() < deadline) {
       signal.throwIfAborted();
-      const data = await whileCurrent(new Promise<Record<string, unknown>>((resolve, reject) => {
+      const data = await whileCurrent(new Promise<Record<string, unknown> | null>((resolve, reject) => {
         const id = localId();
-        const timer = window.setTimeout(() => done(null, "Claude no respondió al comprobar el escritorio."), 3000);
+        const timer = window.setTimeout(() => { pendingControlsRef.current.delete(id); resolve(null); }, 3000);
         const done = (value: Record<string, unknown> | null, error?: string): void => {
           window.clearTimeout(timer); pendingControlsRef.current.delete(id);
           if (error || !value) reject(new Error(error ?? "No se pudo comprobar el escritorio.")); else resolve(value);
@@ -197,6 +200,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         void agentWrite(procId, controlLine(id, { subtype: "mcp_status" })).catch(error => done(null, formatError(error)));
       }), signal);
       if (!isCurrentRef.current(procId)) throw new Error("La sesión de Claude ya no está activa.");
+      silent = !data;
+      if (!data) continue;
       const servers = Array.isArray(data.mcpServers) ? data.mcpServers : [];
       const server = servers.map(record).find(item => item?.name === "trex_desktop");
       if (server?.status === "pending") { await whileCurrent(new Promise<void>(resolve => window.setTimeout(resolve, 150)), signal); continue; }
@@ -210,7 +215,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       }
       return;
     }
-    throw new Error("Claude tardó demasiado en conectar el control de computadora.");
+    throw new Error(silent ? "Claude no respondió al comprobar el escritorio." : "Claude tardó demasiado en conectar el control de computadora.");
   }, []);
   const refreshSettings = useCallback(() => control({ subtype: "get_settings" }, { kind: "settings" }), [control]);
   /** Lo mismo que mide `/context`; el CLI lo calcula al momento, sin llamar al modelo. */
