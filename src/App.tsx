@@ -113,6 +113,7 @@ import { useAccountUsageUpkeep } from "./hooks/useAccountUsage";
 import { requestUsagePanel } from "./accountUsageStore";
 import type { CliId, UpdateKind, UpdateNotice } from "./cliUpdates";
 import { useAgentUpdates } from "./hooks/useAgentUpdates";
+import { useChromeBridge } from "./hooks/useChromeBridge";
 // Ajustes, paleta y diálogos poco frecuentes: en su propio fragmento (ver lazyComponent).
 const SettingsPanel = lazyComponent(() => import("./components/SettingsPanel"));
 const CommandPalette = lazyComponent(() => import("./components/CommandPalette"));
@@ -367,6 +368,7 @@ function AppShell() {
     void runCliUpdate(id).then(showToast, (error: unknown) => showToast(formatError(error)));
   }, [runCliUpdate, showToast]);
   // Antigravity y el propio trex (con Trex CLI) se comprueban aparte; todos van a la misma lista.
+  useChromeBridge();
   const agentUpdates = useAgentUpdates(appInfo?.version ?? null, trexInstalled);
   const { run: runAgentUpdate, dismiss: dismissAgentUpdate } = agentUpdates;
   const pendingUpdates: UpdateNotice[] = [

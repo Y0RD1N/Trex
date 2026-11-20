@@ -74,7 +74,7 @@ function harness(t, extra = {}) {
   };
   const exports = {};
   compile(name => name === "react" ? hooks : name === "../api" ? api : name === "../antigravityConnection" ? { openAntigravity: open }
-    : name === "../browserConnection" ? { connectBrowser: async options => options?.enabled ? { command: "browser", args: ["--client", options.clientId, "--profile", options.profile] } : null }
+    : name === "../browserConnection" ? { chromeAvailable: () => false, connectChromeStdio: async () => null, connectBrowser: async options => options?.enabled ? { command: "browser", args: ["--client", options.clientId, "--profile", options.profile] } : null }
       : name === "../apps" ? { ...deps[name], ...extra.apps } : name === "./chatSession" ? { localId: () => `local-${++serial}` } : name === "./useMessageQueue" ? { useMessageQueue: id => { queueId = id; return queue; } }
         : deps[name] ?? (() => { throw Error(`Unexpected hook import: ${name}`); })(), exports);
   const options = { sessionId: "tab-one", cwd: "C:/project", command: "antigravity-acp", args: "", shell: "", env: null, conversationId: null, mode: null, visible: false, onRunning() {}, onExit() {}, ...extra.options };

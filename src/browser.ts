@@ -37,6 +37,23 @@ export type BrowserArtifact = {
   id: string; sha256?: string; mimeType: string; sizeBytes?: number; width?: number; height?: number;
   kind: string; storage: "local" | "broker"; provenance: unknown;
 };
+// --- «Tu navegador»: la extensión de trex en el navegador de la persona -------------
+/** Nombre del servidor MCP que ve el agente (sus herramientas son `mcp__trex_chrome__…`). */
+export const CHROME_SERVER = "trex_chrome";
+/** Su token viaja en el entorno del agente, nunca en la línea de comandos. */
+export const CHROME_TOKEN_ENV = "TREX_CHROME_TOKEN";
+export type ChromeMode = "observe" | "full";
+export type ChromeHttp = { url: string; token: string };
+/** Las herramientas que solo miran. Debe coincidir con OBSERVE_TOOLS de src-tauri/src/browser_bridge.rs. */
+export const CHROME_READ_TOOLS = ["tabs_list", "read_page", "screenshot"] as const;
+/** Planificar o solo lectura: mirar. En cualquier otro modo, las acciones pasan por los permisos del propio agente. */
+export const chromeMode = (mode: string | null | undefined, planningOnly = false): ChromeMode =>
+  browserMode(mode, planningOnly) === "observe" ? "observe" : "full";
+/** Para los agentes sin MCP por HTTP: el adaptador stdio de trex y el token que debe ir en su entorno. */
+export type ChromeStdio = { command: string; args: string[]; token: string; env: Record<string, string> };
+export const chromeEnv = (value: ChromeHttp | null | undefined): Record<string, string> => value ? { [CHROME_TOKEN_ENV]: value.token } : {};
+export const claudeChromeServer = (value: ChromeHttp): Record<string, unknown> =>
+  ({ type: "http", url: value.url, headers: { Authorization: `Bearer \${${CHROME_TOKEN_ENV}}` } });
 /** Free slots per project: BROWSER2..BROWSER99 (BROWSER1 is the manual one). Mirrors trex-browser/worker/spaces.mjs. */
 export const BROWSER_SPACE_LIMIT = 98;
 export const OBSERVE_BROWSER_TOOLS = new Set([

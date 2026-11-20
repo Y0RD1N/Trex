@@ -7,7 +7,7 @@ import { AntigravityUsageReader, antigravityTier } from "../antigravityUsage";
 import { AcpError, acpMcpServer, acpPrompt, validAcpSessionId } from "../acpProtocol";
 import { acpConfigs, acpEffortConfig, acpModelConfig, acpModes, antigravityReducer, type AcpConfig } from "../antigravityChat";
 import { initialChatState, list, record, text, type Json, type OutgoingImage, type PermissionItem } from "../chatState";
-import { connectBrowser } from "../browserConnection";
+import { connectBrowser, chromeAvailable, connectChromeStdio } from "../browserConnection";
 import { detectedIntegrations, integrationContext, integrationInstructions } from "../integrations";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { PEER_INSTRUCTIONS } from "../coordination";
@@ -16,6 +16,7 @@ import { useMessageQueue } from "./useMessageQueue";
 import { localId, type ChatSession, type ChatSessionOptions } from "./chatSession";
 import { withChatTimes } from "../chatTimes";
 import { loadMemory, loadedMemory, memoryInstructions } from "../memory";
+import { CHROME_SERVER, CHROME_TOKEN_ENV } from "../browser";
 const timedAntigravityReducer = withChatTimes(antigravityReducer);
 
 const INSTRUCTIONS = `${FILE_SHARING_INSTRUCTIONS} For multi-step work, in ordinary chats too, publish and update the chat task list with trex_update_tasks (trex_inbox MCP server; plan:[{step,status}], at most one in_progress); mark work completed only after verifying it. Messages the user types while you work are queued by trex and delivered as the next user turn with their attachments; do not poll an inbox or claim an attachment that was not delivered. ${PEER_INSTRUCTIONS}`;
@@ -150,7 +151,9 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
         { session: current.queueId ?? current.sessionId, project: current.cwd });
       // Memoria de Trex: el resumen viaja en el contexto de la sesión (sin ella, el chat sigue igual).
       await loadMemory(current.cwd);
-      const servers = [acpMcpServer("trex_inbox", { command: text(tasks["mcp_servers.trex_inbox.command"]), args: tasks["mcp_servers.trex_inbox.args"] as string[] }),
+      // El navegador de la persona (extensión de trex): opcional. Su token va en el entorno del adaptador.
+      const chrome = chromeAvailable() ? await connectChromeStdio(current.sessionId, null, false, "") : null;
+      const servers = [...(chrome ? [{ ...acpMcpServer(CHROME_SERVER, chrome), env: [{ name: CHROME_TOKEN_ENV, value: chrome.token }] }] : []), acpMcpServer("trex_inbox", { command: text(tasks["mcp_servers.trex_inbox.command"]), args: tasks["mcp_servers.trex_inbox.args"] as string[] }),
         ...(browser ? [acpMcpServer("trex_browser", browser)] : []), ...(current.desktopEnabled ? [acpMcpServer("trex_desktop", await trexDesktopMcpConfig("full"))] : []),
         ...(a11y ? [acpMcpServer(A11Y_SERVER, a11y)] : []), ...(apps ? [acpMcpServer(APPS_SERVER, apps)] : [])];
       if (!isCurrent(token)) throw new Error("Se canceló la conexión.");

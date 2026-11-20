@@ -1,4 +1,5 @@
 import BrowserSettings from "./BrowserSettings";
+import ChromeBridgeSettings from "./ChromeBridgeSettings";
 import IntegrationSettings from "./IntegrationSettings";
 import RemoteSettings from "./RemoteSettings";
 import VoiceSettings from "./VoiceSettings";
@@ -322,6 +323,7 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
               {item.id === "profiles" && <AutoCompactSettings value={draft.autoCompact} onChange={autoCompact => patch({ autoCompact })} />}
 
               {item.id === "browser" && section === "browser" && <BrowserSettings settings={draft} cwd={cwd} onChange={patch} />}
+              {item.id === "browser" && section === "browser" && <div className="browser-settings"><ChromeBridgeSettings /></div>}
               {item.id === "integrations" && section === "integrations" && <IntegrationSettings cwd={cwd} integrations={draft.integrations} onIntegrationsChange={integrations => patch({ integrations })} desktopEnabled={draft.desktopEnabled} onDesktopChange={desktopEnabled => patch({ desktopEnabled })} a11yEnabled={draft.a11yEnabled} onA11yChange={a11yEnabled => patch({ a11yEnabled })} a11yKeyboard={draft.a11yKeyboard} onA11yKeyboardChange={a11yKeyboard => patch({ a11yKeyboard })} />}
 
               {item.id === "remote" && section === "remote" && <RemoteSettings />}

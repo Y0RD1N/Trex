@@ -1,8 +1,8 @@
-import { connectBrowser } from "../browserConnection";
+import { connectBrowser, connectChrome, chromeAvailable } from "../browserConnection";
 import { agentTeamMcpConfig, trexDesktopMcpConfig } from "../api";
 import { A11Y_ACTION_TOOLS, A11Y_KEYBOARD_TOOLS, A11Y_READ_TOOLS, A11Y_SERVER, accessibilityServer } from "../accessibility";
 import { APPS_SERVER, appToolsFor, appsFromArgs, appsServer, appsWanted } from "../apps";
-import { browserConfigForShell, browserEnv, BROWSER_INSTRUCTIONS, BROWSER_TOKEN_ENV, isBrowserHttp } from "../browser";
+import { browserConfigForShell, browserEnv, chromeEnv, BROWSER_INSTRUCTIONS, BROWSER_TOKEN_ENV, CHROME_SERVER, CHROME_TOKEN_ENV, isBrowserHttp } from "../browser";
 import { browserMode, type BrowserMode } from "../browser";
 /**
  * Sesión de Codex como chat: `codex app-server` por JSON-RPC.
@@ -593,6 +593,15 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
           [`mcp_servers.${A11Y_SERVER}.tool_timeout_sec`]: 120,
           [`mcp_servers.${A11Y_SERVER}.default_tools_approval_mode`]: bindingMode === "full" ? "approve" : "prompt",
         });
+        // El navegador de la persona (extensión de trex): opcional, nunca impide abrir el hilo.
+        const chrome = chromeAvailable() ? await connectChrome(sessionId, browserChoice(bindingMode), planningOnly, shell) : null;
+        if (!isCurrent()) return;
+        if (chrome) Object.assign(inboxConfigRef.current, {
+          [`mcp_servers.${CHROME_SERVER}.url`]: chrome.url, [`mcp_servers.${CHROME_SERVER}.bearer_token_env_var`]: CHROME_TOKEN_ENV,
+          [`mcp_servers.${CHROME_SERVER}.enabled`]: true, [`mcp_servers.${CHROME_SERVER}.required`]: false,
+          [`mcp_servers.${CHROME_SERVER}.startup_timeout_sec`]: 15, [`mcp_servers.${CHROME_SERVER}.tool_timeout_sec`]: 90,
+          [`mcp_servers.${CHROME_SERVER}.default_tools_approval_mode`]: bindingMode === "full" ? "approve" : "prompt",
+        });
         if (callbacks.current.team) {
           const teamConfig = browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell);
           if (!isCurrent()) return;
@@ -604,7 +613,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         }
         autoCompactAt.current = codexAutoCompact(callbacks.current.autoCompact, launch.flags);
         const flags = [...launch.flags, ...codexAutoCompactFlags(autoCompactAt.current)];
-        const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags, shell, env: { ...env, ...browserEnv(browser) } });
+        const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags, shell, env: { ...env, ...browserEnv(browser), ...chromeEnv(chrome) } });
         if (!procId || !isCurrent() || !agent.isCurrent(procId)) return;
         readyProcessRef.current = procId;
         dispatch({ type: "spawned" });

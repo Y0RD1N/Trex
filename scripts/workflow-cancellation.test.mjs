@@ -79,7 +79,7 @@ function harness(t, { planningOnly = true, conversationId = null } = {}) {
   const modules = {
     ...dependencies,
     react: hooks,
-    "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },
+    "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session"), connectChrome: async () => null, chromeAvailable: () => false },
     "../api": { agentWrite: nativeWrite, claudeRewindPoint: () => rewind.promise, formatError: error => error?.message ?? String(error) },
     "../conversations": { readConversation: () => history.promise },
     "./chatSession": { localId: () => `control-${++counter}`, useAgentProcess: (_id, callbacks) => { handlers = callbacks; return agent; } },

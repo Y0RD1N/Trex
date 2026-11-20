@@ -191,7 +191,7 @@ function harness(t, provider, extra = {}) {
     ...(extra.accessibility ? { "../accessibility": { ...dependencies["../accessibility"], ...extra.accessibility } } : {}),
     ...(extra.apps ? { "../apps": { ...dependencies["../apps"], ...extra.apps } } : {}),
     react: hooks,
-    "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },
+    "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session"), connectChrome: async () => null, chromeAvailable: () => false },
     "../api": { agentWrite: nativeWrite, formatError: error => error?.message ?? String(error),
       agentTeamMcpConfig: async binding => { assert.ok(extra.teamConfig, "Unexpected team bridge discovery"); return typeof extra.teamConfig === "function" ? extra.teamConfig(binding) : extra.teamConfig; },
       codexContextWindows: async () => ({}), messageQueueMcpConfig: extra.mcpConfig ?? (async () => ({})), claudeRewindPoint: async () => null },

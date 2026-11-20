@@ -1,5 +1,5 @@
-import { connectBrowser, rebindBrowser } from "../browserConnection";
-import { browserEnv, claudeBrowserServer, isBrowserHttp, type BrowserTransport } from "../browser";
+import { chromeAvailable, connectBrowser, connectChrome, rebindBrowser } from "../browserConnection";
+import { browserEnv, chromeEnv, claudeBrowserServer, claudeChromeServer, isBrowserHttp, CHROME_READ_TOOLS, CHROME_SERVER, type BrowserTransport } from "../browser";
 import { browserMode, OBSERVE_BROWSER_TOOLS } from "../browser";
 import { detectedIntegrations, integrationContext, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS, type IntegrationContext } from "../integrations";
 /**
@@ -39,7 +39,7 @@ const USAGE_INTERVAL_MS = 60_000;
 /** Herramientas de coordinación entre sesiones: solo avisan y reservan en el registro de trex, nunca tocan el proyecto. */
 // La memoria de Trex va por el mismo puente que la coordinación y, como ella, sin pedir permiso.
 const CLAUDE_COORDINATION_TOOLS = [...COORDINATION_TOOLS, ...MEMORY_TOOLS].map(name => `mcp__${INBOX_SERVER}__${name}`);
-const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, `mcp__${INBOX_SERVER}__trex_peers`, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...APPS_READ_TOOLS.map(name => `mcp__${APPS_SERVER}__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`)]);
+const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, `mcp__${INBOX_SERVER}__trex_peers`, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...APPS_READ_TOOLS.map(name => `mcp__${APPS_SERVER}__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`), ...CHROME_READ_TOOLS.map(name => `mcp__${CHROME_SERVER}__${name}`)]);
 const planningDeniedLine = (requestId: string): string => JSON.stringify({
   type: "control_response", response: { subtype: "success", request_id: requestId,
     response: { behavior: "deny", message: "Esta pestaña de planificación solo permite herramientas de lectura y preguntas; no puede conceder permisos de escritura o ejecución." } },
@@ -494,7 +494,10 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
           && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
         const teamConfig = callbacks.current.team ? browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell) : null;
         startup.signal.throwIfAborted();
-        if (browser || desktop || a11y || apps || teamConfig) flags.push("--mcp-config", JSON.stringify({ mcpServers: {
+        // El navegador de la persona (extensión de trex): solo si lo activó en Ajustes.
+        const chrome = chromeAvailable() ? await whileCurrent(connectChrome(sessionId, chosenMode, planningOnly, shell), startup.signal) : null;
+        if (browser || desktop || a11y || apps || teamConfig || chrome) flags.push("--mcp-config", JSON.stringify({ mcpServers: {
+          ...(chrome ? { [CHROME_SERVER]: claudeChromeServer(chrome) } : {}),
           ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}), ...(teamConfig ? { trex_team: { command: teamConfig.command, args: teamConfig.args, timeout: 1900000 } } : {}),
         } }));
         if (teamConfig) flags.push("--allowedTools", TEAM_TOOLS.map(name => `mcp__${TEAM_SERVER}__${name}`).join(","));
@@ -505,7 +508,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         if (accessEnabled) initialization ??= initializationWait();
         const procId = await whileCurrent(agent.spawn({
           cwd, command: command?.trim() || "claude", profileArgs, shell,
-          env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...browserEnv(browser), ...(teamConfig ? { CLAUDE_AUTO_BACKGROUND_TASKS: "0" } : {}) },
+          env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...browserEnv(browser), ...chromeEnv(chrome), ...(teamConfig ? { CLAUDE_AUTO_BACKGROUND_TASKS: "0" } : {}) },
           flags: planningOnly ? claudePlanningFlags(flags) : flags,
         }), startup.signal);
         if (!procId) { initialization?.ready("El arranque de Claude fue sustituido."); return null; }
@@ -662,7 +665,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const flags = planningOnly ? claudePlanningFlags(chatFlags) : chatFlags;
       if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
         && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
-      if (browser || desktop || a11y || apps) flags.push("--mcp-config", JSON.stringify({ mcpServers: { ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}) } }));
+      const chrome = chromeAvailable() ? await whileCurrent(connectChrome(sessionId, chosenMode, planningOnly, shell), request.signal) : null;
+      if (browser || desktop || a11y || apps || chrome) flags.push("--mcp-config", JSON.stringify({ mcpServers: { ...(chrome ? { [CHROME_SERVER]: claudeChromeServer(chrome) } : {}), ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}) } }));
       if (apps) flags.push("--allowedTools", appToolsFor(wantApps).read.map(name => `mcp__${APPS_SERVER}__${name}`).join(","));
       browserBoundMode.current = accessEnabled ? browserMode(chosenMode, planningOnly) : null;
       browserConnectionRef.current = browser;
@@ -685,7 +689,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       startupRef.current = request;
       readyProcessRef.current = null;
       const procId = await whileCurrent(agent.spawn({ cwd, command: command?.trim() || "claude", profileArgs, flags, shell,
-        env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...browserEnv(browser) } }), request.signal);
+        env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...browserEnv(browser), ...chromeEnv(chrome) } }), request.signal);
       if (!procId) throw new Error("La sesión se cerró mientras se preparaba la edición.");
       request.signal.throwIfAborted();
       readyProcessRef.current = procId;

@@ -15,7 +15,7 @@ let body = ast.statements.filter(node => ts.isVariableStatement(node) || ts.isFu
     && node.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken))
   .map(node => node.getText(ast)).join("\n").replaceAll("import.meta.url", JSON.stringify(url.href));
 for (const [before, after] of [
-  ['"../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },',
+  ['"../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session"), connectChrome: async () => null, chromeAvailable: () => false },',
     '"../browserConnection": extra.browserConnection,'],
   ['writes, spawns, actions, queueCalls, queue, clock, line, respond, controlResponse, render, unmount,',
     'options, writes, spawns, actions, queueCalls, queue, clock, line, respond, controlResponse, render, unmount,'],

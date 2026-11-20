@@ -606,6 +606,18 @@ Trex prepara el servicio del navegador desde la app antes de conectar Claude o C
 
 La interfaz CLI/MCP, los modos y las pruebas del componente están documentados en [trex-browser/README.md](../trex-browser/README.md). Las capturas se envían como imágenes únicamente a modelos con soporte de visión confirmado; los demás conservan el acceso a DOM, consola y red. Una operación incierta requiere revisión y no se repite automáticamente.
 
+## Tu navegador, con la extensión de trex
+
+Además de Trex Browser, los agentes pueden usar **tu navegador de siempre** (Chrome, Brave o Edge), con tus sesiones iniciadas, a través de la extensión de trex. Está apagado por defecto: actívalo en **Ajustes → Conexiones → Navegador → «Los agentes pueden usar tu navegador»**.
+
+1. Pulsa **«Carpeta de la extensión»** y cárgala en `chrome://extensions` (o `brave://extensions`, `edge://extensions`) con el modo de desarrollador y **«Cargar descomprimida»**. Todavía no está en la Chrome Web Store.
+2. Pulsa **«Emparejar»** y escribe el código de 6 caracteres en la ventanita de la extensión. Se empareja una vez por navegador.
+3. Comparte una pestaña con el botón de la extensión, o deja que el agente abra las suyas.
+
+Los agentes solo alcanzan las pestañas del grupo **«trex»**: las que abren ellos y las que tú compartes. Pueden listar, leer, capturar, navegar, hacer clic, escribir, pulsar teclas, desplazar y cerrar; no escriben en campos de contraseña. En un chat en modo planificar o de solo lectura solo pueden mirar; en los demás modos, cada acción pasa por los permisos del propio agente. Claude Code, Codex, Antigravity y Trex CLI reciben estas herramientas (`trex_chrome`) al arrancar el chat: los que ya estaban abiertos al activarlo deben reiniciarse. Un agente que corre dentro de WSL no las recibe.
+
+El servidor de trex escucha solo en `127.0.0.1` (puerto 7341 por defecto, editable en Ajustes). Apagar la función no desempareja: la extensión vuelve a conectar al encenderla. Si cambias el puerto, los navegadores ya emparejados se quedan con el anterior: en la extensión, «Desvincular» y vuelve a emparejar con el puerto nuevo en «Avanzado». Ten en cuenta que en una pestaña compartida el agente actúa con tu sesión de ese sitio y que lo que lee se envía al proveedor del modelo. Más detalle en [extension/README.md](../extension/README.md).
+
 ## Fedora
 
 La app, Trex CLI y Trex Browser se empaquetan juntos en un RPM. El navegador usa Chromium instalado en Fedora y un runtime privado de Node/Playwright; las claves se guardan en Secret Service. Consulta [instalación, compilación y pruebas en Fedora](fedora.md), incluidos los requisitos del llavero y los límites de validación del escritorio.

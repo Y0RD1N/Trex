@@ -43,6 +43,7 @@ function harness(t, extra = {}) {
   compile(name => name === "react" ? hooks : name === "../api" ? { agentWrite: nativeWrite, formatError: e => e.message ?? String(e), messageQueueMcpConfig: mcpConfig }
     : name === "./chatSession" ? { useAgentProcess: (_, cb) => { handlers = cb; return agent; }, localId: () => `rpc-${++counter}` }
     : name === "./useMessageQueue" ? { useMessageQueue: () => queue }
+    : name === "../browserConnection" ? { chromeAvailable: () => !!extra.chrome, connectChromeStdio: async () => extra.chrome ?? null }
     : name === "../accessibility" && extra.accessibility ? { ...deps[name], ...extra.accessibility } : deps[name], exports, { randomUUID: () => `message-${++counter}` });
   const options = { sessionId: "tab", cwd: "D:/project", command: "trex-agent", args: "--profile TREX1", shell: "wsl", env: null,
     conversationId: null, mode: "ask", model: "deepseek", effort: "high", visible: false, onExit() {}, onRunning() {}, ...extra };
@@ -252,4 +253,19 @@ test("Trex CLI talks with the other sessions through the app's coordination-only
   const missing = harness(t, { mcpConfig: async () => { throw new Error("sin datos"); } }); await missing.start();
   assert.equal(missing.writes.find(w => w.method === "session/start").params.coordination, undefined);
   assert.ok(missing.state.items.some(item => item.kind === "notice" && /no está disponible en este chat/.test(item.text)));
+});
+
+test("the browser extension reaches Trex CLI as the app adapter, with its token only in the environment", async t => {
+  const chrome = { command: "C:/Trex/trex.exe", args: ["--trex-chrome-mcp", "http://127.0.0.1:7341/mcp"], token: "a".repeat(64), env: { TREX_CHROME_TOKEN: "a".repeat(64) } };
+  const h = harness(t, { chrome });
+  await h.start();
+  assert.equal(h.spawns[0].request.env.TREX_CHROME_TOKEN, chrome.token);
+  const start = h.writes.find(write => write.method === "session/start");
+  assert.deepEqual(start.params.chrome, { command: chrome.command, args: chrome.args });
+  assert.ok(!JSON.stringify(start).includes(chrome.token), "the token never travels in a message");
+  // Feature off (the default): no extra environment and no binding.
+  const off = harness(t);
+  await off.start();
+  assert.equal(off.spawns[0].request.env, null);
+  assert.equal(off.writes.find(write => write.method === "session/start").params.chrome, undefined);
 });

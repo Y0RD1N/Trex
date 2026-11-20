@@ -23,8 +23,8 @@ async function declarations(file, exports, transform = source => source) {
 // replies. Every provider hook, reducer and browser adapter is production code.
 const base = await declarations("./queue-send-now.test.mjs", ["harness", "flush", "deferred", "dependencies"], body => {
   const replacements = [
-    ['"../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },',
-      '"../browserConnection": extra.browserConnection ?? { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session") },'],
+    ['"../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session"), connectChrome: async () => null, chromeAvailable: () => false },',
+      '"../browserConnection": extra.browserConnection ?? { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session"), connectChrome: async () => null, chromeAvailable: () => false },'],
     ['claudeRewindPoint: async () => null },', 'claudeRewindPoint: async () => null, ...extra.api },'],
     ['extra.planningOnly ? "plan" : "default", commands:',
       'extra.nativePermissionMode ? extra.nativePermissionMode(spawns.find(spawn => spawn.id === request.process)?.request, request) : (extra.planningOnly ? "plan" : "default"), commands:'],

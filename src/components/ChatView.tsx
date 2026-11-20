@@ -81,6 +81,7 @@ import type { TerminalOwner } from "../agentTerminals";
 import { useCoordination, type Coordination } from "../hooks/useCoordination";
 import { coordinationHub, notesBlock, notesFor, PEER_WAKE, peersOf, peerTurnNotes, WAKE_LIMIT, withNotes } from "../coordination";
 import PeerSessions, { PeerMessage } from "./chat/PeerSessions";
+import { syncChromeMode } from "../browserConnection";
 
 export type ChatViewProps = ChatSessionOptions & {
   toolbar?: ReactNode;
@@ -850,6 +851,9 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   };
 
   const mode = state.permissionMode === "manual" ? "default" : state.permissionMode ?? agent.defaultMode;
+  // El navegador de la persona sigue al modo del chat: al entrar o salir de planificar, sus herramientas
+  // pasan de mirar a manejar sin reiniciar el agente (si la función está apagada, no hace nada).
+  useEffect(() => { syncChromeMode(sessionId, mode, !!props.planningOnly); }, [sessionId, mode, props.planningOnly]);
   // El modo elegido se guarda con la pestaña: sigue igual al volver a abrir la app.
   useEffect(() => {
     if (state.modeChoice) callbacks.current.onMode(sessionId, provider, state.modeChoice);

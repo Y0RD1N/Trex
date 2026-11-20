@@ -26,6 +26,7 @@ async function coordinationServer(session: string, project: string): Promise<{ c
 import { withChatTimes } from "../chatTimes";
 import { autoCompactTokens, trexAutoCompactSettings } from "../autoCompact";
 import { loadMemory, memoryInstructions } from "../memory";
+import { chromeAvailable, connectChromeStdio } from "../browserConnection";
 const timedTrexReducer = withChatTimes(trexReducer);
 
 /** Una herramienta se cortó sin saber si llegó a actuar: Trex CLI no la repite
@@ -153,8 +154,11 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
     ready.current = (async () => {
       rejectPending("La sesión de Trex CLI se está reiniciando.");
       const current = latest.current;
+      // El navegador de la persona (extensión de trex): su token tiene que estar en el entorno del CLI
+      // desde que arranca, porque es el CLI quien lanza el adaptador. Con la función apagada no se pide nada.
+      const chrome = chromeAvailable() ? await connectChromeStdio(current.sessionId, planningOnly ? "plan" : choices.current.mode, planningOnly, current.shell ?? "") : null;
       const procId = await agent.spawn({ cwd: current.cwd, command: current.command ?? "trex-agent", profileArgs: current.args,
-        flags: ["app-server"], shell: current.shell, env: current.env });
+        flags: ["app-server"], shell: current.shell, env: chrome ? { ...current.env, ...chrome.env } : current.env });
       if (!procId || !mounted.current || startupGeneration.current !== token) throw new Error("Se canceló el arranque de Trex CLI.");
       processId.current = procId;
       const init = await rpc(procId, "initialize", { protocolVersion: 1, client: "trex", inbox: true });
@@ -193,7 +197,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
           memoryInstructions(coordination ? await loadMemory(current.cwd) : null)].filter(Boolean).join(" "),
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
         settings: { ...integrationRestrictions(current.integrations), ...trexAutoCompactSettings(autoCompactAt.current = autoCompactTokens(current.autoCompact, "trex")) }, desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}),
-        ...(coordination ? { coordination } : {}) });
+        ...(coordination ? { coordination } : {}), ...(chrome ? { chrome: { command: chrome.command, args: chrome.args } } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
       assertIntegrationRestrictions(result, current.integrations);
       if (result.instructionsApplied !== true) throw new Error("Trex CLI no confirmó las instrucciones de las herramientas. Actualiza el CLI antes de iniciar esta conversación.");

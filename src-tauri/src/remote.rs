@@ -120,42 +120,42 @@ fn save_config(app: &AppHandle, config: &RemoteConfig) -> Result<(), String> {
 
 // --- Utilidades puras -----------------------------------------------------------
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
     let mut bytes = [0u8; N];
     getrandom::fill(&mut bytes).map_err(|error| format!("No hay aleatoriedad del sistema: {error}"))?;
     Ok(bytes)
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn token_hash(token: &str) -> String {
+pub(crate) fn token_hash(token: &str) -> String {
     hex(&Sha256::digest(token.as_bytes()))
 }
 
-fn valid_hash(value: &str) -> bool {
+pub(crate) fn valid_hash(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Comparación en tiempo constante (para hashes de igual longitud).
-fn same_secret(a: &str, b: &str) -> bool {
+pub(crate) fn same_secret(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Código de emparejado: 6 caracteres sin ambigüedades (sin 0/O, 1/I/L).
-fn new_code() -> Result<String, String> {
+pub(crate) fn new_code() -> Result<String, String> {
     let bytes = random_bytes::<CODE_LEN>()?;
     // 31 símbolos: el sesgo de módulo de un byte es despreciable para un código de 5 minutos y 5 intentos.
     Ok(bytes.iter().map(|byte| CODE_ALPHABET[*byte as usize % CODE_ALPHABET.len()] as char).collect())
 }
 
 /// Lo que escribe la persona: sin guiones ni espacios y en mayúsculas.
-fn normalize_code(value: &str) -> String {
+pub(crate) fn normalize_code(value: &str) -> String {
     value.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect()
 }
 
@@ -396,7 +396,7 @@ impl Inner {
     }
 }
 
-fn base64_url(bytes: &[u8]) -> String {
+pub(crate) fn base64_url(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }

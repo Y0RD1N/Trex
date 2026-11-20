@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "trex para tu navegador",
+  "short_name": "trex",
+  "version": "0.1.0",
+  "description": "Deja que los agentes de trex vean y manejen las pestañas que tú compartas, dentro del grupo «trex».",
+  "minimum_chrome_version": "120",
+  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "trex para tu navegador" },
+  "icons": { "32": "icons/32.png", "64": "icons/64.png", "128": "icons/128.png" }
+}

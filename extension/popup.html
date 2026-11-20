@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>trex para tu navegador</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <img src="icons/64.png" alt="" width="28" height="28" />
+    <div><strong>trex</strong><span id="status">…</span></div>
+  </header>
+
+  <section id="pairing" hidden>
+    <p>En trex, abre <b>Ajustes › Conexiones › Navegador</b>, activa «Tu navegador» y pulsa «Emparejar».</p>
+    <form id="pair-form">
+      <label for="code">Código</label>
+      <input id="code" autocomplete="off" spellcheck="false" maxlength="8" placeholder="ABC234" />
+      <details>
+        <summary>Avanzado</summary>
+        <label for="port">Puerto de trex</label>
+        <input id="port" inputmode="numeric" maxlength="5" />
+      </details>
+      <button type="submit" class="primary">Emparejar</button>
+    </form>
+  </section>
+
+  <section id="paired" hidden>
+    <button id="share" class="primary"></button>
+    <p id="share-note"></p>
+    <footer>
+      <span id="count"></span>
+      <button id="retry" class="link" hidden>Reintentar</button>
+      <button id="unpair" class="link">Desvincular</button>
+    </footer>
+  </section>
+
+  <p id="error" role="alert" hidden></p>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

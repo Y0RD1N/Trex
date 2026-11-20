@@ -25,6 +25,8 @@ mod output_batch;
 mod message_queue;
 mod queue_mcp;
 mod remote;
+mod browser_bridge;
+mod browser_bridge_stdio;
 mod process_lifetime;
 mod project_icon;
 mod shared_files;
@@ -363,7 +365,7 @@ async fn desktop_notification(app: AppHandle, title: String, body: String) -> Re
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if agent_team::run_if_requested() || queue_mcp::run_if_requested() {
+    if agent_team::run_if_requested() || queue_mcp::run_if_requested() || browser_bridge_stdio::run_if_requested() {
         return;
     }
     tauri::Builder::default()
@@ -374,10 +376,12 @@ pub fn run() {
         .manage(PtyState::default())
         .manage(AgentState::default())
         .manage(remote::RemoteState::default())
+        .manage(browser_bridge::BridgeState::default())
         .manage(voice::VoiceState::default())
         .manage(voice_live::LiveState::default())
         .setup(|app| {
             remote::init(app.handle());
+            browser_bridge::init(app.handle());
             voice::init(app.handle());
             Ok(())
         })
@@ -510,6 +514,15 @@ pub fn run() {
             remote::remote_publish_detail,
             remote::remote_publish_theme,
             remote::remote_command_result,
+            browser_bridge::browser_bridge_status,
+            browser_bridge::browser_bridge_configure,
+            browser_bridge::browser_bridge_pairing_start,
+            browser_bridge::browser_bridge_pairing_cancel,
+            browser_bridge::browser_bridge_revoke,
+            browser_bridge::browser_bridge_open_extension,
+            browser_bridge::browser_bridge_mcp_session,
+            browser_bridge::browser_bridge_set_mode,
+            browser_bridge::browser_bridge_mcp_stdio,
             voice::voice_status,
             voice::voice_configure,
             voice::voice_download_models,

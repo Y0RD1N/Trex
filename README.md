@@ -58,6 +58,7 @@ cuando a uno se le acaba la cuota, **coordinar un equipo de agentes** o darles u
 | 🔁 **Continuar con otro asistente** | Traspasa el trabajo de un chat a otro perfil sin perder el contexto, incluso si el anterior se quedó sin cuota. |
 | 📬 **Mensajes en cola** | Escribe mientras el agente trabaja; tus mensajes esperan en una bandeja que puedes editar, cancelar o enviar al instante. |
 | 🌐 **Trex Browser** | Un navegador con perfiles privados por proyecto que los agentes pueden manejar y tú puedes pausar o tomar. |
+| 🧷 **Tu navegador** *(experimental)* | Con la extensión de trex, los agentes ven y manejan las pestañas que compartas en tu Chrome, Brave o Edge, con tus sesiones iniciadas. |
 | 🖱️ **Control de aplicaciones** *(experimental)* | Los agentes pueden usar otras apps mediante el árbol de accesibilidad del sistema, sin mover tu ratón ni tu teclado. |
 | 🔔 **Comodidades** | Paleta de comandos (`Ctrl+K`), recuperar conversaciones, avisos de escritorio, atajos configurables, tema claro y oscuro. |
 
@@ -180,6 +181,7 @@ En Windows usa tu Chrome; en Fedora, Chromium. Más en
 | Terminal, proyectos, pestañas, perfiles de Claude Code y Codex, planificar e implementar, equipos y mensajes en cola | ✅ Disponible |
 | Trex CLI y Trex Browser | ✅ Disponible (opcionales) |
 | Control de aplicaciones por accesibilidad | 🧪 **Experimental** |
+| Tu navegador (extensión de trex) | 🧪 **Experimental**: la extensión se carga a mano, todavía no está en la Chrome Web Store |
 | Antigravity | 🧪 **Integración inicial**: probada en Windows con una cuenta real; las herramientas autenticadas y los turnos en Fedora aún requieren validación. La planificación de solo lectura, los equipos y el control de sus terminales internas están desactivados |
 | macOS | Solo Apple Silicon, firma *ad hoc* y sin Trex Browser |
 | Linux | Probado en Fedora 44 (RPM); otras distribuciones, sin instalador |
@@ -193,6 +195,7 @@ En Windows usa tu Chrome; en Fedora, Chromium. Más en
 | [Trex CLI](trex-cli/README.md) · [protocolo](trex-cli/PROTOCOL.md) | Agente para modelos con API key y su protocolo JSON-RPC |
 | [Trex Browser](trex-browser/README.md) | Navegador de los agentes: herramientas, modos y pruebas |
 | [Espacios del navegador](docs/agent-browser-spaces.md) | Cómo se aíslan los datos de cada agente |
+| [Extensión «Tu navegador»](extension/README.md) | Instalarla, emparejarla y qué pestañas pueden tocar los agentes |
 | [Integraciones de escritorio](docs/integraciones-escritorio.md) | Dependencias, GitHub CLI y control por accesibilidad |
 | [Tareas en cualquier chat](docs/chat-task-tools.md) | Cómo se publican y se muestran las tareas |
 | [Fedora](docs/fedora.md) | Instalación, llavero y compilación en Fedora |

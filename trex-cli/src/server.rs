@@ -752,6 +752,8 @@ impl Server {
             .context("cwd must be an existing directory")?;
         ensure!(cwd.is_dir(), "cwd must be a directory");
         let coordination = crate::coordination::CoordinationConfig::parse(params.get("coordination"), &cwd)?;
+        // The person's own browser, through the app's extension bridge. Optional: only read when a session is created.
+        let chrome = crate::chrome::ChromeConfig::parse(params.get("chrome"))?;
         let conversation = optional(params, "conversationId")?;
         let id = match conversation {
             Some(id) => {
@@ -949,6 +951,13 @@ impl Server {
             },
             None => None,
         };
+        // El navegador de la persona (extensión de trex): sin él el chat sigue igual.
+        if let Some(config) = chrome {
+            match crate::mcp::McpProvider::connect(&config.server(), &data.cwd, &settings.shell).await {
+                Ok(provider) => mcp.push(provider),
+                Err(_) => unavailable.push(crate::chrome::SERVER.into()),
+            }
+        }
         let session = Arc::new(Session {
             path,
             _lock: lock,

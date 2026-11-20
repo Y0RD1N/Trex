@@ -635,6 +635,25 @@ export const trexBrowserListSpaces = (cwd: string): Promise<{spaces: BrowserSpac
 /** Per-agent MCP-over-HTTP session (url + bearer token) bound to a permission mode. */
 export const trexBrowserMcpSession = (cwd: string, mode: string, clientId: string, profile: string): Promise<{url: string; token: string; mode: string}> =>
   invoke("trex_browser_mcp_session", {cwd, mode, clientId, profile});
+// --- «Tu navegador»: la extensión de trex (src-tauri/src/browser_bridge.rs) ----------
+export type BrowserBridgeStatus = {
+  enabled: boolean; port: number; running: boolean; error: string | null; connected: boolean; pairing: boolean; extensionPath: string | null;
+  browsers: { id: string; name: string; createdAt: number; lastSeen: number; connected: boolean; version: string | null }[];
+};
+export const browserBridgeStatus = (): Promise<BrowserBridgeStatus> => invoke("browser_bridge_status");
+export const browserBridgeConfigure = (settings: { enabled: boolean; port: number }): Promise<BrowserBridgeStatus> => invoke("browser_bridge_configure", { settings });
+export const browserBridgePairingStart = (): Promise<{ code: string; expiresAt: number; port: number }> => invoke("browser_bridge_pairing_start");
+export const browserBridgePairingCancel = (): Promise<void> => invoke("browser_bridge_pairing_cancel");
+/** Abre la carpeta de la extensión en el explorador de archivos. */
+export const browserBridgeOpenExtension = (): Promise<void> => invoke("browser_bridge_open_extension");
+export const browserBridgeRevoke =(browser: string): Promise<BrowserBridgeStatus> => invoke("browser_bridge_revoke", { browser });
+/** Acceso de un chat a las herramientas del navegador de la persona; `null` si la función está apagada. */
+export const browserBridgeMcpSession = (session: string, mode: string): Promise<{ url: string; token: string; mode: string; connected: boolean } | null> =>
+  invoke("browser_bridge_mcp_session", { session, mode });
+/** Lo mismo para los agentes que solo hablan MCP por stdio: el adaptador de trex y el token para su entorno. */
+export const browserBridgeMcpStdio = (session: string, mode: string): Promise<{ command: string; args: string[]; token: string; mode: string } | null> =>
+  invoke("browser_bridge_mcp_stdio", { session, mode });
+export const browserBridgeSetMode = (session: string, mode: string): Promise<boolean> => invoke("browser_bridge_set_mode", { session, mode });
 /** A person's Trex Browser window without automation: personal, or an agent's closed space (sign-in). */
 export const trexBrowserOpen = (target: { cwd: string; profile: string } | null, url?: string): Promise<{opened: boolean; reason?: string; reused?: boolean}> =>
   invoke("trex_browser_open", {cwd: target?.cwd ?? null, profile: target?.profile ?? null, url: url ?? null});
