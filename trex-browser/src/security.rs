@@ -28,11 +28,11 @@ use windows_sys::Win32::Security::{
     DeriveCapabilitySidsFromName, EqualSid, GetAce, GetLengthSid, GetSecurityDescriptorControl,
     GetSecurityDescriptorDacl, GetSidIdentifierAuthority, GetSidSubAuthority,
     GetSidSubAuthorityCount, GetTokenInformation, IsValidAcl, IsValidSecurityDescriptor,
-    IsValidSid, IsWellKnownSid, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+    IsValidSid, IsWellKnownSid, TokenGroups, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
     WinWorldSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE,
     NO_PROPAGATE_INHERIT_ACE, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SE_DACL_PROTECTED,
-    SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER,
+    SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, CreateFileW, GetFileInformationByHandle, GetFileType,
@@ -518,6 +518,8 @@ struct Policy {
     // usize storage preserves TOKEN_USER pointer alignment; its SID points into
     // this allocation and remains valid for Policy's entire lifetime.
     token_user: Vec<usize>,
+    // TOKEN_GROUPS of this process, with the same alignment and lifetime rules.
+    token_groups: Vec<usize>,
     descriptor: LocalAllocation,
     chromium_capability_sids: Vec<Vec<usize>>,
 }
@@ -553,6 +555,29 @@ impl Policy {
             return Err(io::Error::last_os_error())
                 .context("could not read the current Windows user identity");
         }
+        let mut length = 0;
+        unsafe {
+            GetTokenInformation(token.as_raw_handle(), TokenGroups, null_mut(), 0, &mut length);
+        }
+        if unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER
+            || length < size_of::<TOKEN_GROUPS>() as u32
+        {
+            bail!("could not size the current Windows group identities");
+        }
+        let mut token_groups = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenGroups,
+                token_groups.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error())
+                .context("could not read the current Windows group identities");
+        }
         let sid = unsafe { (*(token_user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
         let mut sid_text = null_mut();
         if unsafe { ConvertSidToStringSidW(sid, &mut sid_text) } == 0 {
@@ -587,6 +612,7 @@ impl Policy {
         }
         Ok(Self {
             token_user,
+            token_groups,
             descriptor: LocalAllocation(descriptor),
             chromium_capability_sids: chromium_capability_sids()?,
         })
@@ -594,6 +620,22 @@ impl Policy {
 
     fn user_sid(&self) -> PSID {
         unsafe { (*(self.token_user.as_ptr().cast::<TOKEN_USER>())).User.Sid }
+    }
+
+    /// Whether this process carries `sid`: as its user, or as any of its groups.
+    /// Groups count whatever their attributes: Windows applies deny entries to
+    /// deny-only groups (a UAC-filtered Administrators) as well as enabled ones.
+    fn carries(&self, sid: PSID) -> bool {
+        if unsafe { EqualSid(sid, self.user_sid()) } != 0 {
+            return true;
+        }
+        let groups = self.token_groups.as_ptr().cast::<TOKEN_GROUPS>();
+        let count = unsafe { (*groups).GroupCount } as usize;
+        let first = unsafe { std::ptr::addr_of!((*groups).Groups) }.cast::<windows_sys::Win32::Security::SID_AND_ATTRIBUTES>();
+        (0..count).any(|index| {
+            let group = unsafe { (*first.add(index)).Sid };
+            !group.is_null() && unsafe { EqualSid(sid, group) } != 0
+        })
     }
 
     /// Whether `owner` may own private-home entries. The owner keeps
@@ -712,6 +754,14 @@ impl Policy {
                     && ace.Header.AceFlags == 0
                     && unsafe { IsWellKnownSid(sid, WinWorldSid) } != 0
                 {
+                    continue;
+                }
+                // A deny entry never grants access to anyone. One aimed at an
+                // identity this process does not carry (another tool's sandbox
+                // accounts, for instance) cannot lock the user out of the home
+                // either, so it is harmless: the home stays readable only by the
+                // user and SYSTEM, which the grant checks below still enforce.
+                if !self.carries(sid) && unsafe { IsWellKnownSid(sid, WinLocalSystemSid) } == 0 {
                     continue;
                 }
                 bail!("the private home contains an unsupported Windows deny ACL entry");
@@ -1609,6 +1659,44 @@ mod tests {
             drop(home);
             assert_eq!(PrivateHome::at(&test.0).is_ok(), accepted);
         }
+    }
+
+    #[test]
+    fn a_deny_for_an_identity_the_user_does_not_carry_is_harmless() {
+        // What another tool's sandbox does: deny its own accounts on the whole home,
+        // inherited by everything inside. BUILTIN\\Guests stands in for that group.
+        let outsiders = sid("S-1-5-32-546");
+        let test = TestHome::new();
+        let home = PrivateHome::at(&test.0).unwrap();
+        let inside = home.path().join("artifacts").join("state");
+        fs::create_dir_all(inside.parent().unwrap()).unwrap();
+        fs::write(&inside, b"private").unwrap();
+        extra_ace(home.path(), outsiders.0, FILE_GENERIC_READ, SUB_CONTAINERS_AND_OBJECTS_INHERIT, DENY_ACCESS);
+        extra_ace(&inside, outsiders.0, FILE_GENERIC_READ, 0, DENY_ACCESS);
+        drop(home);
+        assert!(PrivateHome::at(&test.0).is_ok(), "a deny that cannot touch the user must not block the browser");
+
+        // A deny that reaches the user (Everyone, or the user itself) is still refused,
+        // and so is one for SYSTEM.
+        for blocked in ["S-1-1-0", "S-1-5-18"] {
+            let test = TestHome::new();
+            let home = PrivateHome::at(&test.0).unwrap();
+            let target = home.path().join("artifacts").join("state");
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(&target, b"private").unwrap();
+            extra_ace(&target, sid(blocked).0, FILE_GENERIC_READ, 0, DENY_ACCESS);
+            drop(home);
+            assert!(PrivateHome::at(&test.0).is_err(), "{blocked}");
+        }
+        // And a grant to that outside identity is refused as before: only denies are tolerated.
+        let test = TestHome::new();
+        let home = PrivateHome::at(&test.0).unwrap();
+        let target = home.path().join("artifacts").join("state");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, b"private").unwrap();
+        extra_ace(&target, outsiders.0, FILE_GENERIC_READ, 0, GRANT_ACCESS);
+        drop(home);
+        assert!(PrivateHome::at(&test.0).is_err());
     }
 
     #[test]
