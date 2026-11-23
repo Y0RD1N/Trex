@@ -43,6 +43,13 @@ jobs:
           node trex-browser/shell/node_modules/electron/install.js
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # sherpa-onnx (voice) downloads its import libraries into target/sherpa-onnx-prebuilt,
+      # which rust-cache prunes before saving. With a cache restored, its build script does
+      # not run again and linking fails (LNK1181 sherpa-onnx-c-api.lib). Forgetting its
+      # build makes it fetch them again; everything else stays cached.
+      - name: Let sherpa-onnx fetch its libraries again
+        shell: bash
+        run: rm -rf src-tauri/target/release/build/sherpa-onnx-sys-* src-tauri/target/release/.fingerprint/sherpa-onnx-sys-*
       - name: Build the NSIS installer
         run: npm run tauri build
       - name: Install silently and check the installed app
