@@ -28,6 +28,8 @@ const CLOSING: Duration = Duration::from_millis(750);
 /// Sin usarse durante este tiempo, la ventana oculta se destruye.
 const KEEP_WARM: Duration = Duration::from_secs(120);
 const READY_WAIT: Duration = Duration::from_secs(3);
+/// Lo que se espera a una ventana que otro hilo está creando antes de darla por perdida.
+const CREATE_WAIT: Duration = Duration::from_secs(10);
 /// Pico de la salida a partir del cual se considera que trex está sonando.
 const VOICE_FLOOR: f32 = 0.015;
 /// El micrófono se tapa mientras suena lo fuerte de la activación, no toda su cola.
@@ -223,6 +225,7 @@ impl Orb {
     pub fn prewarm(&self) {
         self.touch();
         let Some(app) = self.app() else { return };
+        // Se llama en cada tramo con voz: la creación se reserva aquí, antes de lanzar el hilo.
         if self.shut() || self.active() || app.get_webview_window(LABEL).is_some() || self.0.creating.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -239,6 +242,16 @@ impl Orb {
         if spawned.is_err() {
             self.0.creating.store(false, Ordering::SeqCst);
         }
+    }
+
+    /// La ventana de la esfera: la que ya hay, la que se está preparando o una nueva.
+    ///
+    /// Una sola creación a la vez. Tauri solo rechaza una etiqueta repetida cuando la primera
+    /// ventana ya existe: si «oye trex» llegaba mientras `prewarm` preparaba la ventana oculta,
+    /// se creaban dos «orb», la esfera no se dibujaba y la otra quedaba huérfana y oculta,
+    /// manteniendo trex vivo al cerrarlo.
+    fn window(&self, app: &AppHandle) -> Result<WebviewWindow, String> {
+        single_flight(&self.0.creating, || app.get_webview_window(LABEL), || create(app), CREATE_WAIT)
     }
 
     /// Enseña la esfera y la mantiene mientras `signals` diga que la conversación sigue.
@@ -295,7 +308,7 @@ impl Orb {
     }
 
     fn run(&self, app: &AppHandle, look: &Look, signals: impl Fn() -> Signals, generation: u64) {
-        let window = match app.get_webview_window(LABEL).map(Ok).unwrap_or_else(|| create(app)) {
+        let window = match self.window(app) {
             Ok(window) => window,
             Err(error) => {
                 if cfg!(debug_assertions) { eprintln!("[esfera] no se pudo abrir la ventana: {error}"); }
@@ -403,6 +416,32 @@ impl Orb {
         if spawned.is_err() {
             self.0.keeper.store(false, Ordering::SeqCst);
         }
+    }
+}
+
+/// Lo que hay (`existing`) o lo que crea `create`, sin crear nunca dos a la vez: quien llega
+/// mientras otro crea espera a que termine (como mucho `wait`) y se queda con lo suyo.
+fn single_flight<T>(
+    creating: &AtomicBool,
+    existing: impl Fn() -> Option<T>,
+    create: impl FnOnce() -> Result<T, String>,
+    wait: Duration,
+) -> Result<T, String> {
+    let started = Instant::now();
+    loop {
+        if let Some(found) = existing() {
+            return Ok(found);
+        }
+        if !creating.swap(true, Ordering::SeqCst) {
+            // Pudo terminar otra creación justo entre la consulta y el turno.
+            let made = existing().map(Ok).unwrap_or_else(create);
+            creating.store(false, Ordering::SeqCst);
+            return made;
+        }
+        if started.elapsed() >= wait {
+            return Err("la ventana de la esfera tarda demasiado en prepararse".into());
+        }
+        std::thread::sleep(Duration::from_millis(15));
     }
 }
 
@@ -560,6 +599,56 @@ mod tests {
         // Un segundo monitor a la izquierda, con coordenadas negativas y escala 1,5.
         let left = Rect { x: -2560, y: 0, width: 2560, height: 1392 };
         assert_eq!(placement("corner", 390, 24, left, None), (-2560 + 2560 - 390 - 24, 1392 - 390 - 24));
+    }
+
+    #[test]
+    fn only_one_window_is_created_when_several_threads_ask_at_once() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Barrier;
+        let creating = Arc::new(AtomicBool::new(false));
+        let made = Arc::new(AtomicUsize::new(0));
+        let registry: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+        let barrier = Arc::new(Barrier::new(4));
+        let threads: Vec<_> = (0..4).map(|_| {
+            let (creating, made, registry, barrier) = (creating.clone(), made.clone(), registry.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                single_flight(&creating, || *lock(&registry), || {
+                    // Como una ventana de Tauri: tarda en crearse y solo después se puede encontrar.
+                    let id = made.fetch_add(1, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(80));
+                    *lock(&registry) = Some(id);
+                    Ok(id)
+                }, Duration::from_secs(5))
+            })
+        }).collect();
+        let windows: Vec<usize> = threads.into_iter().map(|thread| thread.join().unwrap().unwrap()).collect();
+        assert_eq!(made.load(Ordering::SeqCst), 1, "una sola ventana «orb»");
+        assert!(windows.iter().all(|window| *window == windows[0]));
+        assert!(!creating.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_window_being_prepared_is_awaited_and_a_failure_frees_the_turn() {
+        // `prewarm` reservó la creación y la ventana aún no existe: «oye trex» la espera.
+        let creating = AtomicBool::new(true);
+        let registry = Mutex::new(None);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(60));
+                *lock(&registry) = Some(7);
+                creating.store(false, Ordering::SeqCst);
+            });
+            let got = single_flight(&creating, || *lock(&registry), || Ok(99), Duration::from_secs(5));
+            assert_eq!(got, Ok(7), "usa la ventana preparada en vez de crear otra");
+        });
+        // Una creación que falla deja el turno libre para la siguiente.
+        let creating = AtomicBool::new(false);
+        assert!(single_flight(&creating, || None::<u8>, || Err("sin ventana".into()), Duration::from_secs(1)).is_err());
+        assert!(!creating.load(Ordering::SeqCst));
+        // Una reserva que nunca se suelta no cuelga a quien espera.
+        let stuck = AtomicBool::new(true);
+        assert!(single_flight(&stuck, || None::<u8>, || Ok(1), Duration::from_millis(50)).is_err());
     }
 
     #[test]
