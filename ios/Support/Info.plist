@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>trex</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>es</string>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>La cámara solo se usa para escanear el código QR de emparejado que muestra trex en tu PC.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>trex se conecta a tu PC por la red local o tu VPN para ver y dirigir tus sesiones.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- El servidor de trex escucha por http:// dentro del túnel (WireGuard o Tailscale),
+		     que ya va cifrado. La app solo habla con la dirección de tu PC que tú emparejas. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>
