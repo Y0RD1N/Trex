@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -176,6 +176,14 @@ struct VoiceConfig {
     speech: String,
     /// Voz elegida de ElevenLabs (su id).
     cloud_voice: String,
+    /// Enseñar la esfera al llamar a trex (ver `voice_orb.rs`).
+    orb: bool,
+    /// Sonidos de activación y cierre de la esfera.
+    orb_sounds: bool,
+    /// Dónde aparece: "corner" | "center" | "trex".
+    orb_position: String,
+    /// Tamaño: "small" | "medium" | "large".
+    orb_size: String,
 }
 
 impl Default for VoiceConfig {
@@ -184,6 +192,7 @@ impl Default for VoiceConfig {
             enabled: false, raw_capture: true, device: String::new(),
             mode: "local".into(), live_voice: crate::voice_live::DEFAULT_VOICE.into(), barge_in: true,
             speech: "local".into(), cloud_voice: String::new(),
+            orb: true, orb_sounds: true, orb_position: "corner".into(), orb_size: "medium".into(),
         }
     }
 }
@@ -230,6 +239,12 @@ pub struct Inner {
     speech: AtomicU64,
     /// Generación del motor: al apagar o reconfigurar, el hilo anterior se retira solo.
     generation: AtomicU64,
+    /// Hasta cuándo se aceptan frases sin «oye trex» (la ventana de conversación).
+    conversation: Mutex<Option<std::time::Instant>>,
+    /// Respuestas que Claude está preparando ahora mismo (`voice_think`).
+    thinking: AtomicU32,
+    /// La esfera que aparece al llamar a trex.
+    orb: crate::voice_orb::Orb,
 }
 
 #[derive(Clone)]
@@ -241,8 +256,29 @@ impl Default for VoiceState {
             app: Mutex::new(None), config: Mutex::new(VoiceConfig::default()), phase: Mutex::new("off"),
             error: Mutex::new(None), speech_error: Mutex::new(None), dictation: Mutex::new(None), downloading: AtomicBool::new(false), downloaded: AtomicU64::new(0),
             download_total: AtomicU64::new(0), speaking: AtomicBool::new(false), speech: AtomicU64::new(0),
-            generation: AtomicU64::new(0),
+            generation: AtomicU64::new(0), conversation: Mutex::new(None), thinking: AtomicU32::new(0),
+            orb: crate::voice_orb::Orb::default(),
         }))
+    }
+}
+
+/// Mientras vive, cuenta como una respuesta que Claude está preparando.
+pub struct ThinkingGuard(Arc<Inner>);
+
+impl Drop for ThinkingGuard {
+    fn drop(&mut self) { self.0.thinking.fetch_sub(1, Ordering::SeqCst); }
+}
+
+impl VoiceState {
+    /// Para `voice_think`: la esfera piensa mientras dure la guarda.
+    pub fn thinking(&self) -> ThinkingGuard {
+        self.0.thinking.fetch_add(1, Ordering::SeqCst);
+        ThinkingGuard(self.0.clone())
+    }
+
+    /// Se cierra trex: la esfera se va y ya no vuelve a crearse.
+    pub fn shutdown_orb(&self) {
+        self.0.orb.shutdown();
     }
 }
 
@@ -334,7 +370,44 @@ fn load_runtime(inner: &Inner) -> bool {
 
 fn stop(inner: &Arc<Inner>) {
     inner.generation.fetch_add(1, Ordering::SeqCst);
+    // Sin motor no hay conversación: la esfera, si estaba a la vista, se despide.
+    *lock(&inner.conversation) = None;
     inner.set_phase("off");
+}
+
+// --- Esfera -----------------------------------------------------------------------
+
+/// Cómo debe verse la esfera, o `None` si está desactivada.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn orb_look(inner: &Inner) -> Option<crate::voice_orb::Look> {
+    let config = lock(&inner.config).clone();
+    if !config.orb { return None; }
+    let reduced = lock(&inner.app).as_ref().is_some_and(|app| crate::config::load_settings(app).motion == "reduced");
+    Some(crate::voice_orb::Look { position: config.orb_position, size: config.orb_size, sounds: config.orb_sounds, reduced })
+}
+
+/// Lo que la esfera necesita saber del motor y de la llamada en tiempo real.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn orb_signals(inner: &Inner, live: &crate::voice_live::LiveState) -> crate::voice_orb::Signals {
+    crate::voice_orb::Signals {
+        open: lock(&inner.conversation).is_some_and(|until| std::time::Instant::now() < until),
+        thinking: inner.thinking.load(Ordering::SeqCst) > 0,
+        transcribing: *lock(&inner.phase) == "transcribing",
+        speaking: inner.speaking.load(Ordering::SeqCst),
+        live: live.active().then(|| live.connecting()),
+        live_tools: live.tools_pending(),
+    }
+}
+
+/// trex oyó su nombre: abre la ventana de conversación y enseña la esfera si no está ya.
+#[cfg(windows)]
+fn summon(inner: &Arc<Inner>) {
+    *lock(&inner.conversation) = Some(std::time::Instant::now() + CONVERSATION_WINDOW);
+    let Some(look) = orb_look(inner) else { return };
+    let Some(app) = lock(&inner.app).clone() else { return };
+    let live = app.state::<crate::voice_live::LiveState>().inner().clone();
+    let watched = inner.clone();
+    inner.orb.wake(look, move || orb_signals(&watched, &live));
 }
 
 /// Arranca el motor con la configuración actual (o deja anotado por qué no).
@@ -385,6 +458,7 @@ fn start(state: &VoiceState) {
 pub fn init(app: &AppHandle) {
     let state = app.state::<VoiceState>().inner().clone();
     *lock(&state.0.app) = Some(app.clone());
+    state.0.orb.set_app(app.clone());
     *lock(&state.0.config) = load_config(app);
     if lock(&state.0.config).enabled { start(&state); }
 }
@@ -536,8 +610,8 @@ mod engine {
         inner.set_phase("idle");
 
         let mut pending: Vec<f32> = Vec::new();
-        // Hasta cuándo se aceptan frases sin "oye trex" delante.
-        let mut conversation_until: Option<Instant> = None;
+        // Hasta cuándo se aceptan frases sin "oye trex" delante: `inner.conversation`.
+        let conversing = || super::lock(&inner.conversation).is_some_and(|until| Instant::now() < until);
         // Tras hablar trex se descarta un instante más de audio: la cola de su propia voz.
         let mut deaf_until = Instant::now();
         loop {
@@ -549,7 +623,7 @@ mod engine {
                 dictation_failed = false;
                 if dictation_recognizer.take().is_some() && cfg!(debug_assertions) { eprintln!("[voz] modelo del dictado liberado"); }
             }
-            let quiet = conversation_until.is_none_or(|until| Instant::now() >= until);
+            let quiet = !conversing();
             if recognizer.is_some() && quiet && !vad.detected() && used_at.elapsed() >= WHISPER_IDLE {
                 recognizer = None;
                 if cfg!(debug_assertions) { eprintln!("[voz] Whisper liberado tras {} s sin uso", WHISPER_IDLE.as_secs()); }
@@ -562,11 +636,17 @@ mod engine {
             if inner.speaking.load(Ordering::SeqCst) {
                 deaf_until = Instant::now() + Duration::from_millis(400);
                 // Después de responder, la persona puede seguir hablando sin repetir "oye trex".
-                conversation_until = Some(Instant::now() + CONVERSATION_WINDOW);
+                *super::lock(&inner.conversation) = Some(Instant::now() + CONVERSATION_WINDOW);
+            } else if inner.orb.chiming() {
+                // Suena la activación de la esfera: que Whisper no la tome por una frase.
+                deaf_until = deaf_until.max(Instant::now() + Duration::from_millis(150));
             }
             let deaf = Instant::now() < deaf_until;
             // Medidor de Ajustes: unas cuatro veces por segundo, también mientras trex habla.
-            peak = chunk.iter().fold(peak, |max, sample| max.max(sample.abs()));
+            let chunk_peak = chunk.iter().fold(0f32, |max, sample| max.max(sample.abs()));
+            peak = peak.max(chunk_peak);
+            // La esfera, si está a la vista, reacciona a tu voz (no a la de trex).
+            if !deaf { inner.orb.feed_mic(chunk_peak); }
             if level_at.elapsed() >= Duration::from_millis(250) {
                 let voice = !deaf && vad.detected();
                 // En silencio se avisa una vez y no cuatro por segundo: la ventana no tiene nada que pintar.
@@ -596,7 +676,7 @@ mod engine {
                 live = None;
                 pending.clear();
                 vad.reset();
-                conversation_until = None;
+                *super::lock(&inner.conversation) = None;
                 inner.set_phase("idle");
             }
             pending.extend_from_slice(&samples);
@@ -615,6 +695,8 @@ mod engine {
                 let needs_base = dictating.is_none() || dictation_recognizer.is_none();
                 if needs_base && recognizer.is_none() { recognizer = Some(load_base(models)?); }
                 used_at = Instant::now();
+                // Puede que le llamen: la esfera se prepara oculta para aparecer sin esperar.
+                if dictating.is_none() && super::lock(&inner.config).orb { inner.orb.prewarm(); }
             }
             let resting = if dictating.is_some() { "dictating" } else { "idle" };
             if vad.is_empty() {
@@ -640,8 +722,7 @@ mod engine {
                     continue;
                 }
                 let Some(model) = recognizer.as_ref() else { continue };
-                let now = Instant::now();
-                let in_conversation = conversation_until.is_some_and(|until| now < until);
+                let in_conversation = conversing();
                 // Fuera de una conversación solo importa si la frase empieza llamando a trex: se
                 // transcribe su arranque y, solo si le llama, la frase entera. Lo que no va con
                 // trex (una tele, otra conversación) cuesta una fracción y nunca se transcribe completo.
@@ -654,6 +735,8 @@ mod engine {
                 }
                 if probe {
                     if voice_wake::wake_command(&text).is_none() { continue; }
+                    // Le llamó: la esfera aparece ya, mientras se transcribe la frase entera.
+                    super::summon(inner);
                     let started = Instant::now();
                     text = transcribe(model, &speech);
                     if cfg!(debug_assertions) { eprintln!("[voz] llamó a trex; frase entera en {} ms: «{text}»", started.elapsed().as_millis()); }
@@ -668,6 +751,9 @@ mod engine {
                     // Nadie llamó a trex: la frase no sale de este hilo.
                     None => continue,
                 };
+                // La conversación sigue (o empieza): la esfera está a la vista. Si ya se había ido
+                // mientras se transcribía la frase, vuelve.
+                super::summon(inner);
                 if wake && settings.mode == "live" {
                     // Sin clave se sigue por el camino local: trex contesta igual, solo que más despacio.
                     if let Some(call) = start_live(inner, settings, &command) {
@@ -678,7 +764,6 @@ mod engine {
                         break;
                     }
                 }
-                conversation_until = Some(now + CONVERSATION_WINDOW);
                 let at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
                 inner.emit(EVENT_UTTERANCE, Utterance { text, command, wake, at });
             }
@@ -906,6 +991,10 @@ pub struct VoiceStatus {
     downloading: bool,
     downloaded_bytes: u64,
     total_bytes: u64,
+    orb: bool,
+    orb_sounds: bool,
+    orb_position: String,
+    orb_size: String,
 }
 
 fn status_of(state: &VoiceState) -> VoiceStatus {
@@ -943,6 +1032,10 @@ fn status_of(state: &VoiceState) -> VoiceStatus {
         downloaded_bytes: inner.downloaded.load(Ordering::SeqCst),
         // Durante la descarga, lo que faltaba al empezar; si no, lo que falta ahora.
         total_bytes: if downloading { inner.download_total.load(Ordering::SeqCst) } else { missing },
+        orb: config.orb,
+        orb_sounds: config.orb_sounds,
+        orb_position: config.orb_position.clone(),
+        orb_size: config.orb_size.clone(),
     }
 }
 
@@ -964,9 +1057,28 @@ pub struct VoiceSettings {
     #[serde(default = "yes")] barge_in: bool,
     #[serde(default)] speech: String,
     #[serde(default)] cloud_voice: String,
+    #[serde(default = "yes")] orb: bool,
+    #[serde(default = "yes")] orb_sounds: bool,
+    #[serde(default)] orb_position: String,
+    #[serde(default)] orb_size: String,
 }
 
 fn yes() -> bool { true }
+
+/// Un valor de una lista cerrada, o el primero de la lista si no está.
+fn one_of(value: &str, allowed: &[&str], fallback: &str) -> String {
+    if allowed.contains(&value) { value.into() } else { fallback.into() }
+}
+
+/// ¿Hace falta reiniciar la escucha? La voz de las respuestas y la esfera se cambian en caliente.
+fn engine_changed(previous: &VoiceConfig, next: &VoiceConfig) -> bool {
+    let unchanged = VoiceConfig {
+        speech: previous.speech.clone(), cloud_voice: previous.cloud_voice.clone(),
+        orb: previous.orb, orb_sounds: previous.orb_sounds, orb_position: previous.orb_position.clone(), orb_size: previous.orb_size.clone(),
+        ..next.clone()
+    };
+    unchanged != *previous
+}
 
 /// Voces de la cuenta de ElevenLabs, para elegir una en Ajustes.
 #[tauri::command]
@@ -1004,11 +1116,16 @@ pub fn voice_configure(app: AppHandle, state: State<'_, VoiceState>, settings: V
         config.barge_in = settings.barge_in;
         config.speech = if settings.speech == "elevenlabs" { "elevenlabs".into() } else { "local".into() };
         config.cloud_voice = if crate::voice_cloud::valid_voice(&settings.cloud_voice) { settings.cloud_voice } else { String::new() };
+        config.orb = settings.orb;
+        config.orb_sounds = settings.orb_sounds;
+        config.orb_position = one_of(&settings.orb_position, crate::voice_orb::POSITIONS, "corner");
+        config.orb_size = one_of(&settings.orb_size, crate::voice_orb::SIZES, "medium");
         config.clone()
     };
     save_config(&app, &snapshot)?;
-    // Cambiar solo la voz de las respuestas no reinicia la escucha.
-    let same_engine = VoiceConfig { speech: previous.speech.clone(), cloud_voice: previous.cloud_voice.clone(), ..snapshot.clone() } == previous;
+    // Cambiar solo la voz de las respuestas o la esfera no reinicia la escucha.
+    let same_engine = !engine_changed(&previous, &snapshot);
+    if previous.orb && !snapshot.orb { state.0.orb.disable(); }
     if !snapshot.enabled {
         stop(&state.0);
         *lock(&state.0.error) = None;
@@ -1034,38 +1151,107 @@ pub async fn voice_speak(state: State<'_, VoiceState>, text: String) -> Result<(
     #[cfg(windows)]
     {
         let inner = state.inner().0.clone();
-        let turn = inner.speech.fetch_add(1, Ordering::SeqCst) + 1;
-        tauri::async_runtime::spawn_blocking(move || {
-            inner.speaking.store(true, Ordering::SeqCst);
-            let listening = !matches!(*lock(&inner.phase), "off" | "loading");
-            if listening { inner.set_phase("speaking"); }
-            // Con la voz neuronal instalada se usa esa; si no (o si falla), la de Windows.
-            let neural = inner.speech_dir().filter(|dir| speech_installed(dir) && load_runtime(&inner));
-            if cfg!(debug_assertions) { eprintln!("[voz] hablando (neuronal: {}): «{text}»", neural.is_some()); }
-            let cancelled = || inner.speech.load(Ordering::SeqCst) != turn;
-            // Voz de nube, si está elegida y hay clave. Si no llega a sonar, se dice con la voz local.
-            let config = lock(&inner.config).clone();
-            let cloud_key = (config.speech == "elevenlabs").then(|| lock(&inner.app).clone()).flatten()
-                .and_then(|app| crate::voice_keys::load(&app, "elevenlabs"));
-            let mut said = false;
-            if let Some(key) = cloud_key {
-                match crate::voice_cloud::speak(&key, &config.cloud_voice, &text, cancelled) {
-                    Ok(()) => { said = true; *lock(&inner.speech_error) = None; }
-                    Err(crate::voice_cloud::Failure::Midway(error)) => { said = true; *lock(&inner.speech_error) = Some(error); }
-                    Err(crate::voice_cloud::Failure::BeforeSound(error)) => { *lock(&inner.speech_error) = Some(error); }
-                }
+        tauri::async_runtime::spawn_blocking(move || say(&inner, &text))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+}
+
+/// Dice `text` y vuelve cuando termina de sonar. Una frase nueva corta la anterior.
+#[cfg(windows)]
+fn say(inner: &Arc<Inner>, text: &str) -> Result<(), String> {
+    let turn = inner.speech.fetch_add(1, Ordering::SeqCst) + 1;
+    inner.speaking.store(true, Ordering::SeqCst);
+    let listening = !matches!(*lock(&inner.phase), "off" | "loading");
+    if listening { inner.set_phase("speaking"); }
+    // Con la voz neuronal instalada se usa esa; si no (o si falla), la de Windows.
+    let neural = inner.speech_dir().filter(|dir| speech_installed(dir) && load_runtime(inner));
+    if cfg!(debug_assertions) { eprintln!("[voz] hablando (neuronal: {}): «{text}»", neural.is_some()); }
+    let cancelled = || inner.speech.load(Ordering::SeqCst) != turn;
+    // Voz de nube, si está elegida y hay clave. Si no llega a sonar, se dice con la voz local.
+    let config = lock(&inner.config).clone();
+    let cloud_key = (config.speech == "elevenlabs").then(|| lock(&inner.app).clone()).flatten()
+        .and_then(|app| crate::voice_keys::load(&app, "elevenlabs"));
+    let mut said = false;
+    if let Some(key) = cloud_key {
+        match crate::voice_cloud::speak(&key, &config.cloud_voice, text, cancelled) {
+            Ok(()) => { said = true; *lock(&inner.speech_error) = None; }
+            Err(crate::voice_cloud::Failure::Midway(error)) => { said = true; *lock(&inner.speech_error) = Some(error); }
+            Err(crate::voice_cloud::Failure::BeforeSound(error)) => { *lock(&inner.speech_error) = Some(error); }
+        }
+    }
+    let result = if said { Ok(()) } else { crate::voice_speech::speak(text, neural.as_deref(), cancelled) };
+    if cfg!(debug_assertions) { eprintln!("[voz] terminó de hablar: {result:?}"); }
+    // Si otra frase tomó el relevo, es ella la que cierra el turno.
+    if inner.speech.load(Ordering::SeqCst) == turn {
+        inner.speaking.store(false, Ordering::SeqCst);
+        if *lock(&inner.phase) == "speaking" { inner.set_phase("idle"); }
+    }
+    result
+}
+
+/// La página de la esfera cargó y ya escucha sus eventos.
+#[tauri::command]
+pub fn voice_orb_ready(state: State<'_, VoiceState>) {
+    state.inner().0.orb.mark_ready();
+}
+
+/// La persona se despidió: trex vuelve a necesitar «oye trex» y la esfera se va.
+#[tauri::command]
+pub fn voice_conversation_end(state: State<'_, VoiceState>) {
+    *lock(&state.inner().0.conversation) = None;
+}
+
+/// Voz simulada para la prueba de la esfera: sílabas, palabras y pausas (pico de 0 a 1).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn practice_voice(t: f32) -> f32 {
+    use std::f32::consts::TAU;
+    let syllable = (t * TAU * 4.4 + 1.3).sin().max(0.0).powf(0.6);
+    let gate = 0.5 + 0.5 * (t * TAU * 0.37 + 2.2).sin() * (t * TAU * 0.61 + 1.3).sin();
+    let word = ((gate - 0.18) / 0.24).clamp(0.0, 1.0);
+    syllable * word * word * (3.0 - 2.0 * word)
+}
+
+/// Enseña la esfera unos segundos desde Ajustes: escucha una voz simulada, piensa y dice una frase de verdad.
+#[tauri::command]
+pub fn voice_orb_test(state: State<'_, VoiceState>) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = state;
+        Err("La esfera solo funciona en Windows por ahora.".into())
+    }
+    #[cfg(windows)]
+    {
+        use crate::voice_orb::Signals;
+        use std::sync::atomic::AtomicU8;
+        let inner = state.inner().0.clone();
+        let look = orb_look(&inner).ok_or("Activa la esfera para probarla.")?;
+        let stage = Arc::new(AtomicU8::new(0));
+        let script = stage.clone();
+        let shown = inner.orb.wake(look, move || match script.load(Ordering::SeqCst) {
+            0 => Signals { open: true, ..Default::default() },
+            1 => Signals { open: true, thinking: true, ..Default::default() },
+            2 => Signals { open: true, speaking: true, ..Default::default() },
+            _ => Signals::default(),
+        });
+        if !shown { return Err("La esfera ya está a la vista.".into()); }
+        std::thread::Builder::new().name("trex-orb-test".into()).spawn(move || {
+            let started = std::time::Instant::now();
+            // Tras el despertar, una frase simulada.
+            std::thread::sleep(Duration::from_millis(900));
+            while started.elapsed() < Duration::from_millis(3600) {
+                inner.orb.feed_mic(practice_voice(started.elapsed().as_secs_f32()) * 0.3);
+                std::thread::sleep(Duration::from_millis(30));
             }
-            let result = if said { Ok(()) } else { crate::voice_speech::speak(&text, neural.as_deref(), cancelled) };
-            if cfg!(debug_assertions) { eprintln!("[voz] terminó de hablar: {result:?}"); }
-            // Si otra frase tomó el relevo, es ella la que cierra el turno.
-            if inner.speech.load(Ordering::SeqCst) == turn {
-                inner.speaking.store(false, Ordering::SeqCst);
-                if *lock(&inner.phase) == "speaking" { inner.set_phase("idle"); }
-            }
-            result
-        })
-        .await
-        .map_err(|e| e.to_string())?
+            stage.store(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(1600));
+            stage.store(2, Ordering::SeqCst);
+            let _ = say(&inner, "Hola, soy trex. Así me verás mientras hablamos.");
+            // Que la prueba no deje abierta una conversación: lo siguiente vuelve a necesitar «oye trex».
+            *lock(&inner.conversation) = None;
+            stage.store(3, Ordering::SeqCst);
+        }).map_err(|error| format!("No se pudo probar la esfera: {error}"))?;
+        Ok(())
     }
 }
 
@@ -1169,6 +1355,30 @@ mod tests {
         assert!(!config.enabled);
         assert!(config.raw_capture);
         assert_eq!(serde_json::from_str::<VoiceConfig>("{}").unwrap(), config);
+    }
+
+    #[test]
+    fn the_orb_is_on_by_default_and_changes_without_restarting_the_engine() {
+        let config = VoiceConfig::default();
+        assert!(config.orb && config.orb_sounds);
+        assert_eq!((config.orb_position.as_str(), config.orb_size.as_str()), ("corner", "medium"));
+        // Un voice.json de antes de la esfera la trae activada.
+        assert!(serde_json::from_str::<VoiceConfig>(r#"{"enabled":true}"#).unwrap().orb);
+        let orb_only = VoiceConfig {
+            orb: false, orb_sounds: false, orb_position: "trex".into(), orb_size: "large".into(), speech: "elevenlabs".into(), ..config.clone()
+        };
+        assert!(!engine_changed(&config, &orb_only));
+        assert!(engine_changed(&config, &VoiceConfig { device: "mic-2".into(), ..config.clone() }));
+        assert_eq!(one_of("trex", crate::voice_orb::POSITIONS, "corner"), "trex");
+        assert_eq!(one_of("../fuera", crate::voice_orb::POSITIONS, "corner"), "corner");
+    }
+
+    #[test]
+    fn the_practice_voice_is_a_level() {
+        let levels: Vec<f32> = (0..400).map(|i| practice_voice(i as f32 * 0.025)).collect();
+        assert!(levels.iter().all(|level| (0.0..=1.0).contains(level)));
+        // Tiene sílabas y pausas: ni plano ni siempre arriba.
+        assert!(levels.iter().any(|level| *level > 0.6) && levels.iter().filter(|level| **level < 0.05).count() > 40);
     }
 
     #[test]

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>trex · esfera</title>
+    <!-- Ventana transparente: solo se ve lo que dibuja el lienzo. -->
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      canvas { display: block; width: 100%; height: 100%; }
+    </style>
+  </head>
+  <body>
+    <canvas id="orb" aria-hidden="true"></canvas>
+    <script type="module" src="/src/orb/main.ts"></script>
+  </body>
+</html>

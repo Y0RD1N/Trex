@@ -42,7 +42,27 @@ export type VoiceStatus = {
   downloading: boolean;
   downloadedBytes: number;
   totalBytes: number;
+  /** La esfera que aparece al llamar a trex (ver `src-tauri/src/voice_orb.rs`). */
+  orb: boolean;
+  orbSounds: boolean;
+  orbPosition: VoiceOrbPosition;
+  orbSize: VoiceOrbSize;
 };
+
+export type VoiceOrbPosition = "corner" | "center" | "trex";
+export type VoiceOrbSize = "small" | "medium" | "large";
+
+export const ORB_POSITION_OPTIONS: { value: VoiceOrbPosition; label: string; description?: string }[] = [
+  { value: "corner", label: "Esquina inferior derecha" },
+  { value: "center", label: "Centro, abajo" },
+  { value: "trex", label: "Sobre trex", description: "En el centro de su ventana; si está minimizada, en la esquina" },
+];
+
+export const ORB_SIZE_OPTIONS: { value: VoiceOrbSize; label: string; description: string }[] = [
+  { value: "small", label: "Pequeña", description: "200 px" },
+  { value: "medium", label: "Mediana", description: "260 px" },
+  { value: "large", label: "Grande", description: "320 px" },
+];
 
 export type VoiceMicrophone = { id: string; name: string; isDefault: boolean };
 
@@ -125,11 +145,13 @@ export function insertDictated(draft: string, point: { start: number; end: numbe
 }
 
 /** Lo que se guarda al aplicar un cambio en Ajustes: todo menos el estado. */
-export type VoiceSettingsPatch = Pick<VoiceStatus, "enabled" | "rawCapture" | "device" | "mode" | "liveVoice" | "bargeIn" | "speech" | "cloudVoice">;
+export type VoiceSettingsPatch = Pick<VoiceStatus,
+  "enabled" | "rawCapture" | "device" | "mode" | "liveVoice" | "bargeIn" | "speech" | "cloudVoice" | "orb" | "orbSounds" | "orbPosition" | "orbSize">;
 
 export const voiceSettingsOf = (status: VoiceStatus): VoiceSettingsPatch => ({
   enabled: status.enabled, rawCapture: status.rawCapture, device: status.device, mode: status.mode,
   liveVoice: status.liveVoice, bargeIn: status.bargeIn, speech: status.speech, cloudVoice: status.cloudVoice,
+  orb: status.orb, orbSounds: status.orbSounds, orbPosition: status.orbPosition, orbSize: status.orbSize,
 });
 
 /** Qué le falta a cada opción de pago para funcionar, en una frase; null si está lista. */

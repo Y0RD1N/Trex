@@ -37,10 +37,12 @@ mod voice;
 mod voice_brain;
 #[cfg(windows)]
 mod voice_capture;
+mod voice_chime;
 mod voice_cloud;
 mod voice_dictation;
 mod voice_keys;
 mod voice_live;
+mod voice_orb;
 #[cfg(windows)]
 mod voice_playback;
 #[cfg(windows)]
@@ -537,12 +539,23 @@ pub fn run() {
             voice_live::voice_live_hangup,
             voice::voice_speak,
             voice::voice_hush,
+            voice::voice_orb_ready,
+            voice::voice_orb_test,
+            voice::voice_conversation_end,
             voice_brain::voice_think,
             voice_brain::voice_recent_commits,
         ])
         .on_window_event(|window, event| {
+            // Solo la ventana principal: la de la esfera de voz se crea y se destruye sola.
+            if window.label() != "main" {
+                return;
+            }
             // Al cerrarse la ventana principal se terminan todas las sesiones.
             if matches!(event, WindowEvent::CloseRequested { .. }) {
+                // La esfera, aunque esté oculta, no debe mantener viva la app.
+                if let Some(state) = window.try_state::<voice::VoiceState>() {
+                    state.shutdown_orb();
+                }
                 if let Some(state) = window.try_state::<PtyState>() {
                     state.kill_all();
                 }

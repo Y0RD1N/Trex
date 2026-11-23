@@ -178,6 +178,8 @@ pub struct Shared {
     /// Herramientas pedidas al frontend que aún no han contestado.
     tools: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     active: AtomicBool,
+    /// Gemini confirmó la sesión: la llamada ya no se está conectando.
+    connected: AtomicBool,
     hangup: AtomicBool,
     next: AtomicU64,
 }
@@ -191,6 +193,10 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl LiveState {
     pub fn active(&self) -> bool { self.0.active.load(Ordering::SeqCst) }
+    /// Hay llamada pero Gemini aún no la ha aceptado.
+    pub fn connecting(&self) -> bool { self.active() && !self.0.connected.load(Ordering::SeqCst) }
+    /// Gemini espera el resultado de alguna acción.
+    pub fn tools_pending(&self) -> bool { !lock(&self.0.tools).is_empty() }
 }
 
 #[derive(Clone, Serialize)]
@@ -249,6 +255,7 @@ impl LiveLink {
 pub fn start(app: AppHandle, state: LiveState, options: LiveOptions) -> LiveLink {
     let (audio, audio_rx) = mpsc::unbounded_channel();
     state.0.hangup.store(false, Ordering::SeqCst);
+    state.0.connected.store(false, Ordering::SeqCst);
     state.0.active.store(true, Ordering::SeqCst);
     let task_state = state.clone();
     tauri::async_runtime::spawn(async move {
@@ -349,6 +356,7 @@ mod session {
                             match event {
                                 ServerEvent::SetupComplete => {
                                     ready = true;
+                                    state.0.connected.store(true, Ordering::SeqCst);
                                     if !announced {
                                         announced = true;
                                         let _ = app.emit(EVENT_LIVE, json!({ "kind": "state", "state": "talking" }));

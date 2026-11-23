@@ -18,6 +18,10 @@ export const voiceCloudVoices = (): Promise<VoiceCloudVoice[]> => invoke("voice_
 export const voiceLiveToolResult = (id: string, result: unknown): Promise<void> => invoke("voice_live_tool_result", { id, result });
 /** Cuelga la llamada en tiempo real. */
 export const voiceLiveHangup = (): Promise<void> => invoke("voice_live_hangup");
+/** La persona se despidió: lo siguiente vuelve a necesitar «oye trex» y la esfera se va. */
+export const voiceConversationEnd = (): Promise<void> => invoke("voice_conversation_end");
+/** Enseña la esfera unos segundos: escucha, piensa y dice una frase. */
+export const voiceOrbTest = (): Promise<void> => invoke("voice_orb_test");
 
 /** Empieza a dictar en un chat (por su id de sesión) o deja de dictar. */
 export const voiceDictationStart = (target: string): Promise<VoiceStatus> => invoke("voice_dictation_start", { target });

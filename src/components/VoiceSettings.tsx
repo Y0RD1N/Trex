@@ -9,11 +9,12 @@ import { listen } from "@tauri-apps/api/event";
 import { formatError } from "../api";
 import {
   cloudVoiceOptions, downloadPercent, heardLabel, levelPercent, megabytes, microphoneOptions, pushHeard, voiceDownloadOffer, voiceListening,
-  voiceModeBlocker, voiceSettingsOf, voiceSpeechBlocker, voiceStateLabel, VOICE_PHASE_LABEL,
-  type VoiceCloudVoice, type VoiceKeyProvider, type VoiceLevel, type VoiceMicrophone, type VoiceSettingsPatch, type VoiceStatus, type VoiceUtterance,
+  voiceModeBlocker, voiceSettingsOf, voiceSpeechBlocker, voiceStateLabel, ORB_POSITION_OPTIONS, ORB_SIZE_OPTIONS, VOICE_PHASE_LABEL,
+  type VoiceCloudVoice, type VoiceKeyProvider, type VoiceLevel, type VoiceMicrophone, type VoiceOrbPosition, type VoiceOrbSize, type VoiceSettingsPatch,
+  type VoiceStatus, type VoiceUtterance,
 } from "../voice";
 import {
-  voiceCloudVoices, voiceConfigure, voiceDownloadDictation, voiceDownloadModels, voiceKeyClear, voiceKeySet, voiceMicrophones, voiceStatus,
+  voiceCloudVoices, voiceConfigure, voiceDownloadDictation, voiceDownloadModels, voiceKeyClear, voiceKeySet, voiceMicrophones, voiceOrbTest, voiceStatus,
   VOICE_LEVEL_EVENT, VOICE_STATUS_EVENT, VOICE_UTTERANCE_EVENT,
 } from "../voiceApi";
 import Select from "./Select";
@@ -22,6 +23,9 @@ import { MicIcon } from "./Icons";
 import "./BrowserSettings.css";
 import "./Voice.css";
 import SettingInfo from "./SettingInfo";
+
+/** Lo que dura la prueba de la esfera (escucha, piensa, habla y se despide), con margen. */
+const ORB_TEST_MS = 10_000;
 
 /**
  * Campo de una clave de API. La clave se escribe aquí y se guarda cifrada; después solo
@@ -57,7 +61,15 @@ export default function VoiceSettings() {
   const [microphones, setMicrophones] = useState<VoiceMicrophone[]>([]);
   const [level, setLevel] = useState<VoiceLevel | null>(null);
   const [cloudVoices, setCloudVoices] = useState<VoiceCloudVoice[] | null>(null);
+  const [orbTesting, setOrbTesting] = useState(false);
   const id = useId();
+
+  // Mientras dura la prueba, el botón no la vuelve a lanzar.
+  useEffect(() => {
+    if (!orbTesting) return;
+    const timer = window.setTimeout(() => setOrbTesting(false), ORB_TEST_MS);
+    return () => window.clearTimeout(timer);
+  }, [orbTesting]);
 
   const refresh = useCallback(async () => {
     try { setStatus(await voiceStatus()); }
@@ -107,6 +119,13 @@ export default function VoiceSettings() {
     setStatus({ ...status, downloading: true, downloadedBytes: 0, totalBytes: status.dictationBytes });
     try { setStatus(await voiceDownloadDictation()); }
     catch (failure) { setError(formatError(failure)); await refresh(); }
+  };
+
+  const testOrb = async (): Promise<void> => {
+    setError(null);
+    setOrbTesting(true);
+    try { await voiceOrbTest(); }
+    catch (failure) { setError(formatError(failure)); setOrbTesting(false); }
   };
 
   const loadCloudVoices = async (): Promise<void> => {
@@ -219,6 +238,25 @@ export default function VoiceSettings() {
         {status.hasCloudKey && (cloudVoices?.length || status.cloudVoice) && <Select value={status.cloudVoice} placeholder="Elegir voz…" disabled={busy} aria-label="Voz de ElevenLabs"
           options={cloudVoiceOptions(cloudVoices ?? [], status.cloudVoice)} onChange={cloudVoice => void apply({ cloudVoice })} />}
         {speechBlocker && <p className="browser-settings-note">{speechBlocker}</p>}
+      </>}
+    </div>}
+
+    {status.supported && <div className="browser-settings-card">
+      <div className="browser-settings-heading"><div><h4>Esfera<SettingInfo text="Al decir «oye trex» aparece una esfera que te escucha, piensa y te habla, y se va cuando acaba la conversación. Flota encima de todo, pero deja pasar los clics y no te quita el teclado. Desactivada no gasta nada." /></h4></div>
+        <button type="button" className="btn btn-small" disabled={!status.orb || orbTesting} onClick={() => void testOrb()}>Probar</button></div>
+      <label className="browser-settings-toggle"><span><strong>Mostrar la esfera al llamar a trex</strong></span>
+        <input type="checkbox" role="switch" aria-label="Mostrar la esfera al llamar a trex" checked={status.orb} disabled={busy}
+          onChange={event => void apply({ orb: event.currentTarget.checked })} /></label>
+      {status.orb && <>
+        <label className="browser-settings-toggle"><span><strong>Sonidos de activación y cierre</strong></span>
+          <input type="checkbox" role="switch" aria-label="Sonidos de activación y cierre" checked={status.orbSounds} disabled={busy}
+            onChange={event => void apply({ orbSounds: event.currentTarget.checked })} /></label>
+        <label className="browser-settings-field">Posición
+          <Select value={status.orbPosition} options={ORB_POSITION_OPTIONS} disabled={busy} aria-label="Posición de la esfera"
+            onChange={orbPosition => void apply({ orbPosition: orbPosition as VoiceOrbPosition })} /></label>
+        <label className="browser-settings-field">Tamaño
+          <Select value={status.orbSize} options={ORB_SIZE_OPTIONS} disabled={busy} aria-label="Tamaño de la esfera"
+            onChange={orbSize => void apply({ orbSize: orbSize as VoiceOrbSize })} /></label>
       </>}
     </div>}
 

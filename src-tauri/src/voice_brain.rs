@@ -87,10 +87,12 @@ fn parse_reply(stdout: &str) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn voice_think(system: String, prompt: String, schema: String) -> Result<Value, String> {
+pub async fn voice_think(state: tauri::State<'_, crate::voice::VoiceState>, system: String, prompt: String, schema: String) -> Result<Value, String> {
     if prompt.len() > MAX_PROMPT || system.len() > MAX_SYSTEM || schema.len() > MAX_SCHEMA {
         return Err("La orden es demasiado larga para procesarla.".into());
     }
+    // Mientras Claude piensa, la esfera lo enseña.
+    let _thinking = state.thinking();
     tauri::async_runtime::spawn_blocking(move || {
         let claude = crate::pty::detect_claude();
         let program = claude.path.filter(|_| claude.found)

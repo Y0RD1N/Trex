@@ -76,9 +76,13 @@ test('paid options say what they still need, and fall back to local meanwhile', 
 });
 
 test('saving a change sends every setting and never the state', () => {
-  const full = status({ device: 'mic-1', mode: 'live', liveVoice: 'Puck', bargeIn: false, speech: 'elevenlabs', cloudVoice: 'abc12345', hasGeminiKey: true });
+  const full = status({
+    device: 'mic-1', mode: 'live', liveVoice: 'Puck', bargeIn: false, speech: 'elevenlabs', cloudVoice: 'abc12345', hasGeminiKey: true,
+    orb: false, orbSounds: true, orbPosition: 'trex', orbSize: 'large',
+  });
   assert.deepEqual(voiceSettingsOf(full), {
     enabled: true, rawCapture: true, device: 'mic-1', mode: 'live', liveVoice: 'Puck', bargeIn: false, speech: 'elevenlabs', cloudVoice: 'abc12345',
+    orb: false, orbSounds: true, orbPosition: 'trex', orbSize: 'large',
   });
 });
 

@@ -13,7 +13,7 @@ import { formatError } from "../api";
 import { remoteBridge } from "../remoteBridge";
 import type { Project } from "../types";
 import type { VoiceUtterance } from "../voice";
-import { VOICE_LIVE_EVENT, VOICE_TOOL_EVENT, VOICE_UTTERANCE_EVENT, voiceLiveToolResult } from "../voiceApi";
+import { VOICE_LIVE_EVENT, VOICE_TOOL_EVENT, VOICE_UTTERANCE_EVENT, voiceConversationEnd, voiceLiveToolResult } from "../voiceApi";
 import { SessionRefs, liveCaption, liveEndMessage, liveSessions, runLiveTool, type LiveToolDeps, type VoiceLiveEvent, type VoiceToolRequest } from "../voiceLive";
 import {
   BRAIN_SCHEMA, BRAIN_SYSTEM, SUMMARY_SCHEMA, SUMMARY_SYSTEM, brainPrompt, describeSessions, isGoodbye, parseBrainReply, runBrainActions,
@@ -91,7 +91,12 @@ export function useVoiceCall(options: Options): void {
     const attend = async (utterance: VoiceUtterance): Promise<void> => {
       const command = utterance.command.trim();
       if (!command) { await say("", "Dime."); return; }
-      if (isGoodbye(command)) { await say(command, "Vale."); return; }
+      if (isGoodbye(command)) {
+        await say(command, "Vale.");
+        // Despedida: lo siguiente vuelve a necesitar «oye trex» y la esfera se va.
+        await voiceConversationEnd().catch(() => undefined);
+        return;
+      }
       setCallState({ thinking: true, reply: null, live: null });
       try {
         const { projects, activeProjectId, selectProject, openSession } = latest.current;
