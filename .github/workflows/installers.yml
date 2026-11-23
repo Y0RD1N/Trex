@@ -48,12 +48,16 @@ jobs:
       # not run again and linking fails (LNK1181 sherpa-onnx-c-api.lib). Forgetting its
       # build makes it fetch them again; everything else stays cached. The pattern covers
       # both build-dir layouts: build/sherpa-onnx-sys-<hash> (cargo 1.99 and earlier) and
-      # build/sherpa-onnx-sys/<hash> (cargo 1.100).
+      # build/sherpa-onnx-sys/<hash> (cargo 1.100). The prebuilt folder goes too: a cache
+      # can bring back its lib/ directory without the .lib files, and the build script
+      # trusts any existing lib/ directory instead of downloading.
       - name: Let sherpa-onnx fetch its libraries again
         shell: bash
         run: |
           shopt -s nullglob
-          stale=(src-tauri/target/release/build/sherpa-onnx-sys* src-tauri/target/release/.fingerprint/sherpa-onnx-sys*)
+          stale=(src-tauri/target/sherpa-onnx-prebuilt src-tauri/target/release/build/sherpa-onnx-sys* src-tauri/target/release/.fingerprint/sherpa-onnx-sys*)
+          # What the cache brought back (sed reads it all, so no broken pipe under pipefail).
+          if [ -d src-tauri/target/sherpa-onnx-prebuilt ]; then find src-tauri/target/sherpa-onnx-prebuilt -maxdepth 3 | sed -n '1,20p'; fi
           echo "Forgetting ${#stale[@]} cached sherpa-onnx-sys entries: ${stale[*]}"
           rm -rf "${stale[@]}"
       - name: Build the NSIS installer
