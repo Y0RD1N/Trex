@@ -411,14 +411,18 @@ fn create(app: &AppHandle) -> Result<WebviewWindow, String> {
         return Ok(window);
     }
     let side = size_points("medium");
-    let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("orb.html".into()))
+    let builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("orb.html".into()));
+    // En macOS la transparencia exige la API privada de Tauri, que trex no activa; allí
+    // la voz (y con ella la esfera) aún no existe.
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.transparent(true);
+    let window = builder
         .title("trex")
         .inner_size(side, side)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
         .decorations(false)
-        .transparent(true)
         .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
