@@ -46,10 +46,16 @@ jobs:
       # sherpa-onnx (voice) downloads its import libraries into target/sherpa-onnx-prebuilt,
       # which rust-cache prunes before saving. With a cache restored, its build script does
       # not run again and linking fails (LNK1181 sherpa-onnx-c-api.lib). Forgetting its
-      # build makes it fetch them again; everything else stays cached.
+      # build makes it fetch them again; everything else stays cached. The pattern covers
+      # both build-dir layouts: build/sherpa-onnx-sys-<hash> (cargo 1.99 and earlier) and
+      # build/sherpa-onnx-sys/<hash> (cargo 1.100).
       - name: Let sherpa-onnx fetch its libraries again
         shell: bash
-        run: rm -rf src-tauri/target/release/build/sherpa-onnx-sys-* src-tauri/target/release/.fingerprint/sherpa-onnx-sys-*
+        run: |
+          shopt -s nullglob
+          stale=(src-tauri/target/release/build/sherpa-onnx-sys* src-tauri/target/release/.fingerprint/sherpa-onnx-sys*)
+          echo "Forgetting ${#stale[@]} cached sherpa-onnx-sys entries: ${stale[*]}"
+          rm -rf "${stale[@]}"
       - name: Build the NSIS installer
         run: npm run tauri build
       - name: Install silently and check the installed app
