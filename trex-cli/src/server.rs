@@ -1111,9 +1111,18 @@ impl Server {
                 .clone()
                 .drive(session.clone(), &message_id, cancel.clone());
             tokio::pin!(drive);
+            // Without maxTurnMs (the default) a turn has no wall-clock cap.
+            let turn_limit = session.tools.settings().limits.max_turn_ms;
+            let deadline = async move {
+                match turn_limit {
+                    Some(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            tokio::pin!(deadline);
             let (result, timed_out) = tokio::select! {
                 result=&mut drive=>(result,false),
-                _=tokio::time::sleep(Duration::from_millis(session.tools.settings().limits.max_turn_ms))=>{
+                _=&mut deadline=>{
                     // Signal first: browser/MCP/desktop adapters must finish
                     // their cancellation protocol before their futures drop.
                     cancel.cancel();let _=tokio::time::timeout(Duration::from_secs(10),&mut drive).await;

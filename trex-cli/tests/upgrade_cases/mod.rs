@@ -1055,6 +1055,27 @@ fn absolute_active_token_cap_compacts_even_without_a_known_window() {
 }
 
 #[test]
+fn local_models_without_prompt_cache_are_not_cut_by_a_default_turn_cap() {
+    let f = Fixture::new();
+    let mut agent = f.agent();
+    let session = start(&f, &mut agent, "plan", json!({"provider":{"maxOutputTokens":100}}));
+    agent.turn(&session, "long", "Plan a long task");
+    // A local server reports no prompt cache: every tool round re-counts the whole
+    // context. Three rounds of 450,000 uncached tokens went past the former 1M cap.
+    for step in 0..3 {
+        f.api.chat().json(json!({"choices":[{"index":0,"message":calls(vec![tool(
+            &format!("plan-{step}"),
+            "update_plan",
+            json!({"plan":[{"step":format!("Step {step}"),"status":"in_progress"}]}),
+        )]),"finish_reason":"tool_calls"}],
+            "usage":{"prompt_tokens":450_000,"completion_tokens":10}}));
+    }
+    f.api.chat().final_text("Planned");
+    let end = agent.completed("long", "completed");
+    assert!(end["params"]["usage"]["apiUsage"]["totalTokens"].as_u64().unwrap() > 1_000_000);
+}
+
+#[test]
 fn turn_token_budget_counts_uncached_input_and_output() {
     let f = Fixture::new();
     let mut agent = f.agent();

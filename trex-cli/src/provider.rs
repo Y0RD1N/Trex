@@ -613,6 +613,11 @@ fn remote_context_window(provider: &str, model: &Value) -> Option<u64> {
         "/capabilities/contextWindow",
         "/capabilities/context_window",
         "/capabilities/context_length",
+        // llama.cpp's server: the context it was started with (`-c`), not
+        // n_ctx_train. Without it a local model got the 128K fallback even when
+        // it runs with less, and its server silently dropped the start of the
+        // conversation.
+        "/meta/n_ctx",
     ]
     .into_iter()
     .find_map(|path| {
@@ -3343,6 +3348,13 @@ mod tests {
             assert_eq!(normalized[0]["contextWindow"], 65_536);
             assert!(normalized[0].get("contextWindowSource").is_none());
         }
+        // llama.cpp reports the loaded context in meta.n_ctx; n_ctx_train is only
+        // what the model could take and must not be used.
+        let local = profile("custom");
+        let llama = json!({"id":"inkling-2-mini","owned_by":"llamacpp","meta":{"n_ctx":32_768,"n_ctx_train":1_048_576}});
+        assert_eq!(normalize_models_for_profile(&local, &[llama]).unwrap()[0]["contextWindow"], 32_768);
+        let untrained = json!({"id":"other","meta":{"n_ctx_train":1_048_576}});
+        assert!(normalize_models_for_profile(&local, &[untrained]).unwrap()[0].get("contextWindow").is_none());
         assert!(normalize_catalog(
             b"{\"data\":[]}",
             &official,

@@ -4,10 +4,10 @@
       "maxRounds": 64,
       "maxRequestsPerTurn": 64,
       "maxToolCallsPerTurn": 256,
-      "maxTurnTokens": 1000000,
+      "maxTurnTokens": null,
       "maxConversationTokens": null,
       "maxCostUsd": null,
-      "maxTurnMs": 3600000,
+      "maxTurnMs": null,
       "repeatedToolLimit": 3
     },
     "context": {

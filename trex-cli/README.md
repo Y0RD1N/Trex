@@ -184,11 +184,16 @@ with `session/start.settings`; standalone chat/exec accept `--settings FILE`.
 See [settings.example.json](settings.example.json) for a partial document.
 Unspecified fields keep their defaults. `profiles` contains partial overrides.
 
-Default guards are 64 rounds, 64 HTTP attempts, 256 tool calls, 1,000,000 processed
-turn tokens and one hour per turn. `limits.maxTurnTokens` counts tokens the
-provider processed anew: uncached input plus output (prompt-cache hits re-read on
-every tool round are not counted again); the next request is still reserved in
-full. `maxConversationTokens` keeps counting total tokens. Configure `limits` to
+Default guards are 64 rounds, 64 HTTP attempts and 256 tool calls per turn, plus
+the repeated-call detector. A turn has no default token or time cap:
+`limits.maxTurnTokens` and `limits.maxTurnMs` are null unless you set them. Local
+models report no prompt cache, so every tool round re-counts the whole context,
+and a fixed token cap (formerly 1,000,000) stopped long local turns after a few
+rounds; slow local models also ran past the former one-hour cap. When set,
+`maxTurnTokens` counts tokens the provider processed anew: uncached input plus
+output (prompt-cache hits re-read on every tool round are not counted again); the
+next request is still reserved in full. `maxConversationTokens` keeps counting
+total tokens. Configure `limits` to
 change them, including
 conversation token and estimated USD reservations. `provider.maxOutputTokens`
 reserves and caps output; context metadata can reduce it. USD checks require
@@ -270,8 +275,10 @@ Context settings that bound what is re-sent on every request:
   in addition to `thresholdPercent` of a known window. When recent turns alone
   exceed it, older completed tool batches of the current turn are summarized too.
 - `context.fallbackWindow` (default 128000): the window assumed for models whose
-  window is not in the catalog or documentation. An explicit `null` keeps it
-  unknown (no window preflight; `maxActiveTokens` still applies).
+  window is not in the catalog or documentation. A llama.cpp server's model list
+  reports the context it was started with (`meta.n_ctx`), and that is used
+  instead. An explicit `null` keeps it unknown (no window preflight;
+  `maxActiveTokens` still applies).
 - `context.clearToolResultsAfterTurns` (default 2; `null` disables): at the start
   of a user turn, tool results from turns older than this and larger than 1 KiB are
   replaced in the request by a short placeholder with a preview and their

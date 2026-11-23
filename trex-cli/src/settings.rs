@@ -10,10 +10,16 @@ pub struct Limits {
     pub max_rounds: usize,
     pub max_requests_per_turn: u64,
     pub max_tool_calls_per_turn: usize,
+    /// Tokens processed anew in one turn (uncached input plus output). null,
+    /// the default, never stops a turn for its size: local models report no
+    /// prompt cache, so every tool round re-counts the whole context and a
+    /// fixed cap cut long agentic turns after a few rounds.
     pub max_turn_tokens: Option<u64>,
     pub max_conversation_tokens: Option<u64>,
     pub max_cost_usd: Option<f64>,
-    pub max_turn_ms: u64,
+    /// Wall-clock cap for one turn. null, the default, lets a slow local model
+    /// keep working; rounds, tool calls and repeated-call guards still apply.
+    pub max_turn_ms: Option<u64>,
     pub repeated_tool_limit: usize,
 }
 impl Default for Limits {
@@ -22,10 +28,10 @@ impl Default for Limits {
             max_rounds: 64,
             max_requests_per_turn: 64,
             max_tool_calls_per_turn: 256,
-            max_turn_tokens: Some(1_000_000),
+            max_turn_tokens: None,
             max_conversation_tokens: None,
             max_cost_usd: None,
-            max_turn_ms: 3_600_000,
+            max_turn_ms: None,
             repeated_tool_limit: 3,
         }
     }
@@ -239,8 +245,8 @@ impl Settings {
             "maxToolCallsPerTurn must be 1..4096"
         );
         ensure!(
-            (1000..=86_400_000).contains(&self.limits.max_turn_ms),
-            "maxTurnMs must be 1000..86400000"
+            self.limits.max_turn_ms.is_none_or(|ms| (1000..=86_400_000).contains(&ms)),
+            "maxTurnMs must be null or 1000..86400000"
         );
         ensure!(
             (1..=100).contains(&self.limits.repeated_tool_limit),
@@ -567,6 +573,22 @@ mod tests {
         s = Settings::default();
         s.tools.parallel_reads = 0;
         assert!(s.validate().is_err());
+    }
+    #[test]
+    fn a_turn_has_no_token_or_time_cap_unless_configured() {
+        let s = Settings::default();
+        assert_eq!((s.limits.max_turn_tokens, s.limits.max_turn_ms), (None, None));
+        // The other per-turn guards stay.
+        assert_eq!((s.limits.max_rounds, s.limits.max_tool_calls_per_turn, s.limits.repeated_tool_limit), (64, 256, 3));
+        // A settings.json written with the former defaults still loads, and keeps them.
+        let old: Settings = serde_json::from_value(json!({"limits":{"maxTurnTokens":1_000_000,"maxTurnMs":3_600_000}})).unwrap();
+        old.validate().unwrap();
+        assert_eq!((old.limits.max_turn_tokens, old.limits.max_turn_ms), (Some(1_000_000), Some(3_600_000)));
+        let none: Settings = serde_json::from_value(json!({"limits":{"maxTurnTokens":null,"maxTurnMs":null}})).unwrap();
+        none.validate().unwrap();
+        for bad in [json!({"limits":{"maxTurnMs":999}}), json!({"limits":{"maxTurnTokens":0}})] {
+            assert!(serde_json::from_value::<Settings>(bad).unwrap().validate().is_err());
+        }
     }
     #[test]
     fn context_token_controls_default_on_and_explicit_null_disables_them() {
