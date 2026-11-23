@@ -272,6 +272,60 @@ export function parseRemoteCommand(value: unknown): RemoteCommand | null {
   return null;
 }
 
+// --- Catálogo y peticiones sin sesión (abrir y cerrar chats, favoritos…) ---------------
+
+/** Todos los proyectos (no solo los que tienen chats) y los perfiles con los que se abre un chat. */
+export type RemoteCatalog = {
+  projects: { id: string; name: string; path: string; favorite: boolean; order: number }[];
+  profiles: {
+    id: string; name: string; provider: AgentProvider; isDefault: boolean;
+    /** Modos de permisos del asistente y el que heredaría un chat nuevo ahora mismo. */
+    modes: { value: string; label: string; description: string }[];
+    mode: string | null;
+  }[];
+};
+
+export type RemoteRequestAction =
+  | { kind: "open"; project: string; profile: string; model: string | null; effort: string | null; fast: boolean | null;
+      mode: string | null; conversation: { id: string; title: string } | null; text: string }
+  | { kind: "close"; session: string }
+  | { kind: "favorite"; project: string; favorite: boolean }
+  | { kind: "conversations"; project: string; profile: string }
+  | { kind: "models"; project: string; profile: string };
+export type RemoteRequest = { command: number; device: string; action: RemoteRequestAction };
+
+/** Valida lo que llega del backend (ya filtrado en remote.rs): nunca se confía en la forma. */
+export function parseRemoteRequest(value: unknown): RemoteRequest | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const action = raw.action as Record<string, unknown> | undefined;
+  if (typeof raw.command !== "number" || !action || typeof action !== "object") return null;
+  const base = { command: raw.command, device: typeof raw.device === "string" ? raw.device : "" };
+  const str = (key: string): string | null => typeof action[key] === "string" && (action[key] as string).length > 0 ? action[key] as string : null;
+  switch (action.kind) {
+    case "open": {
+      const project = str("project"), profile = str("profile");
+      if (!project || !profile) return null;
+      const conversation = action.conversation && typeof action.conversation === "object" ? action.conversation as Record<string, unknown> : null;
+      return { ...base, action: { kind: "open", project, profile, model: str("model"), effort: str("effort"), mode: str("mode"),
+        fast: typeof action.fast === "boolean" ? action.fast : null, text: typeof action.text === "string" ? action.text : "",
+        conversation: conversation && typeof conversation.id === "string" && conversation.id
+          ? { id: conversation.id, title: typeof conversation.title === "string" ? conversation.title : "" } : null } };
+    }
+    case "close": { const session = str("session"); return session ? { ...base, action: { kind: "close", session } } : null; }
+    case "favorite": {
+      const project = str("project");
+      return project && typeof action.favorite === "boolean" ? { ...base, action: { kind: "favorite", project, favorite: action.favorite } } : null;
+    }
+    case "conversations":
+    case "models": {
+      const project = str("project"), profile = str("profile");
+      return project && profile ? { ...base, action: { kind: action.kind, project, profile } } : null;
+    }
+    default: return null;
+  }
+}
+
 /** «ahora», «3 min», «2 h», «ayer», «5 d»: corto, para listas en el móvil y en Ajustes. */
 export function timeAgo(at: number, now: number): string {
   if (!at) return "";

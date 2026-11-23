@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { load } from "./ts-loader.mjs";
 
-const { remoteStatus, remoteNeed, remoteItems, remotePending, remoteDetail, currentActivity, parseRemoteCommand, timeAgo, DETAIL_ITEMS, pendingItem } = await load("remoteProtocol");
+const { remoteStatus, remoteNeed, remoteItems, remotePending, remoteDetail, currentActivity, parseRemoteCommand, parseRemoteRequest, timeAgo, DETAIL_ITEMS, pendingItem } = await load("remoteProtocol");
 const { initialChatState } = await load("chatState");
 
 const permission = (id, toolName, input, extra = {}) => ({ kind: "permission", id, toolName, toolUseId: null, input, description: "", suggestions: [], state: "pending", ...extra });
@@ -103,4 +103,26 @@ test("las fechas relativas son cortas", () => {
   assert.equal(timeAgo(now - 26 * 3_600_000, now), "ayer");
   assert.equal(timeAgo(0, now), "");
   assert.equal(pendingItem([]), null);
+});
+
+test("las peticiones sin sesión (abrir, cerrar, favoritos, conversaciones, modelos) solo pasan con su forma", () => {
+  const open = parseRemoteRequest({ command: 7, device: "d", action: { kind: "open", project: "p", profile: "c", model: "opus", text: "hola", conversation: null } });
+  assert.deepEqual(open.action, { kind: "open", project: "p", profile: "c", model: "opus", effort: null, fast: null, mode: null, text: "hola", conversation: null });
+  assert.equal(parseRemoteRequest({ command: 8, action: { kind: "open", project: "p", profile: "c", mode: "acceptEdits" } }).action.mode, "acceptEdits");
+  const tuned = parseRemoteRequest({ command: 8, action: { kind: "open", project: "p", profile: "c", effort: "high", fast: true } });
+  assert.equal(tuned.action.effort, "high");
+  assert.equal(tuned.action.fast, true);
+  assert.equal(parseRemoteRequest({ command: 8, action: { kind: "open", project: "p", profile: "c", fast: "sí" } }).action.fast, null);
+  const resumed = parseRemoteRequest({ command: 7, action: { kind: "open", project: "p", profile: "c", conversation: { id: "abc", title: 5 } } });
+  assert.deepEqual(resumed.action.conversation, { id: "abc", title: "" });
+  assert.equal(resumed.action.model, null);
+  assert.equal(resumed.action.text, "");
+  assert.equal(parseRemoteRequest({ command: 7, action: { kind: "open", project: "p" } }), null);
+  assert.equal(parseRemoteRequest({ command: "7", action: { kind: "close", session: "s" } }), null);
+  assert.deepEqual(parseRemoteRequest({ command: 1, action: { kind: "close", session: "s" } }).action, { kind: "close", session: "s" });
+  assert.equal(parseRemoteRequest({ command: 1, action: { kind: "favorite", project: "p", favorite: "sí" } }), null);
+  assert.deepEqual(parseRemoteRequest({ command: 1, action: { kind: "favorite", project: "p", favorite: false } }).action, { kind: "favorite", project: "p", favorite: false });
+  assert.deepEqual(parseRemoteRequest({ command: 1, action: { kind: "models", project: "p", profile: "c" } }).action, { kind: "models", project: "p", profile: "c" });
+  assert.equal(parseRemoteRequest({ command: 1, action: { kind: "conversations", project: "p" } }), null);
+  assert.equal(parseRemoteRequest({ command: 1, action: { kind: "shell", command: "rm -rf" } }), null);
 });

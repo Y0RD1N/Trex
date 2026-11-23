@@ -46,6 +46,12 @@ const MAX_DETAIL_JSON: usize = 2 * 1024 * 1024;
 const MAX_SEND_CHARS: usize = 20_000;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+/// Peticiones sin sesión (abrir un chat, listar modelos…): cargar el catálogo de modelos
+/// de un perfil puede tardar hasta 15 s.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(35);
+const MAX_CATALOG_JSON: usize = 512 * 1024;
+const MAX_RESULT_DATA: usize = 512 * 1024;
+const MAX_ID: usize = 256;
 const RETRY_BIND: Duration = Duration::from_secs(20);
 /// Adjuntos que sube el móvil: cuántos por mensaje, cuánto tiempo valen y cuántos se recuerdan.
 const MAX_ATTACHMENTS: usize = 20;
@@ -57,6 +63,8 @@ const IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
 const EVENT_ACTIVE: &str = "remote://active";
 const EVENT_WATCH: &str = "remote://watch";
 const EVENT_COMMAND: &str = "remote://command";
+/// Órdenes que no son de una sesión: abrir o cerrar chats, favoritos, conversaciones, modelos.
+const EVENT_REQUEST: &str = "remote://request";
 
 // --- Configuración guardada ---------------------------------------------------
 
@@ -225,8 +233,14 @@ enum Outgoing {
     Sessions(Arc<str>),
     Detail { id: Arc<str>, json: Arc<str> },
     Theme(Arc<str>),
+    /// Todos los proyectos y los perfiles con los que se puede abrir un chat.
+    Catalog(Arc<str>),
     Revoked(Arc<str>),
 }
+
+/// Lo que devuelve el escritorio a una orden: hecho o no, el motivo y, para las
+/// peticiones, sus datos (el id del chat abierto, la lista de conversaciones…).
+type Outcome = (bool, Option<String>, Option<Value>);
 
 struct Connection {
     device_id: String,
@@ -255,8 +269,11 @@ struct Hub {
     icons: HashMap<PathBuf, Option<String>>,
     details: HashMap<String, Arc<str>>,
     theme: Option<Arc<str>>,
+    catalog: Option<Arc<str>>,
+    /// Ruta de cada proyecto del catálogo: también se sirve el icono de los que no tienen chats.
+    catalog_projects: HashMap<String, PathBuf>,
     connections: HashMap<u64, Connection>,
-    pending: HashMap<u64, oneshot::Sender<(bool, Option<String>)>>,
+    pending: HashMap<u64, oneshot::Sender<Outcome>>,
 }
 
 pub struct Inner {
@@ -497,7 +514,9 @@ async fn icon(AxumState(state): AxumState<RemoteState>, headers: HeaderMap, uri:
     let project = uri.query().unwrap_or("").split('&').find_map(|pair| pair.strip_prefix("project=")).map(percent_decode).unwrap_or_default();
     let (path, cached) = {
         let hub = lock(&state.0.hub);
-        let Some(path) = hub.projects.get(&project).cloned() else { return json_error(StatusCode::NOT_FOUND, "Proyecto desconocido.") };
+        let Some(path) = hub.projects.get(&project).or_else(|| hub.catalog_projects.get(&project)).cloned() else {
+            return json_error(StatusCode::NOT_FOUND, "Proyecto desconocido.");
+        };
         let cached = hub.icons.get(&path).cloned();
         (path, cached)
     };
@@ -546,11 +565,12 @@ async fn connection(state: RemoteState, mut socket: WebSocket) {
     inner.announce();
 
     let host = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "PC".into());
-    let (snapshot, theme) = { let hub = lock(&inner.hub); (hub.sessions.clone(), hub.theme.clone()) };
+    let (snapshot, theme, catalog) = { let hub = lock(&inner.hub); (hub.sessions.clone(), hub.theme.clone(), hub.catalog.clone()) };
     let mut ok = socket.send(text(json!({ "type": "ready", "host": host, "device": { "id": device.id, "name": device.name },
         "version": env!("CARGO_PKG_VERSION") }))).await.is_ok();
     if let Some(theme) = theme { ok = ok && socket.send(raw(&theme)).await.is_ok(); }
     if let Some(snapshot) = snapshot { ok = ok && socket.send(raw(&snapshot)).await.is_ok(); }
+    if let Some(catalog) = catalog { ok = ok && socket.send(raw(&catalog)).await.is_ok(); }
 
     // Respuestas de órdenes: llegan desde tareas aparte.
     let (reply_tx, mut reply_rx) = mpsc::channel::<Message>(32);
@@ -572,7 +592,7 @@ async fn connection(state: RemoteState, mut socket: WebSocket) {
             }
             outgoing = rx.recv() => {
                 let message = match outgoing {
-                    Ok(Outgoing::Sessions(json)) | Ok(Outgoing::Theme(json)) => Some(raw(&json)),
+                    Ok(Outgoing::Sessions(json)) | Ok(Outgoing::Theme(json)) | Ok(Outgoing::Catalog(json)) => Some(raw(&json)),
                     Ok(Outgoing::Detail { id: session, json }) => {
                         let watching = lock(&inner.hub).connections.get(&id).and_then(|c| c.watching.clone());
                         (watching.as_deref() == Some(&*session)).then(|| raw(&json))
@@ -640,14 +660,96 @@ fn handle_client(inner: &Arc<Inner>, connection: u64, device: &str, body: &str, 
                 let result = tokio::time::timeout(COMMAND_TIMEOUT, done_rx).await;
                 lock(&inner.hub).pending.remove(&command);
                 let (ok, error) = match result {
-                    Ok(Ok(outcome)) => outcome,
+                    Ok(Ok((ok, error, _))) => (ok, error),
                     _ => (false, Some("El PC no respondió a tiempo. ¿Sigue abierto trex?".into())),
                 };
                 let _ = replies.send(reply(ok, error)).await;
             });
             None
         }
+        // Órdenes que no van a una sesión abierta: las resuelve la app (pestañas, proyectos, perfiles).
+        "request" => {
+            let request = value["req"].as_u64().unwrap_or(0);
+            let reply = move |ok: bool, error: Option<String>, data: Option<Value>| {
+                text(json!({ "type": "result", "req": request, "ok": ok, "error": error, "data": data }))
+            };
+            let action = match validate_request(&value["action"]) { Ok(action) => action, Err(error) => return Some(reply(false, Some(error), None)) };
+            let command = inner.next_id.fetch_add(1, Ordering::Relaxed);
+            let (done_tx, done_rx) = oneshot::channel();
+            lock(&inner.hub).pending.insert(command, done_tx);
+            inner.emit(EVENT_REQUEST, json!({ "command": command, "device": device, "action": action }));
+            let replies = replies.clone();
+            let inner = inner.clone();
+            tauri::async_runtime::spawn(async move {
+                let result = tokio::time::timeout(REQUEST_TIMEOUT, done_rx).await;
+                lock(&inner.hub).pending.remove(&command);
+                let (ok, error, data) = match result {
+                    Ok(Ok(outcome)) => outcome,
+                    _ => (false, Some("El PC no respondió a tiempo. ¿Sigue abierto trex?".into()), None),
+                };
+                let _ = replies.send(reply(ok, error, data)).await;
+            });
+            None
+        }
         _ => None,
+    }
+}
+
+/// Un identificador que llega del móvil (proyecto, perfil, modelo…): texto corto sin controles.
+fn short_text(value: &Value, max: usize) -> Option<String> {
+    value.as_str().map(str::trim).filter(|text| !text.is_empty() && text.len() <= max && !text.chars().any(char::is_control)).map(str::to_string)
+}
+
+/// Peticiones sin sesión: solo pasan las conocidas, con sus campos acotados.
+fn validate_request(action: &Value) -> Result<Value, String> {
+    let project = || short_text(&action["project"], MAX_ID).ok_or_else(|| "Falta el proyecto.".to_string());
+    let profile = || short_text(&action["profile"], MAX_ID).ok_or_else(|| "Falta el asistente.".to_string());
+    match action["kind"].as_str() {
+        Some("open") => {
+            let model = match &action["model"] {
+                Value::Null => Value::Null,
+                value => Value::String(short_text(value, 200).ok_or("Modelo no válido.")?),
+            };
+            let conversation = match &action["conversation"] {
+                Value::Null => Value::Null,
+                value => {
+                    let id = short_text(&value["id"], 512).ok_or("Conversación no válida.")?;
+                    let title: String = value["title"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(300).collect();
+                    json!({ "id": id, "title": title })
+                }
+            };
+            // El nivel de esfuerzo lo comprueba la app contra los que conoce; aquí solo se acota.
+            let effort = match &action["effort"] {
+                Value::Null => Value::Null,
+                value => Value::String(short_text(value, 40).filter(|e| e.chars().all(|c| c.is_ascii_alphanumeric())).ok_or("Esfuerzo no válido.")?),
+            };
+            let fast = match &action["fast"] {
+                Value::Null => Value::Null,
+                Value::Bool(fast) => Value::Bool(*fast),
+                _ => return Err("Velocidad no válida.".into()),
+            };
+            // Modo de permisos: la app lo comprueba contra los del asistente; aquí solo la forma.
+            let mode = match &action["mode"] {
+                Value::Null => Value::Null,
+                value => Value::String(short_text(value, 128)
+                    .filter(|m| m.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).ok_or("Modo de permisos no válido.")?),
+            };
+            let text = action["text"].as_str().map(str::trim).unwrap_or("");
+            if text.chars().count() > MAX_SEND_CHARS { return Err("El mensaje es demasiado largo.".into()); }
+            Ok(json!({ "kind": "open", "project": project()?, "profile": profile()?, "model": model, "effort": effort, "fast": fast,
+                "mode": mode, "conversation": conversation, "text": text }))
+        }
+        Some("close") => {
+            let session = action["session"].as_str().filter(|id| valid_session(id)).ok_or("Sesión no válida.")?;
+            Ok(json!({ "kind": "close", "session": session }))
+        }
+        Some("favorite") => {
+            let favorite = action["favorite"].as_bool().ok_or("Falta si es favorito.")?;
+            Ok(json!({ "kind": "favorite", "project": project()?, "favorite": favorite }))
+        }
+        Some("conversations") => Ok(json!({ "kind": "conversations", "project": project()?, "profile": profile()? })),
+        Some("models") => Ok(json!({ "kind": "models", "project": project()?, "profile": profile()? })),
+        _ => Err("Orden desconocida.".into()),
     }
 }
 
@@ -718,6 +820,8 @@ fn stop(inner: &Arc<Inner>) {
         let mut hub = lock(&inner.hub);
         hub.details.clear();
         hub.sessions = None;
+        hub.catalog = None;
+        hub.catalog_projects.clear();
     }
 }
 
@@ -1031,11 +1135,33 @@ pub fn remote_publish_theme(state: State<'_, RemoteState>, theme: Value) -> Resu
     Ok(())
 }
 
+/// Todos los proyectos (con su favorito y su orden) y los perfiles con los que el móvil puede abrir un chat.
 #[tauri::command]
-pub fn remote_command_result(state: State<'_, RemoteState>, command: u64, ok: bool, error: Option<String>) {
-    if let Some(done) = lock(&state.0.hub).pending.remove(&command) {
-        let _ = done.send((ok, error.map(|e| e.chars().take(500).collect())));
+pub fn remote_publish_catalog(state: State<'_, RemoteState>, catalog: Value) -> Result<(), String> {
+    let json: Arc<str> = json!({ "type": "catalog", "catalog": catalog }).to_string().into();
+    if json.len() > MAX_CATALOG_JSON { return Err("El catálogo de proyectos es demasiado grande.".into()); }
+    let projects: HashMap<String, PathBuf> = catalog["projects"].as_array().into_iter().flatten().filter_map(|project| {
+        Some((project["id"].as_str()?.to_string(), PathBuf::from(project["path"].as_str().filter(|path| !path.is_empty())?)))
+    }).collect();
+    {
+        let mut hub = lock(&state.0.hub);
+        hub.catalog = Some(json.clone());
+        hub.catalog_projects = projects;
     }
+    let _ = state.0.tx.send(Outgoing::Catalog(json));
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remote_command_result(state: State<'_, RemoteState>, command: u64, ok: bool, error: Option<String>, data: Option<Value>) {
+    let Some(done) = lock(&state.0.hub).pending.remove(&command) else { return };
+    let error = error.map(|e| e.chars().take(500).collect::<String>());
+    // Los datos de una petición (lista de conversaciones, modelos…) también tienen tope.
+    let outcome = match data {
+        Some(data) if data.to_string().len() > MAX_RESULT_DATA => (false, Some("La respuesta del PC es demasiado grande.".into()), None),
+        data => (ok, error, data),
+    };
+    let _ = done.send(outcome);
 }
 
 #[cfg(test)]
@@ -1135,6 +1261,35 @@ mod tests {
         assert_eq!(answer["remember"], false);
         assert!(validate_action(&json!({ "kind": "answer" })).is_err());
         assert!(!valid_session("../x") && valid_session("tab-123_a"));
+    }
+
+    #[test]
+    fn only_known_and_bounded_requests_reach_the_app() {
+        let open = validate_request(&json!({ "kind": "open", "project": "p1", "profile": "claude", "model": "opus", "text": "  hola " })).unwrap();
+        assert_eq!(open["text"], "hola");
+        assert_eq!(open["model"], "opus");
+        assert!(open["conversation"].is_null());
+        assert!(open["effort"].is_null() && open["fast"].is_null());
+        let tuned = validate_request(&json!({ "kind": "open", "project": "p", "profile": "c", "effort": "high", "fast": true })).unwrap();
+        assert_eq!(tuned["effort"], "high");
+        assert_eq!(tuned["fast"], true);
+        assert!(validate_request(&json!({ "kind": "open", "project": "p", "profile": "c", "effort": "--dangerously" })).is_err());
+        assert!(validate_request(&json!({ "kind": "open", "project": "p", "profile": "c", "fast": "sí" })).is_err());
+        assert_eq!(validate_request(&json!({ "kind": "open", "project": "p", "profile": "c", "mode": "acceptEdits" })).unwrap()["mode"], "acceptEdits");
+        assert!(validate_request(&json!({ "kind": "open", "project": "p", "profile": "c", "mode": "full; rm" })).is_err());
+        let resumed = validate_request(&json!({ "kind": "open", "project": "p1", "profile": "c", "conversation": { "id": "abc", "title": "T\u{7}x" } })).unwrap();
+        assert_eq!(resumed["conversation"]["title"], "Tx");
+        assert!(validate_request(&json!({ "kind": "open", "profile": "c" })).is_err());
+        assert!(validate_request(&json!({ "kind": "open", "project": "p", "profile": "c", "model": "" })).is_err());
+        assert!(validate_request(&json!({ "kind": "open", "project": "p", "profile": "c", "text": "x".repeat(MAX_SEND_CHARS + 1) })).is_err());
+        assert!(validate_request(&json!({ "kind": "open", "project": "x".repeat(MAX_ID + 1), "profile": "c" })).is_err());
+        assert!(validate_request(&json!({ "kind": "close", "session": "../x" })).is_err());
+        assert_eq!(validate_request(&json!({ "kind": "close", "session": "t-1" })).unwrap()["session"], "t-1");
+        assert!(validate_request(&json!({ "kind": "favorite", "project": "p" })).is_err());
+        assert_eq!(validate_request(&json!({ "kind": "favorite", "project": "p", "favorite": true })).unwrap()["favorite"], true);
+        assert!(validate_request(&json!({ "kind": "models", "project": "p", "profile": "c" })).is_ok());
+        assert!(validate_request(&json!({ "kind": "conversations", "project": "p" })).is_err());
+        assert!(validate_request(&json!({ "kind": "shell", "command": "rm -rf" })).is_err());
     }
 
     #[test]

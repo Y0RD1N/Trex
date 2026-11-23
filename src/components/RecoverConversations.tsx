@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listConversations, canResume, profileAccountDir } from "../conversations";
-import { launchForProfile, trexProfileName } from "../profiles";
+import { canResume, listProfileConversations } from "../conversations";
+import { launchForProfile } from "../profiles";
 import { formatError, normalizeText } from "../api";
 import type {
   Conversation,
@@ -12,7 +12,6 @@ import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
 import AgentIcon from "./AgentIcon";
 import Select from "./Select";
 import { ArrowRightIcon } from "./Icons";
-import { listAntigravityConversations } from "../antigravityConnection";
 import { formatDateTime } from "../timeFormat";
 export default function RecoverConversations({
   project,
@@ -52,10 +51,7 @@ export default function RecoverConversations({
       return;
     }
     setLoading(true);
-    // Un lanzador como `claude2` guarda sus conversaciones en su propia carpeta.
-    void profileAccountDir(profile, settings.shell)
-      .then((configDir) => profile.provider === "antigravity" ? listAntigravityConversations(profile.command, configDir, project.path)
-        : listConversations(profile.provider, configDir, project.path, profile.provider === "trex" ? trexProfileName(profile) : undefined))
+    void listProfileConversations(profile, settings, project.path)
       .then((result) => {
         if (generation.current === request) setItems(result);
       })

@@ -82,11 +82,13 @@ import { applyDesign } from "./visualDesign";
 import { syncWindowMaterial } from "./windowMaterial";
 import { syncBrowserTheme } from "./browserThemeSync";
 import { applyTimeFormat } from "./timeFormat";
-import { defaultAgentPermission, validAgentPermission } from "./agentPermissions";
+import { agentPermissionOptions, defaultAgentPermission, validAgentPermission } from "./agentPermissions";
 import type { ClipboardContent } from "./paste";
-import { resumedLaunch } from "./conversations";
+import { canResume, listProfileConversations, resumedLaunch, validAcpId, validConversationId } from "./conversations";
 import { codexChatSupported } from "./codexChat";
-import { normalizeEffortChoice, normalizeModelChoice } from "./chatState";
+import { EFFORT_LEVELS, modelDescription, modelName, normalizeEffortChoice, normalizeModelChoice } from "./chatState";
+import { loadProfileModels } from "./profileModels";
+import type { RemoteCatalog, RemoteRequestAction } from "./remoteProtocol";
 import { showDesktopNotice } from "./desktopNotifications";
 import { createSplitLayout, replaceSplitPane, splitPaneStyle, visibleSplit, type SplitDirection, type SplitLayout } from "./splitLayout";
 import SplitDivider from "./components/SplitDivider";
@@ -168,6 +170,29 @@ function SessionChat({ room, agentTeam, onTeamChange, onRoomChange, trexInstalle
 
 const usesChatView = (tab: TabState): tab is TabState & { kind: AgentProvider } =>
   tab.kind !== "shell" && (tab.kind !== "codex" || codexChatSupported(tab.args));
+
+/**
+ * Primer mensaje de un chat abierto desde el móvil: espera a que el chat se monte y su cola
+ * esté lista. Devuelve un aviso si no se pudo (el chat queda abierto igualmente).
+ */
+async function sendWhenReady(session: string, text: string): Promise<string | null> {
+  const deadline = Date.now() + 20_000;
+  let reason = "";
+  while (Date.now() < deadline) {
+    if (remoteBridge.has(session)) {
+      try {
+        await remoteBridge.run(session, { kind: "send", text, files: [] });
+        return null;
+      } catch (error) {
+        reason = formatError(error);
+        // Solo se reintenta mientras la sesión arranca; cualquier otro error se informa ya.
+        if (!/cargando/i.test(reason)) break;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+  return `El chat se abrió, pero no se pudo enviar el primer mensaje (${reason || "la sesión tardó demasiado en arrancar"}). Escríbelo desde el chat.`;
+}
 
 function AppShell() {
   useWindowFrame();
@@ -805,6 +830,9 @@ function AppShell() {
       tab.handoff = handoff;
       tab.chatModel = normalizeModelChoice(model);
       tab.subtitle = `${profile.name} · continuación de ${handoff.sourceLabel}`;
+    } else if (model && profile && !workflow && !team && !room) {
+      // Un chat nuevo con el modelo elegido (desde el control remoto).
+      tab.chatModel = normalizeModelChoice(model);
     }
     if (conversation && profile) {
       // El chat retoma la conversación por su id; la terminal necesita la opción en el comando.
@@ -1119,12 +1147,13 @@ function AppShell() {
     }
   };
 
-  const closeTab = useCallback(async (tabId: string, trigger?: HTMLElement) => {
+  /** `confirmed`: ya se confirmó en otro sitio (el control remoto pregunta en el móvil). */
+  const closeTab = useCallback(async (tabId: string, trigger?: HTMLElement, confirmed = false) => {
     const tab = tabsRef.current.find((item) => item.id === tabId);
     if (!tab) return;
 
     const settings = configRef.current?.settings;
-    if (settings?.confirmCloseTab && !tab.exited) {
+    if (!confirmed && settings?.confirmCloseTab && !tab.exited) {
       const ok = await dialog.confirm({
         trigger,
         title: `Cerrar «${sessionLabel(tab)}»`,
@@ -1417,6 +1446,102 @@ function AppShell() {
   // El móvil agrupa las sesiones por proyecto en el mismo orden que la barra lateral.
   useEffect(() => { remoteBridge.setProjectOrder(config?.projects.map(project => project.id) ?? []); }, [config?.projects]);
 
+  // Control remoto: el móvil ve todos los proyectos (no solo los que tienen chats) y los
+  // perfiles con los que puede abrir uno. Los que se abren como terminal no: el móvil no los maneja.
+  useEffect(() => {
+    if (!config) return;
+    const installed = profilesForInstallation(config.settings, trexInstalled);
+    const preferred = defaultProfile({ ...config.settings, profiles: installed });
+    const catalog: RemoteCatalog = {
+      projects: config.projects.map((project, order) => ({ id: project.id, name: project.name, path: project.path, favorite: !!project.favorite, order })),
+      profiles: installed.filter(profile => profile.provider !== "codex" || codexChatSupported(profile.args))
+        .map(profile => ({ id: profile.id, name: profile.name, provider: profile.provider, isDefault: profile.id === preferred.id,
+          // Los modos que no se eligen (Antigravity los consulta al conectar) no se ofrecen en el móvil.
+          modes: agentPermissionOptions(profile.provider).filter(option => option.value),
+          mode: config.ui.chatModes?.[profile.provider] ?? defaultAgentPermission(profile.provider) })),
+    };
+    remoteBridge.setCatalog(catalog);
+  }, [config?.projects, config?.settings, config?.ui.chatModes, trexInstalled]);
+
+  // Control remoto: lo que el móvil pide fuera de un chat abierto, por los mismos caminos que la interfaz.
+  useEffect(() => remoteBridge.setRequestHandler(async (action: RemoteRequestAction) => {
+    const current = configRef.current;
+    if (!current) throw new Error("trex aún está cargando. Prueba en unos segundos.");
+    const projectOf = (id: string) => {
+      const found = current.projects.find(item => item.id === id);
+      if (!found) throw new Error("Ese proyecto ya no existe en el PC.");
+      return found;
+    };
+    const chatProfileOf = (id: string) => {
+      const found = profilesForInstallation(current.settings, trexInstalledRef.current).find(item => item.id === id);
+      if (!found) throw new Error("Ese asistente ya no está configurado en el PC.");
+      if (found.provider === "codex" && !codexChatSupported(found.args)) throw new Error("Ese perfil se abre como terminal: desde el móvil solo se dirigen chats.");
+      return found;
+    };
+    switch (action.kind) {
+      case "open": {
+        const project = projectOf(action.project);
+        const profile = chatProfileOf(action.profile);
+        // Se comprueba antes de abrir nada: un modo que el asistente no tiene no abre la pestaña.
+        const mode = action.mode;
+        if (mode !== null && !validAgentPermission(profile.provider, mode)) throw new Error("Ese modo de permisos no existe para este asistente.");
+        let conversation: Conversation | undefined;
+        if (action.conversation) {
+          const { id, title } = action.conversation;
+          if (!(profile.provider === "antigravity" ? validAcpId(id) : validConversationId(id))) throw new Error("Esa conversación no es válida.");
+          // Si ya está abierta, se vuelve a ella en vez de abrirla dos veces (como en el escritorio).
+          const existing = tabsRef.current.find(tab => !tab.exited && tab.profileId === profile.id && tab.conversationId === id);
+          if (existing) return { session: existing.id };
+          conversation = { id, provider: profile.provider, title: title || "Conversación", cwd: project.path, updatedAt: Date.now() };
+        }
+        const session = openTab(project.id, profile.id, conversation, undefined, action.model);
+        if (!session) throw new Error("No se pudo abrir el chat en el PC.");
+        // Esfuerzo, velocidad y permisos elegidos en el móvil: se aplican antes de que el chat arranque.
+        const effort = normalizeEffortChoice(action.effort);
+        if (effort || action.fast !== null || mode) {
+          setTabs(previous => previous.map(tab => tab.id === session
+            ? { ...tab, chatEffort: effort ?? tab.chatEffort ?? null, chatFast: action.fast ?? tab.chatFast ?? null, chatMode: mode ?? tab.chatMode } : tab));
+        }
+        const warning = action.text.trim() ? await sendWhenReady(session, action.text.trim()) : null;
+        return warning ? { session, warning } : { session };
+      }
+      case "close": {
+        const tab = tabsRef.current.find(item => item.id === action.session);
+        if (!tab) throw new Error("Ese chat ya no está abierto en el PC.");
+        if (!usesChatView(tab)) throw new Error("Desde el móvil solo se cierran chats.");
+        await closeTab(tab.id, undefined, true);
+        return null;
+      }
+      case "favorite": {
+        projectOf(action.project);
+        setConfig(previous => previous ? { ...previous, projects: previous.projects.map(item =>
+          item.id === action.project ? { ...item, favorite: action.favorite } : item) } : previous);
+        return null;
+      }
+      case "conversations": {
+        const project = projectOf(action.project);
+        const profile = chatProfileOf(action.profile);
+        if (!canResume(launchForProfile(current.settings, profile), profile.provider)) {
+          throw new Error("Este perfil ya contiene opciones de recuperación o un modo especial: elige otro para retomar conversaciones.");
+        }
+        const list = await listProfileConversations(profile, current.settings, project.path);
+        return { conversations: [...list].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 60)
+          .map(item => ({ id: item.id, title: item.title, updatedAt: item.updatedAt })) };
+      }
+      case "models": {
+        const project = projectOf(action.project);
+        const profile = chatProfileOf(action.profile);
+        const models = (await loadProfileModels(profile, current.settings, project.path)).filter(item => normalizeModelChoice(item.value));
+        return { models: models.map(item => ({ value: item.value, label: item.value === "default" ? "Recomendado por el asistente" : modelName(item),
+          description: modelDescription(item, models), featured: !!item.featured,
+          // Lo mismo que ofrece el selector del chat: niveles reconocidos y la velocidad rápida si la hay.
+          efforts: item.efforts.filter(level => EFFORT_LEVELS[level]).map(level => ({ value: level, label: EFFORT_LEVELS[level].label, hint: EFFORT_LEVELS[level].hint })),
+          defaultEffort: item.defaultEffort && EFFORT_LEVELS[item.defaultEffort] ? item.defaultEffort : null,
+          fast: item.fast ? { hint: item.fast.hint } : null })) };
+      }
+    }
+  }), [openTab, closeTab, setTabs]);
+
   if (!config || !workspaceReady) return <Splash />;
 
   const activeProject = config.projects.find((project) => project.id === activeProjectId) ?? null;
@@ -1599,6 +1724,7 @@ function AppShell() {
                     mode={tab.chatMode ?? config.ui.chatModes?.[tab.kind] ?? null}
                     model={tab.chatModel ?? null}
                     effort={tab.chatEffort ?? null}
+                    fast={tab.chatFast ?? null}
                     settings={config.settings}
                     visible={isVisible}
                     focused={isActive}

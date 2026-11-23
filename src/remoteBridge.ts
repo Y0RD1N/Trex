@@ -12,7 +12,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
 import { buildBrowserTheme } from "./browserTheme";
-import { parseRemoteCommand, type RemoteAction, type RemoteDetail, type RemoteSession } from "./remoteProtocol";
+import { parseRemoteCommand, parseRemoteRequest, type RemoteAction, type RemoteCatalog, type RemoteDetail, type RemoteRequestAction, type RemoteSession } from "./remoteProtocol";
 import { formatError } from "./api";
 
 export type RemoteEntry = {
@@ -21,6 +21,9 @@ export type RemoteEntry = {
   /** Ejecuta una orden del móvil; un error se le muestra tal cual. */
   run: (action: RemoteAction) => Promise<void>;
 };
+
+/** Resuelve las peticiones sin sesión (abrir o cerrar chats, favoritos…); lo devuelto viaja al móvil. */
+export type RemoteRequestHandler = (action: RemoteRequestAction) => Promise<unknown>;
 
 const PUBLISH_MS = 250;
 
@@ -36,6 +39,10 @@ class RemoteBridge {
   private themeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Orden de los proyectos en la barra lateral: el móvil los agrupa igual. */
   private projectOrder = new Map<string, number>();
+  private catalog: RemoteCatalog | null = null;
+  private catalogJson = "";
+  private publishedCatalog = "";
+  private requestHandler: RemoteRequestHandler | null = null;
 
   start(): void {
     if (this.started || !isTauri()) return;
@@ -43,6 +50,7 @@ class RemoteBridge {
     void listen<{ active: boolean }>("remote://active", event => this.setActive(!!event.payload?.active)).catch(() => undefined);
     void listen<{ ids: string[] }>("remote://watch", event => this.setWatching(event.payload?.ids ?? [])).catch(() => undefined);
     void listen<unknown>("remote://command", event => { void this.execute(event.payload); }).catch(() => undefined);
+    void listen<unknown>("remote://request", event => { void this.answer(event.payload); }).catch(() => undefined);
     // Si la ventana se recarga con un móvil ya conectado, se retoma el estado.
     void invoke<{ active: boolean; watching: string[] }>("remote_bridge_state").then(state => {
       this.setWatching(state.watching);
@@ -70,6 +78,22 @@ class RemoteBridge {
     this.schedule();
   }
 
+  /** Todos los proyectos y los perfiles de chat; se manda solo si cambió y hay un móvil conectado. */
+  setCatalog(catalog: RemoteCatalog): void {
+    const json = JSON.stringify(catalog);
+    if (json === this.catalogJson) return;
+    this.catalog = catalog;
+    this.catalogJson = json;
+    if (this.active) this.schedule();
+  }
+
+  /** La app resuelve aquí lo que no es de una sesión abierta. Devuelve cómo quitarlo. */
+  setRequestHandler(handler: RemoteRequestHandler): () => void {
+    this.start();
+    this.requestHandler = handler;
+    return () => { if (this.requestHandler === handler) this.requestHandler = null; };
+  }
+
   /** Algo visible cambió en una sesión. Sin móviles conectados no hace nada. */
   changed(id: string): void {
     if (!this.active) return;
@@ -84,6 +108,8 @@ class RemoteBridge {
     if (!active) {
       this.themeObserver?.disconnect();
       this.themeObserver = null;
+      // El servidor olvida el catálogo al reiniciarse: al volver un móvil se manda otra vez.
+      this.publishedCatalog = "";
       return;
     }
     this.dirtyList = true;
@@ -124,6 +150,10 @@ class RemoteBridge {
         } catch { /* una sesión rota no deja sin lista a las demás */ }
       }
       void invoke("remote_publish", { sessions }).catch(() => undefined);
+    }
+    if (this.catalog && this.catalogJson !== this.publishedCatalog) {
+      this.publishedCatalog = this.catalogJson;
+      void invoke("remote_publish_catalog", { catalog: this.catalog }).catch(() => { this.publishedCatalog = ""; });
     }
     for (const id of this.dirtyDetails) {
       const entry = this.entries.get(id);
@@ -176,6 +206,20 @@ class RemoteBridge {
       catch (failure) { error = formatError(failure); }
     }
     await invoke("remote_command_result", { command: command.command, ok, error }).catch(() => undefined);
+  }
+
+  private async answer(payload: unknown): Promise<void> {
+    const request = parseRemoteRequest(payload);
+    if (!request) return;
+    let ok = false;
+    let error: string | null = null;
+    let data: unknown = null;
+    if (!this.requestHandler) error = "Esta versión de trex aún no está lista. Prueba en unos segundos.";
+    else {
+      try { data = await this.requestHandler(request.action) ?? null; ok = true; }
+      catch (failure) { error = formatError(failure); }
+    }
+    await invoke("remote_command_result", { command: request.command, ok, error, data }).catch(() => undefined);
   }
 }
 

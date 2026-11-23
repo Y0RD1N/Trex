@@ -254,6 +254,8 @@ export type TabState = SessionLaunch & {
   /** Modelo elegido para esta pestaña, incluido el primer turno de una continuación. */
   chatModel?: string | null;
   chatEffort?: string | null;
+  /** Velocidad rápida elegida al abrir la pestaña (desde el control remoto); null deja la del asistente. */
+  chatFast?: boolean | null;
   /** Id único de la sesión PTY (también identifica la pestaña). */
   id: string;
   projectId: string;

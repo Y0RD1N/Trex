@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentProvider, Conversation, SessionLaunch } from "./types";
+import { trexProfileName } from "./profiles";
+import type { AgentProvider, Conversation, LauncherProfile, SessionLaunch, Settings } from "./types";
 export const validConversationId = (id: unknown): id is string =>
   typeof id === "string" &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -19,6 +20,23 @@ export const detectAccountDir = (provider: AgentProvider, command: string, shell
 /** Carpeta donde guarda sus conversaciones el perfil: la indicada en él o la que elige su lanzador. */
 export const profileAccountDir = async (profile: { provider: AgentProvider; command: string; shell: string; configDir: string }, shell: string): Promise<string> =>
   profile.configDir.trim() || (profile.provider === "trex" || profile.provider === "antigravity" ? "" : await detectAccountDir(profile.provider, profile.command, profile.shell || shell).catch(() => null) || "");
+/**
+ * Conversaciones guardadas de un perfil en un proyecto (las de «Recuperar conversación»).
+ * La comparten ese diálogo y el control remoto para que ambos vean exactamente lo mismo.
+ */
+export async function listProfileConversations(
+  profile: LauncherProfile,
+  settings: Pick<Settings, "shell">,
+  projectPath: string,
+): Promise<Conversation[]> {
+  // Un lanzador como `claude2` guarda sus conversaciones en su propia carpeta.
+  const configDir = await profileAccountDir(profile, settings.shell);
+  if (profile.provider === "antigravity") {
+    const { listAntigravityConversations } = await import("./antigravityConnection");
+    return listAntigravityConversations(profile.command, configDir, projectPath);
+  }
+  return listConversations(profile.provider, configDir, projectPath, profile.provider === "trex" ? trexProfileName(profile) : undefined);
+}
 /** Mensajes guardados de una conversación de Claude Code, para pintarla en el chat. */
 export const readConversation = (configDir: string, id: string): Promise<unknown[]> =>
   invoke("read_conversation", { configDir, id });

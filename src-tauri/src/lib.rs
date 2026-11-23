@@ -515,6 +515,7 @@ pub fn run() {
             remote::remote_publish,
             remote::remote_publish_detail,
             remote::remote_publish_theme,
+            remote::remote_publish_catalog,
             remote::remote_command_result,
             browser_bridge::browser_bridge_status,
             browser_bridge::browser_bridge_configure,
