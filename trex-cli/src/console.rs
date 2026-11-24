@@ -27,8 +27,6 @@ pub struct Options {
     pub conversation: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
-    pub browser: bool,
-    pub browser_profile: Option<String>,
     pub desktop: bool,
     pub json: bool,
     pub thinking: bool,
@@ -222,7 +220,7 @@ impl Input {
 }
 fn start_params(options: &Options) -> Value {
     json!({"cwd":options.cwd,"mode":options.mode,"conversationId":options.conversation,"model":options.model,"effort":options.effort,
-        "desktopEnabled":options.desktop,"browser":{"enabled":options.browser,"profile":options.browser_profile},"instructions":options.instructions,"settings":options.settings})
+        "desktopEnabled":options.desktop,"instructions":options.instructions,"settings":options.settings})
 }
 fn print_value(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string(value)?);

@@ -830,9 +830,8 @@ fn project_history_with(
 
 /// What the model reads from a normalized MCP/browser/desktop result: one
 /// copy of the structured result (never also its JSON serialization as
-/// text), Trex Browser envelopes reduced to the agent view (ok, data,
-/// revision, error) and compact artifact references. The journal and UI keep
-/// the full envelope with receipts, ownership and provenance.
+/// text) and compact artifact references. The journal and UI keep the full
+/// result with hashes and provenance.
 fn model_view(output: &Value, notes: &[String]) -> String {
     let structured = output.get("structuredContent").filter(|v| !v.is_null());
     let mut text = output["text"].as_str().unwrap_or("").to_owned();
@@ -847,25 +846,7 @@ fn model_view(output: &Value, notes: &[String]) -> String {
     }
     let mut view = Map::new();
     if let Some(structured) = structured {
-        if structured["receipt"].is_object() && structured["ok"].is_boolean() {
-            // Same shape Trex Browser gives MCP agents (tools.mjs modelView).
-            view.insert("ok".into(), structured["ok"].clone());
-            match &structured["data"] {
-                Value::Object(data) => view.extend(data.clone()),
-                Value::Null => {}
-                data => {
-                    view.insert("data".into(), data.clone());
-                }
-            }
-            if !view.contains_key("revision") && !structured["revision"].is_null() {
-                view.insert("revision".into(), structured["revision"].clone());
-            }
-            if structured["ok"] == false && !structured["error"].is_null() {
-                view.insert("error".into(), structured["error"].clone());
-            }
-        } else {
-            view.insert("result".into(), structured.clone());
-        }
+        view.insert("result".into(), structured.clone());
     }
     let mut lines: Vec<&str> = Vec::new();
     if !text.is_empty() {
@@ -882,7 +863,7 @@ fn model_view(output: &Value, notes: &[String]) -> String {
         .take(64)
         .filter_map(|raw| {
             let reference = serde_json::from_value::<crate::artifacts::ArtifactRef>(raw.clone()).ok()?;
-            let mut lean = json!({"artifactId":reference.provenance["brokerArtifactId"].as_str().unwrap_or(&reference.id),"kind":reference.kind,"mimeType":reference.mime_type});
+            let mut lean = json!({"artifactId":reference.id,"kind":reference.kind,"mimeType":reference.mime_type});
             if let (Some(width), Some(height)) = (reference.width, reference.height) {
                 lean["width"] = json!(width);
                 lean["height"] = json!(height);
@@ -901,7 +882,7 @@ fn model_view(output: &Value, notes: &[String]) -> String {
         &serialized,
         crate::context::MCP_MODEL_BYTES,
         25,
-        "; result trimmed for the model (the session history keeps it): request a narrower read (e.g. browser_snapshot with selector or compact:true)",
+        "; result trimmed for the model (the session history keeps it): request a narrower read",
     )
 }
 
@@ -970,9 +951,7 @@ fn project_history_budgeted(
                         notes.push("Artifact unavailable: invalid stored reference. The tool result is recorded; do not repeat the tool solely to recover the artifact.".to_owned());
                         continue;
                     };
-                    if reference.kind != "image"
-                        || reference.storage == crate::artifacts::ArtifactStorage::Broker
-                    {
+                    if reference.kind != "image" {
                         notes.push(format!("Artifact {} is metadata only ({}). No artifact fetch or tool repetition was performed.", reference.id, reference.mime_type));
                     } else if vision != Some(true) {
                         notes.push(format!(
@@ -2699,11 +2678,10 @@ mod tests {
     }
 
     #[test]
-    fn broker_video_metadata_never_loads_and_unknown_user_attachments_are_omitted() {
+    fn video_and_legacy_broker_metadata_never_load_and_unknown_user_attachments_are_omitted() {
         let mut video = artifact_tool("video");
         let mut output: Value = serde_json::from_str(video["content"].as_str().unwrap()).unwrap();
         output["artifacts"][0]["kind"] = json!("video");
-        output["artifacts"][0]["storage"] = json!("broker");
         video["content"] = json!(output.to_string());
         let projected = project_history_with(&[video], Some(true), |_| {
             panic!("never fetch video metadata")
@@ -2713,6 +2691,16 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("metadata only"));
+        // An older journal's broker reference (even an image) is reported, never fetched.
+        let mut legacy = artifact_tool("legacy");
+        let mut output: Value = serde_json::from_str(legacy["content"].as_str().unwrap()).unwrap();
+        output["artifacts"][0]["storage"] = json!("broker");
+        legacy["content"] = json!(output.to_string());
+        let projected = project_history_with(&[legacy], Some(true), |_| {
+            panic!("never fetch a broker reference")
+        });
+        assert_eq!(projected.len(), 1);
+        assert!(projected[0]["content"].as_str().unwrap().contains("Artifact unavailable"));
         let user = json!({"role":"user","content":[{"type":"text","text":"see attached"},{"type":"image_url","image_url":{"url":"data:image/png;base64,original"}}]});
         let omitted = project_history_with(&[user.clone()], None, |_| panic!("must not load"));
         assert!(!serde_json::to_string(&omitted)
@@ -3739,50 +3727,23 @@ mod tests {
         assert!(normalize_catalog(echoed.as_bytes(), &anthropic_profile, Some("sk-ant-key"), Instant::now() + Duration::from_secs(5)).is_err());
     }
 
-    /// A realistic Trex Browser snapshot envelope as `trex-browser call`
-    /// returns it (16,000-char accessibility tree + 300 element lines).
-    fn snapshot_envelope() -> Value {
-        let accessibility = "- generic [ref=e1]:\n  - link \"Product details\" [ref=e2]\n".repeat(300);
-        let elements: Vec<String> = (1..=300)
-            .map(|i| format!("tab-1-e{i} button Add item number {i} to the cart"))
-            .collect();
-        let structured = json!({"ok":true,"operationId":"3f0c3bd6-0a4b-4b43-9a55-0a9f4e1d2c11","projectId":"b".repeat(64),"profile":"default","generation":3,"revision":7,
-            "data":{"tabId":"tab-1","url":"http://localhost:5173/","revision":7,"accessibility":crate::context::clip(&accessibility,16000),"omitted":12,"elements":elements,"untrustedContent":true},
-            "artifacts":[],"receipt":{"status":"completed","manualReview":false,"replaySafe":false}});
-        json!({"content":[{"type":"text","text":structured.to_string()}],"structuredContent":structured})
-    }
-
     #[test]
-    fn browser_results_reach_the_model_once_as_the_lean_agent_view() {
-        let raw = snapshot_envelope();
-        // Before: text + structuredContent both stored and re-serialized.
-        let legacy = json!({"text":raw["content"][0]["text"],"artifacts":[],"structuredContent":raw["structuredContent"]}).to_string();
-        let stored = crate::artifacts::normalize_tool_result(raw.clone(), json!({"toolName":"browser_snapshot"})).unwrap();
+    fn mcp_results_reach_the_model_once_as_a_lean_view() {
+        let structured = json!({"tabId":4,"url":"http://localhost:5173/","elements":["ref_1 button Comprar"]});
+        let raw = json!({"content":[{"type":"text","text":structured.to_string()}],"structuredContent":structured});
+        let stored = crate::artifacts::normalize_tool_result(raw, json!({"toolName":"browser_read_page"})).unwrap();
         assert_eq!(stored["text"], "", "duplicate JSON text is not stored twice");
-        assert!(stored["structuredContent"]["receipt"].is_object(), "journal keeps the envelope");
-        for content in [legacy.clone(), stored.to_string()] {
-            let history = vec![json!({"role":"tool","tool_call_id":"snap","content":content})];
+        let legacy = json!({"text":structured.to_string(),"artifacts":[],"structuredContent":structured}).to_string();
+        for content in [legacy, stored.to_string()] {
+            let history = vec![json!({"role":"tool","tool_call_id":"read","content":content})];
             let projected = project_history_with(&history, Some(true), |_| unreachable!());
-            let model = projected[0]["content"].as_str().unwrap();
-            let view: Value = serde_json::from_str(model).unwrap();
-            assert_eq!(view["ok"], true);
-            assert_eq!(view["revision"], 7);
-            assert_eq!(view["tabId"], "tab-1");
-            assert_eq!(view["elements"].as_array().unwrap().len(), 300);
-            for hidden in ["receipt", "operationId", "projectId", "profile", "generation", "structuredContent", "text"] {
-                assert!(view.get(hidden).is_none(), "{hidden} reached the model");
-            }
-            println!(
-                "browser_snapshot model-facing bytes: before {} -> after {}",
-                legacy.len(),
-                model.len()
-            );
-            assert!(model.len() * 2 < legacy.len());
+            let view: Value = serde_json::from_str(projected[0]["content"].as_str().unwrap()).unwrap();
+            assert_eq!(view, json!({"result":structured}));
         }
-        // Errors keep their message once; plain text and MCP results stay.
-        let error = json!({"text":"Grant expired","artifacts":[],"isError":true,"structuredContent":{"ok":false,"operationId":"x","error":{"code":"BROWSER_ERROR","message":"Grant expired"},"receipt":{"status":"rejected"}}});
+        // An error text repeated in error.message is kept once.
+        let error = json!({"text":"Grant expired","artifacts":[],"isError":true,"structuredContent":{"error":{"code":"E","message":"Grant expired"}}});
         let view: Value = serde_json::from_str(&model_view(&error, &[])).unwrap();
-        assert_eq!(view, json!({"ok":false,"error":{"code":"BROWSER_ERROR","message":"Grant expired"},"isError":true}));
+        assert_eq!(view, json!({"result":{"error":{"code":"E","message":"Grant expired"}},"isError":true}));
         let mcp = json!({"text":"Done","artifacts":[],"structuredContent":{"rows":2}});
         let view: Value = serde_json::from_str(&model_view(&mcp, &["note".into()])).unwrap();
         assert_eq!(view, json!({"result":{"rows":2},"text":"Done\nnote"}));

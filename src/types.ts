@@ -82,8 +82,6 @@ export type Settings = {
   a11yEnabled: boolean;
   /** Atajos de teclado reales (Ctrl+S…): traen la ventana al frente un instante. */
   a11yKeyboard: boolean;
-  browserEnabled: boolean;
-  browserProfile: string;
   profiles: LauncherProfile[];
   defaultProfileId: string;
   shell: string;

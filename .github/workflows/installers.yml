@@ -32,17 +32,9 @@ jobs:
         with:
           workspaces: |
             trex-cli -> target
-            trex-browser -> target
             src-tauri -> target
       - name: Install frontend dependencies
         run: npm ci
-      # Electron downloads its binary on first use, not on install.
-      - name: Download the pinned Electron for the Trex Browser shell
-        run: |
-          npm ci --prefix trex-browser/shell --no-audit --no-fund
-          node trex-browser/shell/node_modules/electron/install.js
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       # sherpa-onnx (voice) downloads its import libraries into target/sherpa-onnx-prebuilt,
       # which rust-cache prunes before saving. With a cache restored, its build script does
       # not run again and linking fails (LNK1181 sherpa-onnx-c-api.lib). Forgetting its
@@ -68,10 +60,13 @@ jobs:
           $setup = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe)
           if ($setup.Count -ne 1) { throw "Expected one installer, found $($setup.Count)" }
           $dir = Join-Path $env:RUNNER_TEMP 'trex-install'
-          $p = Start-Process -FilePath $setup[0].FullName -ArgumentList "/S /TREXCLI=1 /TREXBROWSER=1 /D=$dir" -Wait -PassThru
+          $p = Start-Process -FilePath $setup[0].FullName -ArgumentList "/S /TREXCLI=1 /D=$dir" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Installer exited with $($p.ExitCode)" }
-          foreach ($file in 'trex.exe', 'trex-agent.exe', 'trex-browser.exe', 'trex-browser-runtime\runtime-manifest.json') {
+          foreach ($file in 'trex.exe', 'trex-agent.exe') {
             if (!(Test-Path (Join-Path $dir $file))) { throw "Missing after install: $file" }
+          }
+          foreach ($file in 'trex-browser.exe', 'trex-browser-runtime', 'trex-browser.payload', 'trex-browser-runtime.payload') {
+            if (Test-Path (Join-Path $dir $file)) { throw "Trex Browser is retired, but found: $file" }
           }
           & (Join-Path $dir 'trex-agent.exe') --version
           if ($LASTEXITCODE -ne 0) { throw 'Installed trex-agent did not run' }
@@ -150,24 +145,20 @@ jobs:
         run: |
           mkdir -m 700 /tmp/trex-fedora
           tar --exclude=.git -cf - . | tar --no-same-owner -xf - -C /tmp/trex-fedora
-      - name: Build the RPM with the private Browser runtime
+      - name: Build the RPM
         working-directory: /tmp/trex-fedora
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
           npm ci
-          npm ci --prefix trex-browser/shell --no-audit --no-fund
-          node trex-browser/shell/node_modules/electron/install.js
           npm run tauri -- build --bundles rpm
       - name: Install the RPM and check the installed app
         working-directory: /tmp/trex-fedora
         run: |
           set -euo pipefail
-          # Required dependencies only: the recommended Chromium is not needed here.
+          # Required dependencies only.
           dnf install -y --setopt=install_weak_deps=False src-tauri/target/release/bundle/rpm/*.rpm
           /usr/bin/trex-agent --version
-          /usr/bin/trex-browser doctor --json
-          for binary in /usr/bin/trex /usr/bin/trex-agent /usr/bin/trex-browser; do
+          test ! -e /usr/bin/trex-browser
+          for binary in /usr/bin/trex /usr/bin/trex-agent; do
             if ldd "$binary" | grep -q 'not found'; then ldd "$binary"; exit 1; fi
           done
           mkdir -p "$GITHUB_WORKSPACE/rpm"

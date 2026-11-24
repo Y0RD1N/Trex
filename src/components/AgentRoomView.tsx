@@ -1,5 +1,4 @@
 import { useAntigravityChat } from "../hooks/useAntigravityChat";
-import { browserOptions } from "../browser";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCoordination } from "../hooks/useCoordination";
 import { formatError, loadHandoff, prepareHandoff } from "../api";
@@ -66,8 +65,6 @@ const deliveredTo = (current: AgentRoom, pending: NonNullable<AgentRoom["pending
 /** Two independent provider sessions, one composer and a durable serial handoff. */
 export default function AgentRoomView(props: AgentRoomViewProps) {
   const { room } = props;
-  const browsers = useRef(Object.fromEntries(ROLES.map(role=>[role,browserOptions(props.settings,`${room.id}-${role}`,`${ROLE_NAMES[role]} · ${room[role].agent.profileName}`)])) as Record<RoomRole,ReturnType<typeof browserOptions>>).current;
-  const browser = browsers[room.active];
   const desktopEnabled = useRef(props.settings.desktopEnabled).current;
   const a11yEnabled = useRef(props.settings.a11yEnabled === true).current;
   const latest = useRef(props);
@@ -560,7 +557,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       const readOnly = (participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner")) === "plan";
       const options: ChatSessionOptions = {
       // Computer and accessibility control follow the user's settings only for a role that can act.
-      browser: browsers[role], desktopEnabled, a11yEnabled, integrations: props.settings.integrations, autoCompact: props.settings.autoCompact, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
+      chatLabel: `${ROLE_NAMES[role]} · ${participant.agent.profileName}`, desktopEnabled, a11yEnabled, integrations: props.settings.integrations, autoCompact: props.settings.autoCompact, sessionId: `${room.id}-${role}`, queueId: messageQueueId(`${room.id}-${role}`), cwd: props.cwd, ...launch,
         conversationId: participant.conversationId, model: participant.agent.model, effort: participant.agent.effort, fast: participant.agent.fast ?? null,
         mode: participant.mode ?? defaultAgentPermission(participant.agent.provider, role !== "planner"),
         planningOnly: readOnly,
@@ -572,7 +569,7 @@ export default function AgentRoomView(props: AgentRoomViewProps) {
       return <Runtime key={`${room.id}-${role}-${participant.agent.profileId}-${options.planningOnly ? "read" : "write"}`} role={role} options={options} publish={publish}
         label={`${participant.agent.profileName ?? participant.agent.provider} · ${role === "planner" ? "planificación" : "ejecución"}`} />;
     })}
-    {aggregate ? <ChatPanel {...props} browser={browser} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}
+    {aggregate ? <ChatPanel {...props} provider={room[room.active].agent.provider} profileId={room[room.active].agent.profileId}
       profileName={room[room.active].agent.profileName} conversationId={room[room.active].conversationId}
       terminalOwners={ROLES.flatMap(role=>{const session=sessions[role]?.terminals;return session?[{id:role,label:room[role].agent.profileName+" · "+(role==="planner"?"Planificación":"Implementación"),provider:room[role].agent.provider,session}]:[];})} session={aggregate} toolbar={toolbar} composerLead={composerLead} itemLabels={itemLabels} taskPlan={roomTaskPlan} taskAuthor={roomTaskPlan[0]?.owner ?? room[room.active].agent.profileName} inputLocked={lock}
       emptyState={{title:"Tu flujo está listo",description:"Escribe tu idea en este chat. Primero se preparará el plan y después el ejecutor lo implementará; aquí podrás conversar con ambos.",

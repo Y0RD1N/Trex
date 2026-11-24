@@ -171,10 +171,6 @@ struct Launch {
     #[arg(long)]
     effort: Option<String>,
     #[arg(long)]
-    browser: bool,
-    #[arg(long, requires = "browser")]
-    browser_profile: Option<String>,
-    #[arg(long)]
     desktop: bool,
     #[arg(long)]
     json: bool,
@@ -209,8 +205,6 @@ impl Launch {
             conversation: self.conversation,
             model: self.model,
             effort: self.effort,
-            browser: self.browser,
-            browser_profile: self.browser_profile,
             desktop: self.desktop,
             json: self.json,
             thinking: self.show_thinking,
@@ -382,6 +376,9 @@ fn cache_table(report: &serde_json::Value) -> String {
 const STACK_BYTES: usize = 16 * 1024 * 1024;
 
 fn main() {
+    // Before any thread or the runtime exists: the browser token leaves this
+    // process's environment, so no child process can inherit it.
+    trex_agent::chrome::take_from_env();
     match std::thread::Builder::new().name("trex-agent".into()).stack_size(STACK_BYTES).spawn(run_program) {
         Ok(worker) => {
             if worker.join().is_err() {

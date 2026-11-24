@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { AgentProvider, LauncherProfile, Project, Settings } from "../types";
 import { handoffTargetReason } from "./HandoffDialog";
-import { TEAM_ROLES, MAX_TEAM_WORKERS, teamBrowserDefault, type TeamBudget, type TeamRole } from "../agentTeam";
+import { TEAM_ROLES, MAX_TEAM_WORKERS, type TeamBudget, type TeamRole } from "../agentTeam";
 import { defaultAgentPermission } from "../agentPermissions";
 import { EFFORT_LEVELS, modelName } from "../chatState";
 import { suggestEffort, suggestModel } from "../modelTiers";
@@ -12,12 +12,11 @@ import FeatureDialog, { type FeatureDialogMotionProps } from "./FeatureDialog";
 import AgentIcon from "./AgentIcon";
 import { AgentFields, SetupSwitch } from "./AgentSetup";
 import Select from "./Select";
-import { AlertIcon, ArrowDownIcon, ArrowRightIcon, ArrowUpIcon, ChevronIcon, CloseIcon, FolderIcon, GaugeIcon, GlobeIcon, PlusIcon, SparkIcon } from "./Icons";
+import { AlertIcon, ArrowDownIcon, ArrowRightIcon, ArrowUpIcon, ChevronIcon, CloseIcon, FolderIcon, GaugeIcon, PlusIcon, SparkIcon } from "./Icons";
 import "./AgentTeamDialog.css";
 import "./TeamUsage.css";
 
-/** `browser`: explicit Trex Browser choice (null: role default). */
-export type TeamMemberChoice = WorkflowRequest["planner"] & { id: string; name: string; role: TeamRole; instructions: string; canWrite: boolean; browser?: boolean | null };
+export type TeamMemberChoice = WorkflowRequest["planner"] & { id: string; name: string; role: TeamRole; instructions: string; canWrite: boolean };
 export type TeamRequest = { master: TeamMemberChoice; workers: TeamMemberChoice[]; budget?: TeamBudget | null };
 type Draft = Omit<TeamMemberChoice, "profileId" | "model" | "effort"> & { provider: AgentProvider };
 type Selection = WorkflowRequest["planner"] & { ready: boolean };
@@ -61,9 +60,6 @@ function MemberEditor({ draft, targets, settings, cwd, disabled, leaving, initia
     ? [stage.model ? suggestedInfo ? modelName(suggestedInfo) : stage.model : "modelo del perfil",
       stage.effort ? `esfuerzo ${EFFORT_LEVELS[stage.effort]?.label.toLowerCase() ?? stage.effort}` : null].filter(Boolean).join(" · ") : "";
   const principal = draft.role === "coordinator";
-  const canWrite = mode !== "plan";
-  const browserDefault = teamBrowserDefault(draft.role, canWrite);
-  const browserOn = draft.browser ?? browserDefault;
   const label = principal ? "Principal" : draft.name;
   return <section className="agent-card agent-member" aria-label={principal ? "Agente principal" : draft.name}>
     <header className="agent-card-head">
@@ -91,9 +87,6 @@ function MemberEditor({ draft, targets, settings, cwd, disabled, leaving, initia
           {principal ? "Responsabilidad" : "Instrucciones"}<ChevronIcon size={12} /></button>
         {suggestion && <span className="agent-suggested" tabIndex={0} title={"Sugerido para esta función: " + suggestion}><SparkIcon size={12} />Sugerido</span>}
       </div>
-      {settings.browserEnabled && <button type="button" className="agent-chip" aria-pressed={browserOn} disabled={disabled}
-        title={draft.browser == null ? browserDefault ? "Según su función" + (canWrite ? "" : " (solo observar)") : "Desactivado para esta función: ahorra contexto" : "Elegido para este agente"}
-        onClick={() => onChange({ browser: !browserOn === browserDefault ? null : !browserOn })}><GlobeIcon size={13} />Navegador</button>}
     </div>
     {open && <textarea id={field + "-instructions"} className="input agent-instructions" rows={3} maxLength={2000} value={draft.instructions} disabled={disabled}
       aria-label={principal ? "Responsabilidad del principal" : "Instrucciones de la función"}
@@ -101,7 +94,7 @@ function MemberEditor({ draft, targets, settings, cwd, disabled, leaving, initia
   </section>;
 }
 const draft = (id: string, role: TeamRole, provider: AgentProvider): Draft => ({
-  id, role, provider, name: TEAM_ROLES[role].name, instructions: TEAM_ROLES[role].description, canWrite: TEAM_ROLES[role].writes, browser: null,
+  id, role, provider, name: TEAM_ROLES[role].name, instructions: TEAM_ROLES[role].description, canWrite: TEAM_ROLES[role].writes,
 });
 type Reading = { status: "loading" } | { status: "ready"; quota: AccountQuota | null };
 const quotaPart = (label: string, value: { percent: number } | null): string => `${label} ${value ? `${Math.round(value.percent)} %` : "—"}`;
@@ -124,7 +117,7 @@ export default function AgentTeamDialog({ project, profiles, settings, onClose, 
   });
   const choice = (member: Draft): TeamMemberChoice => ({ id: member.id, name: member.name.trim(), role: member.role,
     instructions: member.instructions.trim(), canWrite: selections[member.id].mode !== "plan", mode: selections[member.id].mode,
-    profileId: selections[member.id].profileId, model: selections[member.id].model, effort: selections[member.id].effort, fast: selections[member.id].fast ?? null, browser: member.browser ?? null });
+    profileId: selections[member.id].profileId, model: selections[member.id].model, effort: selections[member.id].effort, fast: selections[member.id].fast ?? null });
   // Pre-launch summary: who shares which account and how much of its plan is left (reading /usage spends no tokens).
   const groups = accountGroups(members.flatMap(member => {
     const profile = profiles.find(profile => profile.id === selections[member.id]?.profileId);

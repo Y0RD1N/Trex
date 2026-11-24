@@ -1,13 +1,12 @@
 import { useAntigravityChat } from "../hooks/useAntigravityChat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCoordination } from "../hooks/useCoordination";
-import { agentTeamClaim, agentTeamFinish, agentTeamOpen, agentTeamPause, agentTeamPoll, agentTeamSnapshot, trexBrowserStatus, trexBrowserSpaces, formatError, loadHandoff, prepareHandoff } from "../api";
-import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, mergeTeamItems, teamCombinedState, teamGitSnapshot, teamMemberUsesBrowser, teamPlanningContext, teamReportsPrompt, teamRoleBlock, teamRoleBlockNeeded, teamRoleReminder, teamTaskActive, teamTaskRunnable, permissionChangeNote, withMemberPermission, type AgentTeam, type TaskUsage, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
+import { agentTeamClaim, agentTeamFinish, agentTeamOpen, agentTeamPause, agentTeamPoll, agentTeamSnapshot, formatError, loadHandoff, prepareHandoff } from "../api";
+import { TEAM_ROLES, TEAM_COORDINATOR_POLICY, TEAM_READER_POLICY, mergeTeamItems, teamCombinedState, teamGitSnapshot, teamPlanningContext, teamReportsPrompt, teamRoleBlock, teamRoleBlockNeeded, teamRoleReminder, teamTaskActive, teamTaskRunnable, permissionChangeNote, withMemberPermission, type AgentTeam, type TaskUsage, type TeamMember, type TeamSnapshot, type TeamTask } from "../agentTeam";
 import { budgetNote, budgetRefusal, budgetRemaining } from "../teamBudget";
 import { addToLedger, compactionNeeded, memberQuota, observeUsage, readAccountPlan, requestCompaction, teamUsageReport, teamUsageView, usageSince, type UsageObservation } from "../teamUsage";
 import { agentTeamFinishTask, agentTeamPublishUsage } from "../teamApi";
 import type { PlanUsage } from "../planUsage";
-import { browserOptions, type BrowserSpace } from "../browser";
 import { currentModel, effortLabel, modelName, pendingPermissions, type ChatState } from "../chatState";
 import { buildHandoffPrompt, sanitizeHandoffText, withoutGitSnapshot } from "../handoff";
 import { planningContext } from "../agentWorkflow";
@@ -46,9 +45,8 @@ const noop = (): void => undefined;
  * mensaje escrito aquí se confundiría con una delegación. Sus permisos y preguntas se responden
  * en su propia sesión. Nada de lo que muestra se informa a la pestaña (actividad, título, modo…).
  */
-function SubagentChat({ member, session, props, waiting, browser, onBack, onStop }: {
-  member: TeamMember; session: ChatSession; props: Props; waiting: boolean;
-  browser: ReturnType<typeof browserOptions>; onBack: () => void; onStop: () => void;
+function SubagentChat({ member, session, props, waiting, onBack, onStop }: {
+  member: TeamMember; session: ChatSession; props: Props; waiting: boolean; onBack: () => void; onStop: () => void;
 }) {
   const back = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => { back.current?.focus({ preventScroll: true }); }, []);
@@ -69,7 +67,7 @@ function SubagentChat({ member, session, props, waiting, browser, onBack, onStop
       {working && <button type="button" className="agent-subchat-stop" onClick={onStop} aria-label={`Detener a ${member.name}`} title="Detener a este subagente y pausar el equipo"><StopIcon size={12} />Detener</button>}
     </header>
     <ChatPanel {...props} sessionId={props.sessionId + "-" + member.id} provider={member.agent.provider} session={session}
-      visible={props.visible} focused={props.focused} browser={{ ...browser, enabled: false, clientId: props.team.id + "-" + member.id }} browserSpaces={undefined} onStopBrowserAgent={undefined}
+      visible={props.visible} focused={props.focused}
       profileId={member.agent.profileId} profileName={member.agent.profileName} conversationId={member.conversationId}
       terminalOwners={session.terminals ? [{ id: member.id, label: member.name + " · " + TEAM_ROLES[member.role].name, provider: member.agent.provider, session: session.terminals }] : []}
       toolbar={undefined} itemLabels={undefined} taskPlan={undefined} taskAuthor={member.name} onOpenSubagent={undefined}
@@ -86,8 +84,6 @@ export default function AgentTeamView(props: Props) {
   const latest = useRef(props); latest.current = props;
   const current = useRef(team), received = useRef(team);
   if (received.current !== team) { received.current=team; current.current=team; }
-  const browser = useRef(browserOptions(props.settings, team.id)).current;
-  const [spaces,setSpaces]=useState<BrowserSpace[]>([]);
   const desktopEnabled = useRef(props.settings.desktopEnabled).current;
   // Control por accesibilidad: cada miembro reserva las ventanas en las que actúa.
   const a11yEnabled = useRef(props.settings.a11yEnabled === true).current;
@@ -185,15 +181,6 @@ export default function AgentTeamView(props: Props) {
       void agentTeamPause(binding).catch(()=>undefined);
     };
   },[]);
-  const allocateSpaces=async(config:AgentTeam):Promise<BrowserSpace[]>=>{
-    if(!browser.enabled)return [];
-    // Only members whose role browses (or that the user enabled) get a space and its tools.
-    const browsing=[config.master,...config.workers].filter(teamMemberUsesBrowser);
-    if(!browsing.length)return [];
-    const status=await trexBrowserStatus();if(!status.ready)return [];
-    if(!status.capabilities?.spaces)throw new Error("Actualiza el componente Trex Browser para habilitar espacios por agente.");
-    return (await trexBrowserSpaces(latest.current.cwd,browsing.map(member=>({clientId:config.id+"-"+member.id,label:member.name})))).spaces;
-  };
   useEffect(()=>{
     if (team.phase==="paused" || team.phase==="failed") {
       void agentTeamSnapshot(team.id).then(value=>{if(mounted.current)setSnapshot(value);}).catch(()=>undefined);
@@ -201,12 +188,7 @@ export default function AgentTeamView(props: Props) {
     }
     if(openedEpoch===team.epoch || opening.current===team.epoch)return;
     const binding=team.epoch; opening.current=binding; setStarting(true);
-    void (async()=>{
-      const bindings=await allocateSpaces(current.current);
-      if(!mounted.current || current.current.epoch!==binding)return null;
-      setSpaces(bindings);
-      return agentTeamOpen(current.current,props.cwd);
-    })().then(value=>{
+    void (async()=>agentTeamOpen(current.current,props.cwd))().then(value=>{
       if(!value || !mounted.current || current.current.epoch!==binding)return;
       setSnapshot(value);setOpenedEpoch(binding);
     }).catch(error=>{if(mounted.current && current.current.epoch===binding)change(value=>({...value,phase:"failed",error:formatError(error)}));})
@@ -219,12 +201,10 @@ export default function AgentTeamView(props: Props) {
     setStarting(true);
     try{
       const next={...(modify?modify(before):before),epoch:crypto.randomUUID(),phase:"running" as const,error:null};
-      const bindings=await allocateSpaces(next);
-      if(!mounted.current || generation.current!==token)return;
       const value=await agentTeamOpen(next,latest.current.cwd,true);
       if(!mounted.current || generation.current!==token){void agentTeamPause({id:next.id,epoch:next.epoch}).catch(()=>undefined);return;}
       for(const session of Object.values(sessionsRef.current))session.interrupt();
-      setSpaces(bindings);change(()=>next);setPublished({epoch:next.epoch,sessions:{}});setSnapshot(value);setOpenedEpoch(next.epoch);
+      change(()=>next);setPublished({epoch:next.epoch,sessions:{}});setSnapshot(value);setOpenedEpoch(next.epoch);
       requestAnimationFrame(()=>root.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus());
     }catch(error){if(mounted.current)change(value=>({...value,phase:"paused",error:formatError(error)}));}
     finally{if(mounted.current)setStarting(false);}
@@ -233,7 +213,7 @@ export default function AgentTeamView(props: Props) {
   const publishUsage=(binding:{id:string;epoch:string}):void=>{
     const team=current.current;
     const states=Object.fromEntries(Object.entries(sessionsRef.current).map(([id,session])=>[id,session.state])) as Record<string,ChatState>;
-    const text=JSON.stringify(teamUsageReport(team,teamUsageView(team,states,plansRef.current),browser.enabled));
+    const text=JSON.stringify(teamUsageReport(team,teamUsageView(team,states,plansRef.current)));
     const last=publishedUsage.current, now=Date.now();
     if(text===last.text || now-last.at<1500)return;
     publishedUsage.current={text,at:now};
@@ -530,10 +510,9 @@ export default function AgentTeamView(props: Props) {
     {members.map(member=>{
       const historyOnly=paused && openedEpoch!==team.epoch;
       const readOnly=!member.canWrite || historyOnly;
-      const space=spaces.find(space=>space.clientId===team.id+"-"+member.id);
-      const memberBrowser=space?{enabled:browser.enabled,clientId:space.clientId,profile:space.profile}:{...browser,enabled:false,clientId:team.id+"-"+member.id};
       // Computer and accessibility control follow the user's settings only for members that can act.
-      const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,autoCompact:props.settings.autoCompact,desktopEnabled: !historyOnly && desktopEnabled, a11yEnabled: !historyOnly && a11yEnabled,browser:historyOnly?{...memberBrowser,enabled:false}:memberBrowser,
+      const options:ChatSessionOptions={...member.agent.launch,integrations:props.settings.integrations,autoCompact:props.settings.autoCompact,desktopEnabled: !historyOnly && desktopEnabled, a11yEnabled: !historyOnly && a11yEnabled,
+        chatLabel:member.name+" · "+TEAM_ROLES[member.role].name,
         sessionId:team.id+"-"+member.id+"-"+team.epoch,queueId:messageQueueId(team.id+"-"+member.id),cwd:props.cwd,
         conversationId:member.conversationId,mode:readOnly?"plan":member.mode??defaultAgentPermission(member.agent.provider),
         model:member.agent.model,effort:member.agent.effort,fast:member.agent.fast??null,planningOnly:readOnly,
@@ -544,7 +523,7 @@ export default function AgentTeamView(props: Props) {
       const Runtime=member.agent.provider==="antigravity"?AntigravityRuntime:member.agent.provider==="claude"?ClaudeRuntime:member.agent.provider==="codex"?CodexRuntime:TrexRuntime;
       return <Runtime key={team.epoch+"-"+member.id} id={member.id} epoch={team.epoch} label={member.name+" · "+TEAM_ROLES[member.role].name} options={options} publish={publish} />;
     })}
-    {aggregate?<ChatPanel {...props} visible={props.visible && !subOpen} focused={props.focused && !subOpen} onOpenSubagent={openSubagent} provider={team.master.agent.provider} session={aggregate} browser={{...browser,clientId:team.id+"-"+team.master.id,label:team.master.name,...spaces.find(space=>space.clientId===team.id+"-"+team.master.id),enabled:browser.enabled}} browserSpaces={spaces.map(space=>({...space,active:(sessions[space.clientId.slice(team.id.length+1)]?.state.pendingTurns??0)>0}))} onStopBrowserAgent={clientId=>{const member=members.find(member=>team.id+"-"+member.id===clientId);if(member){sessionsRef.current[member.id]?.interrupt();stop("Se detuvo a "+member.name+". Revisa su tarea antes de reanudar el equipo.");}}}
+    {aggregate?<ChatPanel {...props} visible={props.visible && !subOpen} focused={props.focused && !subOpen} onOpenSubagent={openSubagent} provider={team.master.agent.provider} session={aggregate}
       profileId={team.master.agent.profileId} profileName={team.master.agent.profileName} conversationId={team.master.conversationId}
       terminalOwners={members.flatMap(member=>{const session=sessions[member.id]?.terminals;return session?[{id:member.id,label:member.name+" · "+TEAM_ROLES[member.role].name,provider:member.agent.provider,session}]:[];})} toolbar={toolbar} itemLabels={labels} taskPlan={taskPlan} taskAuthor={team.master.name+" · Principal"} tasksPaused={paused} historyReadOnly planningOnly={!team.master.canWrite} inputLocked={locked||preparingMessage}
       emptyState={{title:paused?"Tu equipo está en pausa":"Tu equipo está listo",description:paused?"La configuración está guardada. Revisa las cuentas y el historial antes de reanudar.":`Escribe tu idea a ${team.master.name}. Preparará el plan, repartirá las tareas y revisará los resultados contigo.`,
@@ -562,7 +541,7 @@ export default function AgentTeamView(props: Props) {
       :<div className="agent-room-starting">{toolbar}<p>{starting?"Preparando el equipo…":paused?"Revisa el equipo para recuperar la conversación.":"Conectando al agente principal…"}</p></div>}
     {subOpen && focusedMember && subSession && <SubagentChat key={focusedMember.id} member={focusedMember} session={subSession} props={props}
       waiting={Object.entries(states).some(([id,state])=>id!==focusedMember.id && pendingPermissions(state)>0)}
-      browser={browser} onBack={closeSubagent}
+      onBack={closeSubagent}
       onStop={()=>{sessionsRef.current[focusedMember.id]?.interrupt();stop("Se detuvo a "+focusedMember.name+". Revisa su tarea antes de reanudar el equipo.");}} />}
   </div>;
 }

@@ -2,7 +2,6 @@
 use crate::usage::UsageTotals;
 use crate::{
     artifacts,
-    browser::{BrowserConfig, BrowserToolProvider, ExecutionUncertain},
     profile::{self, Profile},
     provider::{self, ProviderDelta},
     tools,
@@ -165,15 +164,6 @@ struct Journal {
     recovery_required: bool,
     #[serde(default)]
     rejected_responses: Vec<Value>,
-    /// Deferred tool groups the model enabled (enable_tools), in order. Only
-    /// changes what is advertised; mode and session policy still apply.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    enabled_tool_groups: Vec<String>,
-    // Browser access is an explicit live-session choice, never restored authority.
-    #[serde(skip)]
-    browser: BrowserConfig,
-    #[serde(skip)]
-    browser_available: bool,
     #[serde(skip)]
     desktop_enabled: bool,
 }
@@ -195,6 +185,9 @@ struct Session {
     /// Coordinación con las otras sesiones del proyecto: la conexión pedida y si
     /// llegó a conectarse.
     coordination: Option<(crate::coordination::CoordinationConfig, bool)>,
+    /// The person's own browser (`TREX_CHROME_*`): None without it; otherwise
+    /// whether its tools were listed.
+    chrome: Option<bool>,
 }
 
 impl Session {
@@ -565,10 +558,24 @@ pub struct Server {
     permissions: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     callbacks: Mutex<HashMap<String, oneshot::Sender<CallbackResult>>>,
     requests: Mutex<HashMap<String, CachedRequest>>,
+    /// The person's own browser, from `TREX_CHROME_URL`/`TREX_CHROME_TOKEN`. The
+    /// error text never quotes the values.
+    chrome: Option<std::result::Result<crate::chrome::Endpoint, String>>,
 }
 
 impl Server {
     pub fn new(profile: Profile, output: mpsc::UnboundedSender<Value>) -> Arc<Self> {
+        Self::build(profile, output, crate::chrome::configured())
+    }
+    /// Without the person's browser even when its variables are set (evaluation suites).
+    pub fn isolated(profile: Profile, output: mpsc::UnboundedSender<Value>) -> Arc<Self> {
+        Self::build(profile, output, None)
+    }
+    fn build(
+        profile: Profile,
+        output: mpsc::UnboundedSender<Value>,
+        chrome: Option<std::result::Result<crate::chrome::Endpoint, String>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             profile,
             models: Mutex::new(Vec::new()),
@@ -577,6 +584,7 @@ impl Server {
             permissions: Mutex::new(HashMap::new()),
             callbacks: Mutex::new(HashMap::new()),
             requests: Mutex::new(HashMap::new()),
+            chrome,
         })
     }
     fn send(&self, value: Value) {
@@ -625,7 +633,6 @@ impl Server {
         let mut summary = json!({"sessionId":data.id,"conversationId":data.id,"model":data.model,"effort":data.effort,"mode":data.mode,"items":data.items,"recoveryRequired":data.recovery_required,"contextWindow":context.map(|(window, _)| window),"contextWindowSource":context.map(|(_, source)| source)});
         summary["applicationIntegrations"] =
             data.application_integrations.clone().unwrap_or(Value::Null);
-        summary["browser"] = json!({"enabled":data.browser.enabled,"available":data.browser_available,"profile":data.browser.profile,"clientId":data.browser.client_id.as_deref().unwrap_or(&data.id)});
         summary["desktopEnabled"] = json!(data.desktop_enabled);
         summary["imageSupport"] = json!(self.image_support(&data.model).await);
         summary["contextManagement"] = json!({"compactions":data.compactions,"archivedMessages":data.context_cutoff,"fullHistoryPreserved":true,"estimateOnly":true});
@@ -725,7 +732,6 @@ impl Server {
                 .is_none_or(|value| value.len() <= 8192),
             "roleInstructions exceeds 8 KiB"
         );
-        let browser = BrowserConfig::parse(params.get("browser"))?;
         let desktop_enabled = match params.get("desktopEnabled") {
             None | Some(Value::Null) => false,
             Some(Value::Bool(value)) => *value,
@@ -752,8 +758,6 @@ impl Server {
             .context("cwd must be an existing directory")?;
         ensure!(cwd.is_dir(), "cwd must be a directory");
         let coordination = crate::coordination::CoordinationConfig::parse(params.get("coordination"), &cwd)?;
-        // The person's own browser, through the app's extension bridge. Optional: only read when a session is created.
-        let chrome = crate::chrome::ChromeConfig::parse(params.get("chrome"))?;
         let conversation = optional(params, "conversationId")?;
         let id = match conversation {
             Some(id) => {
@@ -772,7 +776,6 @@ impl Server {
             );
             ensure!(data.desktop_enabled == desktop_enabled, "desktop configuration is fixed for this live session; restart the process to change it");
             ensure!(session.accessibility.is_some() == accessibility.is_some(), "accessibility configuration is fixed for this live session; restart the process to change it");
-            ensure!(data.browser == browser, "browser configuration is fixed for this live session; restart the process to change it");
             ensure!(
                 session.tools.team_config() == &team,
                 "team binding is immutable for this live session; restart the process to change it"
@@ -794,6 +797,9 @@ impl Server {
             }
             if let Some((_, connected)) = &session.coordination {
                 summary["coordinationEnabled"] = json!(connected);
+            }
+            if let Some(connected) = session.chrome {
+                summary["chromeEnabled"] = json!(connected);
             }
             if team.is_some() {
                 summary["teamEnabled"] = json!(true);
@@ -880,19 +886,10 @@ impl Server {
                 pending_inbox: vec![],
                 recovery_required: false,
                 rejected_responses: vec![],
-                enabled_tool_groups: vec![],
-                browser: BrowserConfig::default(),
-                browser_available: false,
                 desktop_enabled: false,
             }
         };
-        let browser_provider = BrowserToolProvider::discover(&browser, &id, &data.mode)
-            .await
-            .ok()
-            .flatten();
         data.desktop_enabled = desktop_enabled;
-        data.browser = browser;
-        data.browser_available = browser_provider.is_some();
         let settings = Arc::new(crate::settings::overlay(
             crate::settings::Settings::load(Some(&self.profile.name))?,
             params.get("settings"),
@@ -952,12 +949,24 @@ impl Server {
             None => None,
         };
         // El navegador de la persona (extensión de trex): sin él el chat sigue igual.
-        if let Some(config) = chrome {
-            match crate::mcp::McpProvider::connect(&config.server(), &data.cwd, &settings.shell).await {
-                Ok(provider) => mcp.push(provider),
-                Err(_) => unavailable.push(crate::chrome::SERVER.into()),
+        let mut browser = None;
+        let chrome = match &self.chrome {
+            None => None,
+            Some(Ok(endpoint)) => match crate::chrome::ChromeProvider::connect(endpoint).await {
+                Ok(provider) => {
+                    browser = Some(provider);
+                    Some(true)
+                }
+                Err(_) => {
+                    unavailable.push(crate::chrome::SERVER.into());
+                    Some(false)
+                }
+            },
+            Some(Err(_)) => {
+                unavailable.push(crate::chrome::SERVER.into());
+                Some(false)
             }
-        }
+        };
         let session = Arc::new(Session {
             path,
             _lock: lock,
@@ -990,14 +999,12 @@ impl Server {
                 pending_inbox: vec![],
                 recovery_required: false,
                 rejected_responses: vec![],
-                enabled_tool_groups: vec![],
-                browser: BrowserConfig::default(),
-                browser_available: false,
                 desktop_enabled: false,
             }),
             active: Mutex::new(None),
-            tools: tools::ToolRegistry::configured(browser_provider, settings)
+            tools: tools::ToolRegistry::configured(settings)
                 .with_mcp(mcp)
+                .with_browser(browser)
                 .with_workspace(data.cwd.clone())
                 .with_desktop(desktop_enabled)
                 .with_team(team.clone())
@@ -1005,6 +1012,7 @@ impl Server {
                 .with_role_instructions(role_instructions.clone()),
             accessibility,
             coordination: coordination.clone(),
+            chrome,
         });
         session.persist(&mut data)?;
         let notifications = self.output.clone();
@@ -1018,6 +1026,9 @@ impl Server {
         }
         if let Some((_, connected)) = &coordination {
             summary["coordinationEnabled"] = json!(connected);
+        }
+        if let Some(connected) = chrome {
+            summary["chromeEnabled"] = json!(connected);
         }
         if team.is_some() {
             summary["teamEnabled"] = json!(true);
@@ -1350,14 +1361,13 @@ impl Server {
                 attempted < settings.limits.max_requests_per_turn,
                 "turn API request budget reached"
             );
-            let (cwd, mode, model, effort, enabled_groups, (projected, images)) = {
+            let (cwd, mode, model, effort, (projected, images)) = {
                 let data = session.data.lock().await;
                 (
                     data.cwd.clone(),
                     data.mode.clone(),
                     data.model.clone(),
                     data.effort.clone(),
-                    data.enabled_tool_groups.clone(),
                     model_projection(&data, archive_before, turn_start, max_history_images),
                 )
             };
@@ -1381,7 +1391,7 @@ impl Server {
                 policy.push_str(instructions);
             }
             messages.insert(0, json!({"role":"system","content":policy}));
-            let mut all_definitions = session.tools.definitions(&mode);
+            let mut definitions = session.tools.definitions(&mode);
             let metadata = self
                 .models
                 .lock()
@@ -1397,14 +1407,12 @@ impl Server {
             );
             // A model must be able to inspect a screenshot before it can act on it.
             if image_support != Some(true) {
-                all_definitions.retain(|tool| {
+                definitions.retain(|tool| {
                     !tool["function"]["name"].as_str().is_some_and(|name| {
                         name.starts_with("desktop_") && !crate::desktop::read_only(name)
                     })
                 });
             }
-            // Advanced groups stay out of the request until enable_tools.
-            let definitions = tools::advertised(&all_definitions, &enabled_groups);
             let pricing = settings
                 .provider
                 .pricing
@@ -1814,11 +1822,8 @@ impl Server {
                     session.persist(&mut data)?;
                     continue;
                 }
-                // Deferred (not yet advertised) tools stay callable within the
-                // session policy; enable_tools only adds their definitions.
                 let known = definitions
                     .iter()
-                    .chain(&all_definitions)
                     .any(|tool| tool["function"]["name"] == name);
                 if !known {
                     self.tool_error(
@@ -1890,27 +1895,7 @@ impl Server {
                         .state = "executing".into();
                     session.persist(&mut data)?;
                 }
-                if name == "enable_tools" {
-                    let output = {
-                        let mut data = session.data.lock().await;
-                        let before = data.enabled_tool_groups.clone();
-                        let output =
-                            tools::enable_group(&all_definitions, &mut data.enabled_tool_groups, &input);
-                        if data.enabled_tool_groups != before {
-                            if let Err(error) = session.persist(&mut data) {
-                                data.enabled_tool_groups = before;
-                                return Err(error);
-                            }
-                        }
-                        output
-                    };
-                    let (output, error) = match output {
-                        Ok(v) => (v, false),
-                        Err(e) => (json!({"error":e.to_string()}), true),
-                    };
-                    self.tool_result(&session, &session_id, message_id, &id, output, error)
-                        .await?;
-                } else if name == "task_state" || name == "history_search" {
+                if name == "task_state" || name == "history_search" {
                     let output = {
                         let data = session.data.lock().await;
                         conversation_read(&data, &name, &input)
@@ -1960,17 +1945,9 @@ impl Server {
                             {
                                 // Una captura (o lo que cambió tras una entrada) que el modelo no recibió no vale para actuar.
                                 let captured = output.get("content").and_then(Value::as_array).is_some_and(|items| items.iter().any(|item| item["type"] == "image"));
-                                let client_id = session
-                                    .data
-                                    .lock()
-                                    .await
-                                    .browser
-                                    .client_id
-                                    .clone()
-                                    .unwrap_or_else(|| session_id.clone());
                                 let normalized = artifacts::normalize_tool_result(
                                     output,
-                                    json!({"toolName":name,"toolCallId":provider_id,"operationId":operation_id,"clientId":client_id}),
+                                    json!({"toolName":name,"toolCallId":provider_id,"operationId":operation_id}),
                                 )?;
                                 if (name == "desktop_screenshot" || captured)
                                     && normalized["artifacts"]
@@ -1988,7 +1965,7 @@ impl Server {
                             (output, is_error)
                         }
                         Err(error)
-                            if error.downcast_ref::<ExecutionUncertain>().is_some()
+                            if error.downcast_ref::<crate::chrome::BrowserUncertain>().is_some()
                                 || error.downcast_ref::<crate::mcp::McpUncertain>().is_some()
                                 || error
                                     .downcast_ref::<tools::ToolExecutionUncertain>()
@@ -3008,7 +2985,7 @@ fn restored_usage(data: &Journal) -> (Value, Option<String>) {
 fn system_prompt(mode: &str) -> String {
     let task_policy = "For multi-step work, publish and maintain your task list with update_plan. Use task_state to recover actual task statuses after compaction and history_search to retrieve earlier instructions or results without rerunning tools. Team coordinators publish assignments with trex_team_plan before delegating instead. Never mark unverified work complete. Prefer edit_file for precise changes; native checkpoints can review or restore file-tool changes when the user requests it. Shell changes are not included in native checkpoints.";
     let integration_policy = "Use only the integration tools actually advertised for this turn. Verify installed dependencies and inspect real results; do not silently install missing programs. For desktop input, follow the advertised screenshot observation and permission requirements. An unavailable integration must never be treated as connected.";
-    format!("You are Trex, a coding agent working in the user's workspace. Use available tools to inspect files and make precise changes. Follow project instructions. Never claim a tool succeeded without its result. {task_policy} {integration_policy} Your session mode is {mode}. Plan mode is strictly read-only: inspect and deliver a concrete plan; do not mutate files or execute shell commands. Ask mode requires user approval for each mutation or shell command. Full mode allows approved autonomous work. Browser tools, when explicitly enabled, enforce the session policy in the broker. Browser artifact metadata alone does not establish pixel inspection: only inspect pixels when an actual image observation is present. Missing artifacts are unavailable evidence; do not repeat a tool automatically to recreate them. Uncertain operations require user review and must never be automatically replayed. Use trex_read_messages to retrieve durable user or collaborator inbox messages during a long task. Finish with a clear final response describing results and relevant validation. Do not expose secrets.")
+    format!("You are Trex, a coding agent working in the user's workspace. Use available tools to inspect files and make precise changes. Follow project instructions. Never claim a tool succeeded without its result. {task_policy} {integration_policy} Your session mode is {mode}. Plan mode is strictly read-only: inspect and deliver a concrete plan; do not mutate files or execute shell commands. Ask mode requires user approval for each mutation or shell command. Full mode allows approved autonomous work. Browser tools (browser_*), when connected, act in the person's own browser through the Trex extension, which also enforces the session mode. Artifact metadata alone does not establish pixel inspection: only inspect pixels when an actual image observation is present. Missing artifacts are unavailable evidence; do not repeat a tool automatically to recreate them. Uncertain operations require user review and must never be automatically replayed. Use trex_read_messages to retrieve durable user or collaborator inbox messages during a long task. Finish with a clear final response describing results and relevant validation. Do not expose secrets.")
 }
 
 fn validate_images(value: Option<&Value>) -> Result<Vec<Value>> {
@@ -3383,9 +3360,10 @@ mod tests {
             _storage_lock: None,
             data: Mutex::new(data),
             active: Mutex::new(None),
-            tools: tools::ToolRegistry::new(None),
+            tools: tools::ToolRegistry::new(),
             accessibility: None,
             coordination: None,
+            chrome: None,
         });
         let (tx, _rx) = mpsc::unbounded_channel();
         let server = Server::new(profile(), tx);
@@ -3551,9 +3529,10 @@ mod tests {
                 message_id: "user-1".into(),
                 cancel: cancel.clone(),
             })),
-            tools: tools::ToolRegistry::new(None),
+            tools: tools::ToolRegistry::new(),
             accessibility: None,
             coordination: None,
+            chrome: None,
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
         let server = Server::new(profile(), tx);

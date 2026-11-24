@@ -1,7 +1,6 @@
 import type { BlenderBridgeStatus, BridgeAction } from "./blenderBridge";
 import type { HyperframesAction, HyperframesStatus } from "./hyperframesStatus";
-import type { BrowserStatus, BrowserConfig, BrowserCall, BrowserResult, BrowserMode, BrowserProfile, BrowserOptions, BrowserSpace } from "./browser";
-import { validBrowserProfile, browserSpaceLabel } from "./browser";
+import type { BrowserConfig, BrowserMode } from "./browser";
 import { DEFAULT_INTEGRATIONS, normalizeIntegrations } from "./integrations";
 import { normalizeAutoCompact } from "./autoCompact";
 import { normalizeProjectLauncher } from "./projectLauncher";
@@ -244,8 +243,6 @@ export const DEFAULT_SETTINGS: Settings = {
   desktopEnabled: false,
   a11yEnabled: false,
   a11yKeyboard: false,
-  browserEnabled: true,
-  browserProfile: "BROWSER1",
   profiles: initialProfiles({ claudeCommand: "claude", claudeArgs: "", launchMode: "arg" }),
   defaultProfileId: "claude-default",
   shell: "default",
@@ -492,8 +489,6 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
     a11yEnabled: asBool(settingsRaw.a11yEnabled, false),
     a11yKeyboard: asBool(settingsRaw.a11yKeyboard, false),
-    browserEnabled: asBool(settingsRaw.browserEnabled, DEFAULT_SETTINGS.browserEnabled),
-    browserProfile: typeof settingsRaw.browserProfile === "string" && validBrowserProfile(settingsRaw.browserProfile) ? settingsRaw.browserProfile : "BROWSER1",
     profiles: [],
     defaultProfileId: asString(settingsRaw.defaultProfileId, DEFAULT_SETTINGS.defaultProfileId),
     shell: asString(settingsRaw.shell, DEFAULT_SETTINGS.shell),
@@ -629,7 +624,6 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
   };
 };
 
-export const trexBrowserStatus = (): Promise<BrowserStatus> => invoke("trex_browser_status");
 export const trexDesktopMcpConfig = (mode: BrowserMode): Promise<BrowserConfig> => invoke("trex_desktop_mcp_config", { mode });
 /** Estado de HyperFrames y, solo a petición, instalar o actualizar sus skills (escribe en las carpetas de skills de los agentes). */
 export const hyperframesAdmin = (action: HyperframesAction, cwd: string): Promise<HyperframesStatus> => invoke("hyperframes_admin", { action, cwd });
@@ -637,15 +631,6 @@ export const hyperframesAdmin = (action: HyperframesAction, cwd: string): Promis
 export const blenderBridge = (action: BridgeAction, file?: string): Promise<BlenderBridgeStatus> => invoke("blender_bridge", { action, file: file ?? null });
 export const trexAppsMcpConfig = (mode: BrowserMode, cwd: string, apps: string[]): Promise<BrowserConfig> => invoke("trex_apps_mcp_config", { mode, cwd, apps });
 export const trexA11yMcpConfig = (mode: BrowserMode): Promise<BrowserConfig> => invoke("trex_a11y_mcp_config", { mode });
-export const trexBrowserMcpConfig = (cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserConfig> => invoke("trex_browser_mcp_config", { cwd, mode, clientId, profile });
-export const trexBrowserCall = (request: BrowserCall): Promise<BrowserResult> => invoke("trex_browser_call", { request });
-export const trexBrowserOpenArtifact = (id: string, cwd: string, mode: BrowserMode, clientId: string, profile?: string): Promise<BrowserResult> => invoke("trex_browser_open_artifact", { id, cwd, mode, clientId, profile });
-export const trexBrowserProfiles = (cwd: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_profiles", { cwd });
-export const trexBrowserSpaces = (cwd: string, members: {clientId:string;label:string;model?:string}[]): Promise<{spaces: import("./browser").BrowserSpace[]}> => invoke("trex_browser_spaces", {cwd,members});
-export const trexBrowserListSpaces = (cwd: string): Promise<{spaces: BrowserSpace[]}> => invoke("trex_browser_list_spaces", {cwd});
-/** Per-agent MCP-over-HTTP session (url + bearer token) bound to a permission mode. */
-export const trexBrowserMcpSession = (cwd: string, mode: string, clientId: string, profile: string): Promise<{url: string; token: string; mode: string}> =>
-  invoke("trex_browser_mcp_session", {cwd, mode, clientId, profile});
 // --- «Tu navegador»: la extensión de trex (src-tauri/src/browser_bridge.rs) ----------
 export type BrowserBridgeStatus = {
   enabled: boolean; port: number; running: boolean; error: string | null; connected: boolean; pairing: boolean; extensionPath: string | null;
@@ -658,42 +643,30 @@ export const browserBridgePairingCancel = (): Promise<void> => invoke("browser_b
 /** Abre la carpeta de la extensión en el explorador de archivos. */
 export const browserBridgeOpenExtension = (): Promise<void> => invoke("browser_bridge_open_extension");
 export const browserBridgeRevoke =(browser: string): Promise<BrowserBridgeStatus> => invoke("browser_bridge_revoke", { browser });
-/** Acceso de un chat a las herramientas del navegador de la persona; `null` si la función está apagada. */
-export const browserBridgeMcpSession = (session: string, mode: string): Promise<{ url: string; token: string; mode: string; connected: boolean } | null> =>
-  invoke("browser_bridge_mcp_session", { session, mode });
+/**
+ * Acceso de un chat a las herramientas del navegador de la persona; `null` si la función está apagada.
+ * `label`: nombre del chat, para su grupo de pestañas. `cwd`: carpeta del proyecto, la única desde la
+ * que el agente puede subir archivos a una página.
+ */
+export const browserBridgeMcpSession = (session: string, mode: string, label?: string, cwd?: string): Promise<{ url: string; token: string; mode: string; connected: boolean } | null> =>
+  invoke("browser_bridge_mcp_session", { session, mode, label, cwd });
 /** Lo mismo para los agentes que solo hablan MCP por stdio: el adaptador de trex y el token para su entorno. */
-export const browserBridgeMcpStdio = (session: string, mode: string): Promise<{ command: string; args: string[]; token: string; mode: string } | null> =>
-  invoke("browser_bridge_mcp_stdio", { session, mode });
+export const browserBridgeMcpStdio = (session: string, mode: string, label?: string, cwd?: string): Promise<{ command: string; args: string[]; token: string; mode: string } | null> =>
+  invoke("browser_bridge_mcp_stdio", { session, mode, label, cwd });
 export const browserBridgeSetMode = (session: string, mode: string): Promise<boolean> => invoke("browser_bridge_set_mode", { session, mode });
-/** A person's Trex Browser window without automation: personal, or an agent's closed space (sign-in). */
-export const trexBrowserOpen = (target: { cwd: string; profile: string } | null, url?: string): Promise<{opened: boolean; reason?: string; reused?: boolean}> =>
-  invoke("trex_browser_open", {cwd: target?.cwd ?? null, profile: target?.profile ?? null, url: url ?? null});
-export type BrowserEngineChoice = "auto" | "trex" | "chrome";
-/** Read (or set) which browser opens for agents: Trex Browser or the system Chrome. */
-export const trexBrowserEngine = (engine?: BrowserEngineChoice): Promise<{engine: BrowserEngineChoice; engines: {trex: boolean; chrome: boolean}; active: string | null}> =>
-  invoke("trex_browser_engine", {engine: engine ?? null});
-/** Gives Trex Browser the app's resolved look (tone, accent, light/dark); it follows it live. */
-export const trexBrowserTheme = (theme: import("./browserTheme").BrowserTheme): Promise<boolean> => invoke("trex_browser_theme", {theme});
-/** Folders (besides the project) where full-mode agents may save downloads. */
-export const trexBrowserSaveFolders = (action: "list" | "add" | "remove" = "list", folder?: string): Promise<{folders: string[]}> =>
-  invoke("trex_browser_save_folders", {action, folder: folder ?? null});
-/** Host-only: bring a space's Trex Browser window to the front (optionally on one tab). */
-export const trexBrowserFocus = (cwd: string, profile: string, tabId?: string): Promise<{focused: boolean; reason?: string}> =>
-  invoke("trex_browser_focus", {cwd, profile, tabId: tabId ?? null});
-/** Resolve a host-owned identity before creating any model grant; never take over another profile. */
-export async function trexBrowserResolveSpace(cwd: string, options: BrowserOptions, knownStatus?: BrowserStatus): Promise<BrowserOptions> {
-  const base = {enabled: options.enabled, clientId: options.clientId, profile: options.profile};
-  if (!options.enabled || !options.automatic) return base;
-  const status = knownStatus ?? await trexBrowserStatus();
-  if (!status.installed || !status.ready || !status.compatible) return {...base,enabled:false};
-  if (!status.capabilities?.spaces) throw new Error("Actualiza Trex Browser para habilitar un espacio independiente por agente.");
-  const result = await trexBrowserSpaces(cwd,[{clientId:options.clientId,label:browserSpaceLabel(options.label ?? "Agente")}]);
-  const space = result?.spaces?.[0];
-  if (result?.spaces?.length !== 1 || space?.clientId !== options.clientId || !validBrowserProfile(space.profile) || space.profile === "BROWSER1")
-    throw new Error("No se pudo confirmar el espacio independiente de este agente. No se usará un perfil compartido.");
-  return {...base,profile:space.profile};
-}
-export const trexBrowserCreateProfile = (cwd: string, profile: string): Promise<{ profiles: BrowserProfile[] }> => invoke("trex_browser_create_profile", { cwd, profile });
+/** El chat se cerró: pierde el acceso y su grupo de pestañas queda en gris y sin dueño. */
+export const browserBridgeEndSession = (session: string): Promise<boolean> => invoke("browser_bridge_end_session", { session });
+/** Lo que dejó en este equipo el antiguo Trex Browser (perfiles con sesiones iniciadas, caché…). */
+export type LegacyBrowserStatus = {
+  found: boolean; bytes: number; running: boolean;
+  items: { label: string; path: string; bytes: number }[];
+  /** Desinstalador del Trex Browser instalado aparte, si lo hay. */
+  standaloneUninstaller: string | null;
+};
+export const legacyBrowserStatus = (): Promise<LegacyBrowserStatus> => invoke("legacy_browser_status");
+/** Cierra el antiguo navegador si sigue abierto y borra sus datos; devuelve lo que quedó. */
+export const legacyBrowserRemove = (): Promise<LegacyBrowserStatus> => invoke("legacy_browser_remove");
+export const legacyBrowserUninstallStandalone = (): Promise<void> => invoke("legacy_browser_uninstall_standalone");
 
 export const agentTeamOpen = (team: import("./agentTeam").AgentTeam, cwd: string, resume = false): Promise<import("./agentTeam").TeamSnapshot> => invoke("agent_team_open", {
     id: team.id, epoch: team.epoch, cwd, resume, coordinatorCanWrite: team.master.canWrite,

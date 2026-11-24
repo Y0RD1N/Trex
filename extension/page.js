@@ -1,4 +1,4 @@
-// Lo que la extensión ejecuta DENTRO de una pestaña del grupo «trex».
+// Lo que la extensión ejecuta DENTRO de una pestaña compartida con un chat.
 //
 // Estas funciones se serializan con `toString()` y se evalúan en un mundo aislado de la
 // página (sus scripts no las ven ni pueden tocarlas), así que no pueden usar nada de
@@ -107,20 +107,122 @@ export function ensureClicked() {
   return "directo";
 }
 
-/** Pone el foco en un campo antes de escribir en él. */
+/**
+ * Pone el foco en un campo antes de escribir en él y selecciona lo que ya tiene, para que
+ * lo escrito lo sustituya. `null` si la referencia ya no existe.
+ */
 export function focusRef(ref) {
   const element = globalThis.__trexRefs?.get(ref);
   if (!element || !element.isConnected) return null;
   element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
   element.focus();
-  if (typeof element.select === "function" && element.tagName !== "SELECT") { try { element.select(); } catch { /* campos sin selección */ } }
-  return { password: element.tagName === "INPUT" && element.type === "password" };
+  if (typeof element.select === "function" && element.tagName !== "SELECT") {
+    try { element.select(); } catch { /* campos sin selección */ }
+  } else if (element.isContentEditable) {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  return true;
 }
 
-/** El campo con el foco, por si se escribe sin referencia. */
-export function activePassword() {
-  const element = document.activeElement;
-  return !!element && element.tagName === "INPUT" && element.type === "password";
+/**
+ * Cómo es un campo: qué clase de control es y lo que hace falta para saber si lo debe
+ * rellenar la persona (tipo, autocomplete, nombre, etiqueta). Sin `ref`, el que tiene el foco.
+ * Nunca devuelve lo que hay escrito.
+ */
+export function fieldInfo(ref) {
+  let element = ref === null ? document.activeElement : globalThis.__trexRefs?.get(ref);
+  // El foco puede estar dentro de un componente con su propio DOM (shadow DOM abierto).
+  while (ref === null && element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
+  if (!element || !element.isConnected || element === document.body || element === document.documentElement) return null;
+  const tag = element.tagName.toLowerCase();
+  const type = tag === "input" ? String(element.type || "text").toLowerCase() : "";
+  // Dentro de un marco no se ve qué campo tiene el foco: puede ser una contraseña.
+  const kind = ["iframe", "frame", "object", "embed"].includes(tag) ? "frame"
+    : tag === "select" ? "select"
+    : tag === "textarea" ? "text"
+    : tag === "input" ? (type === "checkbox" || type === "radio" ? "check" : type === "file" ? "file"
+      : ["date", "time", "datetime-local", "month", "week", "range", "color"].includes(type) ? "value"
+      : ["submit", "button", "reset", "image", "hidden"].includes(type) ? "other" : "text")
+    : element.isContentEditable ? "text" : "other";
+  const cut = value => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  return {
+    tag, type, kind,
+    name: cut(element.getAttribute("name")), id: cut(element.id), autocomplete: cut(element.getAttribute("autocomplete")),
+    label: cut(element.labels?.[0]?.innerText || element.getAttribute("aria-label")), placeholder: cut(element.getAttribute("placeholder")),
+    checked: !!element.checked, multiple: !!element.multiple, disabled: !!element.disabled || element.getAttribute("aria-disabled") === "true",
+    readOnly: !!element.readOnly,
+    options: tag === "select" ? [...element.options].slice(0, 500).map(option => ({ value: option.value, text: cut(option.text), disabled: option.disabled })) : [],
+  };
+}
+
+/** Fechas, horas, rangos y colores: no se escriben tecla a tecla, se les da el valor. */
+export function setValue(ref, value) {
+  const element = globalThis.__trexRefs?.get(ref);
+  if (!element || !element.isConnected) return null;
+  element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  element.focus();
+  element.value = value;
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+  return element.value === value;
+}
+
+/**
+ * Marca o desmarca una casilla, o marca un botón de opción, con un clic de verdad (así la
+ * página se entera como si lo hiciera la persona). Devuelve cómo quedó, o «radio» si se
+ * pidió desmarcar un botón de opción, que solo se desmarca eligiendo otro.
+ */
+export function setChecked(ref, checked) {
+  const element = globalThis.__trexRefs?.get(ref);
+  if (!element || !element.isConnected) return null;
+  if (element.checked === checked) return checked;
+  if (!checked && element.type === "radio") return "radio";
+  element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  element.click();
+  return element.checked;
+}
+
+/** Elige la opción `index` de un `<select>` y avisa a la página. Devuelve su texto. */
+export function chooseOption(ref, index) {
+  const element = globalThis.__trexRefs?.get(ref);
+  if (!element || !element.isConnected || element.tagName !== "SELECT" || !element.options[index]) return null;
+  element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  element.focus();
+  element.selectedIndex = index;
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+  return String(element.options[index].text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+/**
+ * Para wait_for: si ya se cumple la condición (un texto en la página, o un elemento por
+ * referencia o selector que se ve). «selector-no-valido» si el selector no se entiende.
+ */
+export function probe(kind, value) {
+  const shown = element => {
+    if (!element || !element.isConnected) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return false;
+    const style = getComputedStyle(element);
+    return style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) !== 0;
+  };
+  if (kind === "text") return (document.body?.innerText ?? "").replace(/\s+/g, " ").includes(value.replace(/\s+/g, " "));
+  if (kind === "ref") return shown(globalThis.__trexRefs?.get(value));
+  try {
+    return shown(document.querySelector(value));
+  } catch {
+    return "selector-no-valido";
+  }
+}
+
+/** El elemento de una referencia, tal cual (para upload_file, que lo necesita como objeto). */
+export function refElement(ref) {
+  const element = globalThis.__trexRefs?.get(ref);
+  return element && element.isConnected ? element : null;
 }
 
 export function scrollPage(direction) {

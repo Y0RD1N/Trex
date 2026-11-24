@@ -6,8 +6,9 @@
 //! lo que haya lanzado. El cierre normal de una sesión sigue siendo el de
 //! `agent.rs`; esto solo cubre lo que antes quedaba huérfano.
 //!
-//! El job permite a un proceso salirse si lo pide al crearse: Trex Browser
-//! lanza así su servicio, que debe seguir vivo para otras sesiones.
+//! El job deja salir a un proceso que lo pide expresamente al crearse
+//! (`CREATE_BREAKAWAY_FROM_JOB`): sin ese permiso Windows rechaza ese arranque
+//! con «acceso denegado» y el programa que lo intenta falla en vez de seguir.
 //!
 //! En Linux y macOS no hay un equivalente fiable (la señal de «padre muerto»
 //! de Linux sigue al hilo que lanzó el proceso, no a la app), así que allí se
@@ -176,7 +177,7 @@ mod tests {
 
     #[test]
     fn the_job_kills_on_close_and_lets_a_process_leave_when_it_asks_to() {
-        // Trex Browser starts its service with "break away from job" from inside an assistant;
+        // A tool an assistant runs may start a daemon with "break away from job";
         // Windows refuses that launch unless the job allows it.
         let job = Job::new().unwrap();
         assert_eq!(job.limit_flags().unwrap() & (KILL_ON_JOB_CLOSE | BREAKAWAY_OK), KILL_ON_JOB_CLOSE | BREAKAWAY_OK);

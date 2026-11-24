@@ -100,7 +100,7 @@
 .agent-link[aria-expanded] > svg { transform: rotate(90deg); transition: transform var(--dur) var(--ease-out); }
 .agent-link[aria-expanded="true"] > svg { transform: rotate(-90deg); }
 .agent-link:disabled { opacity: .5; cursor: default; }
-.agent-link:focus-visible, .agent-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.agent-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 
 /* --- Menús desplegables ---------------------------------------------------------- */
 .context-menu.select-menu.workflow-select-menu { width: max(240px, var(--select-width)); max-width: min(420px, var(--floating-max-width, calc(100vw - 24px))); max-height: min(300px, var(--floating-max-height, calc(100dvh - 24px))); padding: var(--sp-1-5); border-radius: var(--radius-xl); overscroll-behavior: contain; }

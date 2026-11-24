@@ -42,28 +42,11 @@ jobs:
       # is a mitigation, not a proven cause: if it still flakes, look at the stalls themselves.
       - name: Trex CLI tests
         run: cargo +stable test --locked --manifest-path trex-cli/Cargo.toml -- --test-threads=${{ runner.os == 'Windows' && 2 || 4 }}
-      - name: Browser launcher tests
-        run: cargo +stable test --locked --manifest-path trex-browser/Cargo.toml
-      - name: Browser worker dependencies
-        run: npm ci --prefix trex-browser --ignore-scripts --no-audit --no-fund
-      - name: Browser policy and MCP tests
-        run: node --test trex-browser/tests/security.test.mjs trex-browser/tests/availability.test.mjs trex-browser/tests/mcp-compatibility.test.mjs
       - name: Installer process lifecycle tests
         if: runner.os == 'Windows'
         run: pwsh -NoProfile -File scripts/test-installer-process-lifecycle.ps1
       - name: Prepare native CLI resource
         run: npm run cli:build -- --debug
-      # Electron downloads its binary on first use, not on install.
-      - name: Download the pinned Electron for the Trex Browser shell
-        if: runner.os == 'Windows'
-        run: |
-          npm ci --prefix trex-browser/shell --no-audit --no-fund
-          node trex-browser/shell/node_modules/electron/install.js
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-      - name: Prepare native Windows Browser resources
-        if: runner.os == 'Windows'
-        run: npm run browser:build -- --debug
       - name: Native backend tests
         if: runner.os != 'Windows'
         run: cargo +stable test --locked --manifest-path src-tauri/Cargo.toml --lib
@@ -99,13 +82,9 @@ jobs:
           npm ci
           npm test
           npm run build
-      - name: CLI and native Browser tests
+      - name: CLI tests
         working-directory: /tmp/trex-fedora-ci
-        run: |
-          cargo test --locked --manifest-path trex-cli/Cargo.toml -- --test-threads=4
-          cargo test --locked --manifest-path trex-browser/Cargo.toml
-          npm ci --prefix trex-browser --ignore-scripts --no-audit --no-fund
-          node --test trex-browser/tests/security.test.mjs trex-browser/tests/availability.test.mjs trex-browser/tests/mcp-compatibility.test.mjs
+        run: cargo test --locked --manifest-path trex-cli/Cargo.toml -- --test-threads=4
       - name: Accessibility engine with real GTK 3 and GTK 4 apps (isolated virtual desktop)
         working-directory: /tmp/trex-fedora-ci
         run: scripts/a11y-linux-session.sh
@@ -114,21 +93,15 @@ jobs:
         run: |
           npm run cli:build -- --debug
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
-      - name: Build Fedora RPM with private Browser runtime
+      - name: Build Fedora RPM
         working-directory: /tmp/trex-fedora-ci
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-        run: |
-          npm ci --prefix trex-browser/shell --no-audit --no-fund
-          node trex-browser/shell/node_modules/electron/install.js
-          npm run tauri -- build --bundles rpm
-      - name: Verify installed RPM and app runtime discovery
+        run: npm run tauri -- build --bundles rpm
+      - name: Verify installed RPM
         working-directory: /tmp/trex-fedora-ci
         run: |
           rpm -Uvh --nodeps src-tauri/target/release/bundle/rpm/*.rpm
           /usr/bin/trex-agent --version
-          /usr/bin/trex-browser doctor --json
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib trex_browser::tests::installed_linux_rpm_runtime_passes_app_preflight -- --exact --ignored
+          test ! -e /usr/bin/trex-browser
           ldd /usr/bin/trex > /tmp/trex-libraries.txt
           if grep -q 'not found' /tmp/trex-libraries.txt; then cat /tmp/trex-libraries.txt; exit 1; fi
       - uses: actions/upload-artifact@v4

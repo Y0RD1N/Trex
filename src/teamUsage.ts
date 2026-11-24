@@ -4,7 +4,7 @@
  * semana). Leer la cuota de una cuenta no envía mensajes al modelo.
  */
 import { refreshAccount } from "./accountUsageStore";
-import { teamMemberUsesBrowser, type AgentTeam, type TaskUsage, type TeamMember } from "./agentTeam";
+import type { AgentTeam, TaskUsage, TeamMember } from "./agentTeam";
 import { contextPercent, type ChatState } from "./chatState";
 import { accountUsageWindows, type PlanUsage } from "./planUsage";
 import { addUsageTotals, EMPTY_USAGE, subtractApiUsage, subtractUsageTotals, usageTotals, type ApiUsage } from "./tokenUsage";
@@ -91,10 +91,10 @@ export function teamUsageView(team: AgentTeam, states: Record<string, ChatState>
 export type TeamUsageReport = {
   epoch: string;
   budget: { teamTokens?: number; memberTokens?: number };
-  members: { memberId: string; coordinator: boolean; usage: TaskUsage; contextPercent?: number; browser?: boolean;
+  members: { memberId: string; coordinator: boolean; usage: TaskUsage; contextPercent?: number;
     account?: { key: string; label: string; fiveHour?: QuotaWindowView; week?: QuotaWindowView; blocked: boolean } }[];
 };
-export function teamUsageReport(team: AgentTeam, view: TeamUsageView, browserEnabled: boolean): TeamUsageReport {
+export function teamUsageReport(team: AgentTeam, view: TeamUsageView): TeamUsageReport {
   const budget = team.budget ?? null;
   return {
     epoch: team.epoch,
@@ -103,7 +103,6 @@ export function teamUsageReport(team: AgentTeam, view: TeamUsageView, browserEna
       const entry = view.members[member.id], quota = entry?.quota;
       return { memberId: member.id, coordinator: member.id === team.master.id, usage: entry?.usage ?? EMPTY_USAGE,
         ...(entry?.contextPercent != null ? { contextPercent: Math.round(entry.contextPercent) } : {}),
-        ...(browserEnabled ? { browser: teamMemberUsesBrowser(member) } : {}),
         ...(quota ? { account: { key: /^[A-Za-z0-9_-]{1,100}$/.test(quota.key) ? quota.key : "", label: quota.label.slice(0, 120),
           ...(quota.fiveHour ? { fiveHour: quota.fiveHour } : {}), ...(quota.week ? { week: quota.week } : {}), blocked: quota.blocked } } : {}) };
     }),

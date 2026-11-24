@@ -30,7 +30,7 @@ de proceso comprueban el mensaje de sistema y el catálogo que llega al proveedo
 simulado, además de los límites, la restauración y los permisos. El modo de chat
 de terminal también contiene guía básica para sus herramientas anunciadas.
 
-La guía distingue control de Windows/escritorio, Trex Browser y los CLI de GitHub,
+La guía distingue control de Windows/escritorio, «Tu navegador» y los CLI de GitHub,
 Blender e HyperFrames. Las herramientas de escritorio requieren activación en
 Ajustes para un chat nuevo. El catálogo del modo plan excluye entrada; Trex API
 excluye entrada si no se ha confirmado visión del modelo. Recibir el catálogo y

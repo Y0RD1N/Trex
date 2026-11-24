@@ -1,4 +1,5 @@
-// La ventanita del botón de la extensión: emparejar con trex y compartir la pestaña actual.
+// La ventanita del botón de la extensión: emparejar con trex y compartir la pestaña actual
+// (con cualquier chat, en el grupo común «trex», o con uno concreto que ya tenga grupo).
 const $ = id => document.getElementById(id);
 const STATES = {
   "sin-emparejar": "Sin emparejar",
@@ -30,16 +31,26 @@ function render(view) {
     return;
   }
   const { tab } = view;
+  const where = tab?.where ?? "fuera";
+  const shared = where !== "fuera";
   const share = $("share");
-  share.disabled = !tab || (!tab.shared && !tab.shareable);
-  share.classList.toggle("is-shared", !!tab?.shared);
-  share.textContent = tab?.shared ? "Dejar de compartir esta pestaña" : "Compartir esta pestaña con trex";
+  share.disabled = !tab || (!shared && !tab.shareable);
+  share.classList.toggle("is-shared", shared);
+  share.textContent = shared ? "Dejar de compartir esta pestaña" : "Compartir esta pestaña";
   share.dataset.tab = tab?.id ?? "";
-  share.dataset.shared = tab?.shared ? "1" : "";
-  $("share-note").textContent = tab?.shared
-    ? "Los agentes de trex pueden verla y manejarla, con tu sesión iniciada en este sitio."
+  share.dataset.shared = shared ? "1" : "";
+  // Con quién: el grupo común (cualquier chat puede tomarla) o un chat que ya tenga grupo.
+  const chats = view.chats ?? [];
+  const target = $("target");
+  const previous = target.value;
+  target.replaceChildren(new Option("Cualquier chat (grupo común «trex»)", ""), ...chats.map(chat => new Option(`Solo ${chat.title}`, chat.owner)));
+  target.value = chats.some(chat => chat.owner === previous) ? previous : "";
+  $("target-row").hidden = shared || !tab?.shareable || !chats.length;
+  $("share-note").textContent = where === "chat"
+    ? `La está usando el chat «${tab.group}». Solo ese chat puede verla y manejarla, con tu sesión iniciada en este sitio.`
+    : where === "comun" ? "Está en el grupo común «trex»: el primer chat que la use se la queda y pasa a su grupo, con tu sesión iniciada en este sitio."
     : tab && !tab.shareable ? "Esta página no se puede compartir (solo sitios web)."
-    : "Los agentes solo alcanzan las pestañas del grupo «trex».";
+    : "Cada chat solo alcanza su grupo «trex · …» y las pestañas que le compartas.";
   $("count").textContent = view.sharedCount === 1 ? "1 pestaña compartida" : `${view.sharedCount} pestañas compartidas`;
   $("retry").hidden = view.state !== "sin-trex";
 }
@@ -59,7 +70,8 @@ $("pair-form").addEventListener("submit", event => {
 });
 $("share").addEventListener("click", () => {
   const tabId = Number($("share").dataset.tab);
-  if (tabId) void refresh({ type: $("share").dataset.shared ? "unshare" : "share", tabId });
+  if (!tabId) return;
+  void refresh($("share").dataset.shared ? { type: "unshare", tabId } : { type: "share", tabId, owner: $("target").value || null });
 });
 $("retry").addEventListener("click", () => void refresh({ type: "retry" }));
 $("unpair").addEventListener("click", () => void refresh({ type: "unpair" }));

@@ -30,7 +30,7 @@ export default defineConfig(() => ({
       //    Agent worktrees under .claude/ hold whole copies of the repo (their own
       //    tsconfig and vite.config): a change there restarted this server and left
       //    the window blank.
-      ignored: ["**/src-tauri/**", "**/trex-cli/**", "**/trex-browser/**", "**/.clipboard-qa.local/**", "**/.claude/**"],
+      ignored: ["**/src-tauri/**", "**/trex-cli/**","**/.clipboard-qa.local/**", "**/.claude/**"],
     },
   },
 

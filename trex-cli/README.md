@@ -129,37 +129,34 @@ and gradual drag are supported. `desktop_wait` uses milliseconds, up to 10000.
 `desktop-doctor --json` checks availability without a profile, capture or input;
 the desktop app displays this diagnostic in Settings → Integrations.
 
-Optional Trex Browser integration is explicitly enabled per app-server session:
-`session/start` accepts `browser:{enabled:true,profile:"BROWSER1",clientId:"stable-tab-or-room-id"}`.
-Omission keeps browser tools off, including after restore. The CLI discovers a
-compatible fixed sibling executable or the per-user standalone installation;
-it never searches `PATH`, installs components, starts a browser during probing,
-or changes models automatically. Native tools continue working when the optional
-component is absent. Plan, ask, and full map to broker observe, QA, and full
-policy respectively, with existing approval and recovery rules preserved.
+The person's own browser («Tu navegador») is optional: the Trex extension in
+their Chrome, Brave or Edge, reached through the app's local bridge (MCP over
+HTTP). Trex starts this CLI with `TREX_CHROME_URL` (`http://127.0.0.1:<port>/mcp`)
+and `TREX_CHROME_TOKEN` (the chat's token) when the feature is on for that chat;
+without both there are no browser tools. The bridge's tools reach the model as
+`browser_tabs_list`, `browser_read_page`, `browser_screenshot`,
+`browser_navigate`, `browser_click`… Plan mode only gets the reading tools
+(`tabs_list`, `read_page`, `screenshot`, `wait_for`),
+ask mode asks before every other one, and the bridge checks the chat's mode as
+well. The token only travels in the `Authorization` header: never in errors,
+events, the journal, the model's requests or shell commands. If the bridge does
+not answer at startup, `session/start` returns `chromeEnabled:false` and
+`trex_chrome` in `unavailableMcpServers`, and native tools keep working. A
+disconnected extension or an expired token is an ordinary tool error; an action
+whose answer is lost stops the turn for review and is never replayed.
 
 Screenshot results retain private artifact references in conversation history.
 Only a selected model whose catalog metadata or exact documented official
 MiniMax capability accepts image input gets verified image bytes in its outgoing
-request. Unknown and text-only models get
-DOM/log tools and artifact metadata with an explicit omission note. Restoring or
-switching models reprojects the saved references; missing images never cause
-the tool to repeat. Videos remain opaque broker artifact references. See the
-protocol for artifact/event fields and operation cancellation semantics.
+request. Unknown and text-only models get the page text and artifact metadata
+with an explicit omission note. Restoring or switching models reprojects the
+saved references; missing images never cause the tool to repeat. See the
+protocol for artifact/event fields.
 
-The model reads one lean copy of each browser/MCP result: Trex Browser
-envelopes become the same agent view MCP clients get (`ok`, the result data,
-`revision`, `error`) plus compact artifact references, and a text block that only
-repeats `structuredContent` is dropped. Receipts, operation/project IDs, hashes
-and provenance stay in the journal, `tool/result` events and the UI. Results over
-48 KiB keep their head and tail. Agent screenshots default to JPEG quality 70
-unless the model asks for `type`. Advanced browser tools are grouped
-(`browser_devtools`: evaluate, mocking, emulation, frames, bodies, hover, drag,
-mouse, uploads; `browser_capture`: video, traces, profiles, heap, artifacts;
-`browser_session`: pause, takeover, cancel) and are only advertised after the
-model calls `enable_tools({group})`. Enabled groups are appended to the end of
-the tool list, persisted in the conversation and restored with it; deferred
-tools remain callable within the session policy.
+The model reads one lean copy of each browser/MCP result: a text block that only
+repeats `structuredContent` is dropped, structured results arrive as `{result}`
+with compact artifact references, and hashes and provenance stay in the journal,
+`tool/result` events and the UI. Results over 48 KiB keep their head and tail.
 
 Servers and watches can use `shell({command,background:true})`. They remain
 available between model turns; `process_list`, `process_output`, and
@@ -373,7 +370,7 @@ Image delivery still requires model vision support. PDFs need text/image convers
 ```
 trex-agent --profile NAME exec "Review the project" --mode plan --json
 trex-agent --profile NAME exec --file task.txt --mode full --settings limits.json
-trex-agent --profile NAME chat --browser --browser-profile BROWSER1 --desktop
+trex-agent --profile NAME chat --desktop
 ```
 
 `exec` also accepts piped text. JSON emits newline-delimited protocol events.

@@ -18,7 +18,7 @@ const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => Obje
 const modelOptions = [{ id: "model", type: "select", category: "model", currentValue: "account-model", options: [{ value: "account-model", name: "Account model" }, { value: "other-model", name: "Other model" }] }];
 
 function harness(t, extra = {}) {
-  const slots = [], effects = [], writes = [], acks = [], connections = [], mcpQueries = [];
+  const slots = [], effects = [], writes = [], acks = [], connections = [], mcpQueries = [], chromeCalls = [];
   let cursor = 0, serial = 0, session, queueId;
   let receipt = extra.receipt ?? null;
   const hooks = {
@@ -74,14 +74,14 @@ function harness(t, extra = {}) {
   };
   const exports = {};
   compile(name => name === "react" ? hooks : name === "../api" ? api : name === "../antigravityConnection" ? { openAntigravity: open }
-    : name === "../browserConnection" ? { chromeAvailable: () => false, connectChromeStdio: async () => null, connectBrowser: async options => options?.enabled ? { command: "browser", args: ["--client", options.clientId, "--profile", options.profile] } : null }
+    : name === "../browserConnection" ? { chromeAvailable: () => !!extra.chrome, connectChromeStdio: async (...args) => { chromeCalls.push(args); return extra.chrome?.(args[0]) ?? null; } }
       : name === "../apps" ? { ...deps[name], ...extra.apps } : name === "./chatSession" ? { localId: () => `local-${++serial}` } : name === "./useMessageQueue" ? { useMessageQueue: id => { queueId = id; return queue; } }
         : deps[name] ?? (() => { throw Error(`Unexpected hook import: ${name}`); })(), exports);
   const options = { sessionId: "tab-one", cwd: "C:/project", command: "antigravity-acp", args: "", shell: "", env: null, conversationId: null, mode: null, visible: false, onRunning() {}, onExit() {}, ...extra.options };
   const render = () => { cursor = 0; session = exports.useAntigravityChat(options); for (const effect of effects.splice(0)) effect(); return session; };
   const dispose = () => { for (const slot of slots) slot?.cleanup?.(); };
   t.after(dispose); render();
-  return { writes, acks, connections, mcpQueries, options, dispose, render,
+  return { writes, acks, connections, mcpQueries, chromeCalls, options, dispose, render,
     get session() { return render(); }, get state() { return render().state; }, get queueId() { return queueId; },
     async start() { await render().start(); render(); },
     async complete(result = { stopReason: "end_turn" }) { const request = writes.findLast(w => w.method === "session/prompt"), entry = connections[request.generation]; respond(entry, request, result); await tick(); render(); },
@@ -90,12 +90,13 @@ function harness(t, extra = {}) {
   };
 }
 test("Antigravity starts without inference and binds only the selected chat's tools", async t => {
-  const h = harness(t, { options: { browser: { enabled: true, clientId: "client-a", profile: "BROWSER4" }, desktopEnabled: true } }); await h.start();
+  const h = harness(t, { options: { desktopEnabled: true } }); await h.start();
   assert.equal(h.writes.some(w => w.method === "session/prompt"), false);
   const servers = h.writes.find(w => w.method === "session/new").params.mcpServers;
-  assert.deepEqual(servers.map(s => s.name), ["trex_inbox", "trex_browser", "trex_desktop"]);
+  assert.deepEqual(servers.map(s => s.name), ["trex_inbox", "trex_desktop"]);
   assert.deepEqual(h.mcpQueries, [{ id: "t-tab-one", tasksOnly: true }]);
-  assert.deepEqual(servers[1].args, ["--client", "client-a", "--profile", "BROWSER4"]);
+  assert.deepEqual(servers[1].args, ["mcp"]);
+  assert.deepEqual(h.chromeCalls, [], "without Your browser nothing is requested");
   assert.deepEqual(h.session.modes.map(m => m.value), ["ask"]);
 });
 
@@ -200,12 +201,19 @@ test("Send-now waits for the cancelled turn before issuing its replacement", asy
   assert.deepEqual(h.writes.filter(w => w.method === "session/prompt").map(w => w.params.prompt.at(-1).text), ["Old", "Replacement"]);
   await h.complete(); assert.equal(h.state.lastCompletion.status, "completed");
 });
-test("Two simultaneous chats isolate their browser bindings, queues, updates and cancellation", async t => {
-  const a = harness(t, { options: { sessionId: "one", browser: { enabled: true, clientId: "client-one", profile: "BROWSER5" } } });
-  const b = harness(t, { options: { sessionId: "two", browser: { enabled: true, clientId: "client-two", profile: "BROWSER6" } } });
+test("Two simultaneous chats isolate their browser sessions, queues, updates and cancellation", async t => {
+  const chrome = session => ({ command: "C:/Trex/trex.exe", args: ["--trex-chrome-mcp", session], token: "token-" + session, env: { TREX_CHROME_TOKEN: "token-" + session } });
+  const a = harness(t, { chrome, options: { sessionId: "one", chatLabel: "Antigravity · Uno" } });
+  const b = harness(t, { chrome, options: { sessionId: "two", chatLabel: "Antigravity · Dos" } });
   await Promise.all([a.start(), b.start()]); await Promise.all([a.session.send("One", [], []), b.session.send("Two", [], [])]);
   assert.notEqual(a.queueId, b.queueId);
-  assert.notDeepEqual(a.writes.find(w => w.method === "session/new").params.mcpServers[1].args, b.writes.find(w => w.method === "session/new").params.mcpServers[1].args);
+  // Each chat asks for its own session, named after it (its tab group) and limited to its project for uploads.
+  assert.deepEqual(a.chromeCalls.map(call => [call[0], call[4]]), [["one", { label: "Antigravity · Uno", cwd: "C:/project" }]]);
+  assert.deepEqual(b.chromeCalls.map(call => [call[0], call[4]]), [["two", { label: "Antigravity · Dos", cwd: "C:/project" }]]);
+  const chromeOf = h => h.writes.find(w => w.method === "session/new").params.mcpServers.find(server => server.name === "trex_chrome");
+  assert.deepEqual(chromeOf(a).env, [{ name: "TREX_CHROME_TOKEN", value: "token-one" }]);
+  assert.deepEqual(chromeOf(b).env, [{ name: "TREX_CHROME_TOKEN", value: "token-two" }]);
+  assert.ok(!chromeOf(a).args.includes("token-one"), "the token stays out of the command line");
   a.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Only one" } });
   assert.equal(b.state.items.some(i => i.text === "Only one"), false);
   a.session.interrupt(); await tick(); assert.equal(b.writes.some(w => w.method === "session/cancel"), false);
@@ -265,13 +273,10 @@ test("a failed first prompt carries the context again on the next one", async t 
   await h.session.send("Reintento", [], []); await h.complete();
   assert.deepEqual(contextPrompts(h), [true, true]);
 });
-test("browser guidance enters the context only when a browser is attached", async t => {
+test("the context stays compact and never mentions the removed Trex Browser", async t => {
   const plain = harness(t); await plain.start(); await plain.session.send("Hola", [], []);
   const text = plain.writes.find(w => w.method === "session/prompt").params.prompt[0].text;
   assert.doesNotMatch(text, /Trex Browser|browser_navigate/);
   assert.ok(Buffer.byteLength(text) < 2_000, `compact context (${Buffer.byteLength(text)} B)`);
   await plain.complete();
-  const attached = harness(t, { options: { browser: { enabled: true, clientId: "client-b", profile: "BROWSER2" } } }); await attached.start(); await attached.session.send("Hola", [], []);
-  assert.match(attached.writes.find(w => w.method === "session/prompt").params.prompt[0].text, /browser_navigate/);
-  await attached.complete();
 });

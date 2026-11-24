@@ -23,16 +23,17 @@ const MAX_PIXELS: u64 = 64_000_000;
 const MAX_DECODED_BYTES: u64 = MAX_PIXELS * 8;
 const OMITTED: &str = "[image payload omitted; use artifact metadata]";
 
+/// Every artifact lives in this CLI's private store. A reference from an older
+/// journal with another storage no longer parses, so it is reported as
+/// unavailable and never fetched or recreated by repeating its tool.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ArtifactStorage {
     #[default]
     Local,
-    Broker,
 }
 
-/// A durable reference, never a path or URL. Broker references are metadata
-/// only: restoring history must not fetch them or repeat the originating tool.
+/// A durable reference, never a path or URL.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactRef {
@@ -84,8 +85,7 @@ fn normalize_at(
         match item.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(value) = item.get("text").and_then(Value::as_str) {
-                    // MCP servers (Trex Browser included) repeat structuredContent
-                    // as its JSON text. Keep one copy instead of a second,
+                    // MCP servers repeat structuredContent as its JSON text. Keep one copy instead of a second,
                     // escaped serialization inside the stored result.
                     if structured.is_some_and(|structured| {
                         value.trim_start().starts_with('{')
@@ -111,28 +111,6 @@ fn normalize_at(
             _ => text.push("Non-text tool content omitted from durable history.".to_owned()),
         }
     }
-    // Metadata-only diagnostics have broker identities, never local paths.
-    // A matching local image supersedes its broker metadata reference.
-    if let Some(metadata) = raw
-        .pointer("/structuredContent/artifacts")
-        .and_then(Value::as_array)
-    {
-        for item in metadata.iter().take(64) {
-            if let Some(reference) = broker_reference(item, &provenance, &payloads) {
-                if let Some(local) = artifacts.iter_mut().find(|local| {
-                    local.storage == ArtifactStorage::Local
-                        && local.sha256 == reference.sha256
-                        && local.mime_type == reference.mime_type
-                }) {
-                    // Preserve the broker identity for artifact-open UI even
-                    // when provider replay uses the locally verified bytes.
-                    local.provenance = reference.provenance;
-                } else {
-                    artifacts.push(reference);
-                }
-            }
-        }
-    }
     let mut normalized = json!({"text":text.join("\n"),"artifacts":artifacts});
     if let Some(structured) = raw.get("structuredContent") {
         normalized["structuredContent"] = scrub(structured, &payloads, 0);
@@ -141,85 +119,6 @@ fn normalize_at(
         normalized["isError"] = json!(is_error);
     }
     Ok(normalized)
-}
-
-fn broker_reference(item: &Value, provenance: &Value, payloads: &[&str]) -> Option<ArtifactRef> {
-    let id = item
-        .get("artifactId")
-        .or_else(|| item.get("id"))?
-        .as_str()?;
-    let mime = item.get("mimeType")?.as_str()?;
-    if id.is_empty()
-        || id.len() > 256
-        || !id
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':' | b'.'))
-    {
-        return None;
-    }
-    let mime_token = |token: &str| {
-        !token.is_empty()
-            && token
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&c))
-    };
-    if mime.len() > 128
-        || !mime
-            .split_once('/')
-            .is_some_and(|(kind, subtype)| mime_token(kind) && mime_token(subtype))
-    {
-        return None;
-    }
-    let sha256 = item.get("sha256").and_then(Value::as_str).unwrap_or("");
-    if !sha256.is_empty() && !valid_hash(sha256) {
-        return None;
-    }
-    let mut source = json!({"tool":provenance,"brokerArtifactId":id});
-    for field in ["projectId", "profile", "createdAt"] {
-        if let Some(value) = item.get(field) {
-            source[field] = scrub(value, payloads, 0);
-        }
-    }
-    Some(ArtifactRef {
-        id: id.to_owned(),
-        sha256: sha256.to_owned(),
-        mime_type: mime.to_owned(),
-        size_bytes: item
-            .get("bytes")
-            .or_else(|| item.get("sizeBytes"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        width: item
-            .get("width")
-            .and_then(Value::as_u64)
-            .and_then(|n| n.try_into().ok()),
-        height: item
-            .get("height")
-            .and_then(Value::as_u64)
-            .and_then(|n| n.try_into().ok()),
-        kind: item
-            .get("kind")
-            .and_then(Value::as_str)
-            .filter(|kind| {
-                !kind.is_empty()
-                    && kind.len() <= 64
-                    && kind
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
-            })
-            .unwrap_or_else(|| {
-                if mime.starts_with("video/") {
-                    "video"
-                } else if mime.starts_with("image/") {
-                    "image"
-                } else {
-                    "artifact"
-                }
-            })
-            .to_owned(),
-        storage: ArtifactStorage::Broker,
-        provenance: source,
-    })
 }
 
 fn collect_payloads<'a>(value: &'a Value, payloads: &mut Vec<&'a str>, depth: usize) {
@@ -233,7 +132,7 @@ fn collect_payloads<'a>(value: &'a Value, payloads: &mut Vec<&'a str>, depth: us
                 if (image && key == "data") || binary_field(key) {
                     if let Some(data) = field.as_str().filter(|s| s.len() >= 16) {
                         // Short malformed values cannot be screenshot bytes.
-                        // Bound tracking independently of the broker's shape.
+                        // Bound tracking independently of the server's shape.
                         if payloads.len() < 256 && !payloads.contains(&data) {
                             payloads.push(data);
                         }
@@ -303,7 +202,7 @@ fn scrub(value: &Value, payloads: &[&str], depth: usize) -> Value {
 }
 
 fn scrub_text(text: &str, payloads: &[&str]) -> String {
-    // Remove every data URL, including non-image duplicates in broker metadata.
+    // Remove every data URL, including non-image duplicates in structured metadata.
     // Require the scheme boundary and comma so ordinary "metadata:" survives.
     static DATA_URL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let source = DATA_URL
@@ -338,7 +237,7 @@ fn scrub_text(text: &str, payloads: &[&str]) -> String {
         }
     }
     clean.push_str(&source[cursor..]);
-    // Also catch a duplicate embedded in text when the broker accidentally
+    // Also catch a duplicate embedded in text when a server accidentally
     // supplies only structured content instead of a typed image block.
     static IMAGE_BASE64: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     IMAGE_BASE64
@@ -420,7 +319,7 @@ fn store_image(
 }
 
 /// Rehydrate a local reference for a transient provider request. The reference
-/// contributes only a validated hash; neither paths nor broker IDs are opened.
+/// contributes only a validated hash; no path or external ID is ever opened.
 pub fn image_data_url(reference: &ArtifactRef) -> Result<String> {
     let bytes = read_image_at(&crate::profile::home()?.join("artifacts"), reference)?;
     Ok(format!(
@@ -439,7 +338,7 @@ fn valid_hash(hash: &str) -> bool {
 
 fn read_image_at(directory: &Path, reference: &ArtifactRef) -> Result<Vec<u8>> {
     ensure!(
-        reference.storage == ArtifactStorage::Local && reference.kind == "image",
+        reference.kind == "image",
         "artifact is metadata only"
     );
     ensure!(
@@ -1236,73 +1135,16 @@ mod tests {
     }
 
     #[test]
-    fn metadata_only_video_refs_never_open_host_paths_or_broker_ids() {
-        let output = normalize_at(json!({"content":[{"type":"text","text":"Video recorded"}],"structuredContent":{"artifacts":[{"artifactId":"opaque-video-id","kind":"video","mimeType":"video/webm","bytes":12345,"sha256":"a".repeat(64),"projectId":"project","profile":"private","createdAt":"2026-10-24"}]}}), json!({"tool":"browser_record"}), &|| bail!("metadata must not access storage")).unwrap();
-        let reference: ArtifactRef =
-            serde_json::from_value(output["artifacts"][0].clone()).unwrap();
-        assert_eq!(reference.storage, ArtifactStorage::Broker);
-        assert_eq!(reference.kind, "video");
-        assert_eq!(reference.id, "opaque-video-id");
-        assert_eq!(reference.size_bytes, 12345);
-        assert_eq!(reference.provenance["projectId"], "project");
-        assert!(read_image_at(Path::new("must-not-be-opened"), &reference).is_err());
-    }
-
-    #[test]
-    fn trace_and_diagnostic_broker_metadata_keeps_mime_and_kind_without_host_reads() {
-        let output = normalize_at(json!({"content":[{"type":"text","text":"Diagnostics captured"}],"structuredContent":{"artifacts":[
-            {"artifactId":"trace-id","mimeType":"application/zip","kind":"trace","bytes":123,"sha256":"b".repeat(64)},
-            {"artifactId":"cpu-id","mimeType":"application/json","kind":"cpu-profile","bytes":456},
-            {"artifactId":"log-id","mimeType":"text/plain","bytes":789}
-        ]}}), json!({"tool":"browser_trace"}), &|| bail!("broker diagnostics must never open host storage")).unwrap();
-        let refs: Vec<ArtifactRef> = serde_json::from_value(output["artifacts"].clone()).unwrap();
-        assert_eq!(refs.len(), 3);
-        assert_eq!(
-            (refs[0].mime_type.as_str(), refs[0].kind.as_str()),
-            ("application/zip", "trace")
-        );
-        assert_eq!(
-            (refs[1].mime_type.as_str(), refs[1].kind.as_str()),
-            ("application/json", "cpu-profile")
-        );
-        assert_eq!(
-            (refs[2].mime_type.as_str(), refs[2].kind.as_str()),
-            ("text/plain", "artifact")
-        );
-        assert!(refs
-            .iter()
-            .all(|reference| reference.storage == ArtifactStorage::Broker));
-        assert!(refs
-            .iter()
-            .all(|reference| read_image_at(Path::new("must-not-open"), reference).is_err()));
-    }
-
-    #[test]
-    fn local_images_keep_matching_broker_identity_and_provenance() {
+    fn structured_artifact_metadata_is_not_a_reference_and_legacy_broker_refs_do_not_parse() {
+        // Only typed image content becomes an artifact: metadata never opens host storage.
+        let output = normalize_at(json!({"content":[{"type":"text","text":"Video recorded"}],"structuredContent":{"artifacts":[{"artifactId":"opaque-video-id","kind":"video","mimeType":"video/webm","bytes":12345}]}}), json!({"tool":"mcp_tool"}), &|| bail!("metadata must not access storage")).unwrap();
+        assert_eq!(output["artifacts"], json!([]));
+        assert_eq!(output["structuredContent"]["artifacts"][0]["artifactId"], "opaque-video-id");
+        let legacy = json!({"id":"opaque-video-id","sha256":"","mimeType":"video/webm","sizeBytes":12345,"kind":"video","storage":"broker","provenance":{}});
+        assert!(serde_json::from_value::<ArtifactRef>(legacy).is_err());
         let temp = tempfile::tempdir().unwrap();
-        let directory = temp.path().join("artifacts");
-        let hash = format!("{:x}", Sha256::digest(STANDARD.decode(PNG).unwrap()));
-        let output = normalized(
-            &directory,
-            json!({"content":[image()],"structuredContent":{"artifacts":[{"artifactId":"broker-screenshot-id","mimeType":"image/png","bytes":68,"sha256":hash,"width":1,"height":1,"kind":"image","projectId":"project","profile":"saved-profile","createdAt":"2026-10-24T00:00:00Z"}]}}),
-        );
-        assert_eq!(output["artifacts"].as_array().unwrap().len(), 1);
-        let reference: ArtifactRef =
-            serde_json::from_value(output["artifacts"][0].clone()).unwrap();
-        assert_eq!(reference.id, hash);
-        assert_eq!(reference.storage, ArtifactStorage::Local);
-        assert_eq!(
-            reference.provenance["brokerArtifactId"],
-            "broker-screenshot-id"
-        );
-        assert_eq!(reference.provenance["projectId"], "project");
-        assert_eq!(reference.provenance["profile"], "saved-profile");
-        assert_eq!(reference.provenance["createdAt"], "2026-10-24T00:00:00Z");
-        assert_eq!(reference.provenance["tool"]["toolCallId"], "screenshot-1");
-        assert_eq!(
-            STANDARD.encode(read_image_at(&directory, &reference).unwrap()),
-            PNG
-        );
+        let local = normalized(&temp.path().join("artifacts"), json!({"content":[image()]}));
+        assert_eq!(local["artifacts"][0]["storage"], "local");
     }
 
     #[test]

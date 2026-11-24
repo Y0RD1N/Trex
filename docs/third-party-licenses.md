@@ -1,9 +1,8 @@
 # Licencias de dependencias
 
 > Archivo generado con `node scripts/third-party-licenses.mjs`. No lo edites a mano:
-> vuelve a generarlo antes de cada release. Los componentes que se redistribuyen
-> aparte (Node, Electron, Playwright, ffmpeg…) están en
-> [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).
+> vuelve a generarlo antes de cada release. El resumen de lo que llevan los
+> instaladores está en [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).
 
 Una dependencia con varias licencias («`A OR B`») se puede usar con cualquiera de ellas.
 Los Cargo.lock incluyen los paquetes de todas las plataformas, así que esta lista es
@@ -66,9 +65,3 @@ un máximo: cada instalador lleva solo una parte.
 | `Apache-2.0 OR MIT` | 1 | `@tauri-apps/api` |
 | `BSD-3-Clause` | 1 | `highlight.js` |
 | `ISC` | 1 | `@ungap/structured-clone` |
-
-## npm — Trex Browser: worker (2 paquetes)
-
-| Licencia | Paquetes | Lista |
-|---|---:|---|
-| `Apache-2.0` | 2 | `playwright`, `playwright-core` |

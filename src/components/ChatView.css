@@ -2426,10 +2426,8 @@ pre.chat-ask-preview-body {
 .chat-attributed-message { min-width: 0; }
 
 .chat-browser-artifacts { display: flex; flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3) var(--sp-3) var(--sp-8); }
-.chat-browser-artifact { display: flex; align-items: center; gap: var(--sp-2); max-width: 100%; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); color: var(--text); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
-.chat-browser-artifact small { color: var(--text-muted); font-size: var(--fs-xs); }
-.chat-browser-artifact:hover:enabled { background: var(--hover); border-color: var(--border-strong); }
-.chat-browser-artifact:disabled { cursor: default; opacity: .65; }
+.chat-browser-artifact { display: flex; align-items: center; gap: var(--sp-2); max-width: 100%; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); color: var(--text-muted); font-size: var(--fs-sm); }
+.chat-browser-artifact small { color: var(--text-dim); font-size: var(--fs-xs); }
 
 /* --- Panel lateral: equipo, tareas y Git ------------------------------------
    Un solo panel con pestañas. Contraído, las pestañas flotan arriba a la

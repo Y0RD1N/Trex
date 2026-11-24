@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { load } from "./ts-loader.mjs";
-const deps = Object.fromEntries(await Promise.all(["chatState", "chatTimes", "autoCompact", "messageQueue", "trexChat", "chatTasks", "integrations", "accessibility", "sharedFiles"].map(async name => ["../" + name, await load(name)])));
+const deps = Object.fromEntries(await Promise.all(["chatState", "chatTimes", "autoCompact", "messageQueue", "trexChat", "chatTasks", "integrations", "accessibility", "sharedFiles", "browser"].map(async name => ["../" + name, await load(name)])));
 // Trex memory stays off (MEMORY_OFF): no native call and no wait before spawning.
 deps["../memory"] = (memory => ({ ...memory, loadMemory: async () => memory.MEMORY_OFF, loadedMemory: () => memory.MEMORY_OFF, syncMemorySoon: () => {} }))(await load("memory"));
 const source = await readFile(new URL("../src/hooks/useTrexChat.ts", import.meta.url), "utf8");
@@ -43,7 +43,7 @@ function harness(t, extra = {}) {
   compile(name => name === "react" ? hooks : name === "../api" ? { agentWrite: nativeWrite, formatError: e => e.message ?? String(e), messageQueueMcpConfig: mcpConfig }
     : name === "./chatSession" ? { useAgentProcess: (_, cb) => { handlers = cb; return agent; }, localId: () => `rpc-${++counter}` }
     : name === "./useMessageQueue" ? { useMessageQueue: () => queue }
-    : name === "../browserConnection" ? { chromeAvailable: () => !!extra.chrome, connectChromeStdio: async () => extra.chrome ?? null }
+    : name === "../browserConnection" ? { chromeAvailable: () => !!extra.chrome, connectChrome: async (...args) => { extra.chromeCalls?.push(args); return extra.chrome ?? null; } }
     : name === "../accessibility" && extra.accessibility ? { ...deps[name], ...extra.accessibility } : deps[name], exports, { randomUUID: () => `message-${++counter}` });
   const options = { sessionId: "tab", cwd: "D:/project", command: "trex-agent", args: "--profile TREX1", shell: "wsl", env: null,
     conversationId: null, mode: "ask", model: "deepseek", effort: "high", visible: false, onExit() {}, onRunning() {}, ...extra };
@@ -255,13 +255,16 @@ test("Trex CLI talks with the other sessions through the app's coordination-only
   assert.ok(missing.state.items.some(item => item.kind === "notice" && /no está disponible en este chat/.test(item.text)));
 });
 
-test("the browser extension reaches Trex CLI as the app adapter, with its token only in the environment", async t => {
-  const chrome = { command: "C:/Trex/trex.exe", args: ["--trex-chrome-mcp", "http://127.0.0.1:7341/mcp"], token: "a".repeat(64), env: { TREX_CHROME_TOKEN: "a".repeat(64) } };
-  const h = harness(t, { chrome });
+test("Your browser reaches Trex CLI over HTTP, with its address and token only in the environment", async t => {
+  const chrome = { url: "http://127.0.0.1:7341/mcp", token: "a".repeat(64) }, calls = [];
+  const h = harness(t, { chrome, chromeCalls: calls, chatLabel: "Trex CLI · Revisar la web" });
   await h.start();
-  assert.equal(h.spawns[0].request.env.TREX_CHROME_TOKEN, chrome.token);
+  assert.deepEqual(h.spawns[0].request.env, { TREX_CHROME_URL: chrome.url, TREX_CHROME_TOKEN: chrome.token });
+  // The session is asked for this chat: its tab group is named after it and uploads stay in the project.
+  assert.equal(calls.length, 1); assert.equal(calls[0][0], "tab");
+  assert.deepEqual(calls[0][4], { label: "Trex CLI · Revisar la web", cwd: "D:/project" });
   const start = h.writes.find(write => write.method === "session/start");
-  assert.deepEqual(start.params.chrome, { command: chrome.command, args: chrome.args });
+  assert.equal(start.params.chrome, undefined, "the CLI connects by itself: no adapter is sent");
   assert.ok(!JSON.stringify(start).includes(chrome.token), "the token never travels in a message");
   // Feature off (the default): no extra environment and no binding.
   const off = harness(t);

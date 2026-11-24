@@ -15,7 +15,7 @@ import { pathName } from "../../chatFiles";
 import { KIND_LABELS, fileKind, openFile } from "../../sharedFiles";
 import { useImageViewer } from "../ImageViewer";
 import { useMessageEntry } from "./useMessageEntry";
-import { brokerArtifactId, type BrowserArtifact } from "../../browser";
+import type { BrowserArtifact } from "../../browser";
 import { formatClock, formatDateTime } from "../../timeFormat";
 import { useTimeFormat } from "../../hooks/useTimeFormat";
 import { peerNotice } from "../../coordination";
@@ -243,8 +243,8 @@ function toolDetail(item: ToolItem, cwd: string): ReactNode {
   </>;
 }
 
-export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onImplement, onOpenArtifact }: {
-  item: ToolItem; cwd: string; expanded?: boolean; onImplement?: () => void; onOpenArtifact?: (artifact: BrowserArtifact) => Promise<void>;
+export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onImplement }: {
+  item: ToolItem; cwd: string; expanded?: boolean; onImplement?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   // La fila se repinta cuando cambia otra cosa del hilo (p. ej. una prop de
@@ -270,25 +270,17 @@ export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onIm
       <span className="chat-tool-chevron" aria-hidden="true"><ChevronIcon size={13} /></span>
     </button>
     {open && <div className="chat-tool-detail">{toolDetail(item, cwd)}</div>}
-    {!!item.artifacts?.length && <div className="chat-browser-artifacts">{item.artifacts.map(artifact => <BrowserArtifactButton key={artifact.id} artifact={artifact} onOpen={onOpenArtifact} />)}</div>}
+    {!!item.artifacts?.length && <div className="chat-browser-artifacts">{item.artifacts.map(artifact => <ToolArtifact key={artifact.id} artifact={artifact} />)}</div>}
   </div>;
 }, (previous, next) => previous.item === next.item && previous.cwd === next.cwd && previous.expanded === next.expanded
-  && previous.onImplement === next.onImplement
-  // `onOpenArtifact` solo se usa en filas con capturas: en las demás, una función
-  // nueva en cada render del hilo no debe repintarlas con cada trozo de respuesta.
-  && (previous.onOpenArtifact === next.onOpenArtifact || !next.item.artifacts?.length));
+  && previous.onImplement === next.onImplement);
 
-function BrowserArtifactButton({ artifact, onOpen }: { artifact: BrowserArtifact; onOpen?: (artifact: BrowserArtifact) => Promise<void> }) {
-  const [busy, setBusy] = useState(false);
-  const image = artifact.mimeType.startsWith("image/"), video = artifact.mimeType.startsWith("video/");
-  const label = image ? "Captura" : video ? "Vídeo" : artifact.kind === "trace" ? "Traza" : "Diagnóstico";
-  const canOpen = !!onOpen && !!brokerArtifactId(artifact) && (image || video);
-  return <button type="button" className="chat-browser-artifact" disabled={!canOpen || busy} onClick={() => {
-    if (!onOpen || !canOpen || busy) return;
-    setBusy(true); void onOpen(artifact).finally(() => setBusy(false));
-  }} title={canOpen ? `Abrir ${label.toLowerCase()}` : "Archivo local del navegador"}>
-    <ImageIcon size={15} /><span>{busy ? "Abriendo…" : label}</span><small>{artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : artifact.sizeBytes === undefined ? "" : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB`}</small>
-  </button>;
+/** Archivo que devolvió una herramienta (captura, vídeo…): solo sus datos, se guarda en este equipo. */
+function ToolArtifact({ artifact }: { artifact: BrowserArtifact }) {
+  const label = artifact.mimeType.startsWith("image/") ? "Captura" : artifact.mimeType.startsWith("video/") ? "Vídeo" : artifact.kind === "trace" ? "Traza" : "Diagnóstico";
+  return <span className="chat-browser-artifact" title="Guardado en este equipo">
+    <ImageIcon size={15} /><span>{label}</span><small>{artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : artifact.sizeBytes === undefined ? "" : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB`}</small>
+  </span>;
 }
 
 /** Opciones de "permitir siempre" que propone el propio CLI. */

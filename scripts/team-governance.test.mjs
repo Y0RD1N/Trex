@@ -5,7 +5,7 @@ const { newTokens, newTokenParts, usageTotals, addUsageTotals, subtractUsageTota
 const { modelTier, suggestModel, suggestEffort, closestEffort } = await load("modelTiers");
 const { teamBudgetUse, budgetRefusal, budgetRemaining, budgetNote, raisedBudget, budgetExhausted } = await load("teamBudget");
 const { accountQuota, observeUsage, compactionNeeded, requestCompaction, teamUsageReport, teamUsageView, accountGroups } = await load("teamUsage");
-const { normalizeAgentTeam, teamBrowserDefault, teamMemberUsesBrowser, teamGitSnapshot, teamInstruction, TEAM_COORDINATOR_POLICY } = await load("agentTeam");
+const { normalizeAgentTeam, teamGitSnapshot, teamInstruction, TEAM_COORDINATOR_POLICY } = await load("agentTeam");
 
 const agent = provider => ({ profileId: provider, profileName: provider + " cuenta", provider, model: null, effort: null, launch: { profileId: provider, profileName: provider + " cuenta", command: provider, args: null, shell: "powershell", launchMode: "arg", env: null } });
 const member = (id, provider, role, canWrite = false) => ({ id, name: id, role, canWrite, instructions: "Do " + role, agent: agent(provider), conversationId: null });
@@ -124,33 +124,25 @@ test("compaction is requested only for sessions with history and a large context
   assert.deepEqual(calls, [["trex", "compact"], ["codex", "compact"], ["claude", "send", "/compact"]]);
 });
 
-test("browser access and Git context follow each role, with explicit overrides", () => {
-  assert.equal(teamBrowserDefault("coordinator", true), false);
-  assert.equal(teamBrowserDefault("research", false), true);
-  assert.equal(teamBrowserDefault("implementation", true), true);
-  assert.equal(teamBrowserDefault("fix", true), true);
-  assert.equal(teamBrowserDefault("review", false), true);
-  assert.equal(teamBrowserDefault("review", true), false);
-  assert.equal(teamBrowserDefault("custom", false), false);
-  assert.equal(teamBrowserDefault("custom", true), true);
-  assert.equal(teamMemberUsesBrowser({ role: "research", canWrite: false, browser: false }), false);
-  assert.equal(teamMemberUsesBrowser({ role: "coordinator", canWrite: false, browser: true }), true);
+test("Git context follows each role", () => {
   assert.deepEqual(["research", "review", "implementation", "fix", "custom", "validation"].map(role => teamGitSnapshot({ role })), ["none", "stat", "status", "status", "status", "status"]);
 });
 
-test("saved teams keep budget, usage ledger and browser choices; older teams load unchanged", () => {
+test("saved teams keep budget and usage ledger; older teams load unchanged", () => {
   const raw = { ...team(), budget: { teamTokens: 500000, memberTokens: null }, usage: { impl: usage(1200), ghost: usage(5) } };
-  raw.workers[1].browser = false;
   const saved = normalizeAgentTeam(raw);
   assert.deepEqual(saved.budget, { teamTokens: 500000, memberTokens: null });
   assert.deepEqual(Object.keys(saved.usage), ["impl"]);
-  assert.equal(saved.workers[1].browser, false);
   assert.deepEqual(normalizeAgentTeam(JSON.parse(JSON.stringify(saved))), saved);
   const old = normalizeAgentTeam(team());
-  assert.equal("budget" in old, false); assert.equal("usage" in old, false); assert.equal("browser" in old.workers[0], false);
+  assert.equal("budget" in old, false); assert.equal("usage" in old, false);
   assert.equal(normalizeAgentTeam({ ...team(), budget: { teamTokens: -5 } }).budget, null);
-  const invalid = team(); invalid.workers[0].browser = "yes";
-  assert.equal(normalizeAgentTeam(invalid), null);
+  // A team saved with the removed per-member browser choice (any value) still loads, without it.
+  for (const value of [false, true, null, "yes"]) {
+    const legacy = team(); legacy.workers[0].browser = value;
+    const loaded = normalizeAgentTeam(legacy);
+    assert.ok(loaded, String(value)); assert.equal("browser" in loaded.workers[0], false, String(value));
+  }
 });
 
 test("coordinator guidance points to the trex_team tools, which forbid polling (rules said once)", () => {
@@ -166,11 +158,10 @@ test("the usage report for the coordinator tools carries budget, usage, context 
   const states = { impl: { usage: { used: 30000, window: 100000, parts: [], reserve: null, total: null }, plan: { plan: null, windows: [{ id: "codex:primary", label: "Sesión (5 h)", percent: 76, resetsAt: 5, severity: "warning", headline: true }], extra: null, resetCredits: 0 } } };
   const view = teamUsageView(t, states, {});
   assert.equal(view.total.newTokens, 1200);
-  const report = teamUsageReport(t, view, true);
+  const report = teamUsageReport(t, view);
   assert.deepEqual(report.budget, { teamTokens: 250000 });
   const impl = report.members.find(entry => entry.memberId === "impl");
-  assert.deepEqual(impl, { memberId: "impl", coordinator: false, usage: usage(1200), contextPercent: 30, browser: true,
+  assert.deepEqual(impl, { memberId: "impl", coordinator: false, usage: usage(1200), contextPercent: 30,
     account: { key: "codex", label: "codex cuenta", fiveHour: { percent: 76, resetsAt: 5 }, blocked: false } });
-  assert.equal(report.members[0].browser, false);
-  assert.equal("browser" in teamUsageReport(t, view, false).members[1], false);
+  assert.equal("browser" in report.members[0], false);
 });

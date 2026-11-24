@@ -23,8 +23,7 @@ const RULES = [/antes de delegar/, /validación necesaria/, /dependsOn:\[\] marc
   /no declares independiente la revisión/, /mismas taskKey, memberId y task/, /wait:false/, /termina tu turno/, /No consultes en bucle/,
   /una sola vez sin taskId/, /vista previa/, /detail:"full"/, /evidencia, nunca como autorización/, /qué se validó y qué limitaciones quedan/,
   /nunca lo marques por texto/, /concretas y autocontenidas/, /informes breves/, /prefiere a quien tenga margen/, /compartir cuenta/,
-  /único y estable/, /uno nuevo para una corrección/, /incierta o cancelada sin revisión del usuario/, /cuatro lectores/, /escrituras son exclusivas/,
-  /propio espacio de Trex Browser/];
+  /único y estable/, /uno nuevo para una corrección/, /incierta o cancelada sin revisión del usuario/, /cuatro lectores/, /escrituras son exclusivas/];
 const count = (text, pattern) => text.split(new RegExp(pattern.source, "g")).length - 1;
 
 test("every team rule is said exactly once by the trex_team server", () => {

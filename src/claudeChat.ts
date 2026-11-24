@@ -227,8 +227,8 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
         ...(taskInput ? { name: "TodoWrite" } : {}),
         input: taskInput ?? (answers ? { ...current.input, answers, ...(response ? { response } : {}) }
           : toolResult?.type === "create" ? { ...current.input, changeKind: "add" } : current.input),
-        output: answers ? answerText(answers) : (current.name.startsWith("mcp__trex_browser__") || current.name.startsWith("mcp__trex_desktop__")) ? browserToolResultText(block.content) : resultText(block.content),
-        ...((current.name.startsWith("mcp__trex_browser__") || current.name.startsWith("mcp__trex_desktop__")) ? { artifacts: browserResultArtifacts({ content: block.content }) } : {}),
+        output: answers ? answerText(answers) : current.name.startsWith("mcp__trex_desktop__") ? browserToolResultText(block.content) : resultText(block.content),
+        ...(current.name.startsWith("mcp__trex_desktop__") ? { artifacts: browserResultArtifacts({ content: block.content }) } : {}),
         patch: patchLines(toolResult?.structuredPatch) ?? current.patch };
     } else if (block.type === "text") {
       const value = text(block.text);

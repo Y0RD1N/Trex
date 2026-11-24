@@ -688,7 +688,7 @@ mod tests {
             "structuredContent":{"ok":true,"receipt":{"status":"completed"},"data":{"captured":true}}});
         let messages = vec![
             json!({"role":"user","content":"one"}),
-            call("shot", "browser_take_screenshot"),
+            call("shot", "browser_screenshot"),
             result("shot", &envelope.to_string()),
             json!({"role":"user","content":"two"}),
             json!({"role":"user","content":"three"}),

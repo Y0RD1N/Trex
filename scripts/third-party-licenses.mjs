@@ -4,8 +4,8 @@
 //
 //   node scripts/third-party-licenses.mjs
 //
-// Sources: the three Cargo.lock files and the production closure of the npm
-// lockfiles (the lockfiles already carry each npm package's license). Rust
+// Sources: the two Cargo.lock files and the production closure of the npm
+// lockfile (the lockfile already carries each npm package's license). Rust
 // licenses come from the public deps.dev API, so this needs network access.
 // Run it before every release and commit the result.
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -17,7 +17,7 @@ const output = join(root, 'docs', 'third-party-licenses.md');
 const read = file => readFileSync(join(root, file), 'utf8').replace(/\r\n/g, '\n');
 
 // ---- Rust -------------------------------------------------------------------
-const CARGO_LOCKS = ['src-tauri/Cargo.lock', 'trex-cli/Cargo.lock', 'trex-browser/Cargo.lock'];
+const CARGO_LOCKS = ['src-tauri/Cargo.lock', 'trex-cli/Cargo.lock'];
 const crates = new Map();
 for (const file of CARGO_LOCKS) {
   for (const block of read(file).split('\n[[package]]\n').slice(1)) {
@@ -61,7 +61,6 @@ function npmProduction(lockFile) {
 }
 const NPM_SETS = [
   ['Interfaz (React, xterm.js y fuentes)', 'package-lock.json'],
-  ['Trex Browser: worker', 'trex-browser/package-lock.json'],
 ];
 
 // ---- Rendering --------------------------------------------------------------
@@ -90,9 +89,8 @@ const flaggedNames = [...new Set(flagged.map(item => `${item.name} (${item.licen
 const doc = `# Licencias de dependencias
 
 > Archivo generado con \`node scripts/third-party-licenses.mjs\`. No lo edites a mano:
-> vuelve a generarlo antes de cada release. Los componentes que se redistribuyen
-> aparte (Node, Electron, Playwright, ffmpeg…) están en
-> [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).
+> vuelve a generarlo antes de cada release. El resumen de lo que llevan los
+> instaladores está en [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).
 
 Una dependencia con varias licencias («\`A OR B\`») se puede usar con cualquiera de ellas.
 Los Cargo.lock incluyen los paquetes de todas las plataformas, así que esta lista es

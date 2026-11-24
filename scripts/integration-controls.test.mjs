@@ -36,7 +36,6 @@ test("Claude launch and inbox initialization cannot reintroduce a disabled integ
   assert.doesNotMatch(instructions, /GitHub|Blender|HyperFrames/); assert.match(instructions, /task|plan/i);
 });
 const { integrationContext, detectedIntegrations } = await load("integrations");
-const { BROWSER_INSTRUCTIONS } = await load("browser");
 test("only enabled applications that were not detected as missing are announced; preferences stay untouched", () => {
   const preferences = { github: true, blender: true, hyperframes: true };
   const context = integrationContext({ integrations: preferences }, { available: { github: true, blender: false, hyperframes: false } });
@@ -49,19 +48,16 @@ test("only enabled applications that were not detected as missing are announced;
   assert.equal(integrationInstructions("claude", integrationContext({ integrations: preferences }, { available: { github: false, blender: false, hyperframes: false } })), "");
   assert.match(integrationInstructions("claude", integrationContext({ integrations: preferences })), /GitHub.*Blender.*HyperFrames/s, "unknown availability keeps announcing enabled apps");
 });
-test("browser guidance needs a browser attached to that session, once per provider", () => {
-  const enabled = { integrations: off, browser: { enabled: true } };
-  assert.equal(integrationContext(enabled).browser, false, "the preference alone does not attach a browser");
-  assert.equal(integrationInstructions("codex", integrationContext(enabled)), "");
-  const codex = integrationInstructions("codex", integrationContext(enabled, { browser: true }));
-  assert.equal(codex, BROWSER_INSTRUCTIONS);
-  assert.match(integrationInstructions("claude", integrationContext(enabled, { browser: true })), /browser_navigate/);
-  assert.ok(Buffer.byteLength(BROWSER_INSTRUCTIONS) < 700);
+test("no provider is told about the removed Trex Browser", () => {
+  const all = integrationContext({ integrations: { github: true, blender: true, hyperframes: true }, desktopEnabled: true },
+    { a11y: true, available: { github: true, blender: true, hyperframes: true } });
+  for (const provider of ["claude", "codex", "trex", "antigravity"]) assert.doesNotMatch(integrationInstructions(provider, all), /trex_browser|browser_navigate|Trex Browser/, provider);
+  assert.equal("browser" in integrationContext({ integrations: off }), false);
 });
 test("computer control and accessibility guidance follow their own switches for every provider", () => {
   const base = { integrations: off };
   for (const provider of ["claude", "codex", "trex", "antigravity"]) {
-    assert.equal(integrationInstructions(provider, integrationContext({ ...base, desktopEnabled: false }, { a11y: false, browser: false })), "", provider);
+    assert.equal(integrationInstructions(provider, integrationContext({ ...base, desktopEnabled: false }, { a11y: false })), "", provider);
     const desktop = integrationInstructions(provider, integrationContext({ ...base, desktopEnabled: true }));
     assert.match(desktop, /Computer control/, provider); assert.doesNotMatch(desktop, /Accessibility|a11y_/, provider);
     const a11y = integrationInstructions(provider, integrationContext(base, { a11y: true }));
@@ -70,12 +66,12 @@ test("computer control and accessibility guidance follow their own switches for 
 });
 test("with every integration off, Claude's appended prompt keeps only the app's own guidance", () => {
   const all = integrationContext({ integrations: { github: true, blender: true, hyperframes: true }, desktopEnabled: true },
-    { browser: true, a11y: true, available: { github: true, blender: true, hyperframes: true } });
+    { a11y: true, available: { github: true, blender: true, hyperframes: true } });
   const none = integrationContext({ integrations: off, desktopEnabled: false });
   const appended = context => { const flags = claudeChatFlags(null, null, { integrations: context }); return flags[flags.indexOf("--append-system-prompt") + 1]; };
-  assert.doesNotMatch(appended(none), /GitHub|Blender|HyperFrames|Computer control|Accessibility|browser_navigate|desktop_|a11y_|Check real results/);
+  assert.doesNotMatch(appended(none), /GitHub|Blender|HyperFrames|Computer control|Accessibility|desktop_|a11y_|Check real results/);
   assert.match(appended(none), /trex_update_tasks/, "the app's own tools stay");
-  assert.ok(Buffer.byteLength(appended(none)) < Buffer.byteLength(appended(all)) / 2, "turning everything off removes more than half of the appended text");
+  assert.ok(Buffer.byteLength(appended(none)) < Buffer.byteLength(appended(all)) * 0.6, "turning everything off removes a large part of the appended text");
 });
 test("without the native app, detection degrades to the enabled preferences synchronously", () => {
   assert.equal(detectedIntegrations("D:/offline-project"), null);

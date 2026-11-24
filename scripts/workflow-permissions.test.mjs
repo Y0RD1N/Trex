@@ -47,7 +47,7 @@ function harness(t, provider, { planningOnly = true, mode = "full" } = {}) {
   const queue = { client: { read: async () => ({ receipt: null, messages: [] }), ack: async () => undefined } };
   const stubs = {
     ...dependencies, react,
-    "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session"), connectChrome: async () => null, chromeAvailable: () => false },
+    "../browserConnection": { connectChrome: async () => null, chromeAvailable: () => false },
     "../api": { agentWrite: (_id, raw) => write(raw), formatError: error => error.message ?? String(error) },
     "../conversations": { readConversation: () => assert.fail("Unexpected history read") },
     "../platform": { IS_WINDOWS: true },

@@ -140,7 +140,7 @@ This fallback is verified against the official
 Proxies, custom providers, OpenRouter IDs, and similarly named models receive
 no inferred image support.
 
-`session/start {cwd,mode,model?,effort?,conversationId?,instructions?,browser?:{enabled:boolean,profile?:string,clientId?:string}}` returns
+`session/start {cwd,mode,model?,effort?,conversationId?,instructions?}` returns
 `{sessionId,conversationId,model,effort,mode,items,recoveryRequired,contextWindow,contextWindowSource,usage?,instructionsApplied}`. `cwd` must
 exist. Modes: `plan`, `ask`, `full`; `auto` and `default` alias `ask`. `items` is a
 normalized ChatItem array with durable stable IDs. A live session has a fixed
@@ -173,64 +173,67 @@ not a provider bill.
 Existing version-1 journals remain loadable; historical missing counts are not
 estimated.
 
-Browser access defaults to off when omitted, including on conversation restore.
-The live session's browser configuration is immutable. `clientId` defaults to
-the conversation UUID; an application can supply a stable tab or room ID.
-The returned `browser:{enabled,available,profile,clientId}` reports the explicit
-choice and whether a compatible optional component was discovered.
 `imageSupport:true|false|null` describes the selected model using cached
 `inputModalities` or exact documented official MiniMax capabilities; unknown
 support stays unknown. These checks never invoke a
-model, switch the selected model, or launch a browser.
+model or switch the selected model.
 
-### Optional Trex Browser provider
+### The person's own browser (optional)
 
-The tool registry combines `NativeToolProvider` and an explicitly enabled
-`BrowserToolProvider`. Missing, incompatible, or unavailable browser components
-leave native tools usable. Browser tools provide no arbitrary MCP command passthrough. Separately,
-user-configured MCP providers follow the bounded client policy described below. Discovery checks the fixed sibling `trex-browser.exe` and, on
-Windows, `HKCU`'s 64-bit `Software\\com.trex.browser\\Install` REG_SZ `InstallDir`
-plus the fixed child `trex-browser.exe`. All path components must be regular
-directories/files without symlinks or reparse points. Executables are never
-resolved through `PATH` or model arguments.
+The tool registry combines `NativeToolProvider` with an optional
+`ChromeProvider`: the Trex extension in the person's Chrome, Brave or Edge,
+reached through the app's local bridge, an MCP server over HTTP with JSON
+responses. The app enables it per process with two environment variables:
+`TREX_CHROME_URL` (exactly `http://127.0.0.1:<port>/mcp`, port 1024 or above) and
+`TREX_CHROME_TOKEN` (the chat's token, 16 to 512 header-safe characters). Without
+both there are no browser tools and no request is made. If they are set but
+unusable, or the bridge does not answer `initialize` and `tools/list` within 10
+seconds when a session starts, the summary returns `chromeEnabled:false` and
+`unavailableMcpServers` contains `trex_chrome`; native tools keep working.
+Otherwise it returns `chromeEnabled:true` (also when reattaching). Restoring a
+conversation in a process without the variables restores no browser access.
+Evaluation suites never inherit it.
 
-Discovery invokes only `--version`, `doctor --json`, and
-`tools --json --mode observe|qa|full`. It requires broker protocol
-`2025-11-25`, filters the returned MCP schemas through the frozen `browser_*`
-allowlist, and converts them to provider function definitions. It does not
-start a browser or make an inference request. Plan mode binds `observe`, ask
-binds `qa`, and full binds `full`. The broker receives immutable policy context
-outside model-controlled tool arguments. Plan mode excludes raw JavaScript,
-CDP, routes, uploads, mouse actions, and other mutation tools. The adapter also
-rejects tab creation/closing, artifact opening, and log clearing in observe.
-Ask mode uses the ordinary permission flow for mutations, including navigation,
-clicks, typing, JavaScript, routes, uploads, captures with lifecycle changes,
-tab creation/closing, artifact opening, and clearing logs. Reading snapshots,
-screenshots, captured network metadata/bodies, and existing artifacts remains
-available without mutation approval.
+The client sends `initialize` (protocol `2025-11-25`; the bridge may answer
+`2024-11-05`, `2025-03-26`, `2025-06-18` or `2025-11-25`),
+`notifications/initialized` and `tools/list` (up to 64 tools, 8 pages, 256 KiB of
+schemas). Every request is a `POST` with `Content-Type: application/json`,
+`MCP-Protocol-Version` and `Authorization: Bearer <token>`, and no `Origin`. The
+token never travels in a body, URL, error, event, journal or model request; a
+token echoed in a result is replaced with `[redacted credential]`. Environment
+proxies and redirects are not used. Shell commands (and inherit-mode PTYs) never
+receive `TREX_CHROME_TOKEN`.
 
-Calls use a bounded subprocess with JSON stdin:
-`trex-browser call --stdin-json`, with
-`{name,arguments,cwd,mode,clientId,profile?,operationId,timeoutMs:90000}`.
-The operation ID is durably saved before dispatch. Input is capped at 1 MiB,
-stdout at 8 MiB, and execution at 95 seconds including broker overhead.
-Subprocess stderr is discarded. Cancellation requests
-`browser_cancel({operationId})` with the same project/client/profile context
-and stops the adapter process; it does not close the persistent browser.
-Transport failures, malformed results, and cancelled/uncertain/manual-review
-receipts stop the turn and require explicit recovery acknowledgement. They
-never cause automatic retries or duplicate clicks.
+Each bridge tool `NAME` is advertised to the model as `browser_NAME`
+(`browser_tabs_list`, `browser_read_page`, `browser_screenshot`,
+`browser_navigate`, `browser_click`…) with its own schema; names outside
+`[a-z][a-z0-9_]*` or schemas that are not objects are left out. The bridge's
+`instructions` are added to the system guidance. A tool only reads when it is in
+the fixed list `tabs_list`, `read_page`, `screenshot`, `wait_for` and the bridge
+marks it `readOnlyHint:true`. Plan mode advertises and accepts only those; ask mode uses
+the ordinary permission flow for every other browser tool; full mode runs them.
+The bridge enforces the chat's mode again on its side.
+
+`tools/call` has 90 seconds (the bridge answers by itself after 60). A result
+must be `{content:[{type:"text",text}|{type:"image",mimeType,data}],isError?}`;
+`isError:true` (for example, the extension is not connected) is an ordinary
+tool error and the turn continues. Not reaching the bridge, HTTP 401 (expired or
+revoked chat token), any other HTTP status and JSON-RPC errors are ordinary
+errors too: nothing reached the browser. A timeout, a broken connection, invalid
+JSON or an invalid result after the request left are ordinary errors for the
+reading tools, but for any other tool they stop the turn and require explicit
+recovery acknowledgement, like a cancelled action: it is never replayed.
 
 MCP tool results normalize to
 `{text,structuredContent?,artifacts:ArtifactRef[],isError?}`. A text block whose
-JSON equals `structuredContent` (the MCP convention, used by Trex Browser) is not
-stored again, so `text` may be empty. The model receives a lean projection only:
-Trex Browser envelopes become `{ok, ...data, revision?, error?}`, other structured
-results `{result}`, plus `text` (remaining text and artifact notes), compact
-`artifacts:[{artifactId,kind,mimeType,width?,height?}]` and `isError`. Receipts,
-operation/project IDs, hashes and provenance stay in `tool/result` events and the
-journal. Native tool JSON retains its existing shape. An artifact reference is
-`{id,sha256,mimeType,sizeBytes,width?,height?,kind,storage:"local"|"broker",provenance}`.
+JSON equals `structuredContent` (the MCP convention) is not stored again, so
+`text` may be empty. The model receives a lean projection only: structured
+results become `{result}`, plus `text` (remaining text and artifact notes), compact
+`artifacts:[{artifactId,kind,mimeType,width?,height?}]` and `isError`. Operation
+IDs, hashes and provenance stay in `tool/result` events and the journal. Native
+tool JSON retains its existing shape. An artifact reference is
+`{id,sha256,mimeType,sizeBytes,width?,height?,kind,storage:"local",provenance}`;
+only typed image content becomes one.
 `tool/result` includes a top-level `artifacts` array, and projected tool history
 items expose the same metadata. Image bytes are stored in the private
 `TREX_HOME/artifacts` content-addressed store. Screenshot base64 and data URLs
@@ -240,8 +243,8 @@ Local images must pass MIME-matched pixel decoding before storage and on each
 rehydration. PNG validation also checks chunk CRCs, complete image data and the
 zlib stream ending. A malformed image leaves an explicit unavailable-artifact
 note and is never projected into an outgoing provider image.
-Videos and other artifacts without inline image bytes keep opaque broker IDs;
-restoring history does not fetch them.
+A reference with any other `storage` (older journals) is reported as
+unavailable and never fetched.
 
 Immediately before a provider request, the CLI rehydrates verified local image
 references only when the selected model is explicitly known to accept images.
@@ -555,13 +558,6 @@ extract, not a claim that every prior detail remains in the provider's active
 context. Tool results older than `context.clearToolResultsAfterTurns` user turns
 are replaced only in the provider request, at turn boundaries; events, journal
 and `session/history` are unchanged.
-
-`enable_tools({group})` is a server-handled, read-only tool advertised when a
-deferred group is available (`browser_devtools`, `browser_capture`,
-`browser_session`). It returns `{group,enabled,alreadyEnabled,tools}` and appends
-that group's definitions to the end of the tool list from the next request on.
-The journal stores `enabledToolGroups` (omitted when empty; older readers ignore
-it). Deferred tools stay callable within the session mode and policy.
 
 `shell({command,background:true,interactive?:true,pty?:true,rows?,cols?})`
 starts an owned job; foreground commands do not accept interactive/PTY options.

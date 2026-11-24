@@ -1,5 +1,6 @@
 ; Based on Tauri tauri-cli-v2.12.0 (MIT), see LICENSE_TAURI_MIT.
-; Local additions: independent CLI/Browser options and initialization in trex-cli.nsh.
+; Local additions: optional CLI page and initialization in trex-cli.nsh, and stopping
+; the retired Trex Browser before an older uninstaller runs.
 Unicode true
 ManifestDPIAware true
 ; Add in `dpiAwareness` `PerMonitorV2` to manifest for Windows 10 1607+ (note this should not affect lower versions since they should be able to ignore this and pick up `dpiAware` `true` set by `ManifestDPIAware true`)
@@ -356,6 +357,10 @@ Function PageLeaveReinstall
       ReadRegStr $R1 HKLM "$R6" "UninstallString"
       ExecWait '$R1' $0
     ${Else}
+      ; Local: stop the retired Trex Browser first, or an older uninstaller refuses to run (trex-cli.nsh).
+      !ifmacrodef TREX_BEFORE_PREVIOUS_UNINSTALL
+        !insertmacro TREX_BEFORE_PREVIOUS_UNINSTALL
+      !endif
       ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
       ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
       ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
@@ -392,7 +397,7 @@ FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_DIRECTORY
 
-; Optional CLI and Browser. Silent/passive updates preserve independent choices.
+; Optional CLI. Silent/passive updates preserve the choice.
 Page custom TrexCliPageCreate TrexCliPageLeave
 
 ; 6. Start menu shortcut page
