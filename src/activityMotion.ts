@@ -1,5 +1,5 @@
 /**
- * Reloj común de los indicadores de actividad (el loader de estratos y los iconos de agente).
+ * Reloj común de los indicadores de actividad (el loader del zarpazo y los iconos de agente).
  *
  * Rendimiento: cada indicador avanza a saltos (ver `--loader-motion` y `.agent-icon` en styles.css),
  * pero cada animación CSS empieza cuando aparece su elemento, así que dos loaders y dos iconos

@@ -809,7 +809,7 @@
 .chat-thread > :has(> .chat-tool):has(+ * > .chat-tool) { margin-bottom: -8px; }
 .chat-tool-row { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .chat-tool-icon { flex-basis: 14px; color: var(--ok); }
-.chat-tool[data-status="running"] .chat-tool-icon::before { content: ""; display: block; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--loader-mask); mask: var(--loader-mask); animation: var(--loader-motion); }
+.chat-tool[data-status="running"] .chat-tool-icon::before { content: ""; display: block; width: 11px; height: 11px; background: currentColor; -webkit-mask: var(--loader-mask); mask: var(--loader-mask); animation: var(--loader-motion); }
 .chat-tool[data-status="running"] .chat-tool-icon { color: var(--accent-strong); }
 /* Las marcas del final (rueda y círculo) sobran: el estado ya está en el glifo; siguen para lectores de pantalla. */
 .chat-tool-row > .chat-spinner, .chat-tool-row > .chat-status.error { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -1107,9 +1107,8 @@
 /* Indicadores de trabajo: solo transformaciones y opacidad, que la GPU anima sin
    volver a dibujar. Un halo de sombra o un degradado que recorre el texto obligaban
    a repintar en cada fotograma mientras el asistente trabajaba (≈ 20 % de CPU). */
-/* El indicador es el loader de trex (huellas que dan la vuelta), no un punto que late: ver `--loader-mask`
-   en styles.css. 22 px son dos píxeles por celda de su retícula de 11. */
-.chat-working-dot { width: 22px; height: 22px; }
+/* El indicador es el loader de trex (el zarpazo), no un punto que late: ver `--loader-mask` en
+   styles.css. Va a su tamaño natural de 11 px, un pelo más alto que las mayúsculas del texto. */
 .chat-working-label { color: var(--text); }
 .chat-working-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .chat-working-since { color: var(--text-dim); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }

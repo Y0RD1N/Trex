@@ -92,7 +92,9 @@ export default function ProjectItem({
         setMenu({ x: event.clientX, y: event.clientY });
       }}
     >
-      {active && <span className="row-pointer" aria-hidden="true"><ChevronIcon size={12} strokeWidth={2} /></span>}
+      {/* Con sesiones, el botón de desplegar hace de galón: en la fila activa toma el acento y no se
+          pinta un segundo «›» en el margen. Sin sesiones no hay botón y el galón vuelve al margen. */}
+      {active && tabCount === 0 && <span className="row-pointer" aria-hidden="true"><ChevronIcon size={12} strokeWidth={2} /></span>}
       {tabCount > 0 ? (
         <button
           type="button"
@@ -101,7 +103,7 @@ export default function ProjectItem({
           aria-expanded={expanded}
           onClick={(event) => { event.stopPropagation(); onToggleExpanded(); }}
         >
-          <ChevronIcon size={11} />
+          <ChevronIcon size={11} strokeWidth={active ? 2.2 : undefined} />
         </button>
       ) : <span className="project-disclosure-placeholder" />}
       <span className={`project-icon${logo && logo !== brokenLogo ? " has-logo" : ""}`} aria-hidden="true" title={activityText || undefined}>
@@ -109,7 +111,6 @@ export default function ProjectItem({
         {logo && logo !== brokenLogo
           ? <img src={logo} alt="" draggable={false} onError={() => setBrokenLogo(logo)} />
           : <ProjectCore seed={project.id} />}
-        {activity !== "idle" && <span className={`project-activity is-${activity}`}>{activity === "waiting" && <AlertIcon size={11} strokeWidth={2} />}</span>}
       </span>
       <span id={activityId} className="sr-only">{activityText}</span>
 
@@ -158,6 +159,11 @@ export default function ProjectItem({
                 title={`${tabCount} ${tabCount === 1 ? "pestaña abierta" : "pestañas abiertas"}`}
               >
                 {tabCount}
+              </span>
+            )}
+            {activity !== "idle" && (
+              <span className={`project-activity is-${activity}`} aria-hidden="true">
+                {activity === "waiting" && <AlertIcon size={12} strokeWidth={2} />}
               </span>
             )}
             {project.favorite && <span className="project-favorite-mark" aria-label="Favorito"><StarIcon size={11} /></span>}

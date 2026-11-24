@@ -30,8 +30,8 @@
 .chat-background-state[data-state="stopping"]::before {
   content: "";
   display: block;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   background: var(--accent-strong);
   -webkit-mask: var(--loader-mask);
   mask: var(--loader-mask);

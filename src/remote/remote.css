@@ -70,13 +70,19 @@
   .r-n { font: 12px var(--font-mono); color: var(--text-dim); flex: none; }
 
   /* ----- Piezas ---------------------------------------------------------------- */
-  /* Las huellas se pisan una tras otra: cada una aparece de golpe y se apaga en tres pasos. */
+  /* El zarpazo, a pasos de 100 ms como el del PC: cada mitad de arañazo aparece en su paso
+     (la primera en el 0, las dos siguientes en el 1…) y los tres se desvanecen juntos. */
   .r-loader { flex: none; fill: var(--accent); }
-  .r-loader g { animation: r-step 1.2s steps(1) infinite; }
-  .r-loader g:nth-child(1) { animation-delay: -1.2s; } .r-loader g:nth-child(2) { animation-delay: -.9s; }
-  .r-loader g:nth-child(3) { animation-delay: -.6s; } .r-loader g:nth-child(4) { animation-delay: -.3s; }
-  @keyframes r-step { 0% { opacity: 1; } 25% { opacity: .5; } 50% { opacity: .22; } 75%, 100% { opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) { .r-loader g { animation: none; opacity: .3; } .r-loader g:first-child { opacity: 1; } }
+  .r-loader g { opacity: 0; animation: .9s steps(1, end) infinite; }
+  .r-loader g:nth-child(1) { animation-name: r-claw-0; }
+  .r-loader g:is(:nth-child(2), :nth-child(3)) { animation-name: r-claw-1; }
+  .r-loader g:is(:nth-child(4), :nth-child(5)) { animation-name: r-claw-2; }
+  .r-loader g:nth-child(6) { animation-name: r-claw-3; }
+  @keyframes r-claw-0 { 0% { opacity: 1; } 66.667% { opacity: .55; } 77.778% { opacity: .3; } 88.889%, 100% { opacity: .14; } }
+  @keyframes r-claw-1 { 0% { opacity: 0; } 11.111% { opacity: 1; } 66.667% { opacity: .55; } 77.778% { opacity: .3; } 88.889%, 100% { opacity: .14; } }
+  @keyframes r-claw-2 { 0% { opacity: 0; } 22.222% { opacity: 1; } 66.667% { opacity: .55; } 77.778% { opacity: .3; } 88.889%, 100% { opacity: .14; } }
+  @keyframes r-claw-3 { 0% { opacity: 0; } 33.333% { opacity: 1; } 66.667% { opacity: .55; } 77.778% { opacity: .3; } 88.889%, 100% { opacity: .14; } }
+  @media (prefers-reduced-motion: reduce) { .r-loader g { animation: none; opacity: 1; } }
 
   .r-picon { display: inline-grid; place-items: center; flex: none; color: var(--text-dim); }
   .r-picon img { width: 100%; height: 100%; object-fit: contain; border-radius: var(--radius-xs); }

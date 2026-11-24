@@ -30,15 +30,21 @@ function Brand({ size = 18 }: { size?: number }) {
   </svg>;
 }
 
-// Una huella de tres dedos sobre una retícula de 11 x 11, y las esquinas en el orden en que
-// se pisan (el mismo dibujo que el loader del PC, scripts/make_loader_sprite.py).
-const PRINT_CELLS = [[0, 0], [2, 0], [4, 0], [0, 1], [2, 1], [4, 1], [1, 2], [2, 2], [3, 2], [2, 3]];
-const PRINT_CORNERS = [[0, 0], [6, 0], [6, 7], [0, 7]];
+// Tres arañazos de garra sobre una retícula de 11 x 11, cada uno la diagonal x + y = c entre dos
+// filas (el mismo dibujo que el loader del PC, scripts/make_loader_sprite.py). Cada arañazo va en
+// dos mitades, que se marcan en pasos seguidos; las puntas, más suaves.
+const CLAWS = [[7, 0, 7], [10, 0, 10], [13, 3, 10]];
+const CLAW_HALVES = CLAWS.flatMap(([c, y0, y1]) => {
+  const middle = y0 + Math.round((y1 - y0) / 2);
+  const half = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => from + i).map(y => ({ x: c - y, y, tip: y === y0 || y === y1 }));
+  return [half(y0, middle), half(middle + 1, y1)];
+});
 
-/** Cuatro huellas que dan la vuelta por las esquinas: la más reciente marcada y las anteriores apagándose. */
+/** Un zarpazo: tres arañazos que se marcan uno tras otro y se desvanecen. */
 function Loader({ size = 14 }: { size?: number }) {
-  return <svg className="r-loader" width={size} height={size} viewBox="0 0 11 11" aria-hidden="true">
-    {PRINT_CORNERS.map(([ox, oy], i) => <g key={i}>{PRINT_CELLS.map(([cx, cy]) => <rect key={`${cx}-${cy}`} x={ox + cx + .05} y={oy + cy + .05} width=".9" height=".9" />)}</g>)}
+  return <svg className="r-loader" width={size} height={size} viewBox="0 0 11 11" shapeRendering="crispEdges" aria-hidden="true">
+    {CLAW_HALVES.map((cells, i) => <g key={i}>{cells.map(({ x, y, tip }) => <rect key={y} x={x} y={y} width="1" height="1" opacity={tip ? .55 : undefined} />)}</g>)}
   </svg>;
 }
 
