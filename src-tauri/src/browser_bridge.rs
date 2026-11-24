@@ -14,9 +14,12 @@
 //!   entorno. Aquí se rechaza cualquier petición que traiga `Origin`: un agente no es
 //!   un navegador, y así ninguna web puede llamar a las herramientas.
 //!
-//! Este módulo no decide qué pestañas se pueden tocar: eso lo hace la extensión, que
-//! solo actúa dentro del grupo de pestañas «trex». Aquí se validan orígenes, tokens,
-//! tamaños y qué herramientas admite cada modo, y se reparten las órdenes.
+//! Cada chat tiene su propio grupo de pestañas («trex · Claude 2»). Este módulo no decide
+//! qué pestañas puede tocar cada uno: eso lo hace la extensión, que lleva la cuenta de qué
+//! grupo es de qué chat. Aquí se validan orígenes, tokens, tamaños, qué herramientas admite
+//! cada modo y las rutas de `upload_file` (que no salgan de la carpeta del proyecto del
+//! chat), y cada orden sale con la identidad del chat: un id opaco derivado de su sesión
+//! (nunca el token) y el título de su grupo.
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, State as AxumState};
@@ -28,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,21 +56,33 @@ const RETRY_BIND: Duration = Duration::from_secs(20);
 /// (los `ping` de WebSocket no llegan a su código y Chrome lo dormiría a los 30 s).
 const KEEPALIVE: Duration = Duration::from_secs(20);
 const MAX_SESSIONS: usize = 256;
+/// Lo que cabe del nombre del chat en el título de su grupo de pestañas.
+const MAX_LABEL: usize = 24;
+const GROUP_PREFIX: &str = "trex · ";
+const GENERIC_CHAT: &str = "Chat";
+/// upload_file: como mucho estos archivos por vez, y cada uno de hasta este tamaño.
+pub const MAX_UPLOADS: usize = 10;
+pub const MAX_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const EVENT_STATUS: &str = "browser-bridge://status";
 const PROTOCOL: &str = "2025-11-25";
 const MCP_VERSIONS: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", PROTOCOL];
 const INSTRUCTIONS: &str = "Estas herramientas manejan el navegador real de la persona, con sus sesiones iniciadas. \
-Solo alcanzan las pestañas del grupo «trex»: las que abras tú con tab_open y las que la persona haya compartido. \
+Este chat tiene su propio grupo de pestañas («trex · <nombre del chat>») y solo alcanza las suyas: las que abras con tab_open \
+y las que la persona te dé. Las del grupo común «trex» las compartió la persona para cualquier chat: si usas una, pasa a tu grupo, \
+así que tómala solo si encaja con lo que te pidió. \
 Empieza con tabs_list; lee con read_page antes de actuar y usa las referencias ref_N que devuelve. \
+Si la página abre un alert, confirm o prompt, resuélvelo con handle_dialog. \
 Nunca escribas contraseñas, códigos de verificación ni datos de pago: pide a la persona que lo haga ella. \
 Antes de enviar formularios, comprar, publicar o borrar algo, confirma con la persona.";
 
 // --- Herramientas ---------------------------------------------------------------
 
 /// Las que solo miran: disponibles también al planificar o en solo lectura.
-pub const OBSERVE_TOOLS: [&str; 3] = ["tabs_list", "read_page", "screenshot"];
+pub const OBSERVE_TOOLS: [&str; 4] = ["tabs_list", "read_page", "screenshot", "wait_for"];
 /// Las que cambian algo en el navegador: solo en modo completo.
-pub const ACTION_TOOLS: [&str; 7] = ["tab_open", "navigate", "click", "type", "key", "scroll", "tab_close"];
+pub const ACTION_TOOLS: [&str; 11] = [
+    "tab_open", "navigate", "click", "type", "fill_form", "select_option", "key", "scroll", "upload_file", "handle_dialog", "tab_close",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode { Observe, Full }
@@ -86,14 +101,23 @@ fn tool_specs() -> Vec<Value> {
     let tab = json!({ "type": "integer", "description": "Id de la pestaña, de tabs_list." });
     let reference = json!({ "type": "string", "description": "Referencia ref_N de un elemento, de read_page." });
     vec![
-        json!({ "name": "tabs_list", "description": "Lista las pestañas del grupo «trex» (id, título, dirección y cuál está activa). Son las únicas que puedes ver y manejar.",
+        json!({ "name": "tabs_list", "description": "Lista tus pestañas (las de tu grupo «trex · …») y las que la persona compartió en el grupo común «trex» (id, título, dirección y cuál está activa). Son las únicas que puedes ver y manejar.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }, "annotations": { "readOnlyHint": true } }),
         json!({ "name": "read_page", "description": "Lee una pestaña: su título, dirección, texto visible y los elementos con los que se puede interactuar, cada uno con una referencia ref_N.",
             "inputSchema": { "type": "object", "properties": { "tabId": tab, "maxChars": { "type": "integer", "minimum": 1000, "maximum": 100000, "description": "Tope de texto devuelto (por defecto 20000)." } },
                 "required": ["tabId"], "additionalProperties": false }, "annotations": { "readOnlyHint": true } }),
         json!({ "name": "screenshot", "description": "Captura lo que se ve ahora en una pestaña.",
             "inputSchema": { "type": "object", "properties": { "tabId": tab }, "required": ["tabId"], "additionalProperties": false }, "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "tab_open", "description": "Abre una pestaña nueva en el grupo «trex» con una dirección http(s) y espera a que cargue.",
+        json!({ "name": "wait_for", "description": "Espera, como mucho 30 s, a que aparezca un texto o un elemento (por su referencia ref_N o por selector CSS), a que desaparezca (con «gone»), o a que la pestaña termine de cargar (con «load»). Indica una sola de esas condiciones.",
+            "inputSchema": { "type": "object", "properties": { "tabId": tab,
+                "text": { "type": "string", "maxLength": 500, "description": "Texto que debe aparecer (o desaparecer) en la página." },
+                "ref": reference,
+                "selector": { "type": "string", "maxLength": 500, "description": "Selector CSS de un elemento." },
+                "load": { "type": "boolean", "description": "true: espera a que la pestaña termine de cargar." },
+                "gone": { "type": "boolean", "description": "true: espera a que el texto o el elemento desaparezca." },
+                "timeout": { "type": "number", "minimum": 1, "maximum": 30, "description": "Segundos, de 1 a 30 (por defecto 10)." } },
+                "required": ["tabId"], "additionalProperties": false }, "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "tab_open", "description": "Abre una pestaña nueva en tu grupo con una dirección http(s) y espera a que cargue.",
             "inputSchema": { "type": "object", "properties": { "url": { "type": "string" } }, "required": ["url"], "additionalProperties": false } }),
         json!({ "name": "navigate", "description": "Lleva una pestaña a otra dirección http(s), o atrás/adelante con «back» y «forward», y espera a que cargue.",
             "inputSchema": { "type": "object", "properties": { "tabId": tab, "url": { "type": "string" } }, "required": ["tabId", "url"], "additionalProperties": false } }),
@@ -102,12 +126,30 @@ fn tool_specs() -> Vec<Value> {
         json!({ "name": "type", "description": "Escribe texto en el elemento indicado (o en el que tiene el foco). Con «submit» pulsa Intro al terminar. No lo uses para contraseñas ni datos de pago.",
             "inputSchema": { "type": "object", "properties": { "tabId": tab, "ref": reference, "text": { "type": "string", "maxLength": 20000 }, "submit": { "type": "boolean" } },
                 "required": ["tabId", "text"], "additionalProperties": false } }),
+        json!({ "name": "fill_form", "description": "Rellena varios campos de una vez por su referencia ref_N: texto y áreas de texto («value»), desplegables <select> («value»: el valor o el texto de la opción) y casillas o botones de opción («checked»). No envía el formulario. Rechaza contraseñas, códigos de verificación y datos de pago: esos los escribe la persona.",
+            "inputSchema": { "type": "object", "properties": { "tabId": tab,
+                "fields": { "type": "array", "minItems": 1, "maxItems": 50, "items": { "type": "object", "properties": {
+                    "ref": reference,
+                    "value": { "type": "string", "maxLength": 20000, "description": "Texto, o la opción de un desplegable." },
+                    "checked": { "type": "boolean", "description": "Para casillas y botones de opción." } },
+                    "required": ["ref"], "additionalProperties": false } } },
+                "required": ["tabId", "fields"], "additionalProperties": false } }),
+        json!({ "name": "select_option", "description": "Elige una opción de un desplegable <select> por su valor o por el texto que se ve.",
+            "inputSchema": { "type": "object", "properties": { "tabId": tab, "ref": reference, "value": { "type": "string", "maxLength": 1000 } },
+                "required": ["tabId", "ref", "value"], "additionalProperties": false } }),
         json!({ "name": "key", "description": "Pulsa una tecla o combinación en la pestaña: Enter, Escape, Tab, ArrowDown, PageDown, ctrl+a…",
             "inputSchema": { "type": "object", "properties": { "tabId": tab, "key": { "type": "string", "maxLength": 40 } }, "required": ["tabId", "key"], "additionalProperties": false } }),
         json!({ "name": "scroll", "description": "Desplaza la página, o lleva a la vista un elemento por su referencia.",
             "inputSchema": { "type": "object", "properties": { "tabId": tab, "direction": { "type": "string", "enum": ["up", "down", "top", "bottom"] }, "ref": reference },
                 "required": ["tabId"], "additionalProperties": false } }),
-        json!({ "name": "tab_close", "description": "Cierra una pestaña del grupo «trex».",
+        json!({ "name": "upload_file", "description": "Pone uno o varios archivos en un campo de subida <input type=file> por su referencia ref_N. Solo archivos de la carpeta del proyecto de este chat (rutas relativas a ella, o absolutas dentro de ella), de hasta 64 MiB y como mucho 10. No envía el formulario.",
+            "inputSchema": { "type": "object", "properties": { "tabId": tab, "ref": reference,
+                "paths": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "type": "string", "maxLength": 4096 } } },
+                "required": ["tabId", "ref", "paths"], "additionalProperties": false } }),
+        json!({ "name": "handle_dialog", "description": "Acepta (accept: true) o descarta (accept: false) el alert, confirm o prompt que tiene abierto la pestaña; en un prompt, «promptText» es lo que se responde. Mientras haya uno abierto, la página está parada y las demás herramientas lo avisan.",
+            "inputSchema": { "type": "object", "properties": { "tabId": tab, "accept": { "type": "boolean" }, "promptText": { "type": "string", "maxLength": 5000 } },
+                "required": ["tabId", "accept"], "additionalProperties": false } }),
+        json!({ "name": "tab_close", "description": "Cierra una de tus pestañas.",
             "inputSchema": { "type": "object", "properties": { "tabId": tab }, "required": ["tabId"], "additionalProperties": false } }),
     ]
 }
@@ -191,6 +233,24 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ")
 }
 
+/// La extensión más antigua que sabe de chats. Las anteriores ponían las pestañas de todos los
+/// chats en un único grupo «trex», y con ellas un chat podría tocar las de otro: no se les
+/// manda nada.
+const MIN_EXTENSION: [u32; 3] = [0, 2, 0];
+
+fn extension_supported(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let mut found = [0u32; 3];
+    for slot in &mut found {
+        match parts.next().map(str::parse::<u32>) {
+            Some(Ok(number)) => *slot = number,
+            Some(Err(_)) => return false,
+            None => break,
+        }
+    }
+    found >= MIN_EXTENSION
+}
+
 fn clean_name(value: &str) -> String {
     let name: String = value.chars().filter(|c| !c.is_control()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
     let name: String = name.chars().take(60).collect();
@@ -211,8 +271,47 @@ struct Link {
     tx: mpsc::Sender<String>,
 }
 
-/// Un chat con acceso a las herramientas: su token (solo el hash) y su modo.
-struct Session { key: String, mode: Mode, used: Instant }
+/// Un chat con acceso a las herramientas: su token (solo el hash), su modo, el título de su
+/// grupo de pestañas y la carpeta de su proyecto (de donde puede subir archivos).
+struct Session { key: String, mode: Mode, used: Instant, group: String, cwd: Option<PathBuf> }
+
+/// El chat de una petición ya autenticada, con lo que necesita la extensión para saber de quién
+/// es cada pestaña.
+#[derive(Clone, Debug, PartialEq)]
+struct Chat { key: String, mode: Mode, owner: String, group: String, cwd: Option<PathBuf> }
+
+/// Id opaco del chat para la extensión: sale de su clave de sesión, no de su token, así que es
+/// el mismo aunque el token se renueve (al cambiar de modo, o al reiniciar trex), y el chat
+/// conserva su grupo de pestañas. A partir de él no se puede llegar ni al token ni a la clave.
+fn owner_of(key: &str) -> String {
+    token_hash(&format!("trex-chrome-chat\n{key}"))[..32].to_string()
+}
+
+/// Caracteres que no se ven pero cambian cómo se lee un título (dirección del texto, espacios
+/// de ancho cero): en el nombre de un grupo de pestañas solo sirven para engañar.
+fn invisible(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// Título del grupo de pestañas de un chat: «trex · Claude 2», con el nombre limpio y recortado.
+/// Nunca «trex» a secas, que es el grupo común.
+fn group_title(label: Option<&str>) -> String {
+    // Saltos de línea y tabuladores cuentan como espacios; lo demás invisible, fuera.
+    let words: String = label.unwrap_or("").chars().filter(|c| c.is_whitespace() || !invisible(*c)).collect();
+    let text = words.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = text.strip_prefix(GROUP_PREFIX).unwrap_or(&text).trim();
+    let label = if text.chars().count() > MAX_LABEL { format!("{}…", text.chars().take(MAX_LABEL - 1).collect::<String>().trim_end()) } else { text.to_string() };
+    format!("{GROUP_PREFIX}{}", if label.is_empty() { GENERIC_CHAT } else { &label })
+}
+
+/// La carpeta del proyecto del chat, solo si es una ruta absoluta razonable. Si no, el chat
+/// funciona igual, pero sin poder subir archivos.
+fn clean_cwd(value: Option<&str>) -> Option<PathBuf> {
+    let value = value?.trim();
+    if value.is_empty() || value.len() > 4096 || value.contains('\0') { return None; }
+    let path = PathBuf::from(value);
+    (path.is_absolute() && !path.components().any(|part| matches!(part, Component::ParentDir))).then_some(path)
+}
 
 pub struct Inner {
     app: Mutex<Option<AppHandle>>,
@@ -313,18 +412,19 @@ impl Inner {
         Some(found)
     }
 
-    fn session(&self, token: &str) -> Option<(String, Mode)> {
+    fn session(&self, token: &str) -> Option<Chat> {
         if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) { return None; }
         let hash = token_hash(token);
         let mut sessions = lock(&self.sessions);
         let session = sessions.iter_mut().find(|(known, _)| same_secret(known, &hash)).map(|(_, session)| session)?;
         session.used = Instant::now();
-        Some((session.key.clone(), session.mode))
+        Some(Chat { key: session.key.clone(), mode: session.mode, owner: owner_of(&session.key), group: session.group.clone(), cwd: session.cwd.clone() })
     }
 
     /// Token para un chat. Volver a pedirlo para el mismo chat sustituye al anterior
-    /// (por ejemplo, al cambiar de modo): el viejo deja de valer.
-    fn issue_session(&self, key: &str, mode: Mode) -> Result<String, String> {
+    /// (por ejemplo, al cambiar de modo): el viejo deja de valer. `label` es el nombre del chat
+    /// para su grupo de pestañas y `cwd`, la carpeta de su proyecto; los dos son opcionales.
+    fn issue_session(&self, key: &str, mode: Mode, label: Option<&str>, cwd: Option<&str>) -> Result<String, String> {
         let token = hex(&random_bytes::<32>()?);
         let mut sessions = lock(&self.sessions);
         sessions.retain(|_, session| session.key != key);
@@ -332,8 +432,28 @@ impl Inner {
             let Some(oldest) = sessions.iter().min_by_key(|(_, session)| session.used).map(|(hash, _)| hash.clone()) else { break };
             sessions.remove(&oldest);
         }
-        sessions.insert(token_hash(&token), Session { key: key.to_string(), mode, used: Instant::now() });
+        sessions.insert(token_hash(&token), Session { key: key.to_string(), mode, used: Instant::now(), group: group_title(label), cwd: clean_cwd(cwd) });
         Ok(token)
+    }
+
+    /// El chat terminó: su token deja de valer y la extensión suelta sus grupos de pestañas
+    /// (las pestañas se quedan donde están: son de la persona). Se avisa aunque el chat ya no
+    /// tuviera token aquí (por ejemplo, tras apagar y encender el puente), porque la extensión
+    /// puede seguir guardándole grupos.
+    fn end_session(&self, key: &str) -> bool {
+        let ended = {
+            let mut sessions = lock(&self.sessions);
+            let before = sessions.len();
+            sessions.retain(|_, session| session.key != key);
+            sessions.len() != before
+        };
+        self.notify(json!({ "type": "release", "owner": owner_of(key) }));
+        ended
+    }
+
+    /// Un aviso a la extensión que no espera respuesta. Sin extensión conectada, no hay a quién.
+    fn notify(&self, message: Value) {
+        if let Some(link) = lock(&self.link).as_ref() { let _ = link.tx.try_send(message.to_string()); }
     }
 
     /// El modo del chat cambió (por ejemplo, salió de planificar): mismo token, otro permiso.
@@ -346,8 +466,13 @@ impl Inner {
 
     /// Manda una orden a la extensión y espera su respuesta.
     async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
-        let tx = lock(&self.link).as_ref().map(|link| link.tx.clone())
+        let (tx, version) = lock(&self.link).as_ref().map(|link| (link.tx.clone(), link.version.clone()))
             .ok_or("La extensión de trex no está conectada. Abre el navegador y comprueba que la extensión esté activa.")?;
+        if !extension_supported(&version) {
+            let version = if version.is_empty() { "sin versión" } else { version.as_str() };
+            return Err(format!("La extensión de trex de este navegador es antigua ({version}): pide a la persona que la recargue en chrome://extensions \
+o la actualice, para que cada chat tenga sus propias pestañas."));
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (done_tx, done_rx) = oneshot::channel();
         lock(&self.pending).insert(id, done_tx);
@@ -531,8 +656,86 @@ fn tool_error(message: &str) -> Value {
     json!({ "content": [{ "type": "text", "text": message }], "isError": true })
 }
 
+// --- upload_file: qué archivos puede subir un chat ------------------------------------------
+
+/// El resto de `path` tras la carpeta `base`, comparando tramo a tramo (en Windows sin
+/// distinguir mayúsculas). `None` si `path` no está dentro de `base`.
+fn within(path: &Path, base: &Path) -> Option<PathBuf> {
+    let mut rest = path.components();
+    for part in base.components() {
+        let other = rest.next()?;
+        let same = if cfg!(windows) {
+            part.as_os_str().to_string_lossy().to_lowercase() == other.as_os_str().to_string_lossy().to_lowercase()
+        } else {
+            part == other
+        };
+        if !same { return None; }
+    }
+    Some(rest.as_path().to_path_buf())
+}
+
+/// Sin el prefijo `\\?\` que pone `canonicalize` en Windows: el navegador recibe la ruta de siempre.
+fn plain_path(path: &Path) -> String {
+    let text = path.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") { return format!(r"\\{rest}"); }
+    text.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(text)
+}
+
+/// Un archivo que un chat quiere subir. Vale si es un archivo normal dentro de la carpeta de su
+/// proyecto (`root`, ya canonicalizada; `cwd` es la que dio la app), al que se llega sin `..` y
+/// sin pasar por ningún enlace simbólico ni junction, y de hasta 64 MiB.
+fn upload_path(cwd: &Path, root: &Path, raw: &str) -> Result<PathBuf, String> {
+    let shown: String = raw.chars().take(160).collect();
+    if raw.trim().is_empty() || raw.len() > 4096 || raw.contains('\0') { return Err("Hay una ruta vacía o no válida.".into()); }
+    let path = Path::new(raw);
+    if path.components().any(|part| matches!(part, Component::ParentDir)) {
+        return Err(format!("«{shown}»: las rutas no pueden salir de carpeta con «..»."));
+    }
+    let outside = || format!("«{shown}» está fuera de la carpeta del proyecto de este chat.");
+    let relative = if path.is_absolute() {
+        within(path, cwd).or_else(|| within(path, root)).ok_or_else(outside)?
+    } else if path.components().any(|part| matches!(part, Component::Prefix(_) | Component::RootDir)) {
+        // `C:archivo` o `\archivo` en Windows: ni relativas a la carpeta ni absolutas de verdad.
+        return Err(outside());
+    } else {
+        path.to_path_buf()
+    };
+    // Tramo a tramo desde la carpeta del proyecto: ninguno puede ser un enlace (en Windows,
+    // `is_symlink` también es cierto para los junctions).
+    let mut current = root.to_path_buf();
+    let mut steps = 0;
+    for part in relative.components() {
+        let Component::Normal(name) = part else { continue };
+        current.push(name);
+        steps += 1;
+        let meta = std::fs::symlink_metadata(&current).map_err(|_| format!("«{shown}» no existe."))?;
+        if meta.file_type().is_symlink() { return Err(format!("«{shown}» pasa por un enlace simbólico o un junction: no lo subo.")); }
+    }
+    if steps == 0 { return Err(format!("«{shown}» es la carpeta del proyecto, no un archivo.")); }
+    let meta = std::fs::symlink_metadata(&current).map_err(|_| format!("«{shown}» no existe."))?;
+    if !meta.is_file() { return Err(format!("«{shown}» no es un archivo.")); }
+    if meta.len() > MAX_UPLOAD_BYTES { return Err(format!("«{shown}» pesa más de 64 MiB.")); }
+    // Por si acaso, la ruta ya resuelta sigue dentro del proyecto.
+    let resolved = current.canonicalize().map_err(|_| format!("«{shown}» no existe."))?;
+    if !resolved.starts_with(root) { return Err(outside()); }
+    Ok(resolved)
+}
+
+/// Las rutas de upload_file se comprueban aquí, no en la extensión: lo que le llega ya son
+/// rutas absolutas de archivos que este chat puede subir. Sin carpeta de proyecto, nada.
+fn checked_uploads(cwd: Option<&Path>, paths: &Value) -> Result<Vec<String>, String> {
+    let cwd = cwd.ok_or("Este chat no tiene carpeta de proyecto, así que no puede subir archivos.")?;
+    let list = paths.as_array().filter(|list| !list.is_empty()).ok_or("Indica en «paths» los archivos que quieres subir.")?;
+    if list.len() > MAX_UPLOADS { return Err(format!("Como mucho {MAX_UPLOADS} archivos por vez.")); }
+    let root = cwd.canonicalize().map_err(|_| "No se encuentra la carpeta del proyecto de este chat.".to_string())?;
+    list.iter().map(|path| {
+        let path = path.as_str().ok_or("Cada ruta de «paths» es un texto.")?;
+        upload_path(cwd, &root, path).map(|file| plain_path(&file))
+    }).collect()
+}
+
 /// Una petición JSON-RPC de un agente ya autenticado. `None`: es un aviso, no lleva respuesta.
-async fn handle_mcp(inner: &Arc<Inner>, session: &str, mode: Mode, message: &Value) -> Option<Value> {
+async fn handle_mcp(inner: &Arc<Inner>, chat: &Chat, message: &Value) -> Option<Value> {
     let id = message.get("id")?.clone();
     let ok = |result: Value| Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
     let fail = |code: i64, text: &str| Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": text } }));
@@ -553,11 +756,18 @@ async fn handle_mcp(inner: &Arc<Inner>, session: &str, mode: Mode, message: &Val
                 return fail(-32602, "tools/call necesita un nombre y un objeto de argumentos");
             };
             if !OBSERVE_TOOLS.contains(&name) && !ACTION_TOOLS.contains(&name) { return fail(-32602, "Herramienta desconocida"); }
-            if !mode.allows(name) {
+            if !chat.mode.allows(name) {
                 return ok(tool_error("Este chat está en modo de solo lectura: puede mirar el navegador, pero no manejarlo. Cambia el modo de permisos para actuar."));
             }
-            let arguments = if params["arguments"].is_object() { params["arguments"].clone() } else { json!({}) };
-            match inner.call(name, json!({ "session": session, "arguments": arguments })).await {
+            let mut arguments = if params["arguments"].is_object() { params["arguments"].clone() } else { json!({}) };
+            if name == "upload_file" {
+                match checked_uploads(chat.cwd.as_deref(), &arguments["paths"]) {
+                    Ok(paths) => arguments["paths"] = json!(paths),
+                    Err(error) => return ok(tool_error(&error)),
+                }
+            }
+            // La extensión decide con `owner` qué pestañas son de este chat, y con `group` titula su grupo.
+            match inner.call(name, json!({ "owner": chat.owner, "group": chat.group, "arguments": arguments })).await {
                 Ok(value) => ok(tool_content(&value)),
                 Err(error) => ok(tool_error(&error)),
             }
@@ -573,7 +783,7 @@ async fn mcp(AxumState(state): AxumState<BridgeState>, headers: HeaderMap, body:
     if !local_host(&headers, port) || headers.contains_key(header::ORIGIN) {
         return mcp_reply(StatusCode::FORBIDDEN, Some(json!({ "error": "Forbidden" })));
     }
-    let Some((session, mode)) = bearer(&headers).and_then(|token| inner.session(token)) else {
+    let Some(chat) = bearer(&headers).and_then(|token| inner.session(token)) else {
         let mut response = mcp_reply(StatusCode::UNAUTHORIZED, Some(json!({ "error": "La sesión de trex para el navegador no es válida o caducó." })));
         response.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
         return response;
@@ -588,7 +798,7 @@ async fn mcp(AxumState(state): AxumState<BridgeState>, headers: HeaderMap, body:
     if !message.is_object() || message["jsonrpc"] != "2.0" {
         return mcp_reply(StatusCode::BAD_REQUEST, Some(json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "Petición no válida" } })));
     }
-    match handle_mcp(inner, &session, mode, &message).await {
+    match handle_mcp(inner, &chat, &message).await {
         Some(reply) => mcp_reply(StatusCode::OK, Some(reply)),
         None => mcp_reply(StatusCode::ACCEPTED, None),
     }
@@ -789,18 +999,38 @@ pub fn browser_bridge_revoke(app: AppHandle, state: State<'_, BridgeState>, brow
 #[serde(rename_all = "camelCase")]
 pub struct McpSession { url: String, token: String, mode: &'static str, connected: bool }
 
+fn valid_session_key(session: &str) -> bool {
+    !session.is_empty() && session.len() <= 128 && session.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.'))
+}
+
 /// Acceso de un chat a las herramientas. `None`: la función está apagada o aún no escucha,
-/// y el chat simplemente no las tiene.
+/// y el chat simplemente no las tiene. `label` (opcional) es el nombre del chat, que titula su
+/// grupo de pestañas; `cwd` (opcional), la carpeta de su proyecto, la única de la que
+/// upload_file puede subir archivos.
 #[tauri::command]
-pub fn browser_bridge_mcp_session(state: State<'_, BridgeState>, session: String, mode: String) -> Result<Option<McpSession>, String> {
-    let mode = Mode::parse(&mode).ok_or("Modo no válido.")?;
-    if session.is_empty() || session.len() > 128 || !session.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.')) {
-        return Err("Sesión no válida.".into());
-    }
-    let Some(port) = state.0.port() else { return Ok(None) };
-    let token = state.0.issue_session(&session, mode)?;
-    let connected = lock(&state.0.link).is_some();
+pub fn browser_bridge_mcp_session(state: State<'_, BridgeState>, session: String, mode: String, label: Option<String>, cwd: Option<String>)
+    -> Result<Option<McpSession>, String> {
+    mcp_session(&state.0, &session, &mode, label.as_deref(), cwd.as_deref())
+}
+
+fn mcp_session(inner: &Inner, session: &str, mode: &str, label: Option<&str>, cwd: Option<&str>) -> Result<Option<McpSession>, String> {
+    let mode = Mode::parse(mode).ok_or("Modo no válido.")?;
+    if !valid_session_key(session) { return Err("Sesión no válida.".into()); }
+    // Un nombre o una carpeta desmesurados no son de un chat de verdad.
+    if label.is_some_and(|label| label.len() > 1024) || cwd.is_some_and(|cwd| cwd.len() > 4096) { return Err("Sesión no válida.".into()); }
+    let Some(port) = inner.port() else { return Ok(None) };
+    let token = inner.issue_session(session, mode, label, cwd)?;
+    let connected = lock(&inner.link).is_some();
     Ok(Some(McpSession { url: format!("http://127.0.0.1:{port}/mcp"), token, mode: mode.name(), connected }))
+}
+
+/// El chat se cerró: su acceso al navegador termina. Sus pestañas no se cierran (son de la
+/// persona): se quedan en su grupo, que la extensión pone en gris y deja sin dueño, así que
+/// ningún chat las alcanza y la persona puede cerrarlas de una vez. `true` si tenía acceso.
+#[tauri::command]
+pub fn browser_bridge_end_session(state: State<'_, BridgeState>, session: String) -> Result<bool, String> {
+    if !valid_session_key(&session) { return Err("Sesión no válida.".into()); }
+    Ok(state.0.end_session(&session))
 }
 
 #[derive(Serialize)]
@@ -811,8 +1041,9 @@ pub struct McpStdio { command: String, args: Vec<String>, token: String, mode: &
 /// ejecutable hace de adaptador (`browser_bridge_stdio.rs`). El token no va en los argumentos:
 /// quien lanza al agente lo pone en su entorno.
 #[tauri::command]
-pub fn browser_bridge_mcp_stdio(state: State<'_, BridgeState>, session: String, mode: String) -> Result<Option<McpStdio>, String> {
-    let Some(http) = browser_bridge_mcp_session(state, session, mode)? else { return Ok(None) };
+pub fn browser_bridge_mcp_stdio(state: State<'_, BridgeState>, session: String, mode: String, label: Option<String>, cwd: Option<String>)
+    -> Result<Option<McpStdio>, String> {
+    let Some(http) = mcp_session(&state.0, &session, &mode, label.as_deref(), cwd.as_deref())? else { return Ok(None) };
     let command = std::env::current_exe().map_err(|error| format!("No se encontró el ejecutable de trex: {error}"))?;
     Ok(Some(McpStdio { command: command.to_string_lossy().into_owned(), args: vec![crate::browser_bridge_stdio::FLAG.into(), http.url], token: http.token, mode: http.mode }))
 }
@@ -906,6 +1137,9 @@ mod tests {
         for tool in OBSERVE_TOOLS { assert!(Mode::Observe.allows(tool) && Mode::Full.allows(tool), "{tool}"); }
         for tool in ACTION_TOOLS { assert!(!Mode::Observe.allows(tool) && Mode::Full.allows(tool), "{tool}"); }
         assert!(!Mode::Full.allows("eval") && !Mode::Full.allows(""));
+        // Esperar solo mira; rellenar, elegir, subir y responder diálogos actúan.
+        assert!(Mode::Observe.allows("wait_for"));
+        for tool in ["fill_form", "select_option", "upload_file", "handle_dialog"] { assert!(!Mode::Observe.allows(tool), "{tool}"); }
         // Toda herramienta declara un esquema cerrado.
         for tool in tool_specs() {
             assert_eq!(tool["inputSchema"]["additionalProperties"], false, "{}", tool["name"]);
@@ -915,19 +1149,165 @@ mod tests {
     #[test]
     fn a_chat_token_is_replaced_when_reissued_and_unknown_tokens_fail() {
         let state = BridgeState::default();
-        let first = state.0.issue_session("t-1", Mode::Observe).unwrap();
-        assert_eq!(state.0.session(&first), Some(("t-1".into(), Mode::Observe)));
+        let key_mode = |token: &str| state.0.session(token).map(|chat| (chat.key, chat.mode));
+        let first = state.0.issue_session("t-1", Mode::Observe, None, None).unwrap();
+        assert_eq!(key_mode(&first), Some(("t-1".into(), Mode::Observe)));
+        let owner = state.0.session(&first).unwrap().owner;
         // Cambiar de modo da otro token; el anterior deja de valer.
-        let second = state.0.issue_session("t-1", Mode::Full).unwrap();
-        assert_eq!(state.0.session(&second), Some(("t-1".into(), Mode::Full)));
-        assert_eq!(state.0.session(&first), None);
-        assert_eq!(state.0.session(&"0".repeat(64)), None);
-        assert_eq!(state.0.session("corto"), None);
+        let second = state.0.issue_session("t-1", Mode::Full, None, None).unwrap();
+        assert_eq!(key_mode(&second), Some(("t-1".into(), Mode::Full)));
+        assert_eq!(key_mode(&first), None);
+        assert_eq!(key_mode(&"0".repeat(64)), None);
+        assert_eq!(key_mode("corto"), None);
         assert_eq!(lock(&state.0.sessions).len(), 1);
+        // El chat sigue siendo el mismo para la extensión: conserva su grupo de pestañas.
+        assert_eq!(state.0.session(&second).unwrap().owner, owner);
         // El modo de un chat abierto cambia sin tocar su token.
         assert!(state.0.set_mode("t-1", Mode::Observe));
-        assert_eq!(state.0.session(&second), Some(("t-1".into(), Mode::Observe)));
+        assert_eq!(key_mode(&second), Some(("t-1".into(), Mode::Observe)));
         assert!(!state.0.set_mode("otro", Mode::Full));
+        // Al terminar el chat, su token deja de valer.
+        assert!(state.0.end_session("t-1"));
+        assert_eq!(key_mode(&second), None);
+        assert!(!state.0.end_session("t-1"));
+    }
+
+    #[test]
+    fn each_chat_has_an_opaque_owner_and_a_clean_group_title() {
+        let owner = owner_of("t-1");
+        assert_eq!(owner.len(), 32);
+        assert!(owner.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(owner, owner_of("t-1"), "estable para el mismo chat");
+        assert_ne!(owner, owner_of("t-2"));
+        assert!(!owner.contains("t-1"));
+
+        assert_eq!(group_title(Some("Claude 2")), "trex · Claude 2");
+        assert_eq!(group_title(None), "trex · Chat");
+        assert_eq!(group_title(Some(" \n\t ")), "trex · Chat");
+        assert_eq!(group_title(Some("trex · Claude 2")), "trex · Claude 2", "sin el prefijo dos veces");
+        // Nunca «trex» a secas, que es el grupo común.
+        assert_eq!(group_title(Some("trex")), "trex · trex");
+        // Sin controles ni caracteres que dan la vuelta al texto.
+        assert_eq!(group_title(Some("Cla\u{202E}ude\u{200B}  2\n")), "trex · Claude 2");
+        let long = group_title(Some("Una conversación muy larga sobre el navegador"));
+        assert_eq!(long, "trex · Una conversación muy la…");
+        assert_eq!(long.chars().count(), GROUP_PREFIX.chars().count() + MAX_LABEL);
+
+        // La carpeta del proyecto: solo rutas absolutas sin «..».
+        let temp = std::env::temp_dir();
+        assert_eq!(clean_cwd(Some(&temp.to_string_lossy())), Some(temp.clone()));
+        for bad in ["", "   ", "relativa/carpeta", "x\0y"] { assert_eq!(clean_cwd(Some(bad)), None, "{bad:?}"); }
+        assert_eq!(clean_cwd(Some(&temp.join("..").join("otra").to_string_lossy())), None);
+        assert_eq!(clean_cwd(None), None);
+    }
+
+    #[test]
+    fn label_and_cwd_are_optional_when_a_chat_asks_for_access() {
+        let state = BridgeState::default();
+        // Con el puente apagado no hay sesión, se pida como se pida.
+        assert!(mcp_session(&state.0, "t-1", "full", Some("Claude 2"), None).unwrap().is_none());
+        *lock(&state.0.server) = Some(Running { shutdown: watch::channel(false).0, port: 7341 });
+
+        let plain = mcp_session(&state.0, "t-1", "full", None, None).unwrap().unwrap();
+        assert_eq!((plain.url.as_str(), plain.mode), ("http://127.0.0.1:7341/mcp", "full"));
+        let chat = state.0.session(&plain.token).unwrap();
+        assert_eq!((chat.group.as_str(), chat.cwd.as_ref()), ("trex · Chat", None));
+
+        let temp = std::env::temp_dir();
+        let named = mcp_session(&state.0, "t-2", "observe", Some("  Codex\n1  "), Some(&temp.to_string_lossy())).unwrap().unwrap();
+        let chat = state.0.session(&named.token).unwrap();
+        assert_eq!((chat.group.as_str(), chat.mode, chat.cwd), ("trex · Codex 1", Mode::Observe, Some(temp)));
+        // Una carpeta relativa no se guarda: el chat funciona, pero sin subir archivos.
+        let relative = mcp_session(&state.0, "t-3", "full", Some("Gemini"), Some("proyecto")).unwrap().unwrap();
+        assert_eq!(state.0.session(&relative.token).unwrap().cwd, None);
+        // Lo que no es de un chat de verdad se rechaza.
+        assert!(mcp_session(&state.0, "t 4", "full", None, None).is_err());
+        assert!(mcp_session(&state.0, "t-4", "todo", None, None).is_err());
+        assert!(mcp_session(&state.0, "t-4", "full", Some(&"x".repeat(2000)), None).is_err());
+    }
+
+    #[test]
+    fn uploads_only_reach_regular_files_inside_the_chat_folder() {
+        let base = std::env::temp_dir().join(format!("trex-upload-{}", hex(&random_bytes::<6>().unwrap())));
+        let project = base.join("proyecto");
+        let outside = base.join("fuera");
+        std::fs::create_dir_all(project.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(project.join("a.txt"), "hola").unwrap();
+        std::fs::write(project.join("sub").join("b.bin"), [1u8, 2, 3]).unwrap();
+        std::fs::write(outside.join("secreto.txt"), "no").unwrap();
+        std::fs::File::create(project.join("grande.bin")).unwrap().set_len(MAX_UPLOAD_BYTES + 1).unwrap();
+        std::fs::File::create(project.join("justo.bin")).unwrap().set_len(MAX_UPLOAD_BYTES).unwrap();
+        let check = |paths: Value| checked_uploads(Some(&project), &paths);
+
+        let absolute = project.join("a.txt").to_string_lossy().into_owned();
+        let ok = check(json!(["a.txt", "./sub/b.bin", absolute, "justo.bin"])).unwrap();
+        assert_eq!(ok.len(), 4);
+        // Rutas absolutas normales, sin el prefijo \\?\ de Windows.
+        assert!(ok.iter().all(|path| !path.starts_with(r"\\?\") && Path::new(path).is_absolute()), "{ok:?}");
+        assert!(ok[0].ends_with("a.txt") && ok[1].ends_with("b.bin") && ok[2].ends_with("a.txt"), "{ok:?}");
+
+        let secret = outside.join("secreto.txt").to_string_lossy().into_owned();
+        let expected: [(Value, &str); 11] = [
+            (json!(["../fuera/secreto.txt"]), ".."),
+            (json!(["sub/../../fuera/secreto.txt"]), ".."),
+            (json!([secret]), "fuera de la carpeta"),
+            (json!(["grande.bin"]), "64 MiB"),
+            (json!(["sub"]), "no es un archivo"),
+            (json!(["no-existe.txt"]), "no existe"),
+            (json!([""]), "no válida"),
+            (json!([]), "paths"),
+            (json!("a.txt"), "paths"),
+            (json!([7]), "texto"),
+            (json!(vec!["a.txt"; MAX_UPLOADS + 1]), "Como mucho"),
+        ];
+        for (paths, reason) in expected {
+            let error = check(paths.clone()).unwrap_err();
+            assert!(error.contains(reason), "{paths}: {error}");
+        }
+        // Sin carpeta de proyecto, nada.
+        assert!(checked_uploads(None, &json!(["a.txt"])).unwrap_err().contains("carpeta de proyecto"));
+
+        // Un junction (Windows, no pide permisos) o un enlace simbólico dentro del proyecto que lleva fuera.
+        #[cfg(windows)]
+        {
+            let junction = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(project.join("atajo")).arg(&outside).output();
+            assert!(junction.is_ok_and(|output| output.status.success()), "mklink /J debería funcionar sin permisos");
+            assert!(check(json!(["atajo/secreto.txt"])).unwrap_err().contains("enlace"));
+            let through = project.join("atajo").join("secreto.txt").to_string_lossy().into_owned();
+            assert!(check(json!([through])).unwrap_err().contains("enlace"));
+            // Los enlaces simbólicos piden permisos (o el modo de desarrollador): solo si se pueden crear.
+            if std::os::windows::fs::symlink_file(outside.join("secreto.txt"), project.join("enlace.txt")).is_ok() {
+                assert!(check(json!(["enlace.txt"])).unwrap_err().contains("enlace"));
+            }
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, project.join("atajo")).unwrap();
+            assert!(check(json!(["atajo/secreto.txt"])).unwrap_err().contains("enlace"));
+            std::os::unix::fs::symlink(outside.join("secreto.txt"), project.join("enlace.txt")).unwrap();
+            assert!(check(json!(["enlace.txt"])).unwrap_err().contains("enlace"));
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn an_extension_older_than_per_chat_groups_gets_no_orders() {
+        for (version, supported) in [("0.2.0", true), ("0.2.1", true), ("0.10.0", true), ("1", true), ("1.0.0.3", true),
+            ("0.1.9", false), ("0.1.0", false), ("", false), ("0.x", false), ("abc", false)] {
+            assert_eq!(extension_supported(version), supported, "{version}");
+        }
+        let state = BridgeState::default();
+        let (tx, mut rx) = mpsc::channel(4);
+        *lock(&state.0.link) = Some(Link { connection: 1, browser_id: "b1".into(), version: "0.1.0".into(), tx });
+        let chat = Chat { key: "t-1".into(), mode: Mode::Full, owner: owner_of("t-1"), group: group_title(None), cwd: None };
+        let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "tabs_list", "arguments": {} } });
+        let reply = tauri::async_runtime::block_on(handle_mcp(&state.0, &chat, &call)).unwrap();
+        assert_eq!(reply["result"]["isError"], true);
+        assert!(reply["result"]["content"][0]["text"].as_str().unwrap().contains("antigua (0.1.0)"));
+        // A esa extensión no le llegó nada.
+        assert!(rx.try_recv().is_err());
+        assert!(lock(&state.0.pending).is_empty());
     }
 
     #[test]
@@ -945,7 +1325,8 @@ mod tests {
     #[test]
     fn the_agent_protocol_answers_without_a_browser_and_respects_the_mode() {
         let state = BridgeState::default();
-        let run = |mode, message: Value| tauri::async_runtime::block_on(handle_mcp(&state.0, "t-1", mode, &message));
+        let chat = |mode| Chat { key: "t-1".into(), mode, owner: owner_of("t-1"), group: group_title(None), cwd: None };
+        let run = |mode, message: Value| tauri::async_runtime::block_on(handle_mcp(&state.0, &chat(mode), &message));
         let init = run(Mode::Observe, json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } })).unwrap();
         assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(init["result"]["serverInfo"]["name"], "trex-chrome");
@@ -963,6 +1344,13 @@ mod tests {
         let unknown = run(Mode::Full, json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": { "name": "eval", "arguments": {} } })).unwrap();
         assert_eq!(unknown["error"]["code"], -32602);
         assert_eq!(run(Mode::Full, json!({ "jsonrpc": "2.0", "id": 6, "method": "resources/list" })).unwrap()["error"]["code"], -32601);
+        // Esperar se puede en solo lectura (llega al navegador, que aquí no está).
+        let wait = run(Mode::Observe, json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "wait_for", "arguments": { "tabId": 1, "text": "Hola" } } })).unwrap();
+        assert!(wait["result"]["content"][0]["text"].as_str().unwrap().contains("no está conectada"));
+        // Un chat sin carpeta de proyecto no sube nada: se rechaza aquí, antes de llegar al navegador.
+        let upload = run(Mode::Full, json!({ "jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": { "name": "upload_file", "arguments": { "tabId": 1, "ref": "ref_1", "paths": ["a.txt"] } } })).unwrap();
+        assert_eq!(upload["result"]["isError"], true);
+        assert!(upload["result"]["content"][0]["text"].as_str().unwrap().contains("carpeta de proyecto"));
     }
 
     #[test]
@@ -1041,14 +1429,14 @@ mod tests {
             let mut upgrade = format!("ws://127.0.0.1:{port}/ws").into_client_request().unwrap();
             upgrade.headers_mut().insert("Origin", format!("chrome-extension://{EXTENSION}").parse().unwrap());
             let (mut extension, _) = tokio_tungstenite::connect_async(upgrade).await.unwrap();
-            extension.send(WsMessage::Text(json!({ "type": "hello", "token": token, "version": "0.1.0" }).to_string().into())).await.unwrap();
+            extension.send(WsMessage::Text(json!({ "type": "hello", "token": token, "version": "0.2.0" }).to_string().into())).await.unwrap();
             assert_eq!(next_json(&mut extension).await["type"], "ready");
             assert!(lock(&state.0.link).is_some());
 
             // Un agente: sin token, 401; con `Origin` (una web), 403; con GET, 405.
             let call = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"tabs_list","arguments":{}}}"#;
             assert_eq!(request(port, "POST", "/mcp", vec![json_type()], call).await.0, 401);
-            let session = state.0.issue_session("t-1", Mode::Full).unwrap();
+            let session = state.0.issue_session("t-1", Mode::Full, Some("Claude 2"), None).unwrap();
             let bearer = || ("Authorization", format!("Bearer {session}"));
             assert_eq!(request(port, "POST", "/mcp", vec![json_type(), bearer(), ("Origin", "https://evil.example".into())], call).await.0, 403);
             assert_eq!(request(port, "GET", "/mcp", vec![], "").await.0, 405);
@@ -1060,7 +1448,11 @@ mod tests {
                 if message["type"] == "call" { break message; }
             };
             assert_eq!(order["method"], "tabs_list");
-            assert_eq!(order["params"]["session"], "t-1");
+            // La orden dice de qué chat viene (id opaco) y cómo se llama su grupo; nunca el token ni la clave.
+            assert_eq!(order["params"]["owner"], owner_of("t-1"));
+            assert_eq!(order["params"]["group"], "trex · Claude 2");
+            assert!(order["params"].get("session").is_none());
+            assert!(!order.to_string().contains(&session));
             extension.send(WsMessage::Text(json!({ "type": "result", "id": order["id"], "ok": true, "value": { "text": "tabId 4 · Inicio" } }).to_string().into())).await.unwrap();
             let (status, reply) = pending.await.unwrap();
             assert_eq!(status, 200);
@@ -1074,6 +1466,15 @@ mod tests {
             let (status, reply) = request(port, "POST", "/mcp", vec![json_type(), bearer()], click).await;
             assert_eq!((status, reply["result"]["isError"].as_bool()), (200, Some(true)));
             assert!(lock(&state.0.pending).is_empty());
+
+            // El chat termina: la extensión recibe el aviso para soltar sus grupos y el token deja de valer.
+            assert!(state.0.end_session("t-1"));
+            let release = loop {
+                let message = next_json(&mut extension).await;
+                if message["type"] != "ping" { break message; }
+            };
+            assert_eq!(release, json!({ "type": "release", "owner": owner_of("t-1") }));
+            assert_eq!(request(port, "POST", "/mcp", vec![json_type(), bearer()], call).await.0, 401);
 
             // Desvincular cierra la conexión de ese navegador.
             let browser = lock(&state.0.config).browsers[0].id.clone();
