@@ -75,6 +75,8 @@ export type Settings = {
   integrations: ApplicationIntegrations;
   /** Resumen automático del contexto por asistente; apagado salvo que la persona lo active. */
   autoCompact: import("./autoCompact").AutoCompactSettings;
+  /** Lanzador de proyectos: carpetas raíz, agente y si vuelve al chat abierto. */
+  projectLauncher: import("./projectLauncher").ProjectLauncherSettings;
   desktopEnabled: boolean;
   /** Control por accesibilidad (experimental). */
   a11yEnabled: boolean;

@@ -28,6 +28,7 @@ mod remote;
 mod browser_bridge;
 mod browser_bridge_stdio;
 mod process_lifetime;
+mod project_folders;
 mod project_icon;
 mod shared_files;
 mod terminal_env;
@@ -490,6 +491,7 @@ pub fn run() {
             git::git_switch_branch,
             git::git_create_branch,
             files::list_project_files,
+            project_folders::list_project_folders,
             codex_models::codex_context_windows,
             accounts::detect_account_dir,
             desktop_notification,

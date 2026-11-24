@@ -439,3 +439,13 @@
 .settings-hex input[aria-invalid="true"] { border-color: var(--danger-border); color: var(--danger-text); }
 .tone-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 820px) { .tone-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Ajustes → Proyectos: carpetas raíz del lanzador. */
+.launcher-roots { display: grid; gap: var(--sp-1-5); margin: 0; padding: 0; list-style: none; }
+.launcher-roots li { display: flex; align-items: center; gap: var(--sp-2-5); min-height: 38px; padding: var(--sp-1) var(--sp-1-5) var(--sp-1) var(--sp-3); border: 1px solid var(--settings-edge); border-radius: var(--radius-control); background: var(--settings-inset); color: var(--text-muted); }
+.launcher-roots li > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: var(--fs-xs)/1.6 var(--font-mono); }
+.launcher-roots .icon-btn { flex: 0 0 auto; width: 28px; height: 28px; }
+.launcher-roots .icon-btn:hover { color: var(--danger, var(--text)); }
+.settings-block-head .btn { display: inline-flex; align-items: center; gap: var(--sp-1-5); }
+.launcher-shortcut { display: inline-flex; align-items: center; gap: var(--sp-2); justify-self: end; }
+.launcher-shortcut kbd { padding: 1px var(--sp-1-5); border: 1px solid var(--settings-edge); border-radius: var(--radius-xs); background: var(--settings-inset); color: var(--text); font: var(--fs-xs)/1.5 var(--font-mono); }

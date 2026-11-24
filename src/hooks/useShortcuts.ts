@@ -15,6 +15,8 @@ export type ShortcutOptions = {
   settingsOpen: boolean;
   modalOpen?: boolean;
   bindings?: ShortcutBindings;
+  /** Acciones apagadas por ahora: su combinación sigue llegando a la terminal. */
+  inactive?: readonly ShortcutAction[];
 };
 const editable = (target: EventTarget | null): boolean =>
   target instanceof HTMLElement &&
@@ -41,6 +43,7 @@ export function useShortcuts(
         return;
       const bindings = o.bindings ?? DEFAULT_SHORTCUTS;
       const action = SHORTCUT_ACTIONS.find((item) =>
+        !o.inactive?.includes(item.id) &&
         matchesShortcut(event, bindings[item.id]),
       )?.id;
       const indexed =
@@ -76,6 +79,7 @@ export function useShortcuts(
         (editable(event.target) &&
           ![
             "commandPalette",
+            "openProject",
             "focusSearch",
             "toggleSidebar",
             "toggleTopBar",

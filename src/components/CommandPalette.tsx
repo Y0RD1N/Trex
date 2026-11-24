@@ -8,7 +8,7 @@ import "./CommandPalette.css";
 const commandIcons = {
   split: SplitIcon, grid: GridIcon, rotate: RotateIcon, recover: RefreshIcon,
   usage: GaugeIcon, settings: SettingsIcon, theme: SunIcon, sidebar: PanelIcon,
-  folder: FolderIcon, add: FolderPlusIcon, shell: TerminalIcon, "agent-workflow": MapIcon,
+  folder: FolderIcon, add: FolderPlusIcon, launcher: SearchIcon, shell: TerminalIcon, "agent-workflow": MapIcon,
 };
 
 function CommandIcon({ command }: { command: PaletteCommand }) {

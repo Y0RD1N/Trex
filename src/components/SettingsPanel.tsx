@@ -10,7 +10,10 @@ import AccentPicker from "./AccentPicker";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
 import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
-import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MicIcon, MinusIcon, MoonIcon, PlusIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
+import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
+import { addLauncherRoot, MAX_LAUNCHER_ROOTS, type ProjectLauncherSettings } from "../projectLauncher";
+import { shortcutLabel } from "../shortcuts";
+import { CheckIcon, ChevronIcon, CloseIcon, CopyIcon, FolderIcon, TrashIcon, GearIcon, GlobeIcon, InfoIcon, KeyboardIcon, LayoutIcon, MicIcon, MinusIcon, MoonIcon, PlusIcon, ProfilesIcon, SunIcon, SystemIcon, TerminalIcon } from "./Icons";
 import Select from "./Select";
 import LauncherProfiles from "./LauncherProfiles";
 import AutoCompactSettings from "./AutoCompactSettings";
@@ -56,6 +59,7 @@ const SECTIONS = [
   { id: "terminal", label: "Texto" },
   { id: "cursor", label: "Cursor" },
   { id: "profiles", label: "Asistentes" },
+  { id: "projects", label: "Proyectos" },
   { id: "voice", label: "Voz" },
   { id: "browser", label: "Navegador" },
   { id: "integrations", label: "Integraciones" },
@@ -70,6 +74,7 @@ const GROUPS: { id: string; label: string; icon: ReactNode; pages: SectionId[] }
   { id: "general", label: "General", icon: <LayoutIcon size={16} />, pages: ["appearance", "sessions", "notifications"] },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon size={16} />, pages: ["terminal", "cursor"] },
   { id: "profiles", label: "Asistentes", icon: <ProfilesIcon />, pages: ["profiles"] },
+  { id: "projects", label: "Proyectos", icon: <FolderIcon size={16} />, pages: ["projects"] },
   { id: "voice", label: "Voz", icon: <MicIcon size={16} />, pages: ["voice"] },
   { id: "connections", label: "Conexiones", icon: <GlobeIcon size={16} />, pages: ["browser", "integrations", "remote"] },
   { id: "shortcuts", label: "Atajos", icon: <KeyboardIcon size={16} />, pages: ["shortcuts"] },
@@ -82,6 +87,8 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   const dialog = useDialog();
   const id = useId();
   const [draft, setDraft] = useState<Settings>(settings);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [section, setSection] = useState<SectionId>(initialSection);
   const [terminalAdvanced, setTerminalAdvanced] = useState(false);
   const [scrollbackText, setScrollbackText] = useState(String(settings.scrollback));
@@ -133,6 +140,21 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(settings) || scrollback !== settings.scrollback,
     [draft, settings, scrollback]);
   const patch = (partial: Partial<Settings>): void => setDraft(previous => ({ ...previous, ...partial }));
+  const patchLauncher = (partial: Partial<ProjectLauncherSettings>): void =>
+    setDraft(previous => ({ ...previous, projectLauncher: { ...previous.projectLauncher, ...partial } }));
+  const [rootNotice, setRootNotice] = useState("");
+  const addRoot = async (): Promise<void> => {
+    setRootNotice("");
+    let folder: string | string[] | null = null;
+    try { folder = await openFolderDialog({ directory: true, multiple: false, title: "Carpeta donde guardas tus proyectos" }); }
+    catch { setRootNotice("No se pudo abrir el selector de carpetas. Vuelve a intentarlo."); return; }
+    if (typeof folder !== "string" || !folder) return;
+    // El selector es modal: el borrador no cambia mientras está abierto.
+    const next = addLauncherRoot(draftRef.current.projectLauncher, folder);
+    if (next) patchLauncher({ roots: next.roots });
+    else setRootNotice(draftRef.current.projectLauncher.roots.length >= MAX_LAUNCHER_ROOTS
+      ? `Caben ${MAX_LAUNCHER_ROOTS} carpetas como máximo.` : "Esa carpeta ya está en la lista.");
+  };
   const shellOptions = appInfo?.shellOptions.length ? appInfo.shellOptions : [{ id: "default", label: "Shell del sistema", available: true, program: "" }];
 
   useLayoutEffect(() => {
@@ -330,6 +352,41 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
               {item.id === "voice" && section === "voice" && <VoiceSettings />}
               {item.id === "shortcuts" && <ShortcutSettings settings={draft} onChange={patch} />}
               {item.id === "notifications" && <NotificationsSettings settings={draft} onChange={patch} />}
+
+              {item.id === "projects" && <>
+                <div className="settings-block">
+                  <div className="settings-block-head">
+                    <h4>Carpetas de proyectos<SettingInfo text="Cada subcarpeta de estas carpetas aparece en el lanzador como un proyecto. Al abrirla con un agente se añade sola a trex." /></h4>
+                    <button type="button" className="btn btn-small" disabled={draft.projectLauncher.roots.length >= MAX_LAUNCHER_ROOTS} onClick={() => void addRoot()}>
+                      <PlusIcon size={14} />Añadir carpeta</button>
+                  </div>
+                  {draft.projectLauncher.roots.length > 0
+                    ? <ul className="launcher-roots" aria-label="Carpetas de proyectos">
+                      {draft.projectLauncher.roots.map(root => <li key={root}><FolderIcon size={15} /><span title={root}>{root}</span>
+                        <button type="button" className="icon-btn" aria-label={`Quitar ${root}`} title="Quitar"
+                          onClick={() => { setRootNotice(""); patchLauncher({ roots: draft.projectLauncher.roots.filter(item => item !== root) }); }}><TrashIcon size={14} /></button></li>)}
+                    </ul>
+                    : <p className="settings-hint">Añade una o varias carpetas, por ejemplo la que contiene todos tus repositorios. Sin carpetas, {shortcutLabel(draft.shortcuts.openProject)} no hace nada y la combinación sigue llegando a la terminal.</p>}
+                  {rootNotice && <p className="settings-hint" role="status">{rootNotice}</p>}
+                </div>
+                <div className="settings-block">
+                  <SettingField label="Abrir con" hint="en el lanzador, Tab cambia de agente" controlId={`${id}-launcher-profile`}>
+                    <Select id={`${id}-launcher-profile`} value={draft.projectLauncher.profileId && draft.profiles.some(profile => profile.id === draft.projectLauncher.profileId) ? draft.projectLauncher.profileId : ""}
+                      onChange={profileId => patchLauncher({ profileId })} options={[
+                        { value: "", label: "Predeterminado", description: `Ahora ${draft.profiles.find(profile => profile.id === draft.defaultProfileId)?.name ?? "ninguno"}; sigue al perfil predeterminado si lo cambias`,
+                          icon: <AgentIcon kind={draft.profiles.find(profile => profile.id === draft.defaultProfileId)?.provider ?? "claude"} size={15} /> },
+                        ...draft.profiles.map(profile => ({ value: profile.id, label: profile.name, icon: <AgentIcon kind={profile.provider} size={15} /> })),
+                      ]} />
+                  </SettingField>
+                  <SettingField label="Atajo" hint={draft.shortcuts.openProject === "Ctrl+Space" ? "en PowerShell, Ctrl+Space también abre su autocompletado" : undefined}>
+                    <button type="button" className="btn btn-small btn-ghost launcher-shortcut" onClick={() => setSection("shortcuts")}>
+                      <kbd>{shortcutLabel(draft.shortcuts.openProject)}</kbd>Cambiar</button>
+                  </SettingField>
+                </div>
+                <div className="settings-toggles">
+                  <SettingToggle label="Volver al chat que ya está abierto" info="Si el proyecto ya tiene un chat de ese agente, el lanzador va a él en lugar de abrir otro." checked={draft.projectLauncher.reuseChat} onChange={reuseChat => patchLauncher({ reuseChat })} />
+                </div>
+              </>}
 
               {item.id === "sessions" && <div className="settings-toggles">
                 <SettingToggle label="Abrir con un asistente" info="Si no hay sesiones que restaurar, abre el perfil predeterminado. Apagado, abre una terminal normal." checked={draft.autoRunClaude} onChange={autoRunClaude => patch({ autoRunClaude })} />

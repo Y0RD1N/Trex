@@ -60,7 +60,7 @@ cuando a uno se le acaba la cuota, **coordinar un equipo de agentes** o darles u
 | 🌐 **Trex Browser** | Un navegador con perfiles privados por proyecto que los agentes pueden manejar y tú puedes pausar o tomar. |
 | 🧷 **Tu navegador** *(experimental)* | Con la extensión de trex, los agentes ven y manejan las pestañas que compartas en tu Chrome, Brave o Edge, con tus sesiones iniciadas. |
 | 🖱️ **Control de aplicaciones** *(experimental)* | Los agentes pueden usar otras apps mediante el árbol de accesibilidad del sistema, sin mover tu ratón ni tu teclado. |
-| 🔔 **Comodidades** | Paleta de comandos (`Ctrl+K`), recuperar conversaciones, avisos de escritorio, atajos configurables, tema claro y oscuro. |
+| 🔔 **Comodidades** | Paleta de comandos (`Ctrl+K`), abrir cualquier proyecto de tus carpetas con un agente (`Ctrl+Space`, configurable), recuperar conversaciones, avisos de escritorio, atajos configurables, tema claro y oscuro. |
 
 ¿Quieres el detalle de cada una? Está en la **[guía de uso](docs/guia.md)**.
 

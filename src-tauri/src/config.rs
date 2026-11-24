@@ -65,12 +65,28 @@ pub struct AutoCompactRule { pub enabled: bool, pub tokens: u64 }
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoCompactSettings { pub claude: AutoCompactRule, pub codex: AutoCompactRule, pub trex: AutoCompactRule }
 
+/// Lanzador de proyectos: carpetas raíz cuyas subcarpetas se abren como
+/// proyectos, y con qué agente. Sin carpetas, su atajo no hace nada.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectLauncherSettings {
+    pub roots: Vec<String>,
+    /// Perfil con el que se abre; vacío = el perfil predeterminado.
+    pub profile_id: String,
+    /// Si el proyecto ya tiene un chat de ese agente, se vuelve a él.
+    pub reuse_chat: bool,
+}
+impl Default for ProjectLauncherSettings {
+    fn default() -> Self { Self { roots: Vec::new(), profile_id: String::new(), reuse_chat: true } }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub time_format: String,
     pub integrations: ApplicationIntegrations,
     pub auto_compact: AutoCompactSettings,
+    pub project_launcher: ProjectLauncherSettings,
     pub desktop_enabled: bool,
     /// Control por accesibilidad (experimental, desactivado por defecto).
     pub a11y_enabled: bool,
@@ -126,6 +142,7 @@ impl Default for Settings {
             time_format: "24h".into(),
             integrations: ApplicationIntegrations::default(),
             auto_compact: AutoCompactSettings::default(),
+            project_launcher: ProjectLauncherSettings::default(),
             desktop_enabled: false,
             a11y_enabled: false,
             a11y_keyboard: false,
@@ -237,6 +254,16 @@ mod browser_preference_tests {
         assert_eq!(saved["settings"]["autoCompact"]["claude"], serde_json::json!({"enabled":true,"tokens":400000}));
         assert_eq!(saved["settings"]["autoCompact"]["codex"], serde_json::json!({"enabled":false,"tokens":250000}));
         assert_eq!(saved["settings"]["autoCompact"]["trex"], serde_json::json!({"enabled":false,"tokens":0}));
+    }
+    #[test]
+    fn project_launcher_starts_without_folders_and_roundtrips_several() {
+        let old: AppConfig = serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
+        assert!(old.settings.project_launcher.roots.is_empty(), "without folders the launcher shortcut stays inactive");
+        assert!(old.settings.project_launcher.profile_id.is_empty() && old.settings.project_launcher.reuse_chat);
+        let raw = serde_json::json!({"settings":{"projectLauncher":{"roots":["D:\\projects","E:\\clientes"],"profileId":"codex-default","reuseChat":false}}});
+        let config: AppConfig = serde_json::from_value(raw).unwrap();
+        let saved = serde_json::to_value(config).unwrap();
+        assert_eq!(saved["settings"]["projectLauncher"], serde_json::json!({"roots":["D:\\projects","E:\\clientes"],"profileId":"codex-default","reuseChat":false}));
     }
     #[test]
     fn older_configuration_uses_the_frontend_browser_defaults() {

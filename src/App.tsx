@@ -69,6 +69,7 @@ import Toast from "./components/Toast";
 import { useVoiceCall } from "./hooks/useVoiceCall";
 
 const NO_PROJECTS: Project[] = [];
+const LAUNCHER_INACTIVE = ["openProject"] as const;
 import TooltipProvider from "./components/TooltipProvider";
 import ImageViewerProvider from "./components/ImageViewer";
 import FileViewerProvider from "./components/FileViewer";
@@ -109,6 +110,7 @@ import { readQueuedMessages } from "./api";
 import { sanitizeHandoffText } from "./handoff";
 import { IS_WINDOWS } from "./platform";
 import type { PaletteCommand } from "./commandPalette";
+import { addLauncherRoot, launcherProfileId } from "./projectLauncher";
 import { useNotificationSound } from "./hooks/useNotificationSound";
 import { useCliUpdates } from "./hooks/useCliUpdates";
 import { useAccountUsageUpkeep } from "./hooks/useAccountUsage";
@@ -122,6 +124,7 @@ const CommandPalette = lazyComponent(() => import("./components/CommandPalette")
 const RecoverConversations = lazyComponent(() => import("./components/RecoverConversations"));
 const UsageDialog = lazyComponent(() => import("./components/UsageDialog"));
 const AgentWorkflowDialog = lazyComponent(() => import("./components/AgentWorkflowDialog"));
+const ProjectLauncher = lazyComponent(() => import("./components/ProjectLauncher"));
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
 const CLAUDE_INFO_FALLBACK: ClaudeInfo = {
@@ -230,6 +233,7 @@ function AppShell() {
     return () => { current = false; };
   }, [settingsOpen]);
   const [paletteOpen,setPaletteOpen] = useState(false);
+  const [launcherOpen,setLauncherOpen] = useState(false);
   const [usageOpen,setUsageOpen] = useState(false);
   // El uso vive en la pestaña «Uso» del chat; sin un chat a la vista, en su ventana.
   const openUsage = useCallback(() => { if (!requestUsagePanel()) setUsageOpen(true); }, []);
@@ -258,11 +262,13 @@ function AppShell() {
   useEffect(() => () => { imagePreviewRef.current?.resolve(false); },[]);
   const settingsSurfaceRef = useRef<HTMLDivElement>(null);
   const paletteSurfaceRef = useRef<HTMLDivElement>(null);
+  const launcherSurfaceRef = useRef<HTMLDivElement>(null);
   const usageSurfaceRef = useRef<HTMLDivElement>(null);
   const recoverySurfaceRef = useRef<HTMLDivElement>(null);
   const imagePreviewSurfaceRef = useRef<HTMLDivElement>(null);
   const settingsPresence = usePresence(settingsOpen ? true : null, 160, settingsSurfaceRef);
   const palettePresence = usePresence(paletteOpen ? true : null, 160, paletteSurfaceRef);
+  const launcherPresence = usePresence(launcherOpen ? true : null, 160, launcherSurfaceRef);
   const usagePresence = usePresence(usageOpen ? true : null, 160, usageSurfaceRef);
   const recoveryPresence = usePresence(recoveryOpen ? true : null, 160, recoverySurfaceRef);
   const handoffPresence = usePresence(handoffDialog, 160, handoffSurfaceRef);
@@ -868,6 +874,66 @@ function AppShell() {
   }, [openTab]);
   useVoiceCall({ projects: config?.projects ?? NO_PROJECTS, activeProjectId, selectProject, openSession: openVoiceSession });
 
+  // --- Lanzador de proyectos ------------------------------------------------------
+
+  /**
+   * Abre la carpeta con un agente: si aún no es un proyecto de trex lo añade, y
+   * con «Volver al chat que ya está abierto» reutiliza el chat de ese agente.
+   */
+  const launchProject = useCallback((path: string, profileId: string) => {
+    const current = configRef.current;
+    if (!current) return;
+    let project = current.projects.find(item => normalizePath(item.path) === normalizePath(path));
+    if (!project) {
+      const added: Project = {
+        id: newProjectId(),
+        name: deriveProjectName(path),
+        path,
+        color: PROJECT_COLORS[current.projects.length % PROJECT_COLORS.length],
+        createdAt: Date.now(),
+        lastOpenedAt: null,
+      };
+      project = added;
+      const include = (previous: AppConfig): AppConfig => previous.projects.some(item => item.id === added.id) ? previous : {
+        ...previous,
+        projects: [...previous.projects, added],
+        ui: { ...previous.ui, projectFilter: includeAddedProject(previous.ui.projectFilter, added.id) },
+      };
+      // openTab lee el espejo: el proyecto tiene que estar ahí antes del próximo render.
+      configRef.current = include(current);
+      setConfig(previous => previous ? include(previous) : previous);
+      showToast(`Proyecto añadido: ${added.name}`);
+    }
+    setSearch("");
+    selectProject(project.id);
+    if (current.settings.projectLauncher.reuseChat) {
+      const open = [...tabsRef.current].reverse().find(tab => tab.projectId === project.id && tab.profileId === profileId && !tab.exited);
+      if (open) {
+        setActiveTabId(open.id);
+        // Cuenta como apertura: el lanzador ordena por lo último que usaste.
+        setConfig(previous => previous ? { ...previous, projects: previous.projects.map(item =>
+          item.id === open.projectId ? { ...item, lastOpenedAt: Date.now() } : item) } : previous);
+        return;
+      }
+    }
+    openTab(project.id, profileId);
+  }, [openTab, selectProject, showToast]);
+
+  /** Elige otra carpeta raíz desde el lanzador; se guarda como cualquier ajuste. */
+  const addLauncherFolder = useCallback(async () => {
+    let folder: string | string[] | null = null;
+    try { folder = await open({ directory: true, multiple: false, title: "Carpeta donde guardas tus proyectos" }); }
+    catch (error) { showToast(`No se pudo abrir el selector de carpetas: ${formatError(error)}`); return; }
+    if (typeof folder !== "string" || !folder) return;
+    const current = configRef.current;
+    if (!current) return;
+    const next = addLauncherRoot(current.settings.projectLauncher, folder);
+    if (!next) { showToast("Esa carpeta ya es una carpeta de proyectos."); setLauncherOpen(true); return; }
+    setConfig(previous => previous ? { ...previous, settings: { ...previous.settings, projectLauncher: next } } : previous);
+    showToast("Carpeta de proyectos añadida");
+    setLauncherOpen(true);
+  }, [showToast]);
+
   const requestHandoff =useCallback((context: HandoffContext) => {
     const source = tabsRef.current.find(tab => tab.id === context.source.sessionId);
     if (!source || source.projectId !== context.source.projectId || source.activity === "working" || source.activity === "waiting") {
@@ -1402,6 +1468,7 @@ function AppShell() {
       },
       focusSearch,
       commandPalette: () => setPaletteOpen(true),
+      openProject: () => setLauncherOpen(true),
       recoverSessions: () => { if (configRef.current?.ui.activeProjectId) setRecoveryOpen(true); },
       toggleSplit,
       focusOtherPane,
@@ -1425,8 +1492,10 @@ function AppShell() {
       resetFont: resetFontSize,
     },
     { enabled: config !== null && workspaceReady, settingsOpen: settingsPresence.value !== null,
-      modalOpen: palettePresence.value !== null || usagePresence.value !== null || recoveryPresence.value !== null || imagePreviewPresence.value !== null || handoffPresence.value !== null || workflowPresence.value !== null,
-      bindings:config?.settings.shortcuts },
+      modalOpen: palettePresence.value !== null || launcherPresence.value !== null || usagePresence.value !== null || recoveryPresence.value !== null || imagePreviewPresence.value !== null || handoffPresence.value !== null || workflowPresence.value !== null,
+      bindings:config?.settings.shortcuts,
+      // Sin carpetas de proyectos el atajo no existe: la combinación sigue llegando a la terminal.
+      inactive: config?.settings.projectLauncher.roots.length ? undefined : LAUNCHER_INACTIVE },
   );
 
   // --- Datos derivados para la interfaz ---------------------------------------------
@@ -1569,6 +1638,8 @@ function AppShell() {
     {id:"sidebar",label:"Mostrar / ocultar barra lateral",group:"Acciones",shortcut:config.settings.shortcuts.toggleSidebar,run:toggleSidebar},
     {id:"folder",label:"Abrir carpeta del proyecto",group:"Acciones",run:()=>{if(activeProject) revealProject(activeProject.id);},disabled:!activeProject},
     {id:"add",label:"Añadir proyecto",group:"Acciones",run:()=>void addProject()},
+    {id:"launcher",label:"Abrir proyecto con un agente…",detail:config.settings.projectLauncher.roots.length ? "Busca en tus carpetas de proyectos" : "Elige antes tus carpetas de proyectos",group:"Acciones",
+      shortcut:config.settings.projectLauncher.roots.length ? config.settings.shortcuts.openProject : undefined,run:()=>setLauncherOpen(true)},
     {id:"shell",label:"Nueva terminal",group:"Crear sesión",shortcut:config.settings.shortcuts.newShellTab,run:()=>{if(activeProject)openTab(activeProject.id,null);},disabled:!activeProject},
     {id:"agent-workflow",label:"Planear y ejecutar con agentes…",detail:"Elige un agente y un modelo para cada etapa",group:"Crear sesión",run:()=>{if(activeProject)openWorkflow(activeProject.id);},disabled:!activeProject},
     ...availableProfiles.map(profile=>({id:`profile-${profile.id}`,label:`Nueva sesión · ${profile.name}`,detail:profile.command,group:"Crear sesión",run:()=>{if(activeProject)openTab(activeProject.id,profile.id);},disabled:!activeProject})),
@@ -1841,6 +1912,10 @@ function AppShell() {
         entering={handoffPresence.entering} leaving={handoffPresence.leaving} surfaceRef={handoffSurfaceRef} />}
       {palettePresence.value && <Suspense fallback={null}><CommandPalette commands={paletteCommands} onClose={()=>setPaletteOpen(false)}
         surfaceRef={paletteSurfaceRef} entering={palettePresence.entering} leaving={palettePresence.leaving} /></Suspense>}
+      {launcherPresence.value && <Suspense fallback={null}><ProjectLauncher projects={config.projects} roots={config.settings.projectLauncher.roots}
+        profiles={availableProfiles} initialProfileId={launcherProfileId(config.settings.projectLauncher, availableProfiles.map(profile => profile.id), preferredProfile.id)}
+        shortcut={config.settings.projectLauncher.roots.length ? config.settings.shortcuts.openProject : null} onLaunch={launchProject} onAddRoot={() => void addLauncherFolder()} onClose={()=>setLauncherOpen(false)}
+        surfaceRef={launcherSurfaceRef} entering={launcherPresence.entering} leaving={launcherPresence.leaving} /></Suspense>}
       {usagePresence.value && <Suspense fallback={null}><UsageDialog settings={config.settings} onClose={()=>setUsageOpen(false)}
         surfaceRef={usageSurfaceRef} entering={usagePresence.entering} leaving={usagePresence.leaving} /></Suspense>}
       {recoveryPresence.value && activeProject && <Suspense fallback={null}><RecoverConversations project={activeProject} settings={config.settings} onClose={()=>setRecoveryOpen(false)}

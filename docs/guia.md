@@ -36,6 +36,17 @@ Todo lo que puede hacer trex, con detalle. Si es tu primera vez, empieza por el
 - **Terminal dividida**: dos sesiones en columnas o filas, o hasta cuatro en una
   cuadrícula 2 × 2 por proyecto, con separadores ajustables y foco independiente.
 - **Paleta de comandos**: `Ctrl+K` busca acciones, proyectos, perfiles y sesiones.
+- **Abrir proyectos con un agente**: en **Ajustes → Proyectos** eliges una o
+  varias carpetas donde guardas tus proyectos (por ejemplo `D:\projects`).
+  `Ctrl+Space` abre un buscador con todas sus subcarpetas y los proyectos de
+  trex: escribes parte del nombre (también vale con las letras en orden: «trx»
+  encuentra «trex»), `Tab` cambia de agente y `Enter` abre el chat. Si la carpeta
+  aún no es un proyecto de trex, se añade sola. En los mismos ajustes eliges el
+  agente con el que se abre y si vuelve al chat de ese agente cuando ya hay uno
+  abierto; el atajo se cambia en **Ajustes → Atajos**. Mientras no haya carpetas,
+  el atajo no hace nada y la combinación sigue llegando a la terminal (en
+  PowerShell, `Ctrl+Space` abre su menú de autocompletado). La paleta también
+  ofrece «Abrir proyecto con un agente…».
 - **Recuperar conversaciones**: continúa el historial local de Claude Code o
   Codex desde el menú de nueva sesión o con `Ctrl+Shift+R`.
 - **Continuar con otro asistente**: transfiere el trabajo de un chat a otro
@@ -555,6 +566,7 @@ se adjuntan en las sesiones de asistentes; los shells normales reciben texto.
 | `Ctrl+V` (configurable) | Pegar texto o adjuntar una imagen en Claude Code y Codex |
 | `Ctrl+K` | Paleta de comandos |
 | `Ctrl+Shift+K` | Buscar proyectos y sesiones en la barra lateral |
+| `Ctrl+Space` | Abrir un proyecto de tus carpetas de proyectos con un agente (solo con carpetas elegidas en Ajustes → Proyectos) |
 | `Ctrl+Shift+S` | Dividir o unir terminales |
 | `Ctrl+Alt+O` | Enfocar el otro panel |
 | `Ctrl+Shift+R` | Recuperar una conversación |

@@ -4,6 +4,11 @@ export const SHORTCUT_ACTIONS = [
   { id: "commandPalette", label: "Paleta de comandos", key: "Ctrl+K" },
   { id: "focusSearch", label: "Buscar proyectos", key: "Ctrl+Shift+K" },
   {
+    id: "openProject",
+    label: "Abrir un proyecto con un agente",
+    key: "Ctrl+Space",
+  },
+  {
     id: "newClaudeTab",
     label: "Nueva sesión del perfil predeterminado",
     key: "Ctrl+T",
@@ -55,6 +60,10 @@ export const SHORTCUT_ACTIONS = [
   },
 ] as const;
 export type ShortcutAction = (typeof SHORTCUT_ACTIONS)[number]["id"];
+/** Alternativas para una acción nueva cuyo atajo de fábrica ya usa la persona en otra. */
+const FALLBACK_KEYS: Partial<Record<ShortcutAction, string[]>> = {
+  openProject: ["Ctrl+Shift+Space", "Ctrl+Alt+Space", "Ctrl+Alt+P"],
+};
 export type ShortcutBindings = Record<ShortcutAction, string>;
 export const DEFAULT_SHORTCUTS = Object.fromEntries(
   SHORTCUT_ACTIONS.map((action) => [action.id, action.key]),
@@ -98,14 +107,25 @@ export function normalizeShortcuts(
 ): ShortcutBindings {
   const record =
     raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const result = Object.fromEntries(
-    SHORTCUT_ACTIONS.map((action) => [
-      action.id,
-      typeof record[action.id] === "string"
-        ? (parseShortcut(record[action.id] as string) ?? action.key)
-        : action.key,
-    ]),
-  ) as ShortcutBindings;
+  const saved = (id: string): string | null =>
+    typeof record[id] === "string" ? parseShortcut(record[id] as string) : null;
+  // Una acción nueva no puede quitarle su combinación a un atajo que la persona
+  // ya eligió: si choca, toma la primera alternativa libre en vez de que el
+  // conflicto devuelva todos los atajos a sus valores de fábrica.
+  const taken = new Set(
+    SHORTCUT_ACTIONS.map((action) => saved(action.id)?.replace(/^Meta\+/, "Ctrl+"))
+      .filter(Boolean),
+  );
+  taken.add(paste.replace(/^Meta\+/, "Ctrl+"));
+  const fallback = (action: (typeof SHORTCUT_ACTIONS)[number]): string =>
+    !taken.has(action.key) ? action.key
+      : (FALLBACK_KEYS[action.id] ?? []).find((key) => !taken.has(key)) ?? action.key;
+  const result = {} as ShortcutBindings;
+  for (const action of SHORTCUT_ACTIONS) {
+    const key = saved(action.id) ?? fallback(action);
+    result[action.id] = key;
+    taken.add(key.replace(/^Meta\+/, "Ctrl+"));
+  }
   return bindingError(result, paste) ? { ...DEFAULT_SHORTCUTS } : result;
 }
 export function matchesShortcut(

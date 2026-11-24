@@ -1,0 +1,25 @@
+/* Lanzador de proyectos: hereda la paleta de comandos y añade la fila de agentes. */
+.launcher-agents { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: var(--sp-1-5); padding: var(--sp-2-5) var(--sp-1) 0; }
+.launcher-agents-label { margin-right: var(--sp-1); color: var(--text-dim); font-size: var(--fs-xs); }
+.launcher-agent {
+  display: inline-flex; align-items: center; gap: var(--sp-1-5);
+  min-height: 28px; padding: 0 var(--sp-2-5);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: transparent; color: var(--text-muted);
+  font: 500 var(--fs-xs)/1.4 var(--font-ui); cursor: pointer;
+}
+.launcher-agent:hover { background: var(--hover); color: var(--text); }
+.launcher-agent.selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--session-selected); color: var(--text); }
+.launcher-agent.selected .agent-icon { color: var(--accent-strong); }
+.launcher-agent:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }
+.launcher-warning { flex: 0 0 auto; margin: 0 0 var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.6; overflow-wrap: anywhere; }
+.launcher-setup { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2-5) var(--sp-4); margin-bottom: var(--sp-2); padding: var(--sp-3) var(--sp-3-5); border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); }
+.launcher-setup p { flex: 1 1 260px; margin: 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.6; }
+.launcher-setup .btn { display: inline-flex; align-items: center; gap: var(--sp-1-5); }
+.launcher-tag { color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
+.launcher-more { margin: var(--sp-1) 0 0; padding: var(--sp-1-5) var(--sp-2-5); color: var(--text-dim); font-size: var(--fs-xs); }
+.launcher-shortcut-hint { margin-left: auto; }
+@media (max-width: 540px) {
+  .launcher-shortcut-hint { display: none !important; }
+  .launcher-tag { display: none; }
+}

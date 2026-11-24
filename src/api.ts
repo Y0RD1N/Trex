@@ -4,6 +4,7 @@ import type { BrowserStatus, BrowserConfig, BrowserCall, BrowserResult, BrowserM
 import { validBrowserProfile, browserSpaceLabel } from "./browser";
 import { DEFAULT_INTEGRATIONS, normalizeIntegrations } from "./integrations";
 import { normalizeAutoCompact } from "./autoCompact";
+import { normalizeProjectLauncher } from "./projectLauncher";
 /**
  * Capa de acceso al backend: envoltorios de `invoke`/`listen` y utilidades
  * compartidas (ids, valores por defecto, normalización y color de acento).
@@ -182,6 +183,10 @@ export const installAntigravity = (): Promise<AntigravityRuntime> => invoke("ant
 /** Archivos del proyecto (relativos a su carpeta) para las menciones con `@`. */
 export const listProjectFiles = (cwd: string): Promise<string[]> => invoke<string[]>("list_project_files", { cwd });
 
+/** Subcarpetas directas de las carpetas raíz del lanzador, y las raíces que ya no existen. */
+export const listProjectFolders = (roots: string[]): Promise<{ folders: import("./projectLauncher").ProjectFolder[]; missing: string[] }> =>
+  invoke("list_project_folders", { roots });
+
 /** Rama de git del proyecto (null si la carpeta no es un repositorio). */
 export const gitBranch = (cwd: string): Promise<string | null> => invoke<string | null>("git_branch", { cwd });
 
@@ -234,6 +239,8 @@ export const DEFAULT_SETTINGS: Settings = {
   timeFormat: "24h",
   integrations: { ...DEFAULT_INTEGRATIONS },
   autoCompact: normalizeAutoCompact(null),
+  // Sin carpetas raíz: el atajo del lanzador no hace nada hasta que la persona elija una.
+  projectLauncher: normalizeProjectLauncher(null),
   desktopEnabled: false,
   a11yEnabled: false,
   a11yKeyboard: false,
@@ -479,6 +486,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     timeFormat: settingsRaw.timeFormat === "12h" ? "12h" : "24h",
     integrations: normalizeIntegrations(settingsRaw.integrations),
     autoCompact: normalizeAutoCompact(settingsRaw.autoCompact),
+    projectLauncher: normalizeProjectLauncher(settingsRaw.projectLauncher),
     desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
     a11yEnabled: asBool(settingsRaw.a11yEnabled, false),
     a11yKeyboard: asBool(settingsRaw.a11yKeyboard, false),
