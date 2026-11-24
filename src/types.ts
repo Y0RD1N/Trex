@@ -105,6 +105,8 @@ export type Settings = {
   notifyWhenFocused: boolean;
   confirmCloseTab: boolean;
   restoreOnStart: boolean;
+  /** Al cerrar la ventana, trex sigue en la bandeja del sistema (solo Windows). */
+  closeToTray: boolean;
   launchMode: string;
   /** Color de acento en hex (por ejemplo "#f06a8d"). */
   theme: string;

@@ -39,6 +39,8 @@ type Props = {
   /** Barra oculta hasta acercar el cursor al borde superior. */
   autoHideTopBar: boolean;
   onToggleTopBar: () => void;
+  /** Cerrar la ventana la deja en la bandeja (Windows con el ajuste activo). */
+  closeToTray: boolean;
   onRevealProject: (() => void) | null;
   onNew: (profileId: string) => void;
   onNewShell: () => void;
@@ -62,7 +64,7 @@ type Props = {
 
 export default function TerminalTabs({
   tabs, activeTabId, projectName, hasProject, profiles, defaultProfileId,
-  autoHideTopBar, onToggleTopBar, onRevealProject, onNew, onNewShell, onWorkflow, onOpenSettings, onOpenProfiles,
+  autoHideTopBar, onToggleTopBar, closeToTray, onRevealProject, onNew, onNewShell, onWorkflow, onOpenSettings, onOpenProfiles,
   onCommandPalette,onRecover,onChangeSplit,splitDirection,shortcuts,
   notices, soundEnabled, liveTabIds, onOpenNotice, onMarkNoticesRead, onClearNotices, onToggleSound, onPreviewSound,
 }: Props) {
@@ -160,7 +162,7 @@ export default function TerminalTabs({
         onOpenSession={onOpenNotice} onMarkRead={onMarkNoticesRead} onClear={onClearNotices}
         onToggleSound={onToggleSound} onPreviewSound={onPreviewSound} />
       <WindowControls onOpenSettings={onOpenSettings} onRevealProject={onRevealProject}
-        autoHideTopBar={autoHideTopBar} onToggleTopBar={onToggleTopBar} />
+        autoHideTopBar={autoHideTopBar} onToggleTopBar={onToggleTopBar} closeToTray={closeToTray} />
     </header>
     </div>
   );

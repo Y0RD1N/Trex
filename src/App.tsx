@@ -109,6 +109,7 @@ import type { TeamRequest, TeamMemberChoice } from "./components/AgentTeamDialog
 import { readQueuedMessages } from "./api";
 import { sanitizeHandoffText } from "./handoff";
 import { IS_WINDOWS } from "./platform";
+import { reportTrayActivity, trayActivity } from "./tray";
 import type { PaletteCommand } from "./commandPalette";
 import { addLauncherRoot, launcherProfileId } from "./projectLauncher";
 import { useNotificationSound } from "./hooks/useNotificationSound";
@@ -1512,6 +1513,11 @@ function AppShell() {
         tabs.some((tab) => tab.projectId === project.id && normalizeText(sessionLabel(tab)).includes(needle)),
     );
   }, [config?.projects, config?.ui.projectFilter, search, tabs]);
+  // El menú de la bandeja dice cuántos agentes trabajan; solo se avisa cuando cambia la cuenta.
+  const trayCounts = trayActivity(tabs);
+  useEffect(() => {
+    if (IS_WINDOWS) reportTrayActivity({ working: trayCounts.working, waiting: trayCounts.waiting });
+  }, [trayCounts.working, trayCounts.waiting]);
   // El móvil agrupa las sesiones por proyecto en el mismo orden que la barra lateral.
   useEffect(() => { remoteBridge.setProjectOrder(config?.projects.map(project => project.id) ?? []); }, [config?.projects]);
 
@@ -1706,6 +1712,7 @@ function AppShell() {
           defaultProfileId={preferredProfile.id}
           autoHideTopBar={config.ui.autoHideTopBar}
           onToggleTopBar={toggleTopBar}
+          closeToTray={IS_WINDOWS && config.settings.closeToTray}
           onRevealProject={
             activeProjectId ? () => revealProject(activeProjectId) : null
           }

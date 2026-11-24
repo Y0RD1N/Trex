@@ -993,6 +993,18 @@ fn status_of(state: &RemoteState, with_network: bool) -> RemoteStatus {
     }
 }
 
+/// Lo justo para el menú de la bandeja: sin consultar la red ni Tailscale.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn tray_summary(state: &RemoteState) -> crate::tray::RemoteSummary {
+    let inner = &state.0;
+    let connected: HashSet<String> = lock(&inner.hub).connections.values().map(|c| c.device_id.clone()).collect();
+    crate::tray::RemoteSummary {
+        enabled: lock(&inner.config).enabled,
+        running: lock(&inner.server).is_some(),
+        connected: connected.len(),
+    }
+}
+
 // --- Comandos Tauri -------------------------------------------------------------------
 
 #[tauri::command]

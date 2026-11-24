@@ -32,6 +32,7 @@ mod project_folders;
 mod project_icon;
 mod shared_files;
 mod terminal_env;
+mod tray;
 mod trex_cli;
 mod trex_browser;
 mod voice;
@@ -353,6 +354,7 @@ async fn restore_config_backup(app: AppHandle) -> Result<AppConfig, String> {
 async fn save_config(app: AppHandle, config: AppConfig) -> Result<AppConfig, String> {
     blocking(move || {
         config::save(&app, &config)?;
+        tray::apply(&app, config.settings.close_to_tray);
         Ok(config)
     })
     .await
@@ -366,12 +368,42 @@ async fn desktop_notification(app: AppHandle, title: String, body: String) -> Re
     tauri::async_runtime::spawn_blocking(move || app.notification().builder().title(title).body(body).show().map_err(|e| format!("No se pudo mostrar el aviso del escritorio: {e}"))).await.map_err(|e| e.to_string())?
 }
 
+/// Termina las sesiones antes de salir: terminales, asistentes y la esfera de voz.
+pub(crate) fn shutdown_sessions(app: &AppHandle) {
+    // La esfera, aunque esté oculta, no debe mantener viva la app.
+    if let Some(state) = app.try_state::<voice::VoiceState>() {
+        state.shutdown_orb();
+    }
+    if let Some(state) = app.try_state::<PtyState>() {
+        state.kill_all();
+    }
+    if let Some(state) = app.try_state::<AgentState>() {
+        state.kill_all();
+    }
+}
+
+/// Una sola copia de trex: abrirlo otra vez muestra la ventana que ya hay (también
+/// si vive en la bandeja). En desarrollo no, salvo que se pida con
+/// `TREX_SINGLE_INSTANCE=1`: la app de prueba comparte identificador con la
+/// instalada y, si no, se cerraría nada más abrir para mostrar la otra.
+#[cfg(windows)]
+fn single_instance() -> bool {
+    !cfg!(debug_assertions) || std::env::var_os("TREX_SINGLE_INSTANCE").is_some()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if agent_team::run_if_requested() || queue_mcp::run_if_requested() || browser_bridge_stdio::run_if_requested() {
         return;
     }
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+    // Debe ser el primer plugin: la segunda copia sale antes de preparar nada más.
+    #[cfg(windows)]
+    if single_instance() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)));
+    }
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -382,10 +414,12 @@ pub fn run() {
         .manage(browser_bridge::BridgeState::default())
         .manage(voice::VoiceState::default())
         .manage(voice_live::LiveState::default())
+        .manage(tray::TrayState::default())
         .setup(|app| {
             remote::init(app.handle());
             browser_bridge::init(app.handle());
             voice::init(app.handle());
+            tray::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -547,24 +581,23 @@ pub fn run() {
             voice::voice_conversation_end,
             voice_brain::voice_think,
             voice_brain::voice_recent_commits,
+            tray::tray_activity,
+            tray::app_quit,
         ])
         .on_window_event(|window, event| {
             // Solo la ventana principal: la de la esfera de voz se crea y se destruye sola.
             if window.label() != "main" {
                 return;
             }
-            // Al cerrarse la ventana principal se terminan todas las sesiones.
-            if matches!(event, WindowEvent::CloseRequested { .. }) {
-                // La esfera, aunque esté oculta, no debe mantener viva la app.
-                if let Some(state) = window.try_state::<voice::VoiceState>() {
-                    state.shutdown_orb();
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // Con la bandeja activa la ventana solo se oculta y todo sigue en marcha.
+                if tray::keeps_running_on_close(window.app_handle()) {
+                    api.prevent_close();
+                    tray::hide_to_tray(window);
+                    return;
                 }
-                if let Some(state) = window.try_state::<PtyState>() {
-                    state.kill_all();
-                }
-                if let Some(state) = window.try_state::<AgentState>() {
-                    state.kill_all();
-                }
+                // Si no, al cerrarse la ventana principal se terminan todas las sesiones.
+                shutdown_sessions(window.app_handle());
             }
         })
         .run(tauri::generate_context!())

@@ -25,7 +25,7 @@ function harness(t, extra = {}) {
     isWindowMaximized: async () => nativeMaximized, onWindowResized: handler => { resize = handler; return () => { unlistened = true; }; } };
   const exports = {};
   compile(name => ({ react,
-    "react/jsx-runtime": { jsx, jsxs: jsx }, "./Icons": icons, "./DropdownMenu": { __esModule: true, default: "DropdownMenu" }, "../window": native, "../platform": { MOD_LABEL: "Ctrl" } })[name], exports, { body });
+    "react/jsx-runtime": { jsx, jsxs: jsx }, "./Icons": icons, "./DropdownMenu": { __esModule: true, default: "DropdownMenu" }, "../window": native, "../tray": { quitApp: () => calls.push("quit") }, "../platform": { MOD_LABEL: "Ctrl" } })[name], exports, { body });
   const props = { onOpenSettings: () => calls.push("settings"), onRevealProject: () => calls.push("folder"), autoHideTopBar: false, onToggleTopBar: () => calls.push("auto-hide"), ...extra };
   const render = () => { cursor = 0; const tree = exports.default(props); for (const effect of effects.splice(0)) effect(); return tree; };
   const unmount = () => { if (!mounted) return; mounted = false; for (const slot of slots) slot?.cleanup?.(); };
@@ -49,6 +49,19 @@ test("window menu omits duplicate exit actions while the caption retains close",
   const menuText = [...elements(menu)].filter(node => node.props.role === "menuitem").flatMap(node => node.props.children).filter(value => typeof value === "string");
   assert.ok(!menuText.includes("Salir de trex")); assert.ok(!menuText.includes("Cerrar ventana"));
   assert.ok(button(tree, "Cerrar ventana"));
+});
+
+test("with the tray on, the caption close says trex stays there and the menu offers a real exit", async t => {
+  const h = harness(t, { closeToTray: true }); h.render(); await flush();
+  const close = button(h.render(), "Cerrar ventana; trex sigue en la bandeja");
+  assert.equal(close.props["data-tip"], "Cerrar · sigue en la bandeja");
+  close.props.onClick();
+  button(h.render(), "Más opciones").props.onClick({ currentTarget: { id: "menu" } });
+  const menu = find(h.render(), node => node.type === "DropdownMenu");
+  const quit = [...elements(menu)].find(node => node.props.role === "menuitem" && node.props.children.includes("Salir de trex"));
+  quit.props.onClick();
+  assert.deepEqual(h.calls, ["close", "quit"], "closing only hides; quitting is a separate, explicit action");
+  assert.equal(find(h.render(), node => node.type === "DropdownMenu").props.anchor, null);
 });
 
 test("each visible caption button calls only its corresponding native action", async t => {

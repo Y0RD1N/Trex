@@ -45,6 +45,10 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-version = "0.1"
+# Bandeja del sistema y una sola copia de trex (ver tray.rs). Solo en Windows:
+# en Linux el icono depende de appindicator y GNOME no lo muestra sin extensión.
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
 # Modo llamada (apagado por defecto): detector de voz y Whisper locales.
 # `shared`: las bibliotecas estáticas precompiladas usan el CRT estático y
 # chocan con el dinámico de Rust. Los DLL se cargan bajo demanda (ver build.rs).

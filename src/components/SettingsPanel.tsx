@@ -33,6 +33,7 @@ import type { CliUpdates } from "../hooks/useCliUpdates";
 import type { CliId } from "../cliUpdates";
 import "./SettingsPanel.css";
 import { formatClock } from "../timeFormat";
+import { IS_WINDOWS } from "../platform";
 
 type Props = {
   entering: boolean;
@@ -392,6 +393,9 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 <SettingToggle label="Abrir con un asistente" info="Si no hay sesiones que restaurar, abre el perfil predeterminado. Apagado, abre una terminal normal." checked={draft.autoRunClaude} onChange={autoRunClaude => patch({ autoRunClaude })} />
                 <SettingToggle label="Reabrir lo que dejaste abierto" checked={draft.restoreOnStart} onChange={restoreOnStart => patch({ restoreOnStart })} />
                 <SettingToggle label="Preguntar antes de cerrar una sesión activa" checked={draft.confirmCloseTab} onChange={confirmCloseTab => patch({ confirmCloseTab })} />
+                {IS_WINDOWS && <SettingToggle label="Al cerrar la ventana, seguir en la bandeja"
+                  info="trex sigue de fondo con la ventana cerrada: los chats y agentes abiertos, el control remoto y los avisos. Vuelves con su icono junto al reloj; «Salir» en ese menú, o en «Más opciones», lo cierra del todo."
+                  checked={draft.closeToTray} onChange={closeToTray => patch({ closeToTray })} />}
               </div>}
 
               {item.id === "about" && <>

@@ -114,6 +114,8 @@ pub struct Settings {
     pub notify_when_focused: bool,
     pub confirm_close_tab: bool,
     pub restore_on_start: bool,
+    /// Al cerrar la ventana, trex sigue en la bandeja del sistema (solo Windows).
+    pub close_to_tray: bool,
     pub launch_mode: String,
     /// Color de acento en formato hex ("#e8834a").
     pub theme: String,
@@ -169,6 +171,7 @@ impl Default for Settings {
             notify_when_focused: false,
             confirm_close_tab: true,
             restore_on_start: true,
+            close_to_tray: true,
             launch_mode: "arg".into(),
             theme: "#e8834a".into(),
             appearance: "dark".into(),
@@ -264,6 +267,16 @@ mod browser_preference_tests {
         let config: AppConfig = serde_json::from_value(raw).unwrap();
         let saved = serde_json::to_value(config).unwrap();
         assert_eq!(saved["settings"]["projectLauncher"], serde_json::json!({"roots":["D:\\projects","E:\\clientes"],"profileId":"codex-default","reuseChat":false}));
+    }
+    #[test]
+    fn staying_in_the_tray_is_on_by_default_and_roundtrips() {
+        let old: AppConfig = serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
+        assert!(old.settings.close_to_tray, "an older configuration keeps trex in the tray, like the frontend default");
+        for enabled in [false, true] {
+            let config: AppConfig = serde_json::from_value(serde_json::json!({"settings":{"closeToTray":enabled}})).unwrap();
+            assert_eq!(config.settings.close_to_tray, enabled);
+            assert_eq!(serde_json::to_value(config).unwrap()["settings"]["closeToTray"], enabled);
+        }
     }
     #[test]
     fn older_configuration_uses_the_frontend_browser_defaults() {

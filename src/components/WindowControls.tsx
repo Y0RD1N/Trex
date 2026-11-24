@@ -12,6 +12,7 @@ import {
   onWindowResized,
   toggleMaximizeWindow,
 } from "../window";
+import { quitApp } from "../tray";
 import { MOD_LABEL } from "../platform";
 import {
   CheckIcon,
@@ -21,6 +22,7 @@ import {
   GearIcon,
   MaximizeIcon,
   MinimizeIcon,
+  PowerIcon,
   RestoreIcon,
 } from "./Icons";
 
@@ -32,9 +34,11 @@ type Props = {
   /** La barra superior se esconde sola (modo inmersivo). */
   autoHideTopBar: boolean;
   onToggleTopBar: () => void;
+  /** Cerrar deja trex en la bandeja: la ✕ lo dice y el menú ofrece salir del todo. */
+  closeToTray: boolean;
 };
 
-export default function WindowControls({ onOpenSettings, onRevealProject, autoHideTopBar, onToggleTopBar }: Props) {
+export default function WindowControls({ onOpenSettings, onRevealProject, autoHideTopBar, onToggleTopBar, closeToTray }: Props) {
   const [maximized, setMaximized] = useState(false);
   const [menu, setMenu] = useState<FloatingAnchor | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -102,8 +106,8 @@ export default function WindowControls({ onOpenSettings, onRevealProject, autoHi
       <button
         type="button"
         className="window-btn tip tip-below"
-        data-tip="Cerrar"
-        aria-label="Cerrar ventana"
+        data-tip={closeToTray ? "Cerrar · sigue en la bandeja" : "Cerrar"}
+        aria-label={closeToTray ? "Cerrar ventana; trex sigue en la bandeja" : "Cerrar ventana"}
         onClick={closeWindow}
         data-window-action="close"
       >
@@ -157,6 +161,21 @@ export default function WindowControls({ onOpenSettings, onRevealProject, autoHi
             Ocultar esta barra automáticamente
             <span className="kbd">{MOD_LABEL} ⇧ B</span>
           </button>
+
+          {closeToTray && (
+            <button
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              className="context-item"
+              onClick={() => run(quitApp)}
+            >
+              <span className="context-icon" aria-hidden="true">
+                <PowerIcon size={16} />
+              </span>
+              Salir de trex
+            </button>
+          )}
 
         </DropdownMenu>
       }

@@ -266,6 +266,8 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyWhenFocused: false,
   confirmCloseTab: true,
   restoreOnStart: true,
+  // Cerrar la ventana deja trex en la bandeja (solo Windows); se apaga en Ajustes → Inicio.
+  closeToTray: true,
   launchMode: "arg",
   theme: DEFAULT_ACCENT,
   appearance: "dark",
@@ -520,6 +522,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     notifyWhenFocused: asBool(settingsRaw.notifyWhenFocused, false),
     confirmCloseTab: asBool(settingsRaw.confirmCloseTab, DEFAULT_SETTINGS.confirmCloseTab),
     restoreOnStart: asBool(settingsRaw.restoreOnStart, DEFAULT_SETTINGS.restoreOnStart),
+    closeToTray: asBool(settingsRaw.closeToTray, DEFAULT_SETTINGS.closeToTray),
     launchMode: asString(settingsRaw.launchMode, DEFAULT_SETTINGS.launchMode),
     theme: asAccent(settingsRaw.theme),
     appearance: asAppearance(settingsRaw.appearance),

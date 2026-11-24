@@ -548,6 +548,23 @@ requiere la app instalada; Linux utiliza el servicio de notificaciones del
 escritorio, según el [plugin de Tauri](https://v2.tauri.app/plugin/notification/).
 El historial de avisos de la cabecera sigue disponible.
 
+## Seguir en la bandeja (Windows)
+
+Con **Ajustes → General → Inicio → Al cerrar la ventana, seguir en la bandeja**
+activado, cerrar la ventana (la ✕, `Alt+F4` o la barra de tareas) la oculta y
+trex sigue de fondo: los chats y agentes abiertos siguen trabajando, el control
+remoto sigue disponible y los avisos siguen llegando. Su icono queda junto al
+reloj (en los iconos ocultos si Windows lo agrupa allí): un clic abre la ventana
+y el menú del clic derecho dice cuántos agentes trabajan y cómo está el control
+remoto. **Salir**, en ese menú o en **Más opciones** (`⋯`), cierra trex del todo,
+con sus terminales y agentes, como al cerrar sin la bandeja. La primera vez que
+la ventana se oculta, un aviso del sistema lo recuerda.
+
+Viene encendido. Apagado, no hay icono y cerrar la ventana termina trex como
+antes. Abrir trex otra vez desde el menú Inicio muestra la ventana que ya está
+abierta en lugar de abrir otra. En Linux y macOS no está disponible: en Fedora
+con GNOME el icono no se vería sin una extensión.
+
 ## Atajos
 
 En **Ajustes → Atajos** puedes cambiar las acciones de esta tabla pulsando una
