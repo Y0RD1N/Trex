@@ -2,12 +2,14 @@
  * Ajustes › Conexiones › Navegador › «Tu navegador»: la extensión de trex en el navegador de
  * siempre. Como el control remoto o la voz, se aplica al momento (no espera a «Guardar») y
  * nace apagada. La lógica vive en src-tauri/src/browser_bridge.rs y en la carpeta `extension/`.
+ * Debajo, la recomendación de un perfil solo para los agentes y la limpieza del antiguo Trex Browser.
  */
 import { useEffect, useId, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { browserBridgeConfigure, browserBridgeOpenExtension,browserBridgePairingCancel, browserBridgePairingStart, browserBridgeRevoke, browserBridgeStatus, formatError, type BrowserBridgeStatus } from "../api";
 import { GlobeIcon } from "./Icons";
 import SettingInfo from "./SettingInfo";
+import LegacyBrowserCleanup from "./LegacyBrowserCleanup";
 import "./BrowserSettings.css";
 import "./RemoteSettings.css";
 
@@ -25,6 +27,10 @@ const newest = (seq: number, applied: { current: number }): boolean => {
 };
 
 export default function ChromeBridgeSettings() {
+  return <><BrowserBridge /><LegacyBrowserCleanup /></>;
+}
+
+function BrowserBridge() {
   const id = useId();
   const [status, setStatus] = useState<BrowserBridgeStatus | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
@@ -85,9 +91,9 @@ export default function ChromeBridgeSettings() {
     void run(() => browserBridgeConfigure({ enabled: status.enabled, port: portValue })).then(() => setPortDraft(null));
   };
 
-  return <div className="browser-settings-card chrome-bridge">
+  return <><div className="browser-settings-card chrome-bridge">
     <div className="browser-settings-heading"><span className="browser-settings-badge" aria-hidden="true"><GlobeIcon size={20} /></span>
-      <div><h4>Tu navegador<SettingInfo text="Con la extensión de trex, los agentes ven y manejan tu navegador de siempre (Chrome, Brave o Edge), con tus sesiones iniciadas. Solo alcanzan las pestañas del grupo «trex»: las que abren ellos y las que tú compartes desde el botón de la extensión." /></h4></div>
+      <div><h4>Tu navegador<SettingInfo text="Con la extensión de trex, los agentes ven y manejan tu navegador (Chrome, Brave o Edge) con las sesiones iniciadas en el perfil donde la instales. Solo alcanzan sus propias pestañas, que cada chat agrupa con su nombre, y las que tú compartes desde el botón de la extensión." /></h4></div>
       <span className={`browser-settings-status${status.connected ? " is-ready" : ""}`} role="status">{state}</span>
     </div>
     <label className="browser-settings-toggle"><span><strong>Los agentes pueden usar tu navegador</strong></span>
@@ -138,5 +144,15 @@ export default function ChromeBridgeSettings() {
       </ul>}
     </>}
     {error && <p className="browser-settings-error" role="alert">{error}</p>}
-  </div>;
+  </div>
+  {status.enabled && <div className="browser-settings-card">
+    <h4>Un perfil solo para los agentes</h4>
+    <p className="settings-hint">Recomendado: así no ven tus sesiones personales, solo las que inicies en ese perfil.</p>
+    <ol className="remote-steps">
+      <li><span>01</span>En Chrome, Brave o Edge, crea un perfil nuevo desde el icono de tu perfil.</li>
+      <li><span>02</span>En ese perfil, carga la extensión de trex (botón «Carpeta de la extensión»).</li>
+      <li><span>03</span>Pulsa «Emparejar» y escribe el código en la extensión.</li>
+    </ol>
+  </div>}
+  </>;
 }

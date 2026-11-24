@@ -33,6 +33,9 @@ fn command(home: &Path) -> Command {
         "HTTP_PROXY",
         "HTTPS_PROXY",
         "ALL_PROXY",
+        // The person's browser is opt-in per process; a developer's own never leaks in.
+        "TREX_CHROME_URL",
+        "TREX_CHROME_TOKEN",
     ] {
         command.env_remove(name);
     }
@@ -1700,8 +1703,8 @@ fn the_prompt_prefix_only_changes_where_old_tool_results_are_archived_in_batches
     assert!(archived > batch_breaks.len(), "each break archives several results at once: {batch_breaks:?}, {archived}");
 }
 
-#[path = "browser_cases/mod.rs"]
-mod browser_cases;
+#[path = "chrome_cases/mod.rs"]
+mod chrome_cases;
 #[path = "team_cases/mod.rs"]
 mod team_cases;
 #[path = "coordination_cases/mod.rs"]

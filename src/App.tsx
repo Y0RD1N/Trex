@@ -81,7 +81,6 @@ import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, profilesForInstallation, restoreLaunch } from "./profiles";
 import { applyDesign } from "./visualDesign";
 import { syncWindowMaterial } from "./windowMaterial";
-import { syncBrowserTheme } from "./browserThemeSync";
 import { applyTimeFormat } from "./timeFormat";
 import { agentPermissionOptions, defaultAgentPermission, validAgentPermission } from "./agentPermissions";
 import type { ClipboardContent } from "./paste";
@@ -107,6 +106,7 @@ import { normalizeAgentTeam, restoreAgentTeam, teamConfigurationText, type Agent
 import AgentTeamView from "./components/AgentTeamView";
 import type { TeamRequest, TeamMemberChoice } from "./components/AgentTeamDialog";
 import { readQueuedMessages } from "./api";
+import { endChromeSession } from "./browserConnection";
 import { sanitizeHandoffText } from "./handoff";
 import { IS_WINDOWS } from "./platform";
 import type { PaletteCommand } from "./commandPalette";
@@ -478,8 +478,6 @@ function AppShell() {
     applyTheme(config.settings.appearance, config.settings.theme || DEFAULT_SETTINGS.theme, config.settings.colorScheme,
       { hue: config.settings.surfaceHue, tint: config.settings.surfaceTint });
   }, [config?.settings.appearance, config?.settings.theme, config?.settings.colorScheme, config?.settings.surfaceHue, config?.settings.surfaceTint]);
-  // Trex Browser lleva el mismo tono, acento y modo; se engancha una vez, con el tema ya aplicado.
-  useEffect(() => { if (config) syncBrowserTheme(); }, [!!config]);
   useEffect(() => {
     if (config) applyDesign(config.settings);
   }, [config?.settings.terminalRadius, config?.settings.terminalMargin, config?.settings.terminalBorder, config?.settings.motion, config?.settings.glass, config?.settings.materialTint]);
@@ -741,6 +739,7 @@ function AppShell() {
       } catch {
         /* la sesión ya no existía */
       }
+      endChromeSession(tab.id);
     }
 
     const remainingTabs = tabsRef.current.filter((tab) => tab.projectId !== projectId);
@@ -1106,8 +1105,6 @@ function AppShell() {
         if (mode != null && !validAgentPermission(profile.provider, mode)) throw new Error("El modo de permisos no es válido para esta cuenta.");
         return { id: choice.id, name: sanitizeHandoffText(choice.name), role: principal ? "coordinator" : choice.role,
           instructions: sanitizeHandoffText(choice.instructions), canWrite: mode !== "plan", mode,
-          // Explicit Trex Browser choice from the dialog; absent means the role default.
-          ...(typeof choice.browser === "boolean" ? { browser: choice.browser } : {}),
           agent: { profileId: profile.id, profileName: profile.name, provider: profile.provider, model, effort, ...(typeof choice.fast === "boolean" ? { fast: choice.fast } : {}), launch }, conversationId: null };
       };
       const master = pick(request.master, true), workers = request.workers.map(worker => pick(worker));
@@ -1238,6 +1235,7 @@ function AppShell() {
     } catch {
       /* la sesión puede haber terminado ya */
     }
+    endChromeSession(tabId);
 
     const next = tabsRef.current.filter((item) => item.id !== tabId);
     tabsRef.current = next;

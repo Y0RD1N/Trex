@@ -11,7 +11,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
-import { buildBrowserTheme } from "./browserTheme";
+import { buildRemoteTheme } from "./remoteTheme";
 import { parseRemoteCommand, parseRemoteRequest, type RemoteAction, type RemoteCatalog, type RemoteDetail, type RemoteRequestAction, type RemoteSession } from "./remoteProtocol";
 import { formatError } from "./api";
 
@@ -166,7 +166,7 @@ class RemoteBridge {
   private publishTheme(): void {
     const root = document.documentElement;
     const styles = getComputedStyle(root);
-    const theme = buildBrowserTheme(root.dataset.theme ?? "dark", token => styles.getPropertyValue(token));
+    const theme = buildRemoteTheme(root.dataset.theme ?? "dark", token => styles.getPropertyValue(token));
     if (theme) void invoke("remote_publish_theme", { theme }).catch(() => undefined);
   }
 

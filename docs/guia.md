@@ -7,7 +7,7 @@ Todo lo que puede hacer trex, con detalle. Si es tu primera vez, empieza por el
 [Perfiles y cuentas](#perfiles-y-varias-cuentas) · [Trex CLI y conexiones API](#trex-cli-opcional-y-conexiones-api) ·
 [Cursor](#cursor-de-texto) · [Terminales divididas](#trabajar-con-hasta-cuatro-terminales) ·
 [Recuperar conversaciones](#recuperar-una-conversación) · [Capturas y avisos](#capturas-y-notificaciones) ·
-[Atajos](#atajos) · [Notas](#notas) · [Trex Browser](#navegador-opcional-para-los-agentes) ·
+[Atajos](#atajos) · [Notas](#notas) · [Tu navegador](#tu-navegador-con-la-extensión-de-trex) ·
 [Fedora](#fedora) · [Equipos de agentes](#equipos-con-agente-principal)
 
 ## Qué hace
@@ -21,7 +21,7 @@ Todo lo que puede hacer trex, con detalle. Si es tu primera vez, empieza por el
 - **Antigravity (integración inicial)**: añade un perfil desde Ajustes >
   Asistentes, instala el componente ACP oficial de Google y conecta tu cuenta
   al abrir el chat. Los modelos y permisos se consultan al servidor. Incluye
-  entrega de imágenes y archivos, tareas y un espacio de Trex Browser por chat.
+  entrega de imágenes y archivos, tareas y «Tu navegador» si lo activas.
   Sus mensajes en cola se envían como turnos completos al terminar la respuesta.
   Uso y contexto muestra la ocupación informada por ACP, los tokens del chat y
   las cuotas por grupo de modelos de `/usage`, consultadas con la misma cuenta.
@@ -88,9 +88,7 @@ Todo lo que puede hacer trex, con detalle. Si es tu primera vez, empieza por el
   o escribe el hex. El contraste del texto es el mismo en todos los tonos, y si el
   acento elegido se confundiera con el fondo, trex lo acerca al blanco o al negro lo
   justo para que se lea. Los controles, menús, chat, tareas, equipos, ajustes y
-  notificaciones comparten el mismo lenguaje visual. La ventana de Trex Browser
-  lleva también tu tono, acento y modo claro u oscuro, y los sigue en cuanto los
-  cambias (con una versión anterior del navegador conserva su tema oscuro).
+  notificaciones comparten el mismo lenguaje visual.
 - **Colores del terminal con vista previa**: Grafito, Océano, Bosque y Ciruela
   cambian solo los colores ANSI del terminal; el tono de la interfaz y el acento se
   eligen aparte. El código, los diffs y los errores mantienen sus colores
@@ -461,10 +459,8 @@ Para ahorrar tokens, el CLI compacta la conversación antes de superar 128.000
 tokens activos aunque el modelo admita un millón, archiva los resultados de
 herramientas de turnos anteriores (recuperables con `history_search`), reenvía
 como máximo 3 imágenes de turnos previos y recorta las salidas largas
-conservando el principio y, sobre todo, el final. Las herramientas avanzadas del
-navegador (rendimiento, trazas, vídeo, sesiones) se activan bajo demanda con
-`enable_tools`. Con modelos `anthropic/*` de OpenRouter activa la caché de
-prompts, y si el proveedor no informa del coste lo estima con los precios
+conservando el principio y, sobre todo, el final. Con modelos `anthropic/*` de
+OpenRouter activa la caché de prompts, y si el proveedor no informa del coste lo estima con los precios
 configurados, incluidos los de caché. Los ajustes están en
 [trex-cli/README.md](../trex-cli/README.md).
 
@@ -604,35 +600,25 @@ como pegado alternativo. `Ctrl+C`, `Ctrl+D` y `Ctrl+Z` se reservan para el shell
   los asistentes que tenía abiertos y los procesos que hubieran lanzado.
 
 
-## Navegador opcional para los agentes
-
-Trex Browser se instala por separado y también puede seleccionarse en el instalador de trex, independientemente de Trex CLI. Incluye su propio runtime: no necesitas instalar Node ni npm. Utiliza Chrome con perfiles privados por proyecto, `BROWSER1` a `BROWSER99`.
-
-En **Ajustes → Navegador** puedes comprobar la instalación, crear perfiles y permitir el navegador en nuevas conversaciones. Claude Code, Codex y Trex API reciben sus herramientas automáticamente cuando el componente está disponible. El planificador usa observación; los permisos de implementación determinan el acceso de pruebas o completo.
-
-**Permisos de los sitios en Trex Browser.** Notificaciones, ubicación, portapapeles y MIDI se recuerdan por sitio cuando los permites. Cámara, micrófono y abrir aplicaciones externas valen solo hasta que cierras el navegador. Compartir pantalla no se recuerda nunca: cada vez que un sitio lo pide, eliges tú qué pantalla o ventana ve, y solo puede pedirlo la pestaña que tienes delante. Para deshacer lo que hayas decidido en un sitio, clic derecho en la página → **Olvidar permisos de este sitio**.
-
-El control **Navegador** del chat permite abrir una dirección, tomar capturas, grabar/detener vídeo y pausar la automatización para revisar la página. Las capturas y vídeos generados aparecen como archivos locales. Los agentes también pueden usar consola, red, trazas, perfiles de CPU y memoria, y mediciones de rendimiento.
-
-Trex prepara el servicio del navegador desde la app antes de conectar Claude o Codex, sin abrir Chrome todavía. Así puede utilizarlo un agente cuyo proceso MCP está restringido por Windows. La ventana se abre automáticamente en la primera navegación. Codex comprueba las herramientas del chat antes de enviar el primer turno; una conexión fallida no se presenta como un navegador conectado. Los chats abiertos antes de actualizar deben reiniciarse para cargar la nueva conexión.
-
-La interfaz CLI/MCP, los modos y las pruebas del componente están documentados en [trex-browser/README.md](../trex-browser/README.md). Las capturas se envían como imágenes únicamente a modelos con soporte de visión confirmado; los demás conservan el acceso a DOM, consola y red. Una operación incierta requiere revisión y no se repite automáticamente.
-
 ## Tu navegador, con la extensión de trex
 
-Además de Trex Browser, los agentes pueden usar **tu navegador de siempre** (Chrome, Brave o Edge), con tus sesiones iniciadas, a través de la extensión de trex. Está apagado por defecto: actívalo en **Ajustes → Conexiones → Navegador → «Los agentes pueden usar tu navegador»**.
+Los agentes pueden usar **tu navegador** (Chrome, Brave o Edge) a través de la extensión de trex. Está apagado por defecto: actívalo en **Ajustes → Conexiones → Navegador → «Los agentes pueden usar tu navegador»**.
 
-1. Pulsa **«Carpeta de la extensión»** y cárgala en `chrome://extensions` (o `brave://extensions`, `edge://extensions`) con el modo de desarrollador y **«Cargar descomprimida»**. Todavía no está en la Chrome Web Store.
+**Mejor en un perfil solo para los agentes.** Actúan con las sesiones iniciadas del perfil donde esté la extensión. Crea un perfil nuevo desde el icono de tu perfil en el navegador y carga la extensión solo en él: así no ven tus sesiones personales, solo las que inicies allí.
+
+1. En ese perfil, pulsa **«Carpeta de la extensión»** y cárgala en `chrome://extensions` (o `brave://extensions`, `edge://extensions`) con el modo de desarrollador y **«Cargar descomprimida»**. Todavía no está en la Chrome Web Store.
 2. Pulsa **«Emparejar»** y escribe el código de 6 caracteres en la ventanita de la extensión. Se empareja una vez por navegador.
 3. Comparte una pestaña con el botón de la extensión, o deja que el agente abra las suyas.
 
-Los agentes solo alcanzan las pestañas del grupo **«trex»**: las que abren ellos y las que tú compartes. Pueden listar, leer, capturar, navegar, hacer clic, escribir, pulsar teclas, desplazar y cerrar; no escriben en campos de contraseña. En un chat en modo planificar o de solo lectura solo pueden mirar; en los demás modos, cada acción pasa por los permisos del propio agente. Claude Code, Codex, Antigravity y Trex CLI reciben estas herramientas (`trex_chrome`) al arrancar el chat: los que ya estaban abiertos al activarlo deben reiniciarse. Un agente que corre dentro de WSL no las recibe.
+Cada chat trabaja en su propio grupo de pestañas, con su nombre, y solo alcanza ese grupo y las pestañas que compartas con todos (grupo **«trex»**). Pueden mirar (listar, leer, capturar y esperar a que algo aparezca) y actuar (navegar, hacer clic, escribir, rellenar formularios, elegir opciones, pulsar teclas, desplazar, responder diálogos, subir archivos de la carpeta del proyecto y cerrar pestañas); no escriben en campos de contraseña. En un chat en modo planificar o de solo lectura solo pueden mirar; en los demás modos, cada acción pasa por los permisos del propio agente. Claude Code, Codex, Antigravity y Trex CLI reciben estas herramientas (`trex_chrome`) al arrancar el chat: los que ya estaban abiertos al activarlo deben reiniciarse. Un agente que corre dentro de WSL no las recibe.
 
 El servidor de trex escucha solo en `127.0.0.1` (puerto 7341 por defecto, editable en Ajustes). Apagar la función no desempareja: la extensión vuelve a conectar al encenderla. Si cambias el puerto, los navegadores ya emparejados se quedan con el anterior: en la extensión, «Desvincular» y vuelve a emparejar con el puerto nuevo en «Avanzado». Ten en cuenta que en una pestaña compartida el agente actúa con tu sesión de ese sitio y que lo que lee se envía al proveedor del modelo. Más detalle en [extension/README.md](../extension/README.md).
 
+**Datos del antiguo Trex Browser.** El navegador propio que usaban antes los agentes ya no existe. Si quedan sus datos en el equipo, la misma sección de Ajustes lo avisa con su tamaño, porque guardan las sesiones que iniciaron los agentes: **«Borrar datos»** los elimina tras confirmarlo (no se puede deshacer) y, si seguía abierto, lo cierra antes. Si lo instalaste aparte, ofrece también **«Desinstalar Trex Browser»**. Sin restos, no aparece nada.
+
 ## Fedora
 
-La app, Trex CLI y Trex Browser se empaquetan juntos en un RPM. El navegador usa Chromium instalado en Fedora y un runtime privado de Node/Playwright; las claves se guardan en Secret Service. Consulta [instalación, compilación y pruebas en Fedora](fedora.md), incluidos los requisitos del llavero y los límites de validación del escritorio.
+La app y Trex CLI se empaquetan juntos en un RPM; las claves se guardan en Secret Service. Consulta [instalación, compilación y pruebas en Fedora](fedora.md), incluidos los requisitos del llavero y los límites de validación del escritorio.
 
 ## Equipos con agente principal
 
@@ -640,7 +626,7 @@ En **Nueva sesión → Configurar flujo de agentes → Equipo** puedes elegir un
 
 La ventana de planificación solo configura los agentes: funciones, cuentas, modelos, esfuerzo e instrucciones reutilizables. Ordena los subagentes con las flechas y pulsa **Guardar y abrir chat**. No hay que escribir una idea en esa ventana. En el nuevo chat verás el equipo guardado y podrás escribir tu idea normalmente; el trabajo empieza al enviar ese mensaje al principal. El flujo de dos agentes funciona igual: se guarda primero y el primer mensaje inicia la planificación. Al convertir un chat existente, su contexto se conserva para ese primer mensaje y no se envía automáticamente.
 
-El principal planifica, asigna tareas mediante herramientas y evalúa los informes antes de continuar. Respeta el orden inicial configurado cuando las funciones sean necesarias y puede volver a revisión o corrección según los hallazgos. No edita archivos directamente. Los colaboradores pueden implementar, revisar código, corregir errores, investigar o cumplir una función personalizada. Los revisores de solo lectura conservan restricciones nativas; los colaboradores con escritura utilizan los permisos normales de su asistente. La investigación web requiere las herramientas web del asistente o Trex Browser habilitado e instalado.
+El principal planifica, asigna tareas mediante herramientas y evalúa los informes antes de continuar. Respeta el orden inicial configurado cuando las funciones sean necesarias y puede volver a revisión o corrección según los hallazgos. No edita archivos directamente. Los colaboradores pueden implementar, revisar código, corregir errores, investigar o cumplir una función personalizada. Los revisores de solo lectura conservan restricciones nativas; los colaboradores con escritura utilizan los permisos normales de su asistente. La investigación web requiere las herramientas web del asistente o «Tu navegador» activado.
 
 El chat reúne los historiales con el nombre de su participante y conserva el destino de cada aprobación. La lista **Tareas**, arriba a la derecha, muestra el plan, responsables, progreso e informes. El principal publica el plan antes de delegar; las confirmaciones de cada delegación actualizan su estado. Dentro del chat puedes desplegar la actividad de cada subagente, su modelo y esfuerzo, instrucciones, herramientas y resultados. Las solicitudes de permiso permanecen visibles fuera de las tarjetas plegables. **Cuentas y recuperación** conserva las acciones de historial y revisión. Se ejecuta una tarea a la vez dentro del equipo; no se aíslan los cambios en worktrees ni se bloquean otros chats que utilicen el mismo proyecto.
 
@@ -654,7 +640,7 @@ Límites por equipo: ocho colaboradores, 32 tareas por ciclo y 128 en total; tar
 - **Resumen antes de empezar**: el pie del diálogo muestra cuántos agentes usan cada cuenta y el porcentaje de sus límites de 5 horas y semana (consultarlo no gasta tokens), con avisos si una cuenta supera el 75 % o la comparten tres o más agentes.
 - **Presupuesto**: puedes limitar los tokens nuevos del equipo y de cada agente. Las delegaciones informan del presupuesto restante; al agotarse, la tarea no empieza y el equipo se pausa con opciones para ampliarlo o quitar los límites. Los tokens nuevos excluyen las lecturas de caché, que se muestran aparte.
 - **Uso visible**: la pestaña **Equipo** muestra el total del equipo, la barra de presupuesto y, agrupados por cuenta, el contexto, los tokens nuevos, el coste conocido y la cuota de cada participante. El principal recibe esos datos y prefiere a los miembros con margen; una cuenta al 98 % o rechazada bloquea nuevas delegaciones a ese miembro.
-- **Contexto justo por función**: la investigación no recibe instantánea de Git, la revisión recibe las diferencias y el resto solo la rama y el estado. El navegador se asigna por función (puedes cambiarlo por agente). Antes de una tarea nueva, un miembro con el contexto al 50 % o más se compacta una vez.
+- **Contexto justo por función**: la investigación no recibe instantánea de Git, la revisión recibe las diferencias y el resto solo la rama y el estado. Antes de una tarea nueva, un miembro con el contexto al 50 % o más se compacta una vez.
 - **Informes breves**: se piden informes de unas 500 palabras con rutas en lugar de código. Si uno supera 32 KiB ya no falla: el texto completo se guarda en la carpeta de datos de TREX y la tarea conserva el principio y el final con la ruta.
 - **Coordinación sin sondeos**: el principal no espera consultando el estado; TREX abre un turno nuevo cuando terminan las delegaciones y una consulta devuelve los informes nuevos una sola vez.
 

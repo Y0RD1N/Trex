@@ -1,6 +1,6 @@
 /** Trex CLI owns provider HTTP, credentials and tools; React only speaks its versioned protocol. */
 import { useEffect, useReducer, useRef, useState } from "react";
-import { agentWrite, agentTeamMcpConfig, messageQueueMcpConfig, trexBrowserResolveSpace, formatError } from "../api";
+import { agentWrite, agentTeamMcpConfig, messageQueueMcpConfig, formatError } from "../api";
 import { initialChatState, record, text, type Json, type OutgoingImage } from "../chatState";
 import { deliverInbox, InboxRequests, TREX_INBOX_INSTRUCTIONS, INBOX_WAKE, type QueueSnapshot } from "../messageQueue";
 import { taskInstructions } from "../chatTasks";
@@ -26,7 +26,8 @@ async function coordinationServer(session: string, project: string): Promise<{ c
 import { withChatTimes } from "../chatTimes";
 import { autoCompactTokens, trexAutoCompactSettings } from "../autoCompact";
 import { loadMemory, memoryInstructions } from "../memory";
-import { chromeAvailable, connectChromeStdio } from "../browserConnection";
+import { chromeAvailable, connectChrome } from "../browserConnection";
+import { trexCliChromeEnv } from "../browser";
 const timedTrexReducer = withChatTimes(trexReducer);
 
 /** Una herramienta se cortó sin saber si llegó a actuar: Trex CLI no la repite
@@ -154,11 +155,13 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
     ready.current = (async () => {
       rejectPending("La sesión de Trex CLI se está reiniciando.");
       const current = latest.current;
-      // El navegador de la persona (extensión de trex): su token tiene que estar en el entorno del CLI
-      // desde que arranca, porque es el CLI quien lanza el adaptador. Con la función apagada no se pide nada.
-      const chrome = chromeAvailable() ? await connectChromeStdio(current.sessionId, planningOnly ? "plan" : choices.current.mode, planningOnly, current.shell ?? "") : null;
+      // El navegador de la persona (extensión de trex): el CLI se conecta él mismo por HTTP, con la dirección
+      // y el token que recibe en su entorno (TREX_CHROME_URL y TREX_CHROME_TOKEN), nunca en un mensaje.
+      // Con la función apagada no se pide nada y el CLI arranca sin ellas.
+      const chrome = chromeAvailable() ? await connectChrome(current.sessionId, planningOnly ? "plan" : choices.current.mode, planningOnly, current.shell ?? "",
+        { label: current.chatLabel, cwd: current.cwd }) : null;
       const procId = await agent.spawn({ cwd: current.cwd, command: current.command ?? "trex-agent", profileArgs: current.args,
-        flags: ["app-server"], shell: current.shell, env: chrome ? { ...current.env, ...chrome.env } : current.env });
+        flags: ["app-server"], shell: current.shell, env: chrome ? { ...current.env, ...trexCliChromeEnv(chrome) } : current.env });
       if (!procId || !mounted.current || startupGeneration.current !== token) throw new Error("Se canceló el arranque de Trex CLI.");
       processId.current = procId;
       const init = await rpc(procId, "initialize", { protocolVersion: 1, client: "trex", inbox: true });
@@ -173,9 +176,6 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const selected = choices.current;
       const team = current.team ? await agentTeamMcpConfig(current.team) : null;
       assertStartup(procId);
-      const browser = current.browser?.enabled && current.browser.automatic ? await trexBrowserResolveSpace(current.cwd,current.browser) : current.browser;
-      assertStartup(procId);
-      if(current.browser?.enabled && browser?.enabled === false) startupNotices.push("Trex Browser no está disponible. Revisa su instalación en Ajustes; el asistente continúa sin navegador.");
       const detection = detectedIntegrations(current.cwd);
       const available = detection instanceof Promise ? await detection : detection;
       assertStartup(procId);
@@ -188,16 +188,16 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const coordination = await coordinationServer(current.queueId ?? current.sessionId, current.cwd).catch(() => null);
       if (!coordination) startupNotices.push("La coordinación con las otras sesiones del proyecto no está disponible en este chat.");
       assertStartup(procId);
-      // Announce only an attached browser and installed applications; restrictions below still follow the preferences.
-      const integrations = integrationContext(current, { browser: browser?.enabled === true, available, a11y: !!accessibility });
+      // Announce only installed applications; restrictions below still follow the preferences.
+      const integrations = integrationContext(current, { available, a11y: !!accessibility });
       const result = await rpc(procId, "session/start", { cwd: current.cwd, mode: planningOnly ? "plan" : selected.mode,
         model: selected.model, effort: selected.effort, conversationId: nativeConversation.current,
         // Como Claude y Codex: cómo adjuntar archivos para que el chat los pinte como tarjeta.
         instructions: [FILE_SHARING_INSTRUCTIONS, TREX_INBOX_INSTRUCTIONS, taskInstructions("trex"), integrationInstructions("trex", integrations),
           memoryInstructions(coordination ? await loadMemory(current.cwd) : null)].filter(Boolean).join(" "),
         ...(current.planningInstruction ? { roleInstructions: current.planningInstruction } : {}),
-        settings: { ...integrationRestrictions(current.integrations), ...trexAutoCompactSettings(autoCompactAt.current = autoCompactTokens(current.autoCompact, "trex")) }, desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(browser ? { browser: {enabled:browser.enabled,profile:browser.profile,clientId:browser.clientId} } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}),
-        ...(coordination ? { coordination } : {}), ...(chrome ? { chrome: { command: chrome.command, args: chrome.args } } : {}) });
+        settings: { ...integrationRestrictions(current.integrations), ...trexAutoCompactSettings(autoCompactAt.current = autoCompactTokens(current.autoCompact, "trex")) }, desktopEnabled: current.desktopEnabled === true, ...(accessibility ? { accessibility } : {}), ...(team ? { team: { command: team.command, args: team.callArgs } } : {}),
+        ...(coordination ? { coordination } : {}) });
       if (!agent.isCurrent(procId) || !mounted.current || startupGeneration.current !== token) throw new Error("La sesión se sustituyó durante el arranque.");
       assertIntegrationRestrictions(result, current.integrations);
       if (result.instructionsApplied !== true) throw new Error("Trex CLI no confirmó las instrucciones de las herramientas. Actualiza el CLI antes de iniciar esta conversación.");

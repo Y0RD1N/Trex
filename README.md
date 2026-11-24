@@ -57,7 +57,6 @@ cuando a uno se le acaba la cuota, **coordinar un equipo de agentes** o darles u
 | 👥 **Equipos de agentes** | Un coordinador y de 1 a 8 colaboradores (implementan, revisan, investigan…), con presupuesto de tokens y cuotas a la vista. |
 | 🔁 **Continuar con otro asistente** | Traspasa el trabajo de un chat a otro perfil sin perder el contexto, incluso si el anterior se quedó sin cuota. |
 | 📬 **Mensajes en cola** | Escribe mientras el agente trabaja; tus mensajes esperan en una bandeja que puedes editar, cancelar o enviar al instante. |
-| 🌐 **Trex Browser** | Un navegador con perfiles privados por proyecto que los agentes pueden manejar y tú puedes pausar o tomar. |
 | 🧷 **Tu navegador** *(experimental)* | Con la extensión de trex, los agentes ven y manejan las pestañas que compartas en tu Chrome, Brave o Edge, con tus sesiones iniciadas. |
 | 🖱️ **Control de aplicaciones** *(experimental)* | Los agentes pueden usar otras apps mediante el árbol de accesibilidad del sistema, sin mover tu ratón ni tu teclado. |
 | 🔔 **Comodidades** | Paleta de comandos (`Ctrl+K`), abrir cualquier proyecto de tus carpetas con un agente (`Ctrl+Space`, configurable), recuperar conversaciones, avisos de escritorio, atajos configurables, tema claro y oscuro. |
@@ -73,7 +72,7 @@ flowchart LR
     app --> codex["Codex"]
     app --> anti["Antigravity"]
     app --> cli["Trex CLI<br/>modelos con API key"]
-    claude & codex & anti & cli -.-> nav["🌐 Trex Browser<br/>opcional"]
+    claude & codex & anti & cli -.-> nav["🧷 Tu navegador<br/>extensión, opcional"]
 ```
 
 trex son tres piezas, y solo la primera es obligatoria:
@@ -82,7 +81,7 @@ trex son tres piezas, y solo la primera es obligatoria:
 |---|---|:---:|
 | **trex** | La app de escritorio: terminal, proyectos, chats, planes y equipos. | ✅ Sí |
 | **Trex CLI** | Agente propio para modelos con API key: DeepSeek, MiniMax, OpenRouter, Anthropic y cualquier endpoint compatible. | Opcional |
-| **Trex Browser** | Navegador con Chrome o Chromium y perfiles privados, que los agentes controlan mediante herramientas MCP. | Opcional |
+| **Tu navegador** | Extensión para Chrome, Brave o Edge: los agentes manejan las pestañas que compartas, con tus sesiones iniciadas. | Opcional |
 
 ## ⬇️ Instalar
 
@@ -95,8 +94,9 @@ Descarga el instalador de tu sistema desde la
 <br>
 
 1. Ejecuta `trex_<versión>_x64-setup.exe`.
-2. En el instalador puedes marcar los componentes opcionales **Trex CLI** (modelos con API key) y **Trex Browser**.
+2. En el instalador puedes marcar el componente opcional **Trex CLI** (modelos con API key).
 3. El instalador no tiene firma digital, así que Windows puede mostrar un aviso de SmartScreen.
+4. Si tenías Trex Browser (versiones anteriores), el instalador lo quita; sus perfiles se borran desde los ajustes de trex.
 
 </details>
 
@@ -105,14 +105,14 @@ Descarga el instalador de tu sistema desde la
 
 <br>
 
-Paquete RPM para x86-64, probado en Fedora 44. Incluye la app, Trex CLI y Trex Browser.
+Paquete RPM para x86-64, probado en Fedora 44. Incluye la app y Trex CLI.
 
 ```bash
-sudo dnf install ./trex-*.rpm chromium gnome-keyring
+sudo dnf install ./trex-*.rpm gnome-keyring
 trex
 ```
 
-Más detalles en [docs/fedora.md](docs/fedora.md). En otras distribuciones puedes
+Para «Tu navegador» necesitas Chrome, Chromium, Brave o Edge (`sudo dnf install chromium`). Más detalles en [docs/fedora.md](docs/fedora.md). En otras distribuciones puedes
 [compilar desde el código](docs/desarrollo.md#compilar-instaladores).
 
 </details>
@@ -124,7 +124,6 @@ Más detalles en [docs/fedora.md](docs/fedora.md). En otras distribuciones puede
 
 1. Abre `trex_<versión>_aarch64.dmg` y arrastra trex a Aplicaciones.
 2. La app lleva firma *ad hoc*, sin certificado de Apple: la primera vez ábrela con **clic derecho → Abrir**.
-3. Trex Browser todavía no está disponible en macOS.
 
 </details>
 
@@ -159,31 +158,23 @@ Cada asistente se autentica con su propio CLI; trex no copia tus credenciales.
 
 Todos los atajos están en [la guía](docs/guia.md#atajos) y se pueden cambiar en **Ajustes → Atajos**.
 
-## 🌐 Trex Browser
+## 🧷 Tu navegador
 
-Cada agente trabaja en su **propio espacio** del navegador (cookies, almacenamiento, permisos
-y descargas separados), y una ventana por proyecto agrupa las pestañas de todos. Desde ahí puedes
-ver qué hace cada uno, pausarlo o tomar el control.
-
-<p align="center">
-  <img src="docs/design/real-barra-revelada.png" width="820" alt="Trex Browser en Fedora: una ventana de navegador con pestañas sobre el chat de trex y su panel de tareas">
-  <br>
-  <sub>Trex Browser en Fedora, con la barra de pestañas revelada sobre un chat con tareas.</sub>
-</p>
-
-En Windows usa tu Chrome; en Fedora, Chromium. Más en
-[trex-browser/README.md](trex-browser/README.md) y [docs/agent-browser-spaces.md](docs/agent-browser-spaces.md).
+Con la extensión de trex, los agentes usan **tu Chrome, Brave o Edge**, con tus sesiones
+iniciadas, pero solo en las pestañas del grupo «trex»: las que abren ellos y las que tú
+compartes. Está apagado por defecto y es experimental. Cómo instalarla y emparejarla:
+[extension/README.md](extension/README.md).
 
 ## 🚦 Estado del proyecto
 
 | Área | Estado |
 |---|---|
 | Terminal, proyectos, pestañas, perfiles de Claude Code y Codex, planificar e implementar, equipos y mensajes en cola | ✅ Disponible |
-| Trex CLI y Trex Browser | ✅ Disponible (opcionales) |
+| Trex CLI | ✅ Disponible (opcional) |
 | Control de aplicaciones por accesibilidad | 🧪 **Experimental** |
 | Tu navegador (extensión de trex) | 🧪 **Experimental**: la extensión se carga a mano, todavía no está en la Chrome Web Store |
 | Antigravity | 🧪 **Integración inicial**: probada en Windows con una cuenta real; las herramientas autenticadas y los turnos en Fedora aún requieren validación. La planificación de solo lectura, los equipos y el control de sus terminales internas están desactivados |
-| macOS | Solo Apple Silicon, firma *ad hoc* y sin Trex Browser |
+| macOS | Solo Apple Silicon y firma *ad hoc* |
 | Linux | Probado en Fedora 44 (RPM); otras distribuciones, sin instalador |
 | Idioma | La interfaz y la documentación están en español |
 
@@ -193,8 +184,6 @@ En Windows usa tu Chrome; en Fedora, Chromium. Más en
 |---|---|
 | [Guía de uso](docs/guia.md) | Todas las funciones de trex, con detalle |
 | [Trex CLI](trex-cli/README.md) · [protocolo](trex-cli/PROTOCOL.md) | Agente para modelos con API key y su protocolo JSON-RPC |
-| [Trex Browser](trex-browser/README.md) | Navegador de los agentes: herramientas, modos y pruebas |
-| [Espacios del navegador](docs/agent-browser-spaces.md) | Cómo se aíslan los datos de cada agente |
 | [Extensión «Tu navegador»](extension/README.md) | Instalarla, emparejarla y qué pestañas pueden tocar los agentes |
 | [Integraciones de escritorio](docs/integraciones-escritorio.md) | Dependencias, GitHub CLI y control por accesibilidad |
 | [Tareas en cualquier chat](docs/chat-task-tools.md) | Cómo se publican y se muestran las tareas |
@@ -223,8 +212,8 @@ comprobaciones y cómo compilar los instaladores están en **[docs/desarrollo.md
 | Shell de escritorio | [Tauri v2](https://tauri.app) (Rust) |
 | Interfaz | React 19 + TypeScript + Vite |
 | Terminal | [xterm.js](https://xtermjs.org) y `portable-pty` (ConPTY en Windows, `openpty` en Unix) |
-| Trex CLI y lanzador del navegador | Rust |
-| Trex Browser | Node + Playwright, ventana en Electron |
+| Trex CLI | Rust |
+| Extensión «Tu navegador» | JavaScript (Manifest V3) |
 
 ## 🔒 Seguridad y privacidad
 

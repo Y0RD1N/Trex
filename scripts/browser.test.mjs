@@ -1,111 +1,23 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 
-// Execute production modules; only the Tauri IPC boundary is replaced. No native
+// Pure production helpers: tool modes, WSL paths and the files tools return. No native
 // process, browser, provider, network connection, or build is started here.
 const browser = await load("browser");
-const { browserMode, validBrowserProfile, browserOptions, browserConfigForShell,
-  browserArtifacts, browserResultArtifacts, browserToolResultText, brokerArtifactId, OBSERVE_BROWSER_TOOLS } = browser;
+const { browserMode, browserConfigForShell, chromeChatLabel,
+  browserArtifacts, browserResultArtifacts, browserToolResultText } = browser;
 const { claudeProfilePermissionMode } = await load("workflowSafety");
 const offlineTest = (name, fn) => test(name, { timeout: 10000 }, fn);
 
-async function compile(name) {
-  const source = await readFile(new URL(`../src/${name}.ts`, import.meta.url), "utf8");
-  const { outputText } = ts.transpileModule(source, { compilerOptions: {
-    target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS,
-  } });
-  return { run: new Function("require", "exports", outputText),
-    imports: [...new Set([...outputText.matchAll(/require\("([^"]+)"\)/g)].map(match => match[1]))] };
-}
+const nativeConfig = Object.freeze({ command: "C:\\Program Files\\Trex\\trex.exe",
+  args: Object.freeze(["mcp", "--cwd", "D:\\work\\with spaces", "--mode", "full", "literal;$() --flag"]) });
 
-const [compiledApi, compiledConnection] = await Promise.all([compile("api"), compile("browserConnection")]);
-const apiDependencies = Object.fromEntries(await Promise.all(compiledApi.imports
-  .filter(name => name.startsWith("./"))
-  .map(async name => [name, name === "./browser" ? browser : await load(name.slice(2))])));
-
-function instantiate(compiled, dependencies) {
-  const exports = {};
-  compiled.run(name => {
-    assert.ok(Object.hasOwn(dependencies, name), `Unexpected production dependency: ${name}`);
-    return dependencies[name];
-  }, exports);
-  return exports;
-}
-
-function nativeHarness(respond = command => assert.fail(`Unexpected native command: ${command}`)) {
-  const calls = [], warnings = [];
-  const api = instantiate(compiledApi, {
-    ...apiDependencies,
-    "@tauri-apps/api/core": { isTauri: () => true, invoke: async (command, args) => {
-      calls.push({ command, args });
-      return respond(command, args);
-    } },
-    "@tauri-apps/api/event": { listen: () => assert.fail("Unexpected native event listener") },
-  });
-  const { connectBrowser } = instantiate(compiledConnection, { "./api": api, "./browser": browser });
-  return { api, calls, warnings, connect: (options, { cwd = "D:/work/with spaces", mode = "default",
-    planningOnly = false, shell = "powershell", allowHttp } = {}) =>
-    allowHttp === undefined ? connectBrowser(options, cwd, mode, planningOnly, shell, message => warnings.push(message))
-      : connectBrowser(options, cwd, mode, planningOnly, shell, message => warnings.push(message), allowHttp) };
-}
-
-const options = Object.freeze({ enabled: true, profile: "BROWSER27", clientId: "chat-client_42" });
-const ready = Object.freeze({ installed: true, ready: true, compatible: true });
-const nativeConfig = Object.freeze({ command: "C:\\Program Files\\Trex\\trex-browser.exe",
-  args: Object.freeze(["mcp", "--cwd", "D:\\work\\with spaces", "--profile", "BROWSER27", "literal;$() --flag"]) });
-
-offlineTest("agents that support it get one MCP-over-HTTP endpoint; others, WSL and failures keep stdio", async () => {
-  const session = { url: "http://127.0.0.1:48123/mcp", token: "a".repeat(64), mode: "qa" };
-  let failSession = false;
-  const h = nativeHarness((command, args) => {
-    if (command === "trex_browser_status") return { ...ready, capabilities: { spaces: true, mcpHttp: true } };
-    if (command === "trex_browser_mcp_session") { if (failSession) throw new Error("broker down"); assert.equal(args.mode, "qa"); return session; }
-    assert.equal(command, "trex_browser_mcp_config"); return nativeConfig;
-  });
-  const http = await h.connect(options, { allowHttp: true });
-  assert.deepEqual(http, { kind: "http", url: session.url, token: session.token, cwd: "D:/work/with spaces", clientId: options.clientId, profile: options.profile });
-  assert.deepEqual(browser.browserEnv(http), { TREX_BROWSER_TOKEN: session.token });
-  const server = browser.claudeBrowserServer(http);
-  assert.equal(server.type, "http");
-  assert.equal(server.headers.Authorization, "Bearer ${TREX_BROWSER_TOKEN}", "the token must never be on the command line");
-  assert.equal(JSON.stringify(server).includes(session.token), false);
-  assert.deepEqual(await h.connect(options), nativeConfig, "without allowHttp the stdio adapter is used");
-  assert.deepEqual(await h.connect(options, { allowHttp: true, shell: "wsl" }), browser.browserConfigForShell(nativeConfig, "wsl"), "WSL cannot reach the Windows loopback broker");
-  failSession = true;
-  assert.deepEqual(await h.connect(options, { allowHttp: true }), nativeConfig, "a failed session falls back to stdio");
-  assert.deepEqual(browser.browserEnv(nativeConfig), {});
-});
-
-offlineTest("ordinary chats allocate a private persistent profile before constructing the native MCP grant", async () => {
-  const h = nativeHarness((command,args) => {
-    if(command === "trex_browser_status") return {...ready,capabilities:{spaces:true}};
-    if(command === "trex_browser_spaces") return {spaces:[{...args.members[0],profile:args.members[0].clientId === "first" ? "BROWSER2" : "BROWSER3"}]};
-    assert.equal(command,"trex_browser_mcp_config");return {command:"browser.exe",args:["--profile",args.profile]};
-  });
-  for(const clientId of ["first","second"]) {
-    const requested=browserOptions({browserEnabled:true,browserProfile:"BROWSER1"},clientId,"Codex · "+clientId);
-    const config=await h.connect(requested);
-    assert.deepEqual(config.args,["--profile",clientId === "first" ? "BROWSER2" : "BROWSER3"]);
-  }
-  assert.equal(h.calls.filter(call=>call.command==="trex_browser_spaces").length,2);
-  assert.ok(h.calls.every(call=>call.command!=="trex_browser_call"));
-});
-
-offlineTest("failed or foreign automatic bindings never fall back to a shared profile or take control", async () => {
-  for(const response of [null,{spaces:[]},{spaces:[{clientId:"foreign",profile:"BROWSER2"}]},{spaces:[{clientId:"own",profile:"BROWSER1"}]}]) {
-    const h=nativeHarness(command=>command==="trex_browser_status"?{...ready,capabilities:{spaces:true}}:response);
-    await assert.rejects(h.connect(browserOptions({browserEnabled:true,browserProfile:"BROWSER1"},"own")));
-    assert.ok(!h.calls.some(call=>call.command==="trex_browser_mcp_config"||call.command==="trex_browser_call"));
-  }
-});
-
-offlineTest("automatic space labels respect native UTF-8 limits without splitting Unicode characters",()=>{
-  const value=browserOptions({browserEnabled:true,browserProfile:"BROWSER1"},"own","🦖".repeat(100));
-  assert.equal(value.label,"🦖".repeat(25));assert.equal(new TextEncoder().encode(value.label).length,100);
-  assert.equal(browserOptions({browserEnabled:true,browserProfile:"BROWSER1"},"own","\n\r").label,"Agente");
+offlineTest("chat labels for Your browser respect UTF-8 limits without splitting Unicode characters", () => {
+  assert.equal(chromeChatLabel("🦖".repeat(100)), "🦖".repeat(25));
+  assert.equal(new TextEncoder().encode(chromeChatLabel("🦖".repeat(100))).length, 100);
+  assert.equal(chromeChatLabel("Claude Code ·\n  Revisar\tla web "), "Claude Code · Revisar la web");
+  for (const empty of ["", "\n\r", null, undefined]) assert.equal(chromeChatLabel(empty), undefined, JSON.stringify(empty));
 });
 const sha256 = "0123456789abcdef".repeat(4);
 const core = Object.freeze({ artifactId: "A0b1c2d3-1234-4567-8910-AbCdEf012345", sha256,
@@ -200,49 +112,11 @@ offlineTest("Claude flags after the end-of-options marker are prompt arguments",
   }
 });
 
-offlineTest("the observe allowlist matches the published contract and excludes mutation tools", async () => {
-  const [all, observe] = await Promise.all(["tools", "observe-tools"].map(async name =>
-    JSON.parse(await readFile(new URL(`../trex-browser/docs/${name}.json`, import.meta.url), "utf8")).tools));
-  assert.deepEqual([...OBSERVE_BROWSER_TOOLS].sort(), observe.map(tool => tool.name).sort());
-  for (const tool of all) {
-    assert.equal(OBSERVE_BROWSER_TOOLS.has(tool.name), observe.some(item => item.name === tool.name), tool.name);
-    if (OBSERVE_BROWSER_TOOLS.has(tool.name)) {
-      assert.equal(observe.find(item=>item.name===tool.name).annotations.readOnlyHint,true,tool.name);
-      // A full-mode batch can contain input; only its observe grant is read-only.
-      assert.equal(tool.annotations.readOnlyHint,tool.name!=="browser_batch",tool.name);
-    }
-  }
-  assert.equal(OBSERVE_BROWSER_TOOLS.has("browser_evaluate"), false);
-  assert.equal(OBSERVE_BROWSER_TOOLS.has("browser_file_upload"), false);
-});
-
-offlineTest("only canonical BROWSER1 through BROWSER99 profile names are accepted", () => {
-  for (let number = 1; number <= 99; number++) assert.equal(validBrowserProfile(`BROWSER${number}`), true);
-  for (const value of ["", "BROWSER", "BROWSER0", "BROWSER00", "BROWSER01", "BROWSER100", "BROWSER999",
-    "browser1", "Browser1", " BROWSER1", "BROWSER1 ", "BROWSER1\n", "BROWSER1\r", "BROWSER1\0",
-    "BROWSER-1", "BROWSER1.0", "BROWSER+1", "BROWSER１", "../BROWSER1"]) {
-    assert.equal(validBrowserProfile(value), false, JSON.stringify(value));
-  }
-});
-
-offlineTest("browser options retain the client and enabled flag while normalizing invalid profiles", () => {
-  for (const enabled of [true, false]) {
-    for (const profile of ["BROWSER1", "BROWSER27", "BROWSER99"]) {
-      assert.deepEqual(browserOptions({ browserEnabled: enabled, browserProfile: profile }, "client-original"),
-        { enabled, profile, clientId: "client-original", automatic:true, label:"Agente" });
-    }
-    for (const profile of ["", "BROWSER0", "BROWSER01", "BROWSER100", "browser2", "BROWSER2\n"]) {
-      assert.deepEqual(browserOptions({ browserEnabled: enabled, browserProfile: profile }, "client-original"),
-        { enabled, profile: "BROWSER1", clientId: "client-original", automatic:true, label:"Agente" });
-    }
-  }
-});
-
 offlineTest("WSL converts drive and verbatim executable paths without rewriting or splitting arguments", () => {
   for (const [command, expected] of [
-    ["C:\\Program Files\\Trex\\trex-browser.exe", "/mnt/c/Program Files/Trex/trex-browser.exe"],
+    ["C:\\Program Files\\Trex\\trex.exe", "/mnt/c/Program Files/Trex/trex.exe"],
     ["D:/apps/Trex/browser.exe", "/mnt/d/apps/Trex/browser.exe"],
-    ["\\\\?\\E:\\apps\\Trex Browser\\browser.exe", "/mnt/e/apps/Trex Browser/browser.exe"],
+    ["\\\\?\\E:\\apps\\Trex Apps\\browser.exe", "/mnt/e/apps/Trex Apps/browser.exe"],
   ]) {
     const config = Object.freeze({ command, args: nativeConfig.args });
     assert.deepEqual(browserConfigForShell(config, "wsl"), { command: expected, args: nativeConfig.args });
@@ -254,7 +128,7 @@ offlineTest("native shells, relative commands, POSIX paths and UNC commands reta
   for (const shell of ["default", "powershell", "cmd", "bash", "zsh"]) {
     assert.deepEqual(browserConfigForShell(nativeConfig, shell), nativeConfig);
   }
-  for (const command of ["trex-browser", "/usr/local/bin/trex-browser", "C:relative.exe", "\\\\server\\share\\browser.exe"]) {
+  for (const command of ["trex", "/usr/local/bin/trex", "C:relative.exe", "\\\\server\\share\\browser.exe"]) {
     const config = { command, args: nativeConfig.args };
     assert.deepEqual(browserConfigForShell(config, "wsl"), config);
   }
@@ -266,33 +140,14 @@ offlineTest("core artifact metadata is normalized without retaining image bytes 
   assert.deepEqual(browserArtifacts([{ ...core, sha256: sha256.toUpperCase() }]), [{ ...expectedCore, sha256: sha256.toUpperCase() }]);
 });
 
-offlineTest("CLI artifact metadata preserves local storage and exact nested broker provenance", () => {
-  const [artifact] = browserArtifacts([cli]);
-  assert.deepEqual(artifact, cli);
-  assert.equal(brokerArtifactId(artifact), core.artifactId);
-  assert.notEqual(brokerArtifactId(artifact), cli.id);
-});
-
-offlineTest("broker identity comes from provenance before fallback and is never synthesized from a local hash", () => {
-  assert.equal(brokerArtifactId({ ...cli, provenance: { brokerArtifactId: "Exact_Opaque-ID_AbC123" } }), "Exact_Opaque-ID_AbC123");
-  assert.equal(brokerArtifactId({ ...cli, provenance: {} }), null);
-  assert.equal(brokerArtifactId({ ...cli, provenance: "not-provenance" }), null);
-  assert.equal(brokerArtifactId({ ...expectedCore, provenance: {} }), core.artifactId);
-  for (const invalid of ["", "../outside", "C:\\private\\image.png", "https://example.invalid/file", "id with space", 42, {}]) {
-    assert.equal(brokerArtifactId({ ...expectedCore, provenance: { brokerArtifactId: invalid } }), null, JSON.stringify(invalid));
-  }
+offlineTest("CLI artifact metadata preserves local storage and exact nested provenance", () => {
+  assert.deepEqual(browserArtifacts([cli]), [cli]);
 });
 
 offlineTest("CLI opaque IDs containing colon and dot survive metadata unchanged", () => {
   const id = "broker:Capture.Mixed_CASE-01";
   assert.deepEqual(browserArtifacts([{ ...cli, id, storage: "broker", provenance: { brokerArtifactId: id } }]),
     [{ ...cli, id, storage: "broker", provenance: { brokerArtifactId: id } }]);
-});
-
-offlineTest("broker provenance forwards opaque colon and dot IDs exactly", () => {
-  const id = "broker:Capture.Mixed_CASE-01";
-  assert.equal(brokerArtifactId({ ...cli, provenance: { brokerArtifactId: id } }), id);
-  assert.equal(brokerArtifactId({ ...expectedCore, id, provenance: {} }), id);
 });
 
 offlineTest("CLI metadata-only diagnostics with an absent checksum remain visible", () => {
@@ -306,12 +161,11 @@ const lean = Object.freeze({ artifactId: core.artifactId, kind: "screenshot", mi
 const expectedLean = { id: core.artifactId, mimeType: "image/png", width: 640, height: 480, kind: "screenshot", storage: "broker",
   provenance: { projectId: undefined, profile: undefined } };
 
-offlineTest("lean agent artifacts (no sha256, no size) are accepted and open by their id alone", () => {
+offlineTest("lean agent artifacts (no sha256, no size) are accepted", () => {
   assert.deepEqual(browserArtifacts([lean]), [expectedLean]);
   const [artifact] = browserArtifacts([lean]);
   assert.equal(Object.hasOwn(artifact, "sha256"), false);
   assert.equal(Object.hasOwn(artifact, "sizeBytes"), false);
-  assert.equal(brokerArtifactId(artifact), core.artifactId);
   // Video and diagnostics carry no dimensions.
   assert.deepEqual(browserArtifacts([{ artifactId: "vid-1", kind: "video", mimeType: "video/webm" }]).map(item => [item.id, item.kind, item.mimeType]), [["vid-1", "video", "video/webm"]]);
   // A mix of lean and full shapes keeps both, in order.
@@ -329,7 +183,6 @@ offlineTest("lean artifacts are found in every envelope the Claude, Codex and An
   ]) {
     const found = browserResultArtifacts(raw);
     assert.deepEqual(found.map(item => item.id), [core.artifactId], JSON.stringify(raw).slice(0, 60));
-    assert.equal(brokerArtifactId(found[0]), core.artifactId);
   }
 });
 
@@ -339,20 +192,6 @@ offlineTest("an artifact that omits the checksum or size is fine, one that sends
   for (const bad of [{ sha256: 42 }, { sha256: null }, { sha256: "g".repeat(64) }, { sizeBytes: -1 }, { sizeBytes: "12" }, { bytes: 1.5 }, { mimeType: undefined }, { artifactId: "../x" }]) {
     assert.deepEqual(browserArtifacts([{ ...lean, ...bad }]), [], JSON.stringify(bad));
   }
-});
-
-offlineTest("host text for native failures: only the bridge's own sentence is shown", () => {
-  const { browserErrorText, browserFocusNotice, browserOpenFailure } = browser;
-  assert.equal(browserErrorText("  Este espacio está abierto en otra ventana.  ", "genérico"), "Este espacio está abierto en otra ventana.");
-  for (const value of [new Error("TypeError: private diagnostic"), undefined, null, 42, "", "   ", "x".repeat(601), { message: "no" }]) {
-    assert.equal(browserErrorText(value, "genérico"), "genérico");
-  }
-  assert.match(browserFocusNotice("external-browser"), /Chrome del sistema/);
-  assert.match(browserFocusNotice("closed"), /ya no tiene ninguna ventana/);
-  assert.match(browserFocusNotice(undefined), /No se pudo traer la ventana al frente/);
-  assert.match(browserOpenFailure("unknown-profile"), /todavía no existe/);
-  assert.match(browserOpenFailure("agent-running"), /No se pudo abrir este espacio/);
-  assert.match(browserOpenFailure(), /No se pudo abrir este espacio/);
 });
 
 offlineTest("artifact parsing drops malformed required metadata while retaining valid siblings", () => {
@@ -569,119 +408,4 @@ offlineTest("result text parsing skips oversized blocks and reads no more than 3
   const oversized = { type: "text", text: JSON.stringify({ artifacts: [cli], padding: "x".repeat(262144) }) };
   assert.deepEqual(browserResultArtifacts({ content: [oversized, good] }), [expectedCore]);
   assert.deepEqual(browserResultArtifacts({ content: [...Array(32).fill({ type: "text", text: "ordinary" }), good] }), []);
-});
-
-offlineTest("disabled or missing browser options perform no native discovery or configuration", async () => {
-  const h = nativeHarness();
-  for (const value of [undefined, { ...options, enabled: false }]) assert.equal(await h.connect(value), null);
-  assert.deepEqual(h.calls, []);
-  assert.deepEqual(h.warnings, []);
-});
-
-offlineTest("an uninstalled companion quietly skips configuration", async () => {
-  const h = nativeHarness(command => {
-    assert.equal(command, "trex_browser_status");
-    return { installed: false, ready: false, compatible: false };
-  });
-  assert.equal(await h.connect(options), null);
-  assert.deepEqual(h.calls, [{ command: "trex_browser_status", args: undefined }]);
-  assert.deepEqual(h.warnings, []);
-});
-
-offlineTest("a ready companion receives the exact trusted context and mapped permissions", async () => {
-  for (const [mode, planningOnly, expected] of [["plan", false, "observe"], ["read-only", false, "observe"],
-    ["full", false, "full"], ["bypassPermissions", false, "full"], ["default", false, "qa"], ["full", true, "observe"]]) {
-    const h = nativeHarness(command => command === "trex_browser_status" ? ready : nativeConfig);
-    assert.deepEqual(await h.connect(options, { mode, planningOnly }), nativeConfig);
-    assert.deepEqual(h.calls, [
-      { command: "trex_browser_status", args: undefined },
-      { command: "trex_browser_mcp_config", args: { cwd: "D:/work/with spaces", mode: expected, clientId: options.clientId, profile: options.profile } },
-    ]);
-    assert.deepEqual(h.warnings, []);
-  }
-});
-
-offlineTest("connection applies WSL conversion to the native executable while preserving all arguments", async () => {
-  const h = nativeHarness(command => command === "trex_browser_status" ? ready : nativeConfig);
-  assert.deepEqual(await h.connect(options, { shell: "wsl" }), {
-    command: "/mnt/c/Program Files/Trex/trex-browser.exe", args: nativeConfig.args,
-  });
-  assert.deepEqual(h.calls[1].args, { cwd: "D:/work/with spaces", mode: "qa", clientId: options.clientId, profile: options.profile });
-});
-
-offlineTest("not-ready or incompatible native status warns once without asking for configuration", async () => {
-  for (const status of [{ ...ready, ready: false }, { ...ready, compatible: false },
-    { ...ready, ready: false, error: { code: "BROKEN", message: "private native diagnostic" } }]) {
-    const h = nativeHarness(command => {
-      assert.equal(command, "trex_browser_status");
-      return status;
-    });
-    assert.equal(await h.connect(options), null);
-    assert.equal(h.calls.length, 1);
-    assert.equal(h.warnings.length, 1);
-    assert.match(h.warnings[0], /Trex Browser.*no está disponible/);
-    assert.equal(h.warnings[0].includes("private native diagnostic"), false);
-  }
-});
-
-offlineTest("native status rejection and malformed status degrade to one warning", async () => {
-  for (const failure of ["status rejection", "null status", "undefined status"]) {
-    const h = nativeHarness(command => {
-      if (command === "trex_browser_status") {
-        if (failure === "status rejection") throw new Error("native status unavailable");
-        if (failure === "null status") return null;
-        if (failure === "undefined status") return undefined;
-        return ready;
-      }
-      assert.equal(command, "trex_browser_mcp_config");
-      throw new Error("native config unavailable");
-    });
-    assert.equal(await h.connect(options), null, failure);
-    assert.equal(h.calls.length, 1, failure);
-    assert.equal(h.warnings.length, 1, failure);
-    assert.match(h.warnings[0], /Trex Browser.*no está disponible/);
-  }
-});
-offlineTest("a ready installed component cannot silently disappear when app-side preparation fails",async()=>{
-  const h=nativeHarness(command=>{if(command==="trex_browser_status")return ready;throw new Error("private native preparation diagnostic");});
-  await assert.rejects(h.connect(options),error=>error.message.includes("no se pudo preparar")&&!error.message.includes("private native preparation diagnostic"));
-  assert.equal(h.calls.length,2);assert.deepEqual(h.warnings,[]);
-});
-
-offlineTest("a rejection from the native bridge names its cause; a JS error never leaks into the chat",async()=>{
-  const reason="No quedan espacios de navegador libres en este proyecto (máximo 98); los existentes se conservan.";
-  const fails=thrown=>nativeHarness(command=>{if(command==="trex_browser_status")return ready;throw thrown;});
-  await assert.rejects(fails(reason).connect(options),error=>error.message.includes("no se pudo preparar")&&error.message.endsWith(`Motivo: ${reason}`));
-  await assert.rejects(fails(new Error(reason)).connect(options),error=>error.message.includes("no se pudo preparar")&&!error.message.includes(reason));
-});
-
-offlineTest("API native bridge forwards browser commands and trusted arguments without rewriting", async () => {
-  const response = { content: [{ type: "text", text: "done" }], isError: false };
-  const h = nativeHarness(() => response);
-  const cwd = "D:/work/with spaces", mode = "observe", clientId = "Exact_Client-1", profile = "BROWSER99";
-  const request = Object.freeze({ name: "browser_take_screenshot", arguments: Object.freeze({ fullPage: true }),
-    cwd, mode, clientId, profile, operationId: "op-original", timeoutMs: 1500 });
-  for (const result of [await h.api.trexBrowserStatus(), await h.api.trexBrowserMcpConfig(cwd, mode, clientId, profile),
-    await h.api.trexBrowserCall(request), await h.api.trexBrowserOpenArtifact(core.artifactId, cwd, mode, clientId, profile),
-    await h.api.trexBrowserProfiles(cwd), await h.api.trexBrowserCreateProfile(cwd, profile)]) assert.equal(result, response);
-  assert.deepEqual(h.calls, [
-    { command: "trex_browser_status", args: undefined },
-    { command: "trex_browser_mcp_config", args: { cwd, mode, clientId, profile } },
-    { command: "trex_browser_call", args: { request } },
-    { command: "trex_browser_open_artifact", args: { id: core.artifactId, cwd, mode, clientId, profile } },
-    { command: "trex_browser_profiles", args: { cwd } },
-    { command: "trex_browser_create_profile", args: { cwd, profile } },
-  ]);
-  assert.equal(h.calls[2].args.request, request);
-});
-
-offlineTest("API bridge preserves undefined optional profiles and native rejection identity", async () => {
-  const error = new Error("mock native rejection");
-  const h = nativeHarness(() => { throw error; });
-  await assert.rejects(h.api.trexBrowserMcpConfig("D:/work", "qa", "client"), value => value === error);
-  await assert.rejects(h.api.trexBrowserOpenArtifact(core.artifactId, "D:/work", "full", "client"), value => value === error);
-  assert.deepEqual(h.calls, [
-    { command: "trex_browser_mcp_config", args: { cwd: "D:/work", mode: "qa", clientId: "client", profile: undefined } },
-    { command: "trex_browser_open_artifact", args: { id: core.artifactId, cwd: "D:/work", mode: "full", clientId: "client", profile: undefined } },
-  ]);
 });

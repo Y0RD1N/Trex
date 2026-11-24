@@ -11,10 +11,6 @@
 .agent-suggested { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--ok-text); font-size: var(--fs-xs); cursor: help; }
 .agent-suggested:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 .agent-card-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); min-height: 24px; }
-.agent-chip { display: inline-flex; align-items: center; gap: var(--sp-1); height: 26px; padding: 0 var(--sp-2-5); border: 1px solid var(--surface-edge); border-radius: var(--radius-pill); background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-xs); cursor: pointer; transition: border-color var(--dur), background-color var(--dur), color var(--dur); }
-.agent-chip:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
-.agent-chip[aria-pressed="true"] { border-color: var(--border-strong); background: var(--selected); color: var(--text); }
-.agent-chip:disabled { opacity: .5; cursor: default; }
 .agent-workflow-dialog textarea.agent-instructions { width: 100%; height: auto; min-height: 76px; padding: var(--sp-2) var(--sp-2-5); font-size: var(--fs-sm); line-height: 1.6; resize: vertical; }
 
 .agent-budget { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); padding-top: var(--sp-1); }
@@ -33,5 +29,3 @@
   .agent-member .agent-card-head > .agent-account { flex: 1 1 calc(50% - var(--sp-2)); width: auto; margin-left: 0; order: 4; }
   .agent-workflow-dialog .agent-budget .agent-select { flex: 1 1 140px; width: auto; }
 }
-@media (prefers-reduced-motion: reduce) { .agent-chip { transition: none; } }
-:root[data-motion="reduced"] .agent-chip { transition: none; }

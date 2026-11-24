@@ -8,7 +8,7 @@ const {
 const projects = [
   { id: 'p1', name: 'mangi', path: 'D:/projects/mangi' },
   { id: 'p2', name: 'trex', path: 'D:/projects/trex' },
-  { id: 'p3', name: 'Trex Browser', path: 'D:/projects/trex-browser' },
+  { id: 'p3', name: 'Trex Docs', path: 'D:/projects/trex-docs' },
 ];
 
 const session = (id, patch = {}) => ({
@@ -63,10 +63,10 @@ test('a reply is validated and anything malformed is dropped', () => {
 test('projects match by name ignoring case and accents, never by a guess', () => {
   assert.equal(matchProject('Mangi', projects).id, 'p1');
   assert.equal(matchProject('TREX', projects).id, 'p2');
-  assert.equal(matchProject('trex browser', projects).id, 'p3');
+  assert.equal(matchProject('trex docs', projects).id, 'p3');
   assert.equal(matchProject('el proyecto mangi', projects).id, 'p1');
-  // "browser" solo cabe en uno; "tre" cabe en dos y no se adivina.
-  assert.equal(matchProject('browser', projects).id, 'p3');
+  // "docs" solo cabe en uno; "tre" cabe en dos y no se adivina.
+  assert.equal(matchProject('docs', projects).id, 'p3');
   assert.equal(matchProject('tre', projects), null);
   assert.equal(matchProject('otro', projects), null);
   assert.equal(matchProject('', projects), null);
@@ -134,7 +134,7 @@ test('the prompt carries the state, the recent turns and the spoken command', ()
     now: new Date(2026, 10, 14, 9, 30), projects, activeProject: 'trex', sessions: [],
     history: [{ you: 'hola', trex: 'Dime.' }], command: '¿cómo va Claude en mangi?',
   });
-  assert.match(prompt, /"proyectos": \[\n\s+"mangi",\n\s+"trex",\n\s+"Trex Browser"/);
+  assert.match(prompt, /"proyectos": \[\n\s+"mangi",\n\s+"trex",\n\s+"Trex Docs"/);
   assert.match(prompt, /"proyecto_a_la_vista": "trex"/);
   assert.match(prompt, /- Persona: hola\n {2}trex: Dime\./);
   assert.ok(prompt.endsWith('La persona acaba de decir: «¿cómo va Claude en mangi?»'));

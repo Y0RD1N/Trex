@@ -15,6 +15,7 @@ import { MAX_IMAGES, prepareImage } from "../chatImages";
 import { insertImageReferences, removeImageReference, type ReferenceKind } from "../imageReferences";
 import { timeAgo, type RemoteChoice, type RemoteDetail, type RemoteItem, type RemotePending, type RemoteQuestion, type RemoteSession } from "../remoteProtocol";
 import { viewportReport } from "./viewport";
+import { REMOTE_THEME_TOKENS } from "../remoteTheme";
 import { SKULL_BONE, SKULL_BOX, SKULL_EYE, SKULL_SHADE } from "../components/brandSkull";
 import { RemoteClient, defaultDeviceName, forgetToken, pairDevice, projectIcon, storedToken, uploadFile, type ConnectionState, type PhoneAction, type RemoteTheme } from "./client";
 
@@ -91,12 +92,7 @@ function applyTheme(theme: RemoteTheme | null): void {
   const root = document.documentElement;
   if (!theme) return;
   root.dataset.theme = theme.mode;
-  const map: Record<string, string> = {
-    app: "--bg-app", sidebar: "--bg-sidebar", surface: "--bg-surface", elevated: "--bg-elevated", inset: "--bg-inset", selected: "--session-selected",
-    border: "--border", borderStrong: "--border-strong", text: "--text", muted: "--text-muted", dim: "--text-dim",
-    accent: "--accent", accentText: "--accent-strong", accentInk: "--accent-contrast",
-  };
-  for (const [key, token] of Object.entries(map)) {
+  for (const [key, token] of Object.entries(REMOTE_THEME_TOKENS)) {
     const value = theme.colors[key];
     if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)) root.style.setProperty(token, value);
   }

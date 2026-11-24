@@ -92,8 +92,6 @@ pub struct Settings {
     pub a11y_enabled: bool,
     /// Atajos de teclado reales en el control por accesibilidad (desactivado por defecto).
     pub a11y_keyboard: bool,
-    pub browser_enabled: bool,
-    pub browser_profile: String,
     pub profiles: Vec<LauncherProfile>,
     pub default_profile_id: String,
     pub shell: String,
@@ -146,8 +144,6 @@ impl Default for Settings {
             desktop_enabled: false,
             a11y_enabled: false,
             a11y_keyboard: false,
-            browser_enabled: true,
-            browser_profile: "BROWSER1".into(),
             // Vacío indica al frontend que debe migrar la instalación anterior.
             profiles: Vec::new(),
             default_profile_id: String::new(),
@@ -187,7 +183,7 @@ impl Default for Settings {
 }
 
 #[cfg(test)]
-mod browser_preference_tests {
+mod settings_tests {
     use super::*;
     #[test]
     fn time_format_migrates_to_24_hours_and_preserves_12_hours() {
@@ -197,17 +193,15 @@ mod browser_preference_tests {
         assert_eq!(serde_json::to_value(changed).unwrap()["timeFormat"], "12h");
     }
     #[test]
-    fn browser_permission_and_profile_survive_native_configuration_roundtrip() {
+    fn a_configuration_from_trex_browser_times_still_loads_and_drops_its_browser_settings() {
+        // Trex Browser ya no existe: sus ajustes se ignoran al cargar y no se vuelven a guardar.
         for enabled in [false,true] {
-            let raw=serde_json::json!({"version":1,"projects":[],"settings":{"browserEnabled":enabled,"browserProfile":"BROWSER7"},"ui":{"lastTabs":[]}});
+            let raw=serde_json::json!({"version":1,"projects":[],"settings":{"browserEnabled":enabled,"browserProfile":"BROWSER7","timeFormat":"12h"},"ui":{"lastTabs":[]}});
             let config:AppConfig=serde_json::from_value(raw).unwrap();
-            assert_eq!(config.settings.browser_enabled,enabled);
-            assert_eq!(config.settings.browser_profile,"BROWSER7");
+            assert_eq!(config.settings.time_format,"12h");
             let saved=serde_json::to_value(&config).unwrap();
-            assert_eq!(saved["settings"]["browserEnabled"],enabled);
-            assert_eq!(saved["settings"]["browserProfile"],"BROWSER7");
-            let restored:AppConfig=serde_json::from_value(saved).unwrap();
-            assert_eq!(restored.settings.browser_enabled,enabled);assert_eq!(restored.settings.browser_profile,"BROWSER7");
+            assert!(saved["settings"].get("browserEnabled").is_none() && saved["settings"].get("browserProfile").is_none());
+            assert_eq!(saved["settings"]["timeFormat"],"12h");
         }
     }
     #[test]
@@ -266,9 +260,8 @@ mod browser_preference_tests {
         assert_eq!(saved["settings"]["projectLauncher"], serde_json::json!({"roots":["D:\\projects","E:\\clientes"],"profileId":"codex-default","reuseChat":false}));
     }
     #[test]
-    fn older_configuration_uses_the_frontend_browser_defaults() {
+    fn older_configuration_keeps_desktop_control_off() {
         let config:AppConfig=serde_json::from_value(serde_json::json!({"settings":{}})).unwrap();
-        assert!(config.settings.browser_enabled);assert_eq!(config.settings.browser_profile,"BROWSER1");
         assert!(!config.settings.desktop_enabled);
     }
 }

@@ -118,7 +118,7 @@ pub async fn run(profile: Profile, input: &str, mode: &str) -> Result<Value> {
             std::fs::write(path, content)?;
         }
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let server = Server::new(profile.clone(), tx);
+        let server = Server::isolated(profile.clone(), tx);
         let started = Instant::now();
         // Never inherit optional external tools or desktop/browser grants into a suite.
         let outcome=async {

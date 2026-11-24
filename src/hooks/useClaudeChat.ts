@@ -1,6 +1,6 @@
-import { chromeAvailable, connectBrowser, connectChrome, rebindBrowser } from "../browserConnection";
-import { browserEnv, chromeEnv, claudeBrowserServer, claudeChromeServer, isBrowserHttp, CHROME_READ_TOOLS, CHROME_SERVER, type BrowserTransport } from "../browser";
-import { browserMode, OBSERVE_BROWSER_TOOLS } from "../browser";
+import { chromeAvailable, connectChrome } from "../browserConnection";
+import { chromeEnv, claudeChromeServer, CHROME_READ_TOOLS, CHROME_SERVER } from "../browser";
+import { browserMode } from "../browser";
 import { detectedIntegrations, integrationContext, DESKTOP_READ_TOOLS, DESKTOP_INPUT_TOOLS, type IntegrationContext } from "../integrations";
 /**
  * Sesión de Claude Code como chat: `claude -p` con stream-json.
@@ -39,7 +39,7 @@ const USAGE_INTERVAL_MS = 60_000;
 /** Herramientas de coordinación entre sesiones: solo avisan y reservan en el registro de trex, nunca tocan el proyecto. */
 // La memoria de Trex va por el mismo puente que la coordinación y, como ella, sin pedir permiso.
 const CLAUDE_COORDINATION_TOOLS = [...COORDINATION_TOOLS, ...MEMORY_TOOLS].map(name => `mcp__${INBOX_SERVER}__${name}`);
-const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, `mcp__${INBOX_SERVER}__trex_peers`, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...APPS_READ_TOOLS.map(name => `mcp__${APPS_SERVER}__${name}`), ...[...OBSERVE_BROWSER_TOOLS].map(name => `mcp__trex_browser__${name}`), ...CHROME_READ_TOOLS.map(name => `mcp__${CHROME_SERVER}__${name}`)]);
+const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, `mcp__${INBOX_SERVER}__trex_peers`, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...APPS_READ_TOOLS.map(name => `mcp__${APPS_SERVER}__${name}`), ...CHROME_READ_TOOLS.map(name => `mcp__${CHROME_SERVER}__${name}`)]);
 const planningDeniedLine = (requestId: string): string => JSON.stringify({
   type: "control_response", response: { subtype: "success", request_id: requestId,
     response: { behavior: "deny", message: "Esta pestaña de planificación solo permite herramientas de lectura y preguntas; no puede conceder permisos de escritura o ejecución." } },
@@ -84,12 +84,11 @@ type Control =
 export function useClaudeChat(options: ChatSessionOptions): ChatSession {
   const { sessionId, cwd, command, args, shell, env, conversationId } = options;
   const planningOnly = useRef(options.planningOnly === true).current;
-  const browserModeIntent = useRef(options.mode ?? ((options.browser?.enabled || options.desktopEnabled || options.a11yEnabled || options.integrations?.blender !== false || options.integrations?.hyperframes !== false || options.integrations?.github !== false) ? claudeProfilePermissionMode(args, IS_WINDOWS && shell !== "wsl") : null));
+  const browserModeIntent = useRef(options.mode ?? ((options.desktopEnabled || options.a11yEnabled || options.integrations?.blender !== false || options.integrations?.hyperframes !== false || options.integrations?.github !== false) ? claudeProfilePermissionMode(args, IS_WINDOWS && shell !== "wsl") : null));
   const browserBoundMode = useRef<ReturnType<typeof browserMode> | null>(null);
   /** Este proceso arrancó con `trex_apps`: su modo también se fija al arrancar, como el del escritorio. */
   const appsBoundRef = useRef(false);
-  const modeBound = (): boolean => !!(callbacks.current.browser?.enabled || callbacks.current.desktopEnabled || callbacks.current.a11yEnabled || appsBoundRef.current);
-  const browserConnectionRef = useRef<BrowserTransport | null>(null);
+  const modeBound = (): boolean => !!(callbacks.current.desktopEnabled || callbacks.current.a11yEnabled || appsBoundRef.current);
   const browserConnecting = useRef(false);
   const modeRevision = useRef(0);
   const plannerReducer: typeof chatReducer = (before, action) => {
@@ -251,29 +250,14 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     browserModeIntent.current = mode;
     const next = browserMode(mode), bound = browserBoundMode.current;
     if (!bound || next === bound) return false;
-    // Over MCP-HTTP the broker re-binds the same agent token to the new mode, so
-    // the conversation keeps running. Desktop and accessibility control are stdio with a fixed mode.
-    const connection = browserConnectionRef.current;
-    if (isBrowserHttp(connection) && !callbacks.current.desktopEnabled && !callbacks.current.a11yEnabled && !appsBoundRef.current) {
-      browserBoundMode.current = next;
-      dispatch({ type: "mode", mode });
-      void rebindBrowser(connection, mode, false).then(ok => {
-        if (ok || readyProcessRef.current !== procId) return;
-        // Could not re-bind: fall back to the safe restart.
-        startupRef.current?.abort(); processReadyRef.current = null; readyProcessRef.current = null;
-        browserBoundMode.current = null; cancelLocalRequests(); invalidateIssued();
-        void agentKill(procId).catch(() => undefined);
-        dispatch({ type: "notice", id: localId(), tone: "info", text: "Claude cambió sus permisos. El siguiente envío reabrirá la sesión con el acceso de navegador correspondiente." });
-      });
-      return false;
-    }
-    // An immutable grant must never outlive a change in native permissions.
+    // Desktop, accessibility and apps control are stdio servers with a fixed mode:
+    // an immutable grant must never outlive a change in native permissions.
     dispatch({ type: "mode", mode });
     startupRef.current?.abort(); processReadyRef.current = null; readyProcessRef.current = null;
     browserBoundMode.current = null;
     cancelLocalRequests(); invalidateIssued();
     void agentKill(procId).catch(() => undefined);
-    dispatch({ type: "notice", id: localId(), tone: "info", text: "Claude cambió sus permisos. El siguiente envío reabrirá la sesión con el acceso de navegador correspondiente." });
+    dispatch({ type: "notice", id: localId(), tone: "info", text: "Claude cambió sus permisos. El siguiente envío reabrirá la sesión con el acceso correspondiente para las herramientas conectadas." });
     return true;
   }, [planningOnly, cancelLocalRequests, invalidateIssued]);
 
@@ -294,7 +278,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       if (pending.kind === "initialize") {
         if (!planningOnly && browserBoundMode.current && reply.subtype === "success"
           && (typeof data.current_permission_mode !== "string" || !["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"].includes(data.current_permission_mode))) {
-          const reason = "Claude no confirmó los permisos del navegador. Actualiza Claude Code o desactiva el navegador para esta sesión.";
+          const reason = "Claude no confirmó sus permisos para las herramientas conectadas. Actualiza Claude Code o desactiva esas integraciones en Ajustes.";
           pending.ready?.(reason);
           startupRef.current?.abort(); processReadyRef.current = null; readyProcessRef.current = null; browserBoundMode.current = null;
           cancelLocalRequests(); invalidateIssued();
@@ -455,18 +439,11 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
     const ready = (async (): Promise<string | null> => {
       try {
         startup.signal.throwIfAborted();
-        let browser = null;
-        browserConnecting.current = callbacks.current.browser?.enabled === true || callbacks.current.desktopEnabled === true;
-        try {
-          browser = callbacks.current.browser?.enabled ? await whileCurrent(connectBrowser(callbacks.current.browser, cwd, browserModeIntent.current ?? current.modeChoice, planningOnly, shell,
-            message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message }), true), startup.signal) : null;
-        } finally { if (startupRef.current === startup) browserConnecting.current = false; }
-        startup.signal.throwIfAborted();
         // Installed applications (cached per folder) decide whether the apps server is attached.
         const detection = detectedIntegrations(cwd);
         const available = detection instanceof Promise ? await whileCurrent(detection, startup.signal) : detection;
         const wantApps = appsWanted(callbacks.current.integrations, available);
-        const accessEnabled = !!browser || callbacks.current.desktopEnabled === true || callbacks.current.a11yEnabled === true || wantApps.length > 0;
+        const accessEnabled = callbacks.current.desktopEnabled === true || callbacks.current.a11yEnabled === true || wantApps.length > 0;
         const chosenMode = planningOnly ? "plan" : accessEnabled ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
         browserConnecting.current = callbacks.current.desktopEnabled === true;
         let desktop = null;
@@ -483,8 +460,8 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         appsBoundRef.current = !!apps;
         const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", conversationOverrideRef.current)
           : conversationOverrideRef.current ? withoutConversationArgs(args) : args;
-        // Only what this process really has: an attached browser, accessibility and apps, and installed applications.
-        const integrations = integrationContext(callbacks.current, { browser: !!browser, available, a11y: !!a11y, apps: apps ? wantApps : [] });
+        // Only what this process really has: accessibility and apps, and installed applications.
+        const integrations = integrationContext(callbacks.current, { available, a11y: !!a11y, apps: apps ? wantApps : [] });
         // Memoria de Trex: su carpeta del proyecto y lo global (sin ella el chat arranca igual).
         const memory = loadedMemory(cwd) ?? await whileCurrent(loadMemory(cwd), startup.signal);
         const flags = claudeChatFlags(profileArgs, resumeId, { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations,
@@ -495,20 +472,19 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         const teamConfig = callbacks.current.team ? browserConfigForShell(await agentTeamMcpConfig(callbacks.current.team), shell) : null;
         startup.signal.throwIfAborted();
         // El navegador de la persona (extensión de trex): solo si lo activó en Ajustes.
-        const chrome = chromeAvailable() ? await whileCurrent(connectChrome(sessionId, chosenMode, planningOnly, shell), startup.signal) : null;
-        if (browser || desktop || a11y || apps || teamConfig || chrome) flags.push("--mcp-config", JSON.stringify({ mcpServers: {
+        const chrome = chromeAvailable() ? await whileCurrent(connectChrome(sessionId, chosenMode, planningOnly, shell, { label: callbacks.current.chatLabel, cwd }), startup.signal) : null;
+        if (desktop || a11y || apps || teamConfig || chrome) flags.push("--mcp-config", JSON.stringify({ mcpServers: {
           ...(chrome ? { [CHROME_SERVER]: claudeChromeServer(chrome) } : {}),
-          ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}), ...(teamConfig ? { trex_team: { command: teamConfig.command, args: teamConfig.args, timeout: 1900000 } } : {}),
+          ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}), ...(teamConfig ? { trex_team: { command: teamConfig.command, args: teamConfig.args, timeout: 1900000 } } : {}),
         } }));
         if (teamConfig) flags.push("--allowedTools", TEAM_TOOLS.map(name => `mcp__${TEAM_SERVER}__${name}`).join(","));
         // Looking at Blender changes nothing: only code execution, opening and undo go through the permission prompt.
         if (apps) flags.push("--allowedTools", appToolsFor(wantApps).read.map(name => `mcp__${APPS_SERVER}__${name}`).join(","));
         browserBoundMode.current = accessEnabled ? browserMode(chosenMode, planningOnly) : null;
-        browserConnectionRef.current = browser;
         if (accessEnabled) initialization ??= initializationWait();
         const procId = await whileCurrent(agent.spawn({
           cwd, command: command?.trim() || "claude", profileArgs, shell,
-          env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...browserEnv(browser), ...chromeEnv(chrome), ...(teamConfig ? { CLAUDE_AUTO_BACKGROUND_TASKS: "0" } : {}) },
+          env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...chromeEnv(chrome), ...(teamConfig ? { CLAUDE_AUTO_BACKGROUND_TASKS: "0" } : {}) },
           flags: planningOnly ? claudePlanningFlags(flags) : flags,
         }), startup.signal);
         if (!procId) { initialization?.ready("El arranque de Claude fue sustituido."); return null; }
@@ -640,13 +616,10 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const point = await whileCurrent(claudeRewindPoint(env?.CLAUDE_CONFIG_DIR ?? "", current.sessionId, id), request.signal);
       request.signal.throwIfAborted();
       const newSessionId = crypto.randomUUID();
-      const browser = callbacks.current.browser?.enabled ? await whileCurrent(connectBrowser(callbacks.current.browser, cwd, browserModeIntent.current ?? current.modeChoice, planningOnly, shell,
-        message => dispatch({ type: "notice", id: localId(), tone: "warn", text: message }), true), request.signal) : null;
-      request.signal.throwIfAborted();
       const detection = detectedIntegrations(cwd);
       const available = detection instanceof Promise ? await whileCurrent(detection, request.signal) : detection;
       const wantApps = appsWanted(callbacks.current.integrations, available);
-      const accessEnabled = !!browser || callbacks.current.desktopEnabled === true || callbacks.current.a11yEnabled === true || wantApps.length > 0;
+      const accessEnabled = callbacks.current.desktopEnabled === true || callbacks.current.a11yEnabled === true || wantApps.length > 0;
       const chosenMode = planningOnly ? "plan" : accessEnabled ? browserModeIntent.current ?? current.modeChoice : current.modeChoice;
       const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await whileCurrent(trexDesktopMcpConfig(browserMode(chosenMode, planningOnly)), request.signal), shell) : null;
       const a11yConfig = callbacks.current.a11yEnabled ? await whileCurrent(accessibilityServer(browserMode(chosenMode, planningOnly),
@@ -657,7 +630,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const apps = appsConfig ? browserConfigForShell(appsConfig, shell) : null;
       appsBoundRef.current = !!apps;
       const profileArgs = planningOnly || (accessEnabled && chosenMode) ? claudePlanningArgs(args, IS_WINDOWS && shell !== "wsl", true) : withoutConversationArgs(args);
-      const integrations = integrationContext(callbacks.current, { browser: !!browser, available, a11y: !!a11y, apps: apps ? wantApps : [] });
+      const integrations = integrationContext(callbacks.current, { available, a11y: !!a11y, apps: apps ? wantApps : [] });
       const memory = loadedMemory(cwd) ?? await whileCurrent(loadMemory(cwd), request.signal);
       const chatFlags = claudeChatFlags(profileArgs, point ? current.sessionId : null,
         { model: current.modelChoice, effort: current.effortChoice, mode: chosenMode, integrations, rolePolicy: planningOnly ? callbacks.current.planningInstruction : null, memory });
@@ -665,11 +638,10 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const flags = planningOnly ? claudePlanningFlags(chatFlags) : chatFlags;
       if (accessEnabled && chosenMode && ["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"].includes(chosenMode)
         && !flags.includes("--permission-mode") && !(chosenMode === "bypassPermissions" && /(^|\s)--restricted(\s|=|$)/.test(profileArgs ?? ""))) flags.push("--permission-mode", chosenMode);
-      const chrome = chromeAvailable() ? await whileCurrent(connectChrome(sessionId, chosenMode, planningOnly, shell), request.signal) : null;
-      if (browser || desktop || a11y || apps || chrome) flags.push("--mcp-config", JSON.stringify({ mcpServers: { ...(chrome ? { [CHROME_SERVER]: claudeChromeServer(chrome) } : {}), ...(browser ? { trex_browser: claudeBrowserServer(browser) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}) } }));
+      const chrome = chromeAvailable() ? await whileCurrent(connectChrome(sessionId, chosenMode, planningOnly, shell, { label: callbacks.current.chatLabel, cwd }), request.signal) : null;
+      if (desktop || a11y || apps || chrome) flags.push("--mcp-config", JSON.stringify({ mcpServers: { ...(chrome ? { [CHROME_SERVER]: claudeChromeServer(chrome) } : {}), ...(desktop ? { trex_desktop: desktop } : {}), ...(a11y ? { [A11Y_SERVER]: a11y } : {}), ...(apps ? { [APPS_SERVER]: apps } : {}) } }));
       if (apps) flags.push("--allowedTools", appToolsFor(wantApps).read.map(name => `mcp__${APPS_SERVER}__${name}`).join(","));
       browserBoundMode.current = accessEnabled ? browserMode(chosenMode, planningOnly) : null;
-      browserConnectionRef.current = browser;
       if (point) flags.push("--resume-session-at", point, "--fork-session");
       flags.push("--session-id", newSessionId);
       for (const pending of pendingControlsRef.current.values()) {
@@ -689,7 +661,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       startupRef.current = request;
       readyProcessRef.current = null;
       const procId = await whileCurrent(agent.spawn({ cwd, command: command?.trim() || "claude", profileArgs, flags, shell,
-        env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...browserEnv(browser), ...chromeEnv(chrome) } }), request.signal);
+        env: { ...env, ...claudeAutoCompactEnv(autoCompactAt.current = claudeAutoCompact(callbacks.current.autoCompact, args)), ...chromeEnv(chrome) } }), request.signal);
       if (!procId) throw new Error("La sesión se cerró mientras se preparaba la edición.");
       request.signal.throwIfAborted();
       readyProcessRef.current = procId;
@@ -808,7 +780,7 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
       const reconnect = (browserBoundMode.current !== null || browserConnecting.current)
         && (browserBoundMode.current ?? browserMode(browserModeIntent.current ?? before.modeChoice)) !== browserMode(mode);
       if (reconnect && (before.pendingTurns > 0 || localRequestsRef.current.size > 0 || issuedMessagesRef.current.size > 0)) {
-        notice("info", "Detén la respuesta antes de cambiar los permisos del navegador."); return;
+        notice("info", "Detén la respuesta antes de cambiar los permisos de las herramientas conectadas."); return;
       }
       modeRevision.current++;
       browserModeIntent.current = mode;

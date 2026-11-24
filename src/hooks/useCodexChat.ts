@@ -1,8 +1,8 @@
-import { connectBrowser, connectChrome, chromeAvailable } from "../browserConnection";
+import { connectChrome, chromeAvailable } from "../browserConnection";
 import { agentTeamMcpConfig, trexDesktopMcpConfig } from "../api";
 import { A11Y_ACTION_TOOLS, A11Y_KEYBOARD_TOOLS, A11Y_READ_TOOLS, A11Y_SERVER, accessibilityServer } from "../accessibility";
 import { APPS_SERVER, appToolsFor, appsFromArgs, appsServer, appsWanted } from "../apps";
-import { browserConfigForShell, browserEnv, chromeEnv, BROWSER_INSTRUCTIONS, BROWSER_TOKEN_ENV, CHROME_SERVER, CHROME_TOKEN_ENV, isBrowserHttp } from "../browser";
+import { browserConfigForShell, chromeEnv, CHROME_SERVER, CHROME_TOKEN_ENV } from "../browser";
 import { browserMode, type BrowserMode } from "../browser";
 /**
  * Sesión de Codex como chat: `codex app-server` por JSON-RPC.
@@ -85,7 +85,7 @@ class CodexRequestRejected extends Error {}
 class CodexBrowserPermissionsError extends Error {}
 class CodexBrowserConnectionError extends CodexBrowserPermissionsError {}
 class CodexBrowserModeMismatch extends CodexBrowserPermissionsError {
-  constructor(readonly mode: BrowserMode) { super("Los permisos confirmados de Codex requieren reconectar el navegador."); }
+  constructor(readonly mode: BrowserMode) { super("Los permisos confirmados de Codex requieren reconectar sus herramientas."); }
 }
 
 type NativePermissions = { sandbox: "read-only" | "workspace-write" | "danger-full-access"; approvalPolicy: string };
@@ -127,15 +127,13 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   const inboxRequests = useRef(new InboxRequests());
   const inboxConfigRef = useRef<Json>({});
   const availableRef = useRef<IntegrationContext["available"]>(null);
-  /** Browser guidance only when this process really attached trex_browser (it also enters via integrations). */
-  const browserAttached = (): boolean => inboxConfigRef.current["mcp_servers.trex_browser.enabled"] === true;
   const a11yAttached = (): boolean => inboxConfigRef.current[`mcp_servers.${A11Y_SERVER}.enabled`] === true;
   const appsAttached = (): boolean => inboxConfigRef.current[`mcp_servers.${APPS_SERVER}.enabled`] === true;
   /** Las aplicaciones con las que arrancó el servidor de este hilo, leídas de sus argumentos. */
   const attachedApps = () => appsAttached() ? appsFromArgs(inboxConfigRef.current[`mcp_servers.${APPS_SERVER}.args`]) : [];
   // La memoria de Trex se carga al arrancar el proceso (ver más abajo) y entra igual en cada hilo.
   const chatInstructions = () => [CHAT_INSTRUCTIONS, integrationInstructions("codex",
-    integrationContext(callbacks.current, { browser: browserAttached(), available: availableRef.current, a11y: a11yAttached(), apps: attachedApps() })),
+    integrationContext(callbacks.current, { available: availableRef.current, a11y: a11yAttached(), apps: attachedApps() })),
     memoryInstructions(loadedMemory(cwd))].filter(Boolean).join(" ");
   const isCurrentRef = useRef<(id: string) => boolean>(() => false);
 
@@ -374,11 +372,6 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   }, [request, notice]);
 
   const threadOverrides = useCallback((overrides: Json): Json => {
-    // A profile's own developer instructions still learn about an attached browser, once.
-    if (browserBindingRef.current && browserAttached()) {
-      const instructions = typeof overrides.developerInstructions === "string" ? overrides.developerInstructions : "";
-      overrides = { ...overrides, developerInstructions: instructions.includes(BROWSER_INSTRUCTIONS) ? instructions : [instructions, BROWSER_INSTRUCTIONS].filter(Boolean).join("\n\n") };
-    }
     if (planningOnly) return codexPlanningThread({ ...overrides,
       ...(choicesRef.current.model ? { model: choicesRef.current.model } : {}) }, callbacks.current.planningInstruction);
     const mode = choicesRef.current.mode;
@@ -389,7 +382,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
   }, [planningOnly]);
 
   // doctor only proves the component is installed. Verify this exact native
-  // thread received navigation tools before any user/model turn can be sent.
+  // thread received the bound tools before any user/model turn can be sent.
   const confirmBrowserTools = useCallback(async (threadId: string, procId?: string): Promise<void> => {
     if (!browserBindingRef.current) return;
     const generation = threadGenerationRef.current, binding = browserThreadRef.current;
@@ -398,13 +391,12 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         || (procId && readyProcessRef.current !== procId)) throw new DOMException("Envío cancelado.", "AbortError");
     };
     const expected = [
-      ...(inboxConfigRef.current["mcp_servers.trex_browser.enabled"] === true ? [{ server: "trex_browser", tools: ["browser_navigate", "browser_snapshot", "browser_status"] }] : []),
       ...(inboxConfigRef.current["mcp_servers.trex_desktop.enabled"] === true ? [{ server: "trex_desktop", tools: browserBindingRef.current?.mode === "observe" ? [...DESKTOP_READ_TOOLS] : [...DESKTOP_READ_TOOLS, ...DESKTOP_INPUT_TOOLS] }] : []),
       ...(a11yAttached() ? [{ server: A11Y_SERVER, tools: browserBindingRef.current?.mode === "observe" ? [...A11Y_READ_TOOLS] : [...A11Y_READ_TOOLS, ...A11Y_ACTION_TOOLS] }] : []),
       ...(appsAttached() ? (tools => [{ server: APPS_SERVER, tools: browserBindingRef.current?.mode === "observe" ? tools.read : [...tools.read, ...tools.action] }])(appToolsFor(attachedApps())) : []),
     ];
     for (const integration of expected) {
-      const label = integration.server === "trex_browser" ? "Trex Browser" : integration.server === A11Y_SERVER ? "el control por accesibilidad" : integration.server === APPS_SERVER ? "las aplicaciones (Blender, HyperFrames)" : "el control de computadora";
+      const label = integration.server === A11Y_SERVER ? "el control por accesibilidad" : integration.server === APPS_SERVER ? "las aplicaciones (Blender, HyperFrames)" : "el control de computadora";
       let response: Json;
       try { response = await request<Json>("mcpServerStatus/list", { threadId, serverName: integration.server, detail: "toolsAndAuthOnly", limit: 100 }, procId); }
       catch { assertCurrent(); throw new CodexBrowserConnectionError(`Codex no pudo confirmar la conexión con ${label}.`); }
@@ -425,11 +417,11 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     const binding = browserBindingRef.current;
     if (!binding) return;
     const actual = nativePermissions(response);
-    if (binding.pending || !actual) throw new CodexBrowserPermissionsError("Codex no confirmó los permisos nativos del navegador. No se enviarán mensajes.");
+    if (binding.pending || !actual) throw new CodexBrowserPermissionsError("Codex no confirmó sus permisos nativos para las herramientas conectadas. No se enviarán mensajes.");
     const mode = choicesRef.current.mode;
     const expected = planningOnly ? { sandbox: "read-only", approvalPolicy: "on-request" } : mode ? selectedPermissions(mode) : null;
     if (expected && (actual.sandbox !== expected.sandbox || actual.approvalPolicy !== expected.approvalPolicy)) {
-      throw new CodexBrowserPermissionsError("Codex no confirmó los permisos elegidos para el navegador. No se enviarán mensajes.");
+      throw new CodexBrowserPermissionsError("Codex no confirmó los permisos elegidos para las herramientas conectadas. No se enviarán mensajes.");
     }
     const effective = mode ? browserMode(mode, planningOnly) : sandboxBrowserMode(actual.sandbox);
     if (binding.mode !== effective) throw new CodexBrowserModeMismatch(effective);
@@ -540,7 +532,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         availableRef.current = detection instanceof Promise ? await detection : detection;
         if (!isCurrent()) return;
         const wantApps = appsWanted(callbacks.current.integrations, availableRef.current);
-        if (callbacks.current.browser?.enabled || callbacks.current.desktopEnabled || callbacks.current.a11yEnabled || wantApps.length > 0) browserBindingRef.current = { mode: bindingMode, pending: true };
+        if (callbacks.current.desktopEnabled || callbacks.current.a11yEnabled || wantApps.length > 0) browserBindingRef.current = { mode: bindingMode, pending: true };
         // The same identity as the chat's coordination hook (useCoordination): queue id or session id.
         const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId, false, { session: callbacks.current.queueId ?? sessionId, project: cwd });
         if (!isCurrent()) return;
@@ -550,8 +542,6 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         // An unavailable accessibility engine is reported once, not on each attempt.
         let a11yUnavailable = false, appsUnavailable = false;
         for (let attempt = 0; attempt < 2; attempt++) {
-        const browser = callbacks.current.browser?.enabled ? await connectBrowser(callbacks.current.browser, cwd, browserChoice(bindingMode), planningOnly, shell, message => notice("warn", message), true) : null;
-        if (!isCurrent()) return;
         const desktop = callbacks.current.desktopEnabled ? browserConfigForShell(await trexDesktopMcpConfig(bindingMode), shell) : null;
         if (!isCurrent()) return;
         // Experimental: where the accessibility engine cannot run, the thread starts without it, with a notice.
@@ -564,16 +554,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         if (!isCurrent()) return;
         if (wantApps.length && !appsConfig) appsUnavailable = true;
         const apps = appsConfig ? browserConfigForShell(appsConfig, shell) : null;
-        browserBindingRef.current = browser || desktop || a11y || apps ? { mode: bindingMode, pending: false } : null;
-        inboxConfigRef.current = { ...inboxConfigForShell(config, shell), ...(browser ? {
-          // MCP over HTTP (token read from the environment) or the stdio adapter.
-          ...(isBrowserHttp(browser) ? { "mcp_servers.trex_browser.url": browser.url, "mcp_servers.trex_browser.bearer_token_env_var": BROWSER_TOKEN_ENV }
-            : { "mcp_servers.trex_browser.command": browser.command, "mcp_servers.trex_browser.args": browser.args }),
-          "mcp_servers.trex_browser.enabled": true,
-          "mcp_servers.trex_browser.required": true,
-          "mcp_servers.trex_browser.startup_timeout_sec": 30,
-          "mcp_servers.trex_browser.tool_timeout_sec": 120,
-        } : {}) };
+        browserBindingRef.current = desktop || a11y || apps ? { mode: bindingMode, pending: false } : null;
+        inboxConfigRef.current = { ...inboxConfigForShell(config, shell) };
         if (desktop) Object.assign(inboxConfigRef.current, {
           "mcp_servers.trex_desktop.command": desktop.command, "mcp_servers.trex_desktop.args": desktop.args,
           "mcp_servers.trex_desktop.enabled": true, "mcp_servers.trex_desktop.required": true,
@@ -594,7 +576,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
           [`mcp_servers.${A11Y_SERVER}.default_tools_approval_mode`]: bindingMode === "full" ? "approve" : "prompt",
         });
         // El navegador de la persona (extensión de trex): opcional, nunca impide abrir el hilo.
-        const chrome = chromeAvailable() ? await connectChrome(sessionId, browserChoice(bindingMode), planningOnly, shell) : null;
+        const chrome = chromeAvailable() ? await connectChrome(sessionId, browserChoice(bindingMode), planningOnly, shell, { label: callbacks.current.chatLabel, cwd }) : null;
         if (!isCurrent()) return;
         if (chrome) Object.assign(inboxConfigRef.current, {
           [`mcp_servers.${CHROME_SERVER}.url`]: chrome.url, [`mcp_servers.${CHROME_SERVER}.bearer_token_env_var`]: CHROME_TOKEN_ENV,
@@ -613,7 +595,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         }
         autoCompactAt.current = codexAutoCompact(callbacks.current.autoCompact, launch.flags);
         const flags = [...launch.flags, ...codexAutoCompactFlags(autoCompactAt.current)];
-        const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags, shell, env: { ...env, ...browserEnv(browser), ...chromeEnv(chrome) } });
+        const procId = await agent.spawn({ cwd, command: command?.trim() || "codex", profileArgs: null, flags, shell, env: { ...env, ...chromeEnv(chrome) } });
         if (!procId || !isCurrent() || !agent.isCurrent(procId)) return;
         readyProcessRef.current = procId;
         dispatch({ type: "spawned" });
@@ -631,7 +613,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
             browserThreadRef.current = null;
             readyProcessRef.current = null;
             threadRef.current = null;
-            rejectPending("Codex reconectó los permisos del navegador.");
+            rejectPending("Codex reconectó los permisos de sus herramientas.");
             continue;
           }
           if (error instanceof CodexBrowserConnectionError) {
@@ -669,7 +651,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
     if (browserBindingRef.current && (browserBindingRef.current.pending || !browserThreadRef.current
       || browserThreadRef.current.process !== readyProcessRef.current || browserThreadRef.current.id !== activeThreadRef.current
       || browserThreadRef.current.generation !== threadGenerationRef.current)) {
-      throw new CodexBrowserPermissionsError("Codex todavía no confirmó los permisos del navegador. No se enviarán mensajes.");
+      throw new CodexBrowserPermissionsError("Codex todavía no confirmó los permisos de las herramientas conectadas. No se enviarán mensajes.");
     }
     for (const entry of submissionsRef.current.values()) if (entry.id === id) {
       entry.issued = true;
@@ -933,7 +915,7 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
       if (planningOnly) return;
       const reconnect = browserBindingRef.current && browserBindingRef.current.mode !== browserMode(mode);
       if (reconnect && (stateRef.current.pendingTurns > 0 || submissionsRef.current.size > 0 || !!turnIdRef.current || editingRef.current)) {
-        notice("info", "Detén la respuesta antes de cambiar los permisos del navegador."); return;
+        notice("info", "Detén la respuesta antes de cambiar los permisos de las herramientas conectadas."); return;
       }
       choicesRef.current = { ...choicesRef.current, mode };
       if (reconnect) {

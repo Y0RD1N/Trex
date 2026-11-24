@@ -145,8 +145,7 @@ function harness(t, provider, extra = {}) {
       case "initialize": respond(message, provider === "trex" ? { protocolVersion: 1 } : {}); break;
       case "models/list": respond(message, { models: [{ id: "offline-model", efforts: ["high", "max"] }] }); break;
       case "model/list": respond(message, { data: [] }); break;
-      case "mcpServerStatus/list": respond(message, extra.mcpStatus ?? { data: [{ name: "trex_browser", runtimeStatus: "connected", toolsError: null,
-        tools: Object.fromEntries(["browser_navigate", "browser_snapshot", "browser_status"].map(name => [name, { name, inputSchema: { type: "object", properties: {} } }])) }] }); break;
+      case "mcpServerStatus/list": respond(message, (typeof extra.mcpStatus === "function" ? extra.mcpStatus(message) : extra.mcpStatus) ?? { data: [] }); break;
       case "skills/list": case "account/rateLimits/read": respond(message, { data: [] }); break;
       case "session/start":
         conversation = `conversation-${++conversationCounter}`;
@@ -191,7 +190,7 @@ function harness(t, provider, extra = {}) {
     ...(extra.accessibility ? { "../accessibility": { ...dependencies["../accessibility"], ...extra.accessibility } } : {}),
     ...(extra.apps ? { "../apps": { ...dependencies["../apps"], ...extra.apps } } : {}),
     react: hooks,
-    "../browserConnection": { connectBrowser: () => assert.fail("Unexpected browser discovery in a browser-disabled session"), connectChrome: async () => null, chromeAvailable: () => false },
+    "../browserConnection": { connectChrome: async () => null, chromeAvailable: () => false },
     "../api": { agentWrite: nativeWrite, formatError: error => error?.message ?? String(error),
       agentTeamMcpConfig: async binding => { assert.ok(extra.teamConfig, "Unexpected team bridge discovery"); return typeof extra.teamConfig === "function" ? extra.teamConfig(binding) : extra.teamConfig; },
       codexContextWindows: async () => ({}), messageQueueMcpConfig: extra.mcpConfig ?? (async () => ({})), claudeRewindPoint: async () => null },

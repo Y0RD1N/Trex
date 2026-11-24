@@ -10,7 +10,7 @@ inglés** / reports are welcome in Spanish or English.
 1. Ve a la pestaña **Security** del repositorio.
 2. Pulsa **Report a vulnerability** (aviso privado de GitHub).
 3. Cuéntanos lo que puedas de esta lista:
-   - versión de trex, sistema operativo y componente (app, Trex CLI, Trex Browser, instalador);
+   - versión de trex, sistema operativo y componente (app, Trex CLI, extensión «Tu navegador», instalador);
    - pasos para reproducirlo y qué esperabas que pasara;
    - qué impacto tiene (qué podría hacer alguien que lo aprovechara);
    - si lo sabes, cómo corregirlo.
@@ -32,11 +32,11 @@ Algo en trex que permita, sin que la persona usuaria lo apruebe:
 - **Saltarse los permisos de los agentes**: escribir archivos o ejecutar comandos en
   modos de solo lectura (Planificar) o sin la aprobación que pide el modo Preguntar.
 - **Filtrar credenciales**: claves API de Trex CLI, tokens de Claude Code, Codex o
-  Antigravity, o cookies de Trex Browser, hacia el historial, los registros, los
-  argumentos de un proceso, otro agente o la red.
-- **Romper el aislamiento de Trex Browser**: acceso entre perfiles o espacios de
-  distintos agentes (cookies, almacenamiento, permisos, descargas), o hacerse con el
-  control de una ventana que otra persona o agente tiene pausada.
+  Antigravity, hacia el historial, los registros, los argumentos de un proceso,
+  otro agente o la red.
+- **Saltarse los límites de «Tu navegador»**: que un agente lea o maneje pestañas que
+  no están en el grupo «trex», que algo se conecte al puente local sin emparejarse o
+  desde fuera de este equipo, o que escriba en un campo de contraseña.
 - **Control por accesibilidad fuera de lo permitido**: actuar sobre aplicaciones o
   ventanas que no se han autorizado, o seguir actuando después de detenerlo.
 - **Ejecución de código por contenido no confiable**: que el texto de un modelo, una
@@ -47,7 +47,7 @@ Algo en trex que permita, sin que la persona usuaria lo apruebe:
 
 ## Fuera de alcance
 
-- Fallos de **Claude Code, Codex, Antigravity, Chrome, Chromium, Electron, Playwright,
+- Fallos de **Claude Code, Codex, Antigravity, Chrome, Brave, Edge, Chromium,
   Node.js** u otras dependencias en sí. Repórtalos a sus proyectos; si trex los
   empeora o los expone de forma especial, entonces sí cuenta aquí.
 - El comportamiento o las respuestas de un modelo de IA, salvo que lleguen a saltarse
@@ -71,8 +71,8 @@ Esto describe el diseño actual, para que sepas qué esperar y qué reportar si 
   omitir claves, tokens, contraseñas y archivos como `.env` o `credentials.json`.
 - **Control por accesibilidad**: es una integración opcional que se activa en
   Ajustes → Integraciones, y se puede detener desde el chat.
-- **Trex Browser**: usa perfiles privados por proyecto y mantiene separados los datos
-  de cada agente.
+- **Tu navegador**: está apagado por defecto. La extensión se empareja con un código,
+  solo habla con trex en `127.0.0.1` y solo deja tocar las pestañas del grupo «trex».
 - **Red**: trex no tiene servidor propio ni envía telemetría. Las conexiones salen hacia
   los servicios que tú configuras (Anthropic, OpenAI, Google, tu proveedor de API) y hacia
   el registro de npm, para saber si hay una versión nueva de Claude Code o Codex.

@@ -94,7 +94,7 @@ fn planning_is_fixed_and_requests_are_deduplicated() {
             && guidance.contains("desktop_monitors")
             && !guidance.contains("prefer this server")
             && guidance.contains("read-only")
-            && guidance.contains("trex_browser")
+            && guidance.contains("trex_chrome")
     );
     let listing = server.call(2, "tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();

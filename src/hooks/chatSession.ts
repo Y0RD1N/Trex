@@ -1,4 +1,3 @@
-import type { BrowserOptions } from "../browser";
 /**
  * Piezas comunes de las sesiones de chat (Claude Code y Codex).
  *
@@ -24,7 +23,8 @@ export type ChatSessionOptions = {
   queueId?: string;
   /** Solo el principal recibe las herramientas de este equipo y generación. */
   team?: { id: string; epoch: string };
-  browser?: BrowserOptions;
+  /** Nombre del chat (cuenta · título): «Tu navegador» lo usa para el grupo de pestañas de este chat. */
+  chatLabel?: string;
   desktopEnabled?: boolean;
   /** Control por accesibilidad (experimental): motor propio de Trex, servidor `trex_a11y`. */
   a11yEnabled?: boolean;

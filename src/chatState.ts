@@ -621,32 +621,6 @@ export function describeTool(name: string, input: Json, cwd: string, running: bo
   const verb = (live: string, done: string): string => running ? live : done;
   const a11y = a11yToolName(name);
   if (a11y) return describeA11y(a11y, input, running);
-  const browser = name.replace(/^mcp__trex_browser__/, "");
-  const browserLabels: Record<string, [string, string, string]> = {
-    browser_batch: ["Ejecutando", "Ejecutó", "un flujo del navegador"],
-    browser_navigate: ["Abriendo", "Abrió", text(input.url) || "una página"],
-    browser_navigate_back: ["Volviendo", "Volvió", "a la página anterior"],
-    browser_reload: ["Recargando", "Recargó", "la página"],
-    browser_snapshot: ["Revisando", "Revisó", "el contenido de la página"],
-    browser_take_screenshot: ["Capturando", "Capturó", "la página"],
-    browser_start_video: ["Iniciando", "Inició", "una grabación"],
-    browser_stop_video: ["Guardando", "Guardó", "el vídeo"],
-    browser_click: ["Haciendo clic", "Hizo clic", text(input.name) || text(input.selector) || "en la página"],
-    browser_console_messages: ["Revisando", "Revisó", "la consola del navegador"],
-    browser_network_requests: ["Revisando", "Revisó", "las solicitudes de red"],
-    browser_network_body: ["Leyendo", "Leyó", "una respuesta de red"],
-    browser_perf_start: ["Iniciando", "Inició", "la medición de rendimiento"],
-    browser_perf_stop: ["Guardando", "Guardó", "la medición de rendimiento"],
-    browser_start_trace: ["Iniciando", "Inició", "el registro de acciones"],
-    browser_stop_trace: ["Guardando", "Guardó", "el registro de acciones"],
-    browser_cpu_profile_start: ["Midiendo", "Midió", "el uso de CPU"],
-    browser_cpu_profile_stop: ["Guardando", "Guardó", "el perfil de CPU"],
-    browser_heap_snapshot: ["Revisando", "Revisó", "la memoria de la página"],
-  };
-  if (Object.prototype.hasOwnProperty.call(browserLabels, browser)) {
-    const [live, done, target] = browserLabels[browser];
-    return { icon: "web", verb: verb(live, done), target };
-  }
   switch (name) {
     case "Read": return { icon: "read", verb: verb("Leyendo", "Leyó"), target: path("file_path") };
     case "Edit": case "MultiEdit": return { icon: "edit", verb: verb("Editando", "Editó"), target: path("file_path") };

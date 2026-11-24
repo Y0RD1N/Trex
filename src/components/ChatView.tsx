@@ -1,8 +1,6 @@
 import { formatClock } from "../timeFormat";
 import GitPanel from "./chat/GitPanel";
 import { BranchIcon, MemoryIcon } from "./Icons";
-import BrowserMenu from "./chat/BrowserMenu";
-import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browser";
 /**
  * ChatView: sesión de Claude Code o de Codex como conversación.
  *
@@ -14,7 +12,7 @@ import { browserOptions, brokerArtifactId, validBrowserProfile } from "../browse
  */
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { formatError, gitBranch, listProjectFiles, readClipboard, trexBrowserOpenArtifact, trexBrowserResolveSpace, trexBrowserSpaces } from "../api";
+import { formatError, gitBranch, listProjectFiles, readClipboard } from "../api";
 import { MAX_IMAGES, prepareImage, readClipboardImage, readImageFile, type ChatAttachment } from "../chatImages";
 import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from "../chatFiles";
 import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
@@ -87,8 +85,6 @@ export type ChatViewProps = ChatSessionOptions & {
   toolbar?: ReactNode;
   composerLead?: ReactNode;
   terminalOwners?: TerminalOwner[];
-  browserSpaces?: import("../browser").BrowserSpace[];
-  onStopBrowserAgent?: (clientId:string)=>void;
   itemLabels?: Record<string, ChatAttribution>;
   /** Abre la conversación completa de un subagente (la tarjeta del hilo deja de mostrar sus pasos). */
   onOpenSubagent?: (memberId: string) => void;
@@ -864,14 +860,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   useEffect(() => {
     callbacks.current.onEffort?.(sessionId, state.effortChoice);
   }, [state.effortChoice, sessionId]);
-  // Trex Browser shows which model drives this chat's space; keep it current
-  // when the user switches model. Allocation never opens a browser window.
-  const browserModelName = (() => { const m = currentModel(state.models, state.model, state.modelChoice); return (m ? modelName(m) : state.model ?? "").slice(0, 60); })();
-  const browserBinding = props.browser;
-  useEffect(() => {
-    if (!browserBinding?.enabled || !browserModelName || props.historyReadOnly || !cwd) return;
-    void trexBrowserSpaces(cwd, [{ clientId: browserBinding.clientId, label: browserBinding.label ?? "Agente", model: browserModelName }]).catch(() => {});
-  }, [browserModelName, cwd, browserBinding?.clientId, browserBinding?.enabled, props.historyReadOnly]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Modo de trabajo al que se vuelve al poner en marcha un plan. */
   const workModeRef = useRef(mode === "plan" ? agent.defaultMode : mode);
   useEffect(() => { if (mode !== "plan") workModeRef.current = mode; }, [mode]);
@@ -1246,18 +1234,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
       revealingTask.current = false;
     });
   };
-  // Identidad fija para que las filas memorizadas con capturas no se repinten en cada fragmento.
-  const openArtifact = useStableCallback(async (artifact: Parameters<NonNullable<Parameters<typeof ToolRow>[0]["onOpenArtifact"]>>[0]): Promise<void> => {
-    const id = brokerArtifactId(artifact); if (!id || !props.browser) return;
-    const profile=(artifact.provenance as {profile?:string}|null)?.profile;
-    try {
-      // Los artefactos que reciben Claude, Codex y Antigravity no dicen de qué perfil son: se abren con el espacio propio de este chat.
-      const binding=props.browserSpaces?.find(space=>space.profile===profile)
-        ??(profile&&validBrowserProfile(profile)?{...props.browser,profile}:props.browser.automatic?await trexBrowserResolveSpace(cwd,props.browser):props.browser);
-      const result = await trexBrowserOpenArtifact(id, cwd, "full", binding.clientId, binding.profile);
-      if (result.isError) session.notice("warn", "No se pudo abrir el archivo. Revisa el estado del navegador.");
-    } catch { session.notice("warn", "No se pudo abrir el archivo del navegador."); }
-  });
   const rows = useMemo(() => {
     // Las filas de herramientas con un permiso pendiente se sustituyen por la tarjeta.
     const askingFor = new Set(threadItems.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
@@ -1291,7 +1267,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         }
         case "thinking": return <Thinking key={item.id} text={item.text} />;
         case "tool": return asked(item.id) ? null : <div key={item.id} data-plan-source={["TodoWrite", "TaskCreate", "TaskUpdate"].includes(item.name) ? item.id : undefined}><ToolRow item={item} cwd={cwd}
-          onOpenArtifact={props.browser?.enabled ? openArtifact : undefined}
           expanded={!tasks.length && item.id === latestTodos || item.id === latestPlan}
           onImplement={item.id === latestPlan && planReady ? implementPlan : undefined} /></div>;
         // Las preguntas se responden en el panel que sustituye a la caja de mensaje.
@@ -1312,7 +1287,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         {props.onOpenSubagent ? null : rendered.slice(group.start, group.end).filter((_row, at) => items[at].kind !== "user")}</SubagentActivity>;
     });
   }, [threadItems, threadStart, enterFrom, provider, editingId, running, submittingEdit, busy, responseOrigins, summaries, latestTodos, latestPlan,
-    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels, props.onOpenSubagent, props.browser, props.planningOnly, mode, session, tasks.length]);
+    planReady, cwd, agent.name, beginEdit, resendMessage, regenerateMessage, implementPlan, answer, props.historyReadOnly, props.itemLabels, props.onOpenSubagent, props.planningOnly, mode, session, tasks.length]);
   const stderrTail = state.stderr.slice(-6).join("\n");
   // Una pestaña sin contenido (sin equipo o sin repositorio) no se muestra.
   // Otras sesiones vivas en este proyecto: su pestaña solo existe mientras las haya.
@@ -1603,7 +1578,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         <ComposerSettings mode={mode} modes={modeOptions} onMode={session.setMode}
           levels={efforts} effort={state.effort} onEffort={session.setEffort} speed={speed} fast={state.fast} onFast={session.setFast}
           openSignal={menuSignal} />
-        {props.browser?.enabled && <BrowserMenu cwd={cwd} browser={props.browser} spaces={props.browserSpaces} onStopAgent={props.onStopBrowserAgent} />}
         <span className="chat-composer-spacer" />
         {moreActions.length > 0 && <ComposerMoreMenu actions={moreActions} />}
       </div>
@@ -1684,11 +1658,10 @@ function CodexChat(props: ChatViewProps) {
 }
 
 function ChatView(input: ChatViewProps) {
-  const browser = useRef(browserOptions(input.settings, input.sessionId, chatLabel(input))).current;
   const desktopEnabled = useRef(input.settings.desktopEnabled).current;
   // Experimental; en equipos y salas cada agente reserva las ventanas en las que actúa.
   const a11yEnabled = useRef(input.settings.a11yEnabled === true).current;
-  const props = { ...input, browser, desktopEnabled, a11yEnabled, integrations: input.settings.integrations, autoCompact: input.settings.autoCompact };
+  const props = { ...input, chatLabel: chatLabel(input), desktopEnabled, a11yEnabled, integrations: input.settings.integrations, autoCompact: input.settings.autoCompact };
   return props.provider === "antigravity" ? <AntigravityChat {...props} /> : props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
 }
 

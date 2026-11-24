@@ -203,18 +203,12 @@ pub struct ToolRegistry {
     workspace: Option<PathBuf>,
 }
 impl ToolRegistry {
-    pub fn new(browser: Option<crate::browser::BrowserToolProvider>) -> Self {
-        Self::configured(
-            browser,
-            std::sync::Arc::new(crate::settings::Settings::default()),
-        )
+    pub fn new() -> Self {
+        Self::configured(std::sync::Arc::new(crate::settings::Settings::default()))
     }
-    pub fn configured(
-        browser: Option<crate::browser::BrowserToolProvider>,
-        settings: std::sync::Arc<crate::settings::Settings>,
-    ) -> Self {
+    pub fn configured(settings: std::sync::Arc<crate::settings::Settings>) -> Self {
         let processes = std::sync::Arc::new(crate::processes::ProcessManager::default());
-        let mut providers: Vec<Box<dyn ToolProvider>> = vec![
+        let providers: Vec<Box<dyn ToolProvider>> = vec![
             Box::new(NativeToolProvider {
                 processes: processes.clone(),
                 settings: settings.clone(),
@@ -224,9 +218,6 @@ impl ToolRegistry {
             Box::new(crate::blender_live::BlenderLiveProvider::default()),
             Box::new(crate::hyperframes::HyperframesProvider),
         ];
-        if let Some(browser) = browser {
-            providers.push(Box::new(browser));
-        }
         Self {
             providers,
             team: None,
@@ -274,6 +265,13 @@ impl ToolRegistry {
                 .into_iter()
                 .map(|p| Box::new(p) as Box<dyn ToolProvider>),
         );
+        self
+    }
+    /// The person's own browser (Trex extension), when this chat has it.
+    pub fn with_browser(mut self, browser: Option<crate::chrome::ChromeProvider>) -> Self {
+        if let Some(browser) = browser {
+            self.providers.push(Box::new(browser));
+        }
         self
     }
     pub fn with_team(mut self, config: Option<crate::team::TeamConfig>) -> Self {
@@ -348,10 +346,6 @@ impl ToolRegistry {
             .collect()
     }
     pub fn is_mutating(&self, mode: &str, name: &str, input: &Value) -> bool {
-        // Server-handled: it only changes which tools are advertised.
-        if name == "enable_tools" {
-            return false;
-        }
         self.provider(mode, name)
             .is_none_or(|provider| provider.is_mutating(name, input))
     }
@@ -405,76 +399,8 @@ pub fn definitions() -> Vec<Value> {
     })).collect()
 }
 
-/// Deferred tool groups: not advertised until enable_tools turns them on for
-/// the session. Order is fixed so the advertised list stays deterministic.
-pub const TOOL_GROUPS: &[(&str, &str)] = &[
-    ("browser_devtools", "browser_evaluate, request mocking, viewport/color/network emulation, frames, response bodies, hover, drag, raw mouse, file upload"),
-    ("browser_capture", "video, Playwright traces, performance/CPU profiles, heap snapshots, reading or opening generated artifacts"),
-    ("browser_session", "manual pause, ownership takeover, cancelling one operation"),
-];
-
-pub fn tool_group(name: &str) -> Option<&'static str> {
-    crate::browser::tool_group(name)
-}
-
 fn tool_name(tool: &Value) -> &str {
     tool["function"]["name"].as_str().unwrap_or("")
-}
-
-/// The tools sent to the model: the core set, then enable_tools (when a
-/// deferred group is available), then each enabled group in the order it was
-/// enabled. Enabling only appends, so the earlier prefix stays cacheable.
-pub fn advertised(all: &[Value], enabled: &[String]) -> Vec<Value> {
-    let mut result: Vec<Value> = all
-        .iter()
-        .filter(|tool| tool_group(tool_name(tool)).is_none())
-        .cloned()
-        .collect();
-    let available: Vec<_> = TOOL_GROUPS
-        .iter()
-        .filter(|(group, _)| all.iter().any(|tool| tool_group(tool_name(tool)) == Some(group)))
-        .collect();
-    if available.is_empty() {
-        return result;
-    }
-    let summary = available
-        .iter()
-        .map(|(group, description)| format!("{group} ({description})"))
-        .collect::<Vec<_>>()
-        .join("; ");
-    result.push(json!({"type":"function","function":{"name":"enable_tools","description":format!("Advertise an advanced tool group for the rest of this session; its tools appear from your next step. Groups: {summary}."),
-        "parameters":{"type":"object","properties":{"group":{"type":"string","enum":available.iter().map(|(group, _)| *group).collect::<Vec<_>>()}},"required":["group"],"additionalProperties":false}}}));
-    for group in enabled {
-        if available.iter().any(|(name, _)| name == group) {
-            result.extend(
-                all.iter()
-                    .filter(|tool| tool_group(tool_name(tool)) == Some(group.as_str()))
-                    .cloned(),
-            );
-        }
-    }
-    result
-}
-
-/// enable_tools: validates the group against this session's tools and
-/// records it once. Returns the group's tool names.
-pub fn enable_group(all: &[Value], enabled: &mut Vec<String>, input: &Value) -> Result<Value> {
-    let obj = fields(input, &["group"], &["group"])?;
-    let group = string(obj, "group")?;
-    let tools: Vec<&str> = all
-        .iter()
-        .map(tool_name)
-        .filter(|name| tool_group(name) == Some(group))
-        .collect();
-    ensure!(
-        !tools.is_empty(),
-        "unknown tool group or no tools available in this mode"
-    );
-    let already = enabled.iter().any(|name| name == group);
-    if !already {
-        enabled.push(group.to_owned());
-    }
-    Ok(json!({"group":group,"enabled":true,"alreadyEnabled":already,"tools":tools,"note":"These tools are available from your next step."}))
 }
 
 /// Unknown tool names fail closed under a caller's read-only policy.
@@ -482,7 +408,6 @@ pub fn is_mutating(name: &str) -> bool {
     !matches!(
         name,
         "read_file"
-            | "enable_tools"
             | "list_files"
             | "search"
             | "trex_read_messages"
@@ -2205,7 +2130,7 @@ mod tests {
     #[tokio::test]
     async fn plan_updates_are_read_only_bounded_and_validated_before_acceptance() {
         let input = json!({"plan":[{"step":"Inspect","status":"completed"},{"step":"Validate","status":"in_progress"}]});
-        let registry = ToolRegistry::new(None);
+        let registry = ToolRegistry::new();
         assert!(registry
             .definitions("plan")
             .iter()
@@ -2431,62 +2356,6 @@ mod tests {
             .find(|tool| tool["function"]["name"] == "history_search")
             .unwrap();
         assert!(history["function"]["parameters"]["properties"]["messageIndex"].is_object());
-    }
-
-    #[test]
-    fn deferred_groups_are_appended_only_after_enable_tools() {
-        let browser = |name: &str| {
-            json!({"type":"function","function":{"name":name,"description":"fixture","parameters":{"type":"object"}}})
-        };
-        let mut all = definitions();
-        for name in [
-            "browser_navigate",
-            "browser_snapshot",
-            "browser_evaluate",
-            "browser_start_video",
-            "browser_artifact",
-            "browser_pause",
-        ] {
-            all.push(browser(name));
-        }
-        let names = |tools: &[Value]| {
-            tools
-                .iter()
-                .map(|tool| tool["function"]["name"].as_str().unwrap().to_owned())
-                .collect::<Vec<_>>()
-        };
-        let initial = advertised(&all, &[]);
-        let initial_names = names(&initial);
-        assert!(initial_names.contains(&"browser_snapshot".to_owned()));
-        assert!(!initial_names.contains(&"browser_evaluate".to_owned()));
-        assert_eq!(initial_names.last().unwrap(), "enable_tools");
-        println!(
-            "enable_tools definition: {} bytes",
-            serde_json::to_vec(initial.last().unwrap()).unwrap().len()
-        );
-        assert_eq!(
-            initial.last().unwrap()["function"]["parameters"]["properties"]["group"]["enum"],
-            json!(["browser_devtools", "browser_capture", "browser_session"])
-        );
-        let mut enabled = vec![];
-        let result = enable_group(&all, &mut enabled, &json!({"group":"browser_capture"})).unwrap();
-        assert_eq!(result["tools"], json!(["browser_start_video", "browser_artifact"]));
-        assert!(enable_group(&all, &mut enabled, &json!({"group":"desktop"})).is_err());
-        assert!(enable_group(&all, &mut enabled, &json!({"group":"browser_capture","x":1})).is_err());
-        let again = enable_group(&all, &mut enabled, &json!({"group":"browser_capture"})).unwrap();
-        assert_eq!(again["alreadyEnabled"], true);
-        assert_eq!(enabled, vec!["browser_capture".to_owned()]);
-        let after = advertised(&all, &enabled);
-        // Enabling only appends: the earlier (cached) prefix is unchanged.
-        assert_eq!(after[..initial.len()], initial[..]);
-        assert_eq!(
-            names(&after[initial.len()..]),
-            vec!["browser_start_video", "browser_artifact"]
-        );
-        // Without deferred tools there is no enable_tools at all.
-        assert!(!names(&advertised(&definitions(), &[])).contains(&"enable_tools".to_owned()));
-        assert!(!is_mutating("enable_tools"));
-        assert!(!ToolRegistry::new(None).is_mutating("ask", "enable_tools", &json!({})));
     }
 
     #[test]

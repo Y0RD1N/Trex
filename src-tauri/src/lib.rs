@@ -21,6 +21,7 @@ mod git;
 mod git_panel;
 mod handoff;
 mod integrations;
+mod legacy_browser;
 mod output_batch;
 mod message_queue;
 mod queue_mcp;
@@ -33,7 +34,6 @@ mod project_icon;
 mod shared_files;
 mod terminal_env;
 mod trex_cli;
-mod trex_browser;
 mod voice;
 mod voice_brain;
 #[cfg(windows)]
@@ -423,20 +423,6 @@ pub fn run() {
             trex_cli::trex_desktop_status,
             trex_cli::trex_a11y_status,
             trex_cli::trex_a11y_mcp_config,
-            trex_browser::trex_browser_status,
-            trex_browser::trex_browser_spaces,
-            trex_browser::trex_browser_list_spaces,
-            trex_browser::trex_browser_focus,
-            trex_browser::trex_browser_engine,
-            trex_browser::trex_browser_theme,
-            trex_browser::trex_browser_save_folders,
-            trex_browser::trex_browser_mcp_session,
-            trex_browser::trex_browser_open,
-            trex_browser::trex_browser_mcp_config,
-            trex_browser::trex_browser_call,
-            trex_browser::trex_browser_open_artifact,
-            trex_browser::trex_browser_profiles,
-            trex_browser::trex_browser_create_profile,
             trex_cli::trex_cli_profiles,
             trex_cli::trex_cli_models,
             trex_cli::trex_cli_save_profile,
@@ -528,6 +514,10 @@ pub fn run() {
             browser_bridge::browser_bridge_mcp_session,
             browser_bridge::browser_bridge_set_mode,
             browser_bridge::browser_bridge_mcp_stdio,
+            browser_bridge::browser_bridge_end_session,
+            legacy_browser::legacy_browser_status,
+            legacy_browser::legacy_browser_remove,
+            legacy_browser::legacy_browser_uninstall_standalone,
             voice::voice_status,
             voice::voice_configure,
             voice::voice_download_models,

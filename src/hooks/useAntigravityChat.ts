@@ -7,7 +7,7 @@ import { AntigravityUsageReader, antigravityTier } from "../antigravityUsage";
 import { AcpError, acpMcpServer, acpPrompt, validAcpSessionId } from "../acpProtocol";
 import { acpConfigs, acpEffortConfig, acpModelConfig, acpModes, antigravityReducer, type AcpConfig } from "../antigravityChat";
 import { initialChatState, list, record, text, type Json, type OutgoingImage, type PermissionItem } from "../chatState";
-import { connectBrowser, chromeAvailable, connectChromeStdio } from "../browserConnection";
+import { chromeAvailable, connectChromeStdio } from "../browserConnection";
 import { detectedIntegrations, integrationContext, integrationInstructions } from "../integrations";
 import { FILE_SHARING_INSTRUCTIONS } from "../sharedFiles";
 import { PEER_INSTRUCTIONS } from "../coordination";
@@ -40,8 +40,8 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
   const authMethods = useRef<{ id: string; name: string }[]>([]);
   const controller = useRef<AbortController | null>(null);
   const choices = useRef({ model: options.model, effort: options.effort, mode: options.mode });
-  /** What this ACP session has: an attached browser and the installed applications. */
-  const tools = useRef<{ browser: boolean; available: Partial<Record<"github" | "blender" | "hyperframes", boolean>> | null; a11y?: boolean; apps?: readonly AppId[] }>({ browser: false, available: null });
+  /** What this ACP session has: accessibility, the connected apps and the installed applications. */
+  const tools = useRef<{ available: Partial<Record<"github" | "blender" | "hyperframes", boolean>> | null; a11y?: boolean; apps?: readonly AppId[] }>({ available: null });
   /** The <trex_context> stays in the session's history: it is sent again only for a new/reloaded session or new content. */
   const contextSent = useRef<{ session: string; text: string } | null>(null);
   /** Texto de los mensajes del usuario que repite un historial recuperado: si ya
@@ -138,7 +138,6 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
           .map(v => ({ id: text(v.id), name: text(v.name) }));
       }
       const native = connection.current;
-      const browser = await connectBrowser(current.browser, current.cwd, null, false, "", message => notice("warn", message));
       const detection = detectedIntegrations(current.cwd);
       // Experimental: where the accessibility engine cannot run, the session starts without it, with a notice.
       const a11y = current.a11yEnabled ? await accessibilityServer("full", message => notice("warn", message)) : null;
@@ -146,15 +145,15 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       // Antigravity has no read-only planner mode here (it refuses to start as one), so the server is bound to full, like the desktop's.
       const wanted = appsWanted(current.integrations, available);
       const apps = wanted.length ? await appsServer("full", current.cwd, wanted, message => notice("warn", message)) : null;
-      tools.current = { browser: !!browser, available, a11y: !!a11y, apps: apps ? wanted : [] };
+      tools.current = { available, a11y: !!a11y, apps: apps ? wanted : [] };
       const tasks = await messageQueueMcpConfig(messageQueueId(current.queueId ?? current.sessionId), true,
         { session: current.queueId ?? current.sessionId, project: current.cwd });
       // Memoria de Trex: el resumen viaja en el contexto de la sesión (sin ella, el chat sigue igual).
       await loadMemory(current.cwd);
       // El navegador de la persona (extensión de trex): opcional. Su token va en el entorno del adaptador.
-      const chrome = chromeAvailable() ? await connectChromeStdio(current.sessionId, null, false, "") : null;
+      const chrome = chromeAvailable() ? await connectChromeStdio(current.sessionId, null, false, "", { label: current.chatLabel, cwd: current.cwd }) : null;
       const servers = [...(chrome ? [{ ...acpMcpServer(CHROME_SERVER, chrome), env: [{ name: CHROME_TOKEN_ENV, value: chrome.token }] }] : []), acpMcpServer("trex_inbox", { command: text(tasks["mcp_servers.trex_inbox.command"]), args: tasks["mcp_servers.trex_inbox.args"] as string[] }),
-        ...(browser ? [acpMcpServer("trex_browser", browser)] : []), ...(current.desktopEnabled ? [acpMcpServer("trex_desktop", await trexDesktopMcpConfig("full"))] : []),
+        ...(current.desktopEnabled ? [acpMcpServer("trex_desktop", await trexDesktopMcpConfig("full"))] : []),
         ...(a11y ? [acpMcpServer(A11Y_SERVER, a11y)] : []), ...(apps ? [acpMcpServer(APPS_SERVER, apps)] : [])];
       if (!isCurrent(token)) throw new Error("Se canceló la conexión.");
       const capabilities = record(native.init.agentCapabilities);

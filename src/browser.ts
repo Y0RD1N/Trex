@@ -1,38 +1,13 @@
-/** Trusted browser context lives outside model-supplied tool arguments. */
+/**
+ * Herramientas de los agentes que actúan fuera del chat: los modos de permiso de las pasarelas
+ * (escritorio, accesibilidad, aplicaciones), la conexión con «Tu navegador» y los archivos
+ * (capturas, vídeos…) que devuelven sus herramientas.
+ */
+/** Lo que puede hacer una pasarela según el modo del chat: mirar, actuar con permiso o actuar sin preguntar. */
 export type BrowserMode = "observe" | "qa" | "full";
-export type BrowserOptions = { enabled: boolean; profile: string; clientId: string; automatic?: boolean; label?: string };
-export type BrowserStatus = {
-  installed: boolean; ready: boolean; compatible: boolean; version?: string; protocolVersion?: string;
-  browsers?: { id: string; name: string; available: boolean }[];
-  capabilities?: Record<string, boolean>;
-  error?: { code: string; message: string };
-};
+/** Una pasarela por stdio: el ejecutable de trex y sus argumentos. */
 export type BrowserConfig = { command: string; args: string[] };
-/** MCP-over-HTTP connection served by the broker (no process per agent). */
-export type BrowserHttp = { kind: "http"; url: string; token: string; cwd: string; clientId: string; profile: string };
-/** What an agent receives: the stdio adapter command or an HTTP endpoint. */
-export type BrowserTransport = BrowserConfig | BrowserHttp;
-/** The HTTP token travels in the agent's environment, never on its command line. */
-export const BROWSER_TOKEN_ENV = "TREX_BROWSER_TOKEN";
-export const isBrowserHttp = (value: unknown): value is BrowserHttp => !!value && typeof value === "object" && (value as { kind?: unknown }).kind === "http";
-export const browserEnv = (value: BrowserTransport | null | undefined): Record<string, string> => isBrowserHttp(value) ? { [BROWSER_TOKEN_ENV]: value.token } : {};
-/** Claude --mcp-config entry; Claude expands the header from its environment. */
-export const claudeBrowserServer = (value: BrowserTransport): Record<string, unknown> | BrowserConfig => isBrowserHttp(value)
-  ? { type: "http", url: value.url, headers: { Authorization: `Bearer \${${BROWSER_TOKEN_ENV}}` } } : value;
-/** Only sent to a session whose browser is actually attached; stable text keeps prompt caching. */
-export const BROWSER_INSTRUCTIONS = "Trex Browser is connected (trex_browser MCP) with this chat's own browser space; never take over another client's profile unless asked. browser_navigate with the app's http(s) URL automatically opens the visible project browser; start the dev server with workspace tools if needed. Act on browser_snapshot refs (keep tabId and revision); full:true reads content. Actions return what changed and refs last until a new page loads: snapshot again only then. Use browser_batch for ordered steps; never replay its completed steps. Screenshot only when visuals matter. Desktop tools drive another browser; their failures say nothing about Trex Browser. Report its errors accurately.";
-export type BrowserResult = {
-  content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
-  structuredContent?: Record<string, unknown>; isError: boolean;
-};
-export type BrowserCall = {
-  name: string; arguments: Record<string, unknown>; cwd: string; mode: BrowserMode; clientId: string;
-  profile?: string; operationId?: string; timeoutMs?: number;
-};
-export type BrowserSpace = { clientId: string; profile: string; label: string; active?: boolean; running?: boolean; inUse?: boolean; paused?: boolean; tabCount?: number; currentTool?: string | null; pageTitle?: string; url?: string };
-export type BrowserProfile = { id: string; name: string; projectId: string; createdAt: string };
-/** `sha256` and `sizeBytes` are missing in the lean artifacts agents receive (Claude, Codex, Antigravity);
- * the broker checks integrity itself when one is opened, by id. */
+/** Metadatos de un archivo que devolvió una herramienta. `sha256` y `sizeBytes` faltan en los ligeros que reciben los agentes. */
 export type BrowserArtifact = {
   id: string; sha256?: string; mimeType: string; sizeBytes?: number; width?: number; height?: number;
   kind: string; storage: "local" | "broker"; provenance: unknown;
@@ -42,59 +17,45 @@ export type BrowserArtifact = {
 export const CHROME_SERVER = "trex_chrome";
 /** Su token viaja en el entorno del agente, nunca en la línea de comandos. */
 export const CHROME_TOKEN_ENV = "TREX_CHROME_TOKEN";
+/** Trex CLI recibe también la dirección del puente en su entorno (ver `trexCliChromeEnv`). */
+export const CHROME_URL_ENV = "TREX_CHROME_URL";
 export type ChromeMode = "observe" | "full";
 export type ChromeHttp = { url: string; token: string };
 /** Las herramientas que solo miran. Debe coincidir con OBSERVE_TOOLS de src-tauri/src/browser_bridge.rs. */
-export const CHROME_READ_TOOLS = ["tabs_list", "read_page", "screenshot"] as const;
+export const CHROME_READ_TOOLS = ["tabs_list", "read_page", "screenshot", "wait_for"] as const;
 /** Planificar o solo lectura: mirar. En cualquier otro modo, las acciones pasan por los permisos del propio agente. */
 export const chromeMode = (mode: string | null | undefined, planningOnly = false): ChromeMode =>
   browserMode(mode, planningOnly) === "observe" ? "observe" : "full";
 /** Para los agentes sin MCP por HTTP: el adaptador stdio de trex y el token que debe ir en su entorno. */
 export type ChromeStdio = { command: string; args: string[]; token: string; env: Record<string, string> };
 export const chromeEnv = (value: ChromeHttp | null | undefined): Record<string, string> => value ? { [CHROME_TOKEN_ENV]: value.token } : {};
+/** Trex CLI habla MCP por HTTP él mismo: recibe la dirección y el token en su entorno, nunca en un mensaje. */
+export const trexCliChromeEnv = (value: ChromeHttp | null | undefined): Record<string, string> =>
+  value ? { [CHROME_URL_ENV]: value.url, [CHROME_TOKEN_ENV]: value.token } : {};
 export const claudeChromeServer = (value: ChromeHttp): Record<string, unknown> =>
   ({ type: "http", url: value.url, headers: { Authorization: `Bearer \${${CHROME_TOKEN_ENV}}` } });
-/** Free slots per project: BROWSER2..BROWSER99 (BROWSER1 is the manual one). Mirrors trex-browser/worker/spaces.mjs. */
-export const BROWSER_SPACE_LIMIT = 98;
-export const OBSERVE_BROWSER_TOOLS = new Set([
-  "browser_batch", "browser_navigate", "browser_navigate_back", "browser_reload", "browser_tabs", "browser_frames",
-  "browser_snapshot", "browser_console_messages", "browser_network_requests", "browser_network_body",
-  "browser_take_screenshot", "browser_wait_for", "browser_artifact", "browser_status", "browser_cancel",
-]);
+/**
+ * Nombre del chat para el grupo de pestañas que la extensión le abre: sin caracteres de control
+ * y como mucho 100 bytes en UTF-8 (sin partir un carácter). `undefined` si no queda nada.
+ */
+export function chromeChatLabel(value: string | null | undefined): string | undefined {
+  let result = "", bytes = 0;
+  const encoder = new TextEncoder();
+  for (const char of (value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim()) {
+    const size = encoder.encode(char).length;
+    if (bytes + size > 100) break;
+    result += char; bytes += size;
+  }
+  return result.trim() || undefined;
+}
 export function browserMode(mode: string | null | undefined, planningOnly = false): BrowserMode {
   if (planningOnly || mode === "plan" || mode === "read-only") return "observe";
   return mode === "full" || mode === "bypassPermissions" ? "full" : "qa";
 }
-export const validBrowserProfile = (value: string): boolean => /^BROWSER[1-9][0-9]?$/.test(value) && value.trim() === value;
-export function browserSpaceLabel(value: string): string {
-  let result="", bytes=0;const encoder=new TextEncoder();
-  for(const char of value.replace(/[\x00-\x1f\x7f]/g," ").trim()) { const size=encoder.encode(char).length;if(bytes+size>100)break;result+=char;bytes+=size; }
-  return result || "Agente";
-}
-export function browserOptions(settings: { browserEnabled: boolean; browserProfile: string }, clientId: string, label = "Agente"): BrowserOptions {
-  return { enabled: settings.browserEnabled, profile: validBrowserProfile(settings.browserProfile) ? settings.browserProfile : "BROWSER1", clientId,
-    automatic: true, label: browserSpaceLabel(label) };
-}
+/** Un agente dentro de WSL lanza el ejecutable de Windows por su ruta de /mnt. */
 export function browserConfigForShell(config: BrowserConfig, shell: string): BrowserConfig {
   const match = /^(?:\\\\\?\\)?([a-z]):[\\/](.*)$/i.exec(config.command);
   return shell === "wsl" && match ? { ...config, command: `/mnt/${match[1].toLowerCase()}/${match[2].replace(/\\/g, "/")}` } : config;
-}
-/** The native bridge rejects with an already readable (Spanish) sentence naming the cause;
- * anything else (JS errors, odd shapes) is not shown and gets `fallback`. */
-export function browserErrorText(error: unknown, fallback: string): string {
-  const text = typeof error === "string" ? error.trim() : "";
-  return text && text.length <= 600 ? text : fallback;
-}
-/** Why "Mostrar ventana" raised nothing, from the host's `{ focused: false, reason }`. */
-export function browserFocusNotice(reason?: string): string {
-  return reason === "external-browser" ? "Este espacio usa el Chrome del sistema, no la ventana de Trex Browser, así que no se puede traer al frente desde aquí. Búscalo en la barra de tareas."
-    : reason === "closed" ? "Este espacio ya no tiene ninguna ventana abierta."
-    : "No se pudo traer la ventana al frente. Puede que el sistema lo impida; búscala en la barra de tareas.";
-}
-/** Why a space or the personal window did not open (`{ opened: false, reason }`). */
-export function browserOpenFailure(reason?: string): string {
-  return reason === "unknown-profile" ? "Este espacio todavía no existe en el proyecto: se crea cuando el agente lo usa por primera vez."
-    : "No se pudo abrir este espacio para iniciar sesión.";
 }
 export function browserArtifacts(value: unknown): BrowserArtifact[] {
   if (!Array.isArray(value)) return [];
@@ -135,12 +96,6 @@ export function browserResultArtifacts(raw: unknown): BrowserArtifact[] {
     try { const parsed = JSON.parse(block.text); const refs = browserArtifacts(parsed?.artifacts ?? parsed?.structuredContent?.artifacts); if (refs.length) return refs; } catch { /* Ordinary browser text. */ }
   }
   return [];
-}
-
-export function brokerArtifactId(artifact: BrowserArtifact): string | null {
-  const provenance = artifact.provenance && typeof artifact.provenance === "object" ? artifact.provenance as Record<string, unknown> : null;
-  const id = provenance?.brokerArtifactId ?? (artifact.storage === "broker" ? artifact.id : null);
-  return typeof id === "string" && /^[a-zA-Z0-9_:.\-]{1,256}$/.test(id) && !id.includes("..") ? id : null;
 }
 
 /** Serialized MCP image envelopes are projected to metadata and text only. */

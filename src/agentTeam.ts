@@ -26,8 +26,7 @@ export const TEAM_ROLES: Record<TeamRole, { name: string; description: string; w
   validation: { name: "Pruebas", description: "Ejecuta las verificaciones necesarias y comunica resultados concretos.", writes: true },
   custom: { name: "Personalizado", description: "Realiza la función definida para este participante.", writes: false },
 };
-/** `browser` overrides the role default for Trex Browser access (null/undefined: role default). */
-export type TeamMember = { id: string; name: string; role: TeamRole; instructions: string; canWrite: boolean; mode?: string | null; browser?: boolean | null; agent: WorkflowAgent; conversationId: string | null };
+export type TeamMember = { id: string; name: string; role: TeamRole; instructions: string; canWrite: boolean; mode?: string | null; agent: WorkflowAgent; conversationId: string | null };
 /** New-token limits (cache reads excluded); null means no limit. */
 export type TeamBudget = { teamTokens: number | null; memberTokens: number | null };
 /** Compact consumption of a delegation or member: new tokens exclude cache reads. */
@@ -71,11 +70,10 @@ function member(raw: unknown, master: boolean): TeamMember | null {
   const checked = normalizeAgentWorkflow({ id: "validation", role: "planner", status: "paused", planner: value.agent, executor: value.agent });
   if (!checked) return null;
   if (value.mode != null && (!validAgentPermission(checked.planner.provider, value.mode) || (value.mode === "plan") === value.canWrite)) return null;
-  if (value.browser != null && typeof value.browser !== "boolean") return null;
   return { id: value.id, name: sanitizeHandoffText(value.name), role: value.role as TeamRole,
     instructions: sanitizeHandoffText(value.instructions), canWrite: value.canWrite,
-    ...(value.mode !== undefined ? { mode: value.mode as string | null } : {}),
-    ...(value.browser !== undefined ? { browser: value.browser as boolean | null } : {}), agent: checked.planner, conversationId: value.conversationId as string | null };
+    // Un equipo guardado con una versión anterior puede traer `browser` (el antiguo Trex Browser): se ignora.
+    ...(value.mode !== undefined ? { mode: value.mode as string | null } : {}), agent: checked.planner, conversationId: value.conversationId as string | null };
 }
 
 const tokenLimit = (raw: unknown): number | null => typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0 ? raw : null;
@@ -120,20 +118,6 @@ export function normalizeAgentTeam(raw: unknown): AgentTeam | null {
     ...(value.budget !== undefined ? { budget: normalizeTeamBudget(value.budget) } : {}),
     ...(value.usage !== undefined ? { usage: normalizeLedger(value.usage, all) } : {}) };
 }
-
-/**
- * Trex Browser costs context (its tools) and a browser space: only roles that
- * browse get it by default. Read-only reviewers browse in observe mode; the
- * coordinator delegates instead of browsing.
- */
-export function teamBrowserDefault(role: TeamRole, canWrite: boolean): boolean {
-  if (role === "coordinator") return false;
-  if (role === "review") return !canWrite;
-  if (role === "custom") return canWrite;
-  return true;
-}
-export const teamMemberUsesBrowser = (member: Pick<TeamMember, "role" | "canWrite" | "browser">): boolean =>
-  typeof member.browser === "boolean" ? member.browser : teamBrowserDefault(member.role, member.canWrite);
 
 /**
  * Git context each role needs: reviewers get the status and a per-file summary

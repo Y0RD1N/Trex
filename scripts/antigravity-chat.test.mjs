@@ -42,7 +42,7 @@ test("Images remain real ACP blocks, with explicit capability and format validat
   assert.deepEqual(acpPrompt("[Imagen 1]", [image], true), [{ type: "text", text: "[Imagen 1]" }, { type: "image", mimeType: "image/png", data: image.data }]);
   assert.throws(() => acpPrompt("", [image], false), /no admite imágenes/);
   assert.throws(() => acpPrompt("", [{ ...image, data: "not base64" }], true), /formato/);
-  assert.deepEqual(acpMcpServer("trex_browser", { command: "C:/Program Files/Trex/browser.exe", args: ["--client", "chat-one"] }).env, []);
+  assert.deepEqual(acpMcpServer("trex_desktop", { command: "C:/Program Files/Trex/trex.exe", args: ["--trex-desktop-mcp", "full"] }).env, []);
 });
 test("History paths respect Windows normalization and Linux case sensitivity", () => {
   assert.equal(sameAcpCwd("D:/Projects/Trex/", "d:\\projects\\trex"), true);
