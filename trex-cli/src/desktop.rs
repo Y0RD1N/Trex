@@ -533,6 +533,7 @@ fn run(
             })
             .transpose()?;
         *state = None;
+        crate::aura::screen_look("mira la pantalla");
         #[cfg(windows)]
         let captured_focus = windows::focus();
         let (image, x, y, monitor) = capture(monitor)?;
@@ -633,6 +634,8 @@ fn run(
             stopped = Some(index);
             break;
         }
+        let (label, point) = act.aura();
+        crate::aura::screen_act(label, point);
         if perform(&mut enigo, act, cancel).is_err() {
             return Err(DesktopUncertain.into());
         }
@@ -779,6 +782,27 @@ impl Act {
     fn keyboard(&self) -> bool {
         matches!(self, Act::Type(_) | Act::Key(..))
     }
+
+    /// Lo que dice el aura mientras se hace, y dónde deja la onda (clics y arrastres).
+    fn aura(&self) -> (&'static str, Option<(i32, i32)>) {
+        match self {
+            Act::Move(_) => ("mueve el ratón", None),
+            Act::Click(point, button, clicks) => {
+                let label = match (button, clicks) {
+                    (Button::Right, _) => "clic derecho",
+                    (Button::Middle, _) => "clic central",
+                    (_, 2) => "doble clic",
+                    _ => "clic",
+                };
+                (label, Some(*point))
+            }
+            Act::Scroll(..) => ("desplaza", None),
+            Act::Drag(_, to) => ("arrastra", Some(*to)),
+            Act::Type(_) => ("escribe", None),
+            Act::Key(_, modifiers) if modifiers.is_empty() => ("pulsa una tecla", None),
+            Act::Key(..) => ("atajo de teclado", None),
+        }
+    }
 }
 
 fn parse_act(tool: &str, input: &Value, observation: &Observation) -> Result<Act> {
@@ -911,6 +935,7 @@ fn after_capture(
         ensure!(!cancel.is_cancelled(), "cancelled before the after-input capture");
         std::thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
     }
+    crate::aura::screen_look("mira qué cambió");
     #[cfg(windows)]
     let (image, x, y, _) = capture(Some(observation.monitor))?;
     #[cfg(not(windows))]

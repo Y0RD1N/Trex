@@ -72,6 +72,25 @@ actual cubre la pantalla principal en Windows y la pantalla raíz X11 en Linux;
 Wayland se rechaza explícitamente, sin usar XWayland como sustituto. Se probó
 en una pantalla X11 virtual; Windows y múltiples monitores siguen sin verificar.
 
+### Visor en pantalla (Windows)
+
+Mientras Trex controla el equipo, la pantalla lleva un visor: cuatro esquinas
+del color del acento de Ajustes, unidas por una línea fina, y una etiqueta
+arriba al centro con lo que hace («trex › mira la pantalla», «clic», «escribe»).
+Las esquinas se cierran un instante cada vez que Trex captura la pantalla, y
+cada clic o arrastre deja una onda donde ocurre. En reposo no se redibuja.
+Aparece en todos los monitores con la primera captura o entrada y se va sola
+tras 30 s sin acciones.
+
+Son capas que no reciben clics ni foco, no salen en la barra de tareas y se
+excluyen de las capturas (`WDA_EXCLUDEFROMCAPTURE`, Windows 10 2004 o
+posterior): ni el modelo ni la comparación de capturas tras cada entrada las
+ven. Si Windows no permite excluirlas, no se dibuja nada. Con los efectos de
+animación de Windows apagados, el visor no se desliza ni se cierra: solo cambia
+de brillo. El acento llega con `--accent #rrggbb` (servidores MCP) o
+`TREX_ACCENT` (Trex CLI); sin él se usa el rosa por defecto. El código está en
+`trex-cli/src/aura/` (dibujo en `paint.rs`, ventanas en `win.rs`).
+
 ### Diagnóstico y acciones de Windows
 
 Ajustes muestra la disponibilidad real del escritorio y las pantallas detectadas,
@@ -210,8 +229,17 @@ Va dentro de `trex-agent` (`trex-cli/src/a11y/`), sin dependencias externas:
   no se listan;
 - abrir una app que reutiliza su ventana (el Bloc de notas con pestañas) se
   detecta por el cambio de título, sin esperar a una ventana nueva;
-- un marco naranja con la etiqueta «Trex · acción» marca durante un instante
-  el elemento en el que actúa; no recibe clics ni foco;
+- la ventana que maneja lleva una cinta: un trazo discontinuo del color del
+  acento a su alrededor, con una etiqueta que cuelga abajo a la derecha
+  («trex · escribe»). Avanza a saltos de 100 ms mientras trabaja, más deprisa
+  al actuar, y se para en gris mientras espera a que la persona deje de usar
+  la ventana. Va justo encima de esa ventana en el orden de ventanas (lo que la
+  persona tenga delante la tapa), la sigue al moverla o cambiar su tamaño, se
+  oculta si se minimiza y se va tras 30 s sin acciones. Un paso cuesta unos
+  0,5 ms con una ventana maximizada a 1920 × 1200;
+- además, un marco del color del acento con la etiqueta «Trex · acción» marca
+  durante un instante el elemento en el que actúa. Ni la cinta ni el marco
+  reciben clics o foco, ni salen en las capturas;
 - los botones clásicos (Win32 y WinForms) reciben el clic como mensaje
   encolado, igual que el de un ratón, así que un diálogo modal no bloquea la
   pasarela; el resto de acciones que podrían esperar corren en otro hilo con

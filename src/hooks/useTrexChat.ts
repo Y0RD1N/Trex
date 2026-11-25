@@ -160,8 +160,13 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       // Con la función apagada no se pide nada y el CLI arranca sin ellas.
       const chrome = chromeAvailable() ? await connectChrome(current.sessionId, planningOnly ? "plan" : choices.current.mode, planningOnly, current.shell ?? "",
         { label: current.chatLabel, cwd: current.cwd }) : null;
+      // El acento de Ajustes, para el aura que se ve mientras el CLI controla el equipo.
+      const accent = globalThis.document?.documentElement?.dataset?.accent;
+      const env = chrome || accent
+        ? { ...current.env, ...(chrome ? trexCliChromeEnv(chrome) : {}), ...(accent ? { TREX_ACCENT: accent } : {}) }
+        : current.env;
       const procId = await agent.spawn({ cwd: current.cwd, command: current.command ?? "trex-agent", profileArgs: current.args,
-        flags: ["app-server"], shell: current.shell, env: chrome ? { ...current.env, ...trexCliChromeEnv(chrome) } : current.env });
+        flags: ["app-server"], shell: current.shell, env });
       if (!procId || !mounted.current || startupGeneration.current !== token) throw new Error("Se canceló el arranque de Trex CLI.");
       processId.current = procId;
       const init = await rpc(procId, "initialize", { protocolVersion: 1, client: "trex", inbox: true });

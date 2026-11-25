@@ -2,6 +2,7 @@ pub mod a11y;
 pub mod a11y_mcp;
 pub mod apps_mcp;
 pub mod artifacts;
+pub mod aura;
 pub mod blender;
 pub mod blender_bridge;
 pub mod blender_live;

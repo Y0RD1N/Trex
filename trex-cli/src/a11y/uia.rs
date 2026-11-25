@@ -550,7 +550,10 @@ fn top_windows() -> Vec<(isize, String, u32, i32)> {
         let _ = EnumWindows(Some(collect), LPARAM(&mut handles as *mut Vec<isize> as isize));
     }
     // El marco naranja de Trex no es una ventana de la persona.
-    handles.into_iter().filter_map(window_facts).filter(|facts| class_name(facts.0) != HIGHLIGHT_CLASS).collect()
+    handles.into_iter().filter_map(window_facts).filter(|facts| {
+        let class = class_name(facts.0);
+        class != HIGHLIGHT_CLASS && !crate::aura::is_aura_class(&class)
+    }).collect()
 }
 
 /// Título, proceso y estado de una ventana visible con título; None si no lo es.
@@ -621,6 +624,8 @@ pub struct UiaEngine {
     own_input: Option<(u32, u32)>,
     /// Dentro de un lote: cada paso no informa cambios (lo hace el lote al final).
     quiet: bool,
+    /// La ventana de la acción en curso (para la cinta del aura).
+    acting: isize,
 }
 
 impl UiaEngine {
@@ -650,7 +655,7 @@ impl UiaEngine {
             tree.SetTreeScope(TreeScope_Subtree)?;
             tree.SetTreeFilter(&view)?;
             Ok(Self { automation, view, walker, tree, single, places, keeps_focus, refs: HashMap::new(), kept: VecDeque::new(), next: 0, process_names: HashMap::new(),
-                keyboard, locks: Locks::default(), highlighter: None, highlight_started: false, woken: HashSet::new(), own_input: None, quiet: false })
+                keyboard, locks: Locks::default(), highlighter: None, highlight_started: false, woken: HashSet::new(), own_input: None, quiet: false, acting: 0 })
         }
     }
 
@@ -739,7 +744,13 @@ impl UiaEngine {
     /// Si la persona la está usando, se espera un poco a que haga una pausa.
     fn guard(&mut self, window: isize) -> Result<isize, ToolError> {
         let deadline = Instant::now() + PAUSE_WAIT;
+        let mut waiting = false;
         while user_active(foreground(), window, self.idle_ms()) && Instant::now() < deadline {
+            if !waiting {
+                // La cinta se para y lo dice mientras la persona usa la ventana.
+                crate::aura::window_wait(window);
+                waiting = true;
+            }
             sleep(Duration::from_millis(100));
         }
         let (front, idle) = (foreground(), self.idle_ms());
@@ -749,6 +760,8 @@ impl UiaEngine {
                 PAUSE_WAIT.as_secs())));
         }
         self.claim(window)?;
+        crate::aura::window_act(window, None);
+        self.acting = window;
         Ok(front)
     }
 
@@ -780,8 +793,9 @@ impl UiaEngine {
             "Another Trex agent (process {owner}) is working in this window. Nothing was done; use another window or try again in a minute.")))
     }
 
-    /// Marca en pantalla dónde se va a actuar, si el elemento se ve.
+    /// Marca en pantalla dónde se va a actuar, si el elemento se ve, y lo dice en la cinta.
     fn mark(&mut self, element: &IUIAutomationElement, label: &str) {
+        crate::aura::window_act(self.acting, Some(label));
         if !self.highlight_started {
             self.highlight_started = true;
             self.highlighter = Highlighter::start();
@@ -1122,6 +1136,7 @@ impl UiaEngine {
             let header = format!("window w{:X} {} ({})", info.hwnd, quote(&info.title, 100), info.app);
             (self.element(&info)?, info.hwnd, header)
         };
+        crate::aura::window_look(window);
         if args["format"].as_str() == Some("text") {
             return self.read_text(&root, window, &header, args, max_depth);
         }
@@ -1505,7 +1520,7 @@ Bring it into view with a11y_scroll_to (or a11y_scroll) and click it again.");
         };
         let before = self.guard(target.window)?;
         let seen = self.before(target.window);
-        self.mark(&target.element, "escribir");
+        self.mark(&target.element, "escribe");
         unsafe { pattern.SetValue(&BSTR::from(expected.as_str())) }.map_err(failure)?;
         // Releer un poco después: algunos controles aceptan el valor y luego lo descartan.
         sleep(Duration::from_millis(150));
@@ -1536,7 +1551,7 @@ Bring it into view with a11y_scroll_to (or a11y_scroll) and click it again.");
         }
         let before = self.guard(target.window)?;
         let seen = self.before(target.window);
-        self.mark(&target.element, "marcar");
+        self.mark(&target.element, "marca");
         unsafe { pattern.Toggle() }.map_err(failure)?;
         sleep(Duration::from_millis(100));
         let mut after = unsafe { pattern.CurrentToggleState() }.map_err(failure)?;
@@ -1562,7 +1577,7 @@ Bring it into view with a11y_scroll_to (or a11y_scroll) and click it again.");
         let front = self.guard(target.window)?;
         let started = Instant::now();
         let seen = self.before(target.window);
-        self.mark(&target.element, if expand { "desplegar" } else { "plegar" });
+        self.mark(&target.element, if expand { "despliega" } else { "pliega" });
         if let Outcome::Pending = bounded(&target.element, if expand { open_element } else { close_element })? {
             return Ok(format!("Requested; the application is still handling it.{}", self.changes(seen, Some(&target.element))));
         }
@@ -1582,7 +1597,7 @@ Bring it into view with a11y_scroll_to (or a11y_scroll) and click it again.");
         let element = target.element.clone();
         let before = self.guard(target.window)?;
         let seen = self.before(target.window);
-        self.mark(&element, "elegir");
+        self.mark(&element, "elige");
         let Some(wanted) = args["value"].as_str().map(str::to_owned) else {
             let pattern = pattern::<IUIAutomationSelectionItemPattern>(&element, UIA_SelectionItemPatternId)
                 .ok_or_else(|| ToolError::new("NOT_SELECTABLE", "The element is not a selectable item; pass value to pick an option inside it."))?;
@@ -1693,7 +1708,7 @@ Bring it into view with a11y_scroll_to (or a11y_scroll) and click it again.");
         let started = Instant::now();
         let seen = self.before(window);
         if !whole {
-            self.mark(&element, "desplazar");
+            self.mark(&element, "desplaza");
         }
         let edge = if forward { "end" } else { "start" };
         let head = if let Some(pattern) = container {

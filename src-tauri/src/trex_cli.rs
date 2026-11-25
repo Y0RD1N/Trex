@@ -746,7 +746,7 @@ mod tests {
 
 /// Bind desktop access to a fresh MCP process. The mode cannot be changed by a tool call.
 #[tauri::command]
-pub async fn trex_desktop_mcp_config(mode: String) -> Result<serde_json::Value, String> {
+pub async fn trex_desktop_mcp_config(app: tauri::AppHandle, mode: String) -> Result<serde_json::Value, String> {
     let fixed_mode = match mode.as_str() {
         "observe" => "plan",
         "qa" | "full" => "full",
@@ -754,7 +754,17 @@ pub async fn trex_desktop_mcp_config(mode: String) -> Result<serde_json::Value, 
     };
     let binary = installed_cli_path()?;
     let command = binary.to_str().ok_or("La ruta del agente no es UTF-8 válida.")?;
-    Ok(serde_json::json!({"command":command,"args":["desktop-mcp","--mode",fixed_mode]}))
+    let mut args = vec!["desktop-mcp".to_owned(), "--mode".into(), fixed_mode.into()];
+    args.extend(aura_accent(&crate::config::load_settings(&app).theme).into_iter().flatten());
+    Ok(serde_json::json!({"command":command,"args":args}))
+}
+
+/// El acento de Ajustes para el aura que se ve mientras Trex controla el equipo
+/// (`--accent #rrggbb`), si es un color válido.
+fn aura_accent(theme: &str) -> Option<[String; 2]> {
+    let hex = theme.trim();
+    let valid = hex.len() == 7 && hex.starts_with('#') && hex[1..].bytes().all(|byte| byte.is_ascii_hexdigit());
+    valid.then(|| ["--accent".to_owned(), hex.to_owned()])
 }
 
 /// The applications a session may be given, in the order Trex lists them.
@@ -931,11 +941,12 @@ pub async fn trex_a11y_mcp_config(app: tauri::AppHandle, mode: String) -> Result
     a11y_ready(&status)?;
     let binary = installed_cli_path()?;
     let command = binary.to_str().ok_or("La ruta del agente no es UTF-8 válida.")?;
-    let mut args = vec!["a11y-mcp", "--mode", fixed_mode];
+    let mut args = vec!["a11y-mcp".to_owned(), "--mode".into(), fixed_mode.into()];
     // Atajos de teclado solo con el permiso de Ajustes (y nunca al planificar: el motor lo impide).
     if settings.a11y_keyboard {
-        args.push("--keyboard");
+        args.push("--keyboard".into());
     }
+    args.extend(aura_accent(&settings.theme).into_iter().flatten());
     Ok(serde_json::json!({"command":command,"args":args}))
 }
 
@@ -954,8 +965,16 @@ fn a11y_ready(status: &serde_json::Value) -> Result<(), String> {
 
 #[cfg(test)]
 mod a11y_engine_tests {
-    use super::a11y_ready;
+    use super::{a11y_ready, aura_accent};
     use serde_json::json;
+
+    #[test]
+    fn only_a_hex_accent_reaches_the_aura() {
+        assert_eq!(aura_accent(" #dcaa4a "), Some(["--accent".to_owned(), "#dcaa4a".to_owned()]));
+        for wrong in ["dcaa4a", "#dca", "#zzzzzz", "", "#dcaa4a; rm"] {
+            assert_eq!(aura_accent(wrong), None, "{wrong}");
+        }
+    }
 
     #[test]
     fn the_builtin_engine_is_used_where_it_exists() {

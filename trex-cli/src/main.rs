@@ -105,6 +105,9 @@ enum Command {
     DesktopMcp {
         #[arg(long)]
         mode: String,
+        /// Accent colour (#rrggbb) of the on-screen aura shown while Trex controls the computer.
+        #[arg(long)]
+        accent: Option<String>,
     },
     /// Application control (Blender today) as an MCP server for one session.
     AppsMcp {
@@ -146,6 +149,9 @@ enum Command {
         /// Allow real keyboard shortcuts (a11y_press); off unless enabled in Trex settings.
         #[arg(long)]
         keyboard: bool,
+        /// Accent colour (#rrggbb) of the tape drawn around the window Trex controls.
+        #[arg(long)]
+        accent: Option<String>,
     },
     /// Whether the built-in accessibility engine is available, without opening applications.
     A11yDoctor {
@@ -683,10 +689,20 @@ async fn run() -> Result<()> {
                 HyperframesAction::SkillsUpdate => trex_agent::hyperframes::admin_skills_update(&root, &cancel).await?,
             })?
         }
-        Command::DesktopMcp { mode } => trex_agent::desktop_mcp::serve(&mode).await?,
+        Command::DesktopMcp { mode, accent } => {
+            if let Some(hex) = accent.as_deref() {
+                trex_agent::aura::set_accent(hex);
+            }
+            trex_agent::desktop_mcp::serve(&mode).await?
+        }
         Command::AppsMcp { mode, cwd, apps } => trex_agent::apps_mcp::serve(&mode, cwd, &trex_agent::apps_mcp::App::parse_list(&apps)?).await?,
         Command::DesktopDoctor { json: _ } => print_json(&trex_agent::desktop::doctor().await?)?,
-        Command::A11yMcp { mode, engine: _, keyboard } => tokio::task::spawn_blocking(move || trex_agent::a11y_mcp::serve(&mode, keyboard)).await??,
+        Command::A11yMcp { mode, engine: _, keyboard, accent } => {
+            if let Some(hex) = accent.as_deref() {
+                trex_agent::aura::set_accent(hex);
+            }
+            tokio::task::spawn_blocking(move || trex_agent::a11y_mcp::serve(&mode, keyboard)).await??
+        }
         Command::A11yDoctor { json: _ } => print_json(&tokio::task::spawn_blocking(trex_agent::a11y_mcp::doctor).await?)?,
         Command::Chat { launch } => {
             let profile = selected(cli.profile)?;

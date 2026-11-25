@@ -1,7 +1,8 @@
-//! Dónde actúa la IA: un marco naranja con la etiqueta «Trex» sobre el elemento,
-//! durante un instante. Es una ventana por encima de todo que no recibe clics
-//! (`WS_EX_TRANSPARENT`) ni foco (`WS_EX_NOACTIVATE`) y no sale en la barra de
-//! tareas: se ve, pero no estorba.
+//! Dónde actúa la IA: un marco del color del acento con la etiqueta «Trex» sobre
+//! el elemento, durante un instante. Es una ventana por encima de todo que no
+//! recibe clics (`WS_EX_TRANSPARENT`) ni foco (`WS_EX_NOACTIVATE`), no sale en la
+//! barra de tareas ni en las capturas: se ve, pero no estorba. La ventana entera
+//! la marca la cinta del aura (`crate::aura`).
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 use windows::core::{w, PCWSTR};
@@ -13,12 +14,18 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// Color que la ventana deja transparente (magenta) y color del marco (#E8834A en BGR).
 /// Clase de la ventana del marco: no se lista como ventana de la persona.
 pub const CLASS: &str = "TrexA11yHighlight";
+/// Color que la ventana deja transparente (magenta).
 const KEY: COLORREF = COLORREF(0x00FF_00FF);
-const ACCENT: COLORREF = COLORREF(0x004A_83E8);
-const WHITE: COLORREF = COLORREF(0x00FF_FFFF);
+/// Texto sobre el acento (el mismo tinte oscuro de la app).
+const INK: COLORREF = COLORREF(0x000F_1417);
+
+/// El acento de Ajustes en BGR.
+fn accent() -> COLORREF {
+    let color = crate::aura::accent();
+    COLORREF(u32::from(color.0) | (u32::from(color.1) << 8) | (u32::from(color.2) << 16))
+}
 const SHOW: u32 = WM_APP + 1;
 const BORDER: i32 = 3;
 const GAP: i32 = 2;
@@ -61,7 +68,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lp
                 FillRect(hdc, &area, transparent);
                 let _ = DeleteObject(transparent.into());
                 // Marco redondeado alrededor del elemento.
-                let pen = CreatePen(PS_SOLID, BORDER, ACCENT);
+                let pen = CreatePen(PS_SOLID, BORDER, accent());
                 let previous_pen = SelectObject(hdc, pen.into());
                 let previous_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
                 let _ = RoundRect(hdc, 1, TAG_HEIGHT + 1, area.right - 1, area.bottom - 1, 10, 10);
@@ -75,11 +82,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lp
                 let mut measure = RECT { left: 0, top: 0, right: area.right, bottom: TAG_HEIGHT };
                 DrawTextW(hdc, &mut text, &mut measure, DT_LEFT | DT_SINGLELINE | DT_VCENTER | windows::Win32::Graphics::Gdi::DT_CALCRECT);
                 let tag = RECT { left: 0, top: 0, right: measure.right.min(area.right), bottom: TAG_HEIGHT + 1 };
-                let accent = CreateSolidBrush(ACCENT);
+                let accent = CreateSolidBrush(accent());
                 FillRect(hdc, &tag, accent);
                 let _ = DeleteObject(accent.into());
                 SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, WHITE);
+                SetTextColor(hdc, INK);
                 let mut place = tag;
                 DrawTextW(hdc, &mut text, &mut place, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
                 SelectObject(hdc, previous_font);
@@ -110,6 +117,8 @@ impl Highlighter {
                 return;
             };
             let _ = SetLayeredWindowAttributes(window, KEY, 235, LWA_COLORKEY | LWA_ALPHA);
+            // Fuera de las capturas, como el aura: el control de computadora no lo ve.
+            let _ = SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE);
             let _ = sender.send(window.0 as isize);
             let mut message = MSG::default();
             while GetMessageW(&mut message, None, 0, 0).as_bool() {

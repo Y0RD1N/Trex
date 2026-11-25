@@ -64,8 +64,10 @@ Todo lo que puede hacer trex, con detalle. Si es tu primera vez, empieza por el
 - **Control por accesibilidad (experimental)**: Claude Code, Codex, Trex CLI y
   Antigravity manejan las aplicaciones a través del árbol de accesibilidad del
   sistema, sin mover tu ratón, sin escribir con tu teclado y sin traer ventanas
-  al frente; un marco naranja muestra dónde actúa y puedes detenerlo desde el
-  chat. Usa el motor propio de Trex (Windows), que no requiere instalar nada,
+  al frente; una cinta del color de tu acento rodea la ventana que maneja, un
+  marco muestra dónde actúa y puedes detenerlo desde el chat. Con el control de
+  computadora, unas esquinas en los bordes de la pantalla indican que trex la
+  está controlando. Usa el motor propio de Trex (Windows), que no requiere instalar nada,
   también con Chrome y Electron. Es una integración independiente del control
   de computadora: tú eliges cuál activar en Ajustes → Integraciones. Detalles en
   [integraciones de escritorio](integraciones-escritorio.md#control-por-accesibilidad-experimental).
