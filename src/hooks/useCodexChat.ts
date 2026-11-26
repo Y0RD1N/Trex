@@ -534,7 +534,8 @@ export function useCodexChat(options: ChatSessionOptions): ChatSession {
         const wantApps = appsWanted(callbacks.current.integrations, availableRef.current);
         if (callbacks.current.desktopEnabled || callbacks.current.a11yEnabled || wantApps.length > 0) browserBindingRef.current = { mode: bindingMode, pending: true };
         // The same identity as the chat's coordination hook (useCoordination): queue id or session id.
-        const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId, false, { session: callbacks.current.queueId ?? sessionId, project: cwd });
+        const config = await messageQueueMcpConfig(callbacks.current.queueId ?? sessionId, false,
+          { session: callbacks.current.queueId ?? sessionId, project: cwd, requests: callbacks.current.projectRequests === true });
         if (!isCurrent()) return;
         // Memoria de Trex: el resumen para las instrucciones de los hilos (sin ella, el chat sigue igual).
         await loadMemory(cwd);

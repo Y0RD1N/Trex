@@ -5,7 +5,7 @@ import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 
 // Exercise the real hook and reducers; only React scheduling, timers and native IPC are fake.
-const names = ["chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "agentTeam", "integrations", "accessibility", "coordination"];
+const names = ["chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "agentTeam", "integrations", "accessibility", "coordination", "projectRequests"];
 const dependencies = Object.fromEntries(await Promise.all(names.map(async name => ["../" + name, await load(name)])));
 // Applications (Blender) stay off unless a test turns them on: no extra MCP server and no extra mode binding.
 dependencies["../apps"] = { ...(await load("apps")), appsWanted: () => [], appsServer: async () => null };

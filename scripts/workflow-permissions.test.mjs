@@ -5,7 +5,7 @@ import ts from "typescript";
 import { load } from "./ts-loader.mjs";
 
 // Run the actual hooks, protocol encoders and reducers. No process or model is started.
-const modules = ["chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "coordination"];
+const modules = ["chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "coordination", "projectRequests"];
 const dependencies = Object.fromEntries(await Promise.all(modules.map(async name => ["../" + name, await load(name)])));
 // Applications (Blender) stay off unless a test turns them on: no extra MCP server and no extra mode binding.
 dependencies["../apps"] = { ...(await load("apps")), appsWanted: () => [], appsServer: async () => null };

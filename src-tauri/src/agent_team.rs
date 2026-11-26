@@ -156,14 +156,14 @@ const REPORT_INLINE: usize = 32 * 1024;
 const REPORT_EXCERPT: usize = 24 * 1024;
 const REPORT_LIMIT: usize = 4 * 1024 * 1024;
 const REPORT_PREVIEW: usize = 480;
-fn floor_boundary(text: &str, index: usize) -> usize {
+pub(crate) fn floor_boundary(text: &str, index: usize) -> usize {
     let mut index = index.min(text.len());
     while !text.is_char_boundary(index) {
         index -= 1;
     }
     index
 }
-fn ceil_boundary(text: &str, index: usize) -> usize {
+pub(crate) fn ceil_boundary(text: &str, index: usize) -> usize {
     let mut index = index.min(text.len());
     while !text.is_char_boundary(index) {
         index += 1;

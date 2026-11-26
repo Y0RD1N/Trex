@@ -237,6 +237,14 @@ pub fn project_root(project: &str) -> Option<String> {
     absolute(&value).then_some(value)
 }
 
+/// Dos carpetas de proyecto son la misma (en Windows sin distinguir mayúsculas).
+pub fn same_project(a: &str, b: &str) -> bool {
+    match (project_root(a), project_root(b)) {
+        (Some(a), Some(b)) => fold(&a) == fold(&b),
+        _ => false,
+    }
+}
+
 /// Archivo o carpeta, relativo al proyecto si está dentro. «.» es el proyecto entero.
 pub fn normalize_path(project: &str, raw: &str) -> Option<String> {
     let mut value = slashes(raw);
@@ -967,6 +975,9 @@ pub async fn coordination_call(app: AppHandle, project: String, session: String,
     let root = data_dir(&app)?;
     if crate::memory::TOOLS.contains(&name.as_str()) {
         return blocking(move || Ok(crate::memory::call(&root, Some(&project), &format!("claude · sesión {session}"), &name, &arguments))).await;
+    }
+    if crate::project_requests::TOOLS.contains(&name.as_str()) {
+        return blocking(move || Ok(crate::project_requests::call(&root, &project, &session, &name, &arguments))).await;
     }
     blocking(move || Ok(call(&root, &project, &session, &name, &arguments))).await
 }

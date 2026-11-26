@@ -4,6 +4,7 @@ import type { BrowserConfig, BrowserMode } from "./browser";
 import { DEFAULT_INTEGRATIONS, normalizeIntegrations } from "./integrations";
 import { normalizeAutoCompact } from "./autoCompact";
 import { normalizeProjectLauncher } from "./projectLauncher";
+import { normalizeProjectRequests } from "./projectRequests";
 /**
  * Capa de acceso al backend: envoltorios de `invoke`/`listen` y utilidades
  * compartidas (ids, valores por defecto, normalización y color de acento).
@@ -171,7 +172,8 @@ export const agentTerminalOutput = (id: string, taskId: string): Promise<{ text:
  * `peer` adds the coordination tools (trex_peers, trex_claim…) for that session and project;
  * `peersOnly` leaves only those (Trex CLI has its own inbox and task list).
  */
-export const messageQueueMcpConfig = (queueId: string, tasksOnly = false, peer?: { session: string; project: string } | null,
+/** `peer.requests`: un chat normal, que recibe respuestas y encargos de otros proyectos (sus herramientas solo van a él). */
+export const messageQueueMcpConfig = (queueId: string, tasksOnly = false, peer?: { session: string; project: string; requests?: boolean } | null,
   peersOnly = false): Promise<Record<string, unknown>> =>
   invoke("message_queue_mcp_config", { queueId, tasksOnly, peer: peer ?? null, peersOnly });
 
@@ -240,6 +242,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoCompact: normalizeAutoCompact(null),
   // Sin carpetas raíz: el atajo del lanzador no hace nada hasta que la persona elija una.
   projectLauncher: normalizeProjectLauncher(null),
+  projectRequests: normalizeProjectRequests(null),
   desktopEnabled: false,
   a11yEnabled: false,
   a11yKeyboard: false,
@@ -486,6 +489,7 @@ export const normalizeConfig = (raw: unknown): AppConfig => {
     integrations: normalizeIntegrations(settingsRaw.integrations),
     autoCompact: normalizeAutoCompact(settingsRaw.autoCompact),
     projectLauncher: normalizeProjectLauncher(settingsRaw.projectLauncher),
+    projectRequests: normalizeProjectRequests(settingsRaw.projectRequests),
     desktopEnabled: asBool(settingsRaw.desktopEnabled, false),
     a11yEnabled: asBool(settingsRaw.a11yEnabled, false),
     a11yKeyboard: asBool(settingsRaw.a11yKeyboard, false),

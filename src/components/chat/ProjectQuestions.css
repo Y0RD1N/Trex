@@ -1,0 +1,70 @@
+/* --- Preguntas a otros proyectos ------------------------------------------------------
+   La pestaña junto a la caja de mensaje y la tarjeta de respuesta del hilo, que comparte la banda
+   de los mensajes de otras sesiones (.chat-peer-turn, PeerSessions.css). */
+.project-questions { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.project-questions li { display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-2) var(--sp-2-5); border-radius: var(--radius-md); background: var(--bg-inset); }
+.project-question-head { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.project-question-head strong { overflow: hidden; color: var(--text); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.project-question-head span { flex: 1 1 auto; color: var(--text-dim); font: var(--fs-xs)/1.5 var(--font-mono); }
+.project-question-head span.is-live { color: var(--text-muted); }
+.project-question-head .icon-btn { flex: 0 0 auto; width: 24px; height: 24px; }
+.project-questions li > p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-relaxed);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow-wrap: anywhere;
+}
+.project-questions-note { margin: var(--sp-2) 0 0; padding: 0 var(--sp-2-5) var(--sp-1); color: var(--text-dim); font-size: var(--fs-xs); }
+.project-questions-error { margin: var(--sp-1-5) 0 0; padding: 0 var(--sp-2-5); color: var(--danger-text, var(--text)); font-size: var(--fs-xs); }
+
+.chat-project-answer { gap: var(--sp-3); }
+.project-answer { display: grid; gap: var(--sp-1-5); min-width: 0; }
+.project-answer + .project-answer { padding-top: var(--sp-3); border-top: 1px solid var(--border-subtle); }
+/* La pregunta, en una línea discreta: el protagonista es lo que contestó el otro agente. */
+.project-answer-question { display: flex; align-items: baseline; gap: var(--sp-1-5); min-width: 0; margin: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+.project-answer-question > svg { flex-shrink: 0; transform: translateY(1px); }
+.project-answer-question > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-answer-body { min-width: 0; overflow-wrap: anywhere; }
+.project-answer-body.is-folded { max-height: 18em; overflow: hidden; mask-image: linear-gradient(to bottom, #000 calc(100% - 3em), transparent); }
+.project-answer-failed { margin: 0; color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-answer-more { justify-self: start; }
+
+/* Respuestas cuyo chat se cerró: cualquier chat del proyecto puede recogerlas. */
+.project-orphans { display: grid; gap: var(--sp-2); }
+.project-questions + .project-orphans { margin-top: var(--sp-3); padding-top: var(--sp-2); border-top: 1px solid var(--border-subtle); }
+.project-orphans > .project-questions-note { margin: 0; }
+.project-orphan-actions { display: flex; flex-wrap: wrap; gap: var(--sp-1-5); margin-top: var(--sp-1); }
+
+/* Lo que costó y de dónde salió: una línea discreta al pie, como la hora de los mensajes. */
+.project-answer-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); color: var(--text-dim); font-size: var(--fs-xs); }
+.project-answer-meta > span { font-variant-numeric: tabular-nums; }
+.project-answer-open {
+  display: inline-flex; align-items: center; gap: var(--sp-1); margin: 0; padding: 0; border: 0; background: none;
+  color: var(--text-muted); font: inherit; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; cursor: pointer;
+}
+.project-answer-open:hover { color: var(--text); text-decoration-color: currentColor; }
+.project-answer-open:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* Encargos: la aprobación vive en la caja de mensaje, separada de lo que escribes por una regla. */
+.chat-dock > .chat-ask.change-approval { border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+/* El encargo puede ser largo: en el peso del texto normal y con su propio desplazamiento. */
+.change-approval-task { max-height: 12em; overflow: auto; font-weight: 400; }
+.change-approval-line { display: flex; align-items: baseline; gap: var(--sp-1-5); margin: 0; color: var(--text-muted); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.change-approval-line > svg { flex-shrink: 0; transform: translateY(1px); }
+.change-approval-target { display: flex; align-items: center; gap: var(--sp-3); color: var(--text-muted); font-size: var(--fs-sm); }
+.change-approval-target > span { flex: 0 0 auto; }
+.change-approval-target > button { flex: 1 1 auto; min-width: 0; max-width: 28rem; }
+.change-approval-trust { display: inline-flex; align-items: center; gap: var(--sp-2); justify-self: start; color: var(--text-muted); font-size: var(--fs-sm); cursor: pointer; }
+.change-approval-trust:has(input:checked) { color: var(--text); }
+.project-change-context > summary { color: var(--text-muted); font-size: var(--fs-sm); cursor: pointer; }
+.project-change-context[open] > summary { margin-bottom: var(--sp-1-5); }
+
+/* Informe de un encargo: los archivos que midió trex, en la voz monoespaciada de las rutas. */
+.project-answer-files { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; font: var(--fs-xs)/1.5 var(--font-mono); color: var(--text-muted); }
+.project-answer-files li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-answer-diff { margin: 0; padding: var(--sp-2) var(--sp-2-5); overflow-x: auto; border-radius: var(--radius-md); background: var(--bg-inset); color: var(--text-muted); font: var(--fs-xs)/1.5 var(--font-mono); white-space: pre; }

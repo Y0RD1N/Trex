@@ -8,7 +8,7 @@
  * restauración de la sesión anterior y las confirmaciones de la app (mediante
  * el sistema de diálogos propio, montado en el proveedor de la raíz).
  */
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -79,6 +79,7 @@ import { remoteBridge } from "./remoteBridge";
 import { filterProjects, includeAddedProject, normalizeProjectFilter, type ProjectFilter } from "./projectFilter";
 import WelcomeScreen from "./components/WelcomeScreen";
 import { defaultProfile, launchForProfile, profilesForInstallation, restoreLaunch } from "./profiles";
+import { defaultChangeChat, projectChatsStore, projectKey, projectRequestDecide, projectRequestsStore, type ProjectRequest } from "./projectRequests";
 import { applyDesign } from "./visualDesign";
 import { syncWindowMaterial } from "./windowMaterial";
 import { applyTimeFormat } from "./timeFormat";
@@ -126,6 +127,8 @@ const RecoverConversations = lazyComponent(() => import("./components/RecoverCon
 const UsageDialog = lazyComponent(() => import("./components/UsageDialog"));
 const AgentWorkflowDialog = lazyComponent(() => import("./components/AgentWorkflowDialog"));
 const ProjectLauncher = lazyComponent(() => import("./components/ProjectLauncher"));
+// Solo con las preguntas entre proyectos encendidas (Ajustes → Proyectos); apagadas, ni se descarga.
+const ProjectRequestsHost = lazy(() => import("./components/ProjectRequestsHost"));
 
 /** Información de Claude usada cuando la detección no puede ejecutarse. */
 const CLAUDE_INFO_FALLBACK: ClaudeInfo = {
@@ -793,7 +796,8 @@ function AppShell() {
 
   // --- Pestañas ---------------------------------------------------------------
 
-  const openTab = useCallback((projectId: string, profileId: string | null, conversation?: Conversation, handoff?: HandoffReference, model?: string | null, workflow?: AgentWorkflow, room?: AgentRoom, team?: AgentTeam) => {
+  // `background`: la pestaña se abre sin cambiar de proyecto ni de pestaña (el chat que trex abre para un encargo).
+  const openTab = useCallback((projectId: string, profileId: string | null, conversation?: Conversation, handoff?: HandoffReference, model?: string | null, workflow?: AgentWorkflow, room?: AgentRoom, team?: AgentTeam, background = false) => {
     const currentConfig = configRef.current;
     if (!currentConfig) return;
     const settings = currentConfig.settings;
@@ -849,6 +853,7 @@ function AppShell() {
     // Actualiza el espejo al instante para numerar bien aperturas seguidas.
     const nextTabs = [...tabsRef.current, tab];
     tabsRef.current = nextTabs;
+    if (background) { setTabs(nextTabs); return tab.id; }
     activeTabIdRef.current = tab.id;
     setTabs(nextTabs);
     setActiveTabId(tab.id);
@@ -1327,8 +1332,74 @@ function AppShell() {
       setSearch("");
       selectProject(tab.projectId);
       setActiveTabId(tab.id);
+    } else if (notice.kind === "answer" && configRef.current?.projects.some(project => project.id === notice.projectId)) {
+      // Respuesta cuyo chat se cerró: la recoge cualquier chat de ese proyecto.
+      setSearch("");
+      selectProject(notice.projectId);
+      showToast(`La respuesta espera en la pestaña «Preguntas» de cualquier chat de ${notice.projectName}.`);
     } else showToast("Esta sesión ya se cerró.");
   }, [selectProject, showToast]);
+
+  /** Una respuesta de otro proyecto llegó cuando el chat que preguntó ya estaba cerrado. */
+  const handleOrphanAnswer = useCallback((request: ProjectRequest) => {
+    const current = configRef.current;
+    const project = current?.projects.find(item => projectKey(item.path) === projectKey(request.fromProject));
+    if (!current || !project) return;
+    const profile = current.settings.profiles.find(item => item.id === request.answerProfile);
+    const notice: AgentNotice = { id: ++noticeIdRef.current, tabId: "", projectId: project.id, sessionName: `${request.toName} contestó a un chat que ya no está abierto`,
+      projectName: project.name, provider: profile?.provider ?? "claude", kind: "answer", createdAt: Date.now(), read: false };
+    setNotices(previous => [notice, ...previous].slice(0, 50));
+    void playNotificationSound();
+    void showDesktopNotice(notice, current.settings).catch(error => console.warn("Notificación del escritorio:", formatError(error)));
+  }, [playNotificationSound]);
+
+  /** Muestra una pestaña por su sesión (el chat de otro proyecto que hace un encargo). */
+  const openSession = useCallback((session: string) => {
+    const tab = tabsRef.current.find(item => item.id === session);
+    if (!tab) { showToast("Ese chat ya se cerró."); return; }
+    setSearch("");
+    selectProject(tab.projectId);
+    setActiveTabId(tab.id);
+  }, [selectProject, showToast]);
+
+  /** La cuenta con la que se abre un chat para un encargo: la elegida para ese proyecto o la predeterminada. */
+  const changeChatProfile = useCallback((projectId: string) => {
+    const settings = configRef.current?.settings;
+    if (!settings) return null;
+    const profiles = profilesForInstallation(settings, trexInstalledRef.current);
+    const chosen = settings.projectRequests.answerers.find(entry => entry.projectId === projectId)?.profileId;
+    return profiles.find(profile => profile.id === chosen) ?? defaultProfile({ ...settings, profiles });
+  }, []);
+  const projectChatProfile = useCallback((projectId: string) => changeChatProfile(projectId)?.name ?? null, [changeChatProfile]);
+  /** Un chat nuevo en otro proyecto para un encargo, sin cambiar de pestaña. Devuelve su sesión. */
+  const openProjectChat = useCallback((projectId: string): string | null => {
+    const profile = changeChatProfile(projectId);
+    return profile ? openTab(projectId, profile.id, undefined, undefined, undefined, undefined, undefined, undefined, true) ?? null : null;
+  }, [changeChatProfile, openTab]);
+  /** «No volver a preguntar»: los encargos de `from` a `to` van directos desde ahora (se quita en Ajustes). */
+  const trustPair = useCallback((from: string, to: string) => {
+    setConfig(previous => {
+      if (!previous) return previous;
+      const requests = previous.settings.projectRequests;
+      if (requests.trusted.some(pair => pair.from === from && pair.to === to)) return previous;
+      return { ...previous, settings: { ...previous.settings, projectRequests: { ...requests, trusted: [...requests.trusted, { from, to }] } } };
+    });
+  }, []);
+
+  /** «Abrir la conversación» de una respuesta: el chat que contestó, como un chat normal en su proyecto. */
+  const openProjectAnswer = useCallback((request: ProjectRequest) => {
+    const current = configRef.current;
+    if (!current || !request.conversation || !request.answerProfile) return;
+    const project = current.projects.find(item => item.id === request.toProjectId);
+    const profile = profilesForInstallation(current.settings, trexInstalledRef.current).find(item => item.id === request.answerProfile);
+    if (!project) { showToast(`«${request.toName}» ya no está en trex.`); return; }
+    if (!profile) { showToast("La cuenta que contestó ya no existe: no se puede abrir su conversación."); return; }
+    const existing = tabsRef.current.find(tab => !tab.exited && tab.profileId === profile.id && tab.conversationId === request.conversation);
+    setSearch("");
+    if (existing) { selectProject(existing.projectId); setActiveTabId(existing.id); return; }
+    openTab(project.id, profile.id, { id: request.conversation, provider: profile.provider, title: `Pregunta de ${request.fromName}`,
+      cwd: project.path, updatedAt: request.finishedAt ?? request.updatedAt });
+  }, [openTab, selectProject, showToast]);
 
   const toggleNotificationSound = useCallback(() => {
     setConfig(previous => previous ? { ...previous, ui: { ...previous.ui, notificationSound: !previous.ui.notificationSound } } : previous);
@@ -1518,6 +1589,70 @@ function AppShell() {
   }, [trayCounts.working, trayCounts.waiting]);
   // El móvil agrupa las sesiones por proyecto en el mismo orden que la barra lateral.
   useEffect(() => { remoteBridge.setProjectOrder(config?.projects.map(project => project.id) ?? []); }, [config?.projects]);
+  // Encargos entre proyectos: los chats abiertos que pueden hacer uno (la tarjeta de aprobación los lista).
+  const projectRequestsOn = config?.settings.projectRequests.enabled === true;
+  useEffect(() => {
+    projectChatsStore.set(projectRequestsOn ? tabs.filter(usesChatView).filter(tab => !tab.agentTeam && !tab.agentRoom && !tab.workflow && !tab.exited)
+      .map(tab => ({ session: tab.id, projectId: tab.projectId, label: sessionLabel(tab), provider: tab.kind, busy: tab.activity !== "idle" })) : []);
+  }, [tabs, projectRequestsOn]);
+  // Un encargo de una pareja de confianza llega ya aprobado: trex le da el chat libre de ese proyecto o
+  // abre uno sin cambiar de pestaña. Solo si la pareja sigue siendo de confianza en Ajustes (el diario es
+  // un archivo: no basta con lo que diga). Si guardarlo falla, se repite con el mismo chat.
+  const assignedChanges = useRef(new Map<string, string | null>());
+  useEffect(() => projectRequestsStore.subscribe(() => {
+    const settings = configRef.current?.settings.projectRequests;
+    const projects = configRef.current?.projects ?? [];
+    for (const request of projectRequestsStore.get()) {
+      if (request.kind !== "change" || request.status !== "approved" || request.toSession) continue;
+      const assigned = assignedChanges.current.get(request.id);
+      if (assigned === null) continue;
+      const from = projects.find(project => projectKey(project.path) === projectKey(request.fromProject))?.id;
+      const trusted = !!request.trusted && !!settings?.enabled && settings.trusted.some(pair => pair.from === from && pair.to === request.toProjectId)
+        && settings.answerers.some(entry => entry.projectId === request.toProjectId && entry.changes);
+      if (!trusted) {
+        // Ya no se confía en esa pareja (o el diario dice algo que Ajustes no): se descarta, no se hace sin aprobar.
+        assignedChanges.current.set(request.id, null);
+        void projectRequestDecide(request.id, false, null, `Ya no hay confianza en los encargos de «${request.fromName}» a «${request.toName}»: hay que pedirlo de nuevo para aprobarlo.`)
+          .catch(error => console.warn(`Encargo de ${request.fromName}: ${formatError(error)}`));
+        continue;
+      }
+      const chat = assigned ?? defaultChangeChat(projectChatsStore.get(), request.toProjectId)?.session ?? openProjectChat(request.toProjectId);
+      if (!chat) { assignedChanges.current.set(request.id, null); continue; }
+      assignedChanges.current.set(request.id, null);
+      void projectRequestDecide(request.id, true, chat).catch(error => {
+        console.warn(`Encargo de ${request.fromName}: ${formatError(error)}`);
+        assignedChanges.current.set(request.id, chat);
+      });
+    }
+  }), [openProjectChat]);
+  // Mensajes entre agentes: van al chat del otro proyecto que tiene sentido (el que mandó el mensaje que
+  // contestan, el que ya habló con quien escribe, o el libre de ese proyecto) y pasan a otro si ese chat se
+  // cerró. Sin ningún chat abierto en ese proyecto esperan a que abras uno: no se arranca un agente solo para leerlos.
+  const routedMessages = useRef(new Map<string, string>());
+  useEffect(() => {
+    const route = (): void => {
+      const all = projectRequestsStore.get(), chats = projectChatsStore.get();
+      const open = (session?: string | null): session is string => !!session && chats.some(chat => chat.session === session);
+      for (const request of all) {
+        if (request.kind !== "message" || request.status !== "approved" || open(request.toSession)) continue;
+        const recent = [...all].reverse();
+        const original = request.replyTo ? all.find(entry => entry.id === request.replyTo) : undefined;
+        const talked = recent.find(entry => entry.kind === "message" && entry.toSession === request.fromSession
+          && projectKey(entry.fromProject) === projectKey(request.toProject) && open(entry.fromSession));
+        const worked = recent.find(entry => entry.fromSession === request.fromSession && entry.toProjectId === request.toProjectId && open(entry.toSession));
+        const chat = [original?.fromSession, talked?.fromSession, worked?.toSession].find(open) ?? defaultChangeChat(chats, request.toProjectId)?.session;
+        if (!chat || routedMessages.current.get(request.id) === chat) continue;
+        routedMessages.current.set(request.id, chat);
+        void projectRequestDecide(request.id, true, chat).catch(error => {
+          routedMessages.current.delete(request.id);
+          console.warn(`Mensaje de ${request.fromName}: ${formatError(error)}`);
+        });
+      }
+    };
+    const stopRequests = projectRequestsStore.subscribe(route), stopChats = projectChatsStore.subscribe(route);
+    route();
+    return () => { stopRequests(); stopChats(); };
+  }, []);
 
   // Control remoto: el móvil ve todos los proyectos (no solo los que tienen chats) y los
   // perfiles con los que puede abrir uno. Los que se abren como terminal no: el móvil no los maneja.
@@ -1814,6 +1949,11 @@ function AppShell() {
                     onModel={handleChatModel}
                     onEffort={handleChatEffort}
                     onMessage={showToast}
+                    onOpenProjectAnswer={openProjectAnswer}
+                    onOpenSession={openSession}
+                    onProjectChat={openProjectChat}
+                    projectChatProfile={projectChatProfile}
+                    onTrustPair={trustPair}
                   /> : <TerminalView
                     sessionId={tab.id}
                     cwd={project.path}
@@ -1890,6 +2030,7 @@ function AppShell() {
           entering={settingsPresence.entering}
           leaving={settingsPresence.leaving}
           settings={config.settings}
+          projects={config.projects}
           cwd={activeProject?.path}
           appInfo={appInfo}
           claudeInfo={claudeInfo}
@@ -1902,6 +2043,9 @@ function AppShell() {
           onRedetect={redetectClaude}
         />
       </Suspense>)}
+
+      {config.settings.projectRequests.enabled && trexChecked && <Suspense fallback={null}>
+        <ProjectRequestsHost settings={config.settings} projects={config.projects} trexInstalled={trexInstalled} onOrphan={handleOrphanAnswer} /></Suspense>}
 
       {toast && (
         <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />

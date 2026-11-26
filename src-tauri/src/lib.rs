@@ -31,6 +31,7 @@ mod browser_bridge_stdio;
 mod process_lifetime;
 mod project_folders;
 mod project_icon;
+mod project_requests;
 mod shared_files;
 mod terminal_env;
 mod tray;
@@ -339,9 +340,23 @@ async fn app_info(app: AppHandle) -> Result<AppInfo, String> {
 #[tauri::command]
 async fn load_config(app: AppHandle) -> Result<AppConfig, config::LoadFailure> {
     // Un fallo de lectura llega al frontend tal cual: no se sustituye por los valores por defecto.
-    tauri::async_runtime::spawn_blocking(move || config::load(&app)).await.unwrap_or_else(|error| Err(config::LoadFailure {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = config::load(&app)?;
+        publish_project_directory(&app, &config);
+        Ok(config)
+    }).await.unwrap_or_else(|error| Err(config::LoadFailure {
         kind: "unreadable", message: format!("No se pudo cargar la configuración: {error}"), backup: None, previous: false,
     }))
+}
+
+/// Los chats leen de disco qué proyectos contestan preguntas: se publica al cargar y al guardar.
+/// Un fallo solo deja la lista anterior; la configuración se guardó igual.
+fn publish_project_directory(app: &AppHandle, config: &AppConfig) {
+    if let Ok(root) = app.path().app_data_dir() {
+        if let Err(error) = project_requests::publish_directory(&root, config) {
+            eprintln!("trex: {error}");
+        }
+    }
 }
 
 /// La copia del último arranque correcto, cuando el archivo actual está dañado. No escribe nada.
@@ -354,6 +369,7 @@ async fn restore_config_backup(app: AppHandle) -> Result<AppConfig, String> {
 async fn save_config(app: AppHandle, config: AppConfig) -> Result<AppConfig, String> {
     blocking(move || {
         config::save(&app, &config)?;
+        publish_project_directory(&app, &config);
         tray::apply(&app, config.settings.close_to_tray);
         Ok(config)
     })
@@ -491,6 +507,18 @@ pub fn run() {
             coordination::coordination_release,
             coordination::coordination_tools,
             coordination::coordination_call,
+            project_requests::project_requests_snapshot,
+            project_requests::project_request_claim,
+            project_requests::project_request_finish,
+            project_requests::project_requests_recover,
+            project_requests::project_request_cancel,
+            project_requests::project_requests_delivered,
+            project_requests::project_request_reassign,
+            project_requests::project_request_retry,
+            project_requests::project_request_decide,
+            project_requests::project_request_begin,
+            project_requests::project_request_sent,
+            project_requests::project_request_tools,
             attachments::read_image_file,
             attachments::read_clipboard_image,
             attachments::save_attachment,

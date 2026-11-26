@@ -5,6 +5,7 @@ import { taskInstructions } from "./chatTasks";
 import { TASK_TOOL, taskTool, parseTaskPlan } from "./taskTools";
 import { isCoordinationTool, PEER_INSTRUCTIONS } from "./coordination";
 import { isMemoryTool } from "./memory";
+import { isProjectRequestTool } from "./projectRequests";
 export { MCP_TASK_TOOL } from "./taskTools";
 
 export const claudeInboxInitialize = { subtype: "initialize", sdkMcpServers: [INBOX_SERVER] };
@@ -56,10 +57,10 @@ export async function claudeInboxReply(requestId: string, request: Json, read: (
     const peers: unknown = coordination ? await Promise.resolve().then(() => coordination.tools()).catch(() => []) : [];
     result = { tools: [inboxTool, taskTool, ...(Array.isArray(peers) ? peers : [])] };
   } else if (message.method === "tools/call") {
-    if (options.coordination && (isCoordinationTool(params.name) || isMemoryTool(params.name))) {
-      // La coordinación y la memoria de Trex se resuelven en el registro del proyecto (Rust).
+    if (options.coordination && (isCoordinationTool(params.name) || isMemoryTool(params.name) || isProjectRequestTool(params.name))) {
+      // La coordinación, la memoria de Trex y las preguntas a otros proyectos se resuelven en Rust.
       try { result = await options.coordination.call(String(params.name), params.arguments ?? {}); }
-      catch (reason) { result = { content: [{ type: "text", text: `${isMemoryTool(params.name) ? "No se pudo usar la memoria de Trex" : "No se pudo usar la coordinación entre sesiones"}: ${String(reason)}` }], isError: true }; }
+      catch (reason) { result = { content: [{ type: "text", text: `${isMemoryTool(params.name) ? "No se pudo usar la memoria de Trex" : isProjectRequestTool(params.name) ? "No se pudo preguntar a otro proyecto" : "No se pudo usar la coordinación entre sesiones"}: ${String(reason)}` }], isError: true }; }
     } else if (params.name === TASK_TOOL) {
       const plan = parseTaskPlan(params.arguments);
       if (!plan) error = { code: -32602, message: "Expected plan with up to 64 valid steps, at most one in_progress, and at most 32 KiB of JSON." };

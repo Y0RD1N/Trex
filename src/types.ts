@@ -19,7 +19,8 @@ export type AgentProvider = "claude" | "codex" | "trex" | "antigravity";
 export type TabKind = AgentProvider | "shell";
 export type CursorStyle = "auto" | "block" | "bar" | "underline";
 export type AgentActivity = "idle" | "working" | "waiting";
-export type AgentNoticeKind = "ready" | "attention" | "error";
+/** `answer`: llegó la respuesta de otro proyecto y espera a que intervengas (chat en pausa, detenido o cerrado). */
+export type AgentNoticeKind = "ready" | "attention" | "error" | "answer";
 export type AgentNotice = {
   id: number;
   tabId: string;
@@ -77,6 +78,8 @@ export type Settings = {
   autoCompact: import("./autoCompact").AutoCompactSettings;
   /** Lanzador de proyectos: carpetas raíz, agente y si vuelve al chat abierto. */
   projectLauncher: import("./projectLauncher").ProjectLauncherSettings;
+  /** Preguntas entre proyectos: apagadas salvo que la persona las active, y qué proyectos contestan. */
+  projectRequests: import("./projectRequests").ProjectRequestsSettings;
   desktopEnabled: boolean;
   /** Control por accesibilidad (experimental). */
   a11yEnabled: boolean;

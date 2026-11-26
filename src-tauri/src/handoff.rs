@@ -246,8 +246,8 @@ fn bounded_text(text: &str, limit: usize) -> (String, bool) {
     )
 }
 
-struct CapturedOutput {
-    text: String,
+pub(crate) struct CapturedOutput {
+    pub(crate) text: String,
     truncated: bool,
 }
 
@@ -328,7 +328,7 @@ fn run_command(
     })
 }
 
-fn run_git(
+pub(crate) fn run_git(
     cwd: &str,
     args: &[&str],
     limit: usize,

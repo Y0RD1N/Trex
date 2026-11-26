@@ -8,7 +8,7 @@ import { load } from "./ts-loader.mjs";
 // process boundary and both kinds of browser timer are local, offline fakes.
 const dependencies = Object.fromEntries(await Promise.all([
   "chatMessages", "chatCommands", "chatState", "chatTimes", "autoCompact", "claudeChat", "codexChat", "trexChat",
-  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "apps", "coordination", "remoteProtocol",
+  "messageQueue", "inboxProtocol", "workflowSafety", "browser", "sharedFiles", "chatQuestions", "agentTeam", "chatTasks", "integrations", "accessibility", "apps", "coordination", "projectRequests", "remoteProtocol",
 ].map(async name => [`../${name}`, await load(name)])));
 // Applications (Blender) stay off unless a test turns them on: no extra MCP server and no extra mode binding.
 // A `const` so the team-sessions harness, which copies only declarations from this file, gets it too.

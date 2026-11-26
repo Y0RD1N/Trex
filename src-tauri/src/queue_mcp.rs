@@ -2,6 +2,7 @@
 //! Reading claims a durable receipt; only the frontend acknowledges delivery.
 use crate::coordination;
 use crate::memory;
+use crate::project_requests;
 use crate::message_queue::{list_in, read_in};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -45,10 +46,19 @@ struct Launch {
 pub struct Peer {
     pub session: String,
     pub project: String,
+    /// Un chat normal, que recibe las respuestas y los encargos de otros proyectos: solo él tiene sus
+    /// herramientas (los miembros de un equipo o de una sala no las reciben).
+    #[serde(default)]
+    pub requests: bool,
 }
 
 fn is_coordination(name: &Value) -> bool {
     name.as_str().is_some_and(|name| coordination::TOOLS.contains(&name))
+}
+
+/// Preguntas a otros proyectos (ver `project_requests.rs`): como la coordinación, no leen la cola.
+fn is_project_request(name: &Value) -> bool {
+    name.as_str().is_some_and(|name| project_requests::TOOLS.contains(&name))
 }
 
 /// Memoria de Trex (ver `memory.rs`): como la coordinación, necesita el proyecto de la sesión.
@@ -86,24 +96,31 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Option<Launch>
     if args.next().as_deref() != Some(std::ffi::OsStr::new(MCP_FLAG)) {
         return Ok(None);
     }
-    let usage = "Uso: --trex-inbox-mcp <appDataDir> <queueId> [--tasks-only | --peers-only] [--peer <sessionId> <projectDir>]";
+    let usage = "Uso: --trex-inbox-mcp <appDataDir> <queueId> [--tasks-only | --peers-only] [--peer <sessionId> <projectDir>] [--project-requests]";
     let data_dir = args.next().ok_or(usage)?;
     let queue_id = args.next().ok_or(usage)?;
-    let (mut scope, mut peer) = (Scope::All, None);
+    let (mut scope, mut peer, mut requests) = (Scope::All, None, false);
     while let Some(option) = args.next() {
+        if option == "--project-requests" && !requests {
+            requests = true;
+            continue;
+        }
         if option == "--tasks-only" && scope == Scope::All {
             scope = Scope::Tasks;
         } else if option == "--peers-only" && scope == Scope::All {
             scope = Scope::Peers;
         } else if option == "--peer" && peer.is_none() {
             let text = |value: Option<OsString>| value.and_then(|value| value.into_string().ok()).filter(|value| !value.is_empty()).ok_or(usage);
-            peer = Some(Peer { session: text(args.next())?, project: text(args.next())? });
+            peer = Some(Peer { session: text(args.next())?, project: text(args.next())?, requests: false });
         } else {
             return Err(usage.into());
         }
     }
-    if data_dir.is_empty() || scope == Scope::Peers && peer.is_none() {
+    if data_dir.is_empty() || scope == Scope::Peers && peer.is_none() || requests && peer.is_none() {
         return Err(usage.into());
+    }
+    if let Some(peer) = peer.as_mut() {
+        peer.requests = requests;
     }
     let queue_id = queue_id
         .into_string()
@@ -141,6 +158,9 @@ pub async fn message_queue_mcp_config(app: AppHandle, queue_id: String, tasks_on
                 return Err("La sesión y la carpeta del proyecto de la coordinación no son válidas.".into());
             }
             args.extend([json!("--peer"), json!(peer.session), json!(peer.project)]);
+            if peer.requests {
+                args.push(json!("--project-requests"));
+            }
         }
         Ok(config)
     })
@@ -289,7 +309,7 @@ fn serve_tools(
                     let request: Value = request;
                     // Coordination tools never read the queue, so a tasks-only connection keeps them.
                     let name = &request["params"]["name"];
-                    let coordination = peer.is_some() && is_coordination(name);
+                    let coordination = peer.is_some() && (is_coordination(name) || is_project_request(name));
                     let method = request.get("method").and_then(Value::as_str).unwrap_or_default().to_owned();
                     if method == "initialize" {
                         client = request["params"]["clientInfo"]["name"].as_str().map(|name| name.chars().take(40).collect());
@@ -313,7 +333,7 @@ fn serve_tools(
                         match (scope, method.as_str(), result) {
                             (Scope::Tasks | Scope::Peers, "tools/list", Some(result)) => {
                                 if let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) {
-                                    tools.retain(|t| (scope == Scope::Tasks && t["name"] == TASK_TOOL) || is_coordination(&t["name"]) || is_memory(&t["name"]));
+                                    tools.retain(|t| (scope == Scope::Tasks && t["name"] == TASK_TOOL) || is_coordination(&t["name"]) || is_memory(&t["name"]) || is_project_request(&t["name"]));
                                 }
                             }
                             (Scope::Peers, "initialize", Some(result)) => result["instructions"] = json!(PEERS_INSTRUCTIONS),
@@ -431,11 +451,15 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str, peer: Option<
                 "description": TOOL_DESCRIPTION,
                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
             }), task_tool()];
-            if peer.is_some() {
+            if let Some(peer) = peer {
                 tools.extend(coordination::tools());
                 // Con la memoria apagada (panel Memoria) sus herramientas no se ofrecen.
                 if memory::enabled(data_dir) {
                     tools.extend(memory::tools());
+                }
+                // Solo en chats normales; apagadas en Ajustes, sin nadie que atienda o en un chat que atiende una: no se ofrecen.
+                if peer.requests {
+                    tools.extend(project_requests::offered_tools(data_dir, &peer.project, &peer.session));
                 }
             }
             json!({"tools": tools})
@@ -452,6 +476,11 @@ fn handle_request(request: Value, data_dir: &Path, queue_id: &str, peer: Option<
                 let name = params["name"].as_str().unwrap_or_default();
                 let args = params.get("arguments").cloned().unwrap_or(Value::Null);
                 return Some(json!({"jsonrpc":"2.0","id":id,"result":coordination::call(data_dir, &peer.project, &peer.session, name, &args)}));
+            }
+            if let Some(peer) = peer.filter(|peer| peer.requests && is_project_request(&params["name"])) {
+                let name = params["name"].as_str().unwrap_or_default();
+                let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                return Some(json!({"jsonrpc":"2.0","id":id,"result":project_requests::call(data_dir, &peer.project, &peer.session, name, &args)}));
             }
             if params.get("name").and_then(Value::as_str) == Some(TASK_TOOL) {
                 return Some(match update_tasks(params.get("arguments")) {
@@ -647,7 +676,7 @@ mod tests {
     fn peer_connections_add_coordination_tools_even_when_tasks_only() {
         let dir = TestDir::new();
         let project = if cfg!(windows) { "D:\\Mi proyecto" } else { "/home/ana/Mi proyecto" };
-        let peer = Peer { session: "tab-1".into(), project: project.into() };
+        let peer = Peer { session: "tab-1".into(), project: project.into(), requests: false };
         let requests = [json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
             json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trex_claim","arguments":{"resources":["git"]}}}),
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"trex_peers","arguments":{}}}),
@@ -675,7 +704,7 @@ mod tests {
     fn memory_tools_need_a_session_and_record_who_saved() {
         let dir = TestDir::new();
         let project = if cfg!(windows) { "D:\\Mi proyecto" } else { "/home/ana/Mi proyecto" };
-        let peer = Peer { session: "tab-7".into(), project: project.into() };
+        let peer = Peer { session: "tab-7".into(), project: project.into(), requests: false };
         let save = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trex_memory_save","arguments":{
             "name":"usa-pnpm","scope":"project","type":"project","description":"El repo usa pnpm","body":"Usa pnpm, no npm."}}});
         let requests = [json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"codex-mcp-client","version":"1"}}}),
@@ -700,7 +729,7 @@ mod tests {
     fn peers_only_connections_offer_just_the_coordination_tools() {
         let dir = TestDir::new();
         let project = if cfg!(windows) { "D:\\Mi proyecto" } else { "/home/ana/Mi proyecto" };
-        let peer = Peer { session: "trex-tab".into(), project: project.into() };
+        let peer = Peer { session: "trex-tab".into(), project: project.into(), requests: false };
         let requests = [json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"trex-agent","version":"1"}}}),
             json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":TASK_TOOL,"arguments":{"plan":[{"step":"x","status":"pending"}]}}}),
@@ -716,6 +745,44 @@ mod tests {
         assert_eq!(replies[2]["error"]["code"], -32601, "Trex CLI keeps its own task list");
         assert_eq!(replies[3]["error"]["code"], -32601, "and its own inbox");
         assert_eq!(replies[4]["result"]["isError"], false, "{}", replies[4]);
+    }
+
+    #[test]
+    fn questions_to_other_projects_appear_only_when_switched_on_and_work_on_reduced_connections() {
+        let dir = TestDir::new();
+        let (web, engine) = if cfg!(windows) { ("D:/web/Afelio", "D:/motor/zmodal") } else { ("/home/ana/web/Afelio", "/home/ana/motor/zmodal") };
+        let chat = Peer { session: "trex-tab".into(), project: web.into(), requests: true };
+        let exchange_with = |scope: Scope, peer: &Peer| {
+            let requests = [json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trex_ask_project","arguments":{"project":"zmodal","question":"¿Cómo se anima la entrada?","key":"entrada"}}})];
+            let input = requests.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
+            let mut output = Vec::new();
+            serve_tools(Cursor::new(input), &mut output, &dir.0, QUEUE, scope, Some(peer)).unwrap();
+            output.split(|b| *b == b'\n').filter(|v| !v.is_empty()).map(|v| serde_json::from_slice::<Value>(v).unwrap()).collect::<Vec<_>>()
+        };
+        let exchange = |scope: Scope| exchange_with(scope, &chat);
+        let names = |replies: &[Value]| replies[0]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let replies = exchange(Scope::Peers);
+        assert!(!names(&replies).iter().any(|name| name.starts_with("trex_ask")), "apagado no se ofrece");
+        assert_eq!(replies[1]["result"]["isError"], true);
+        let mut config: crate::config::AppConfig = serde_json::from_value(json!({"projects":[
+            {"id":"p-web","name":"Afelio","path":web},{"id":"p-engine","name":"zmodal","path":engine}]})).unwrap();
+        config.settings.project_requests.enabled = true;
+        config.settings.project_requests.answerers.push(crate::config::ProjectAnswerer { project_id: "p-engine".into(), ..Default::default() });
+        project_requests::publish_directory(&dir.0, &config).unwrap();
+        for scope in [Scope::Peers, Scope::Tasks, Scope::All] {
+            let replies = exchange(scope);
+            assert!(names(&replies).iter().any(|name| name == "trex_ask_project"), "{scope:?}");
+            assert_eq!(replies[1]["result"]["isError"], false, "{scope:?}: {}", replies[1]);
+        }
+        // Un miembro de equipo o de sala (sin `--project-requests`) no las recibe: nadie le entregaría la respuesta.
+        let member = Peer { requests: false, ..chat.clone() };
+        let replies = exchange_with(Scope::All, &member);
+        assert!(!names(&replies).iter().any(|name| name.starts_with("trex_ask") || name == "trex_projects"));
+        assert!(replies[1].get("error").is_some() || replies[1]["result"]["isError"] == true, "{}", replies[1]);
+        let launch = parse_args([MCP_FLAG, "data", QUEUE, "--peer", "tab-1", "D:\\p", "--project-requests"].into_iter().map(OsString::from)).unwrap().unwrap();
+        assert!(launch.peer.unwrap().requests);
+        assert!(parse_args([MCP_FLAG, "data", QUEUE, "--project-requests"].into_iter().map(OsString::from)).is_err(), "sin sesión no tiene sentido");
     }
 
     #[test]

@@ -27,6 +27,7 @@ import { deliverInbox, InboxRequests, INBOX_SERVER, INBOX_WAKE } from "../messag
 import { CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, claudeInboxInitialize, claudeInboxReply } from "../inboxProtocol";
 import { COORDINATION_TOOLS, coordinationCall, coordinationTools } from "../coordination";
 import { MEMORY_TOOLS, loadMemory, loadedMemory } from "../memory";
+import { isProjectRequestTool, PROJECT_REQUEST_TOOLS, projectRequestTools } from "../projectRequests";
 import { IS_WINDOWS } from "../platform";
 import { assertClaudePlanningMode, claudePlanningArgs, claudeProfilePermissionMode, claudePlanningExitResponse, claudePlanningFlags } from "../workflowSafety";
 import { withChatTimes } from "../chatTimes";
@@ -38,7 +39,7 @@ const USAGE_INTERVAL_MS = 60_000;
 // A shell or unknown tool approval can escape plan mode; only known readers may be approved.
 /** Herramientas de coordinación entre sesiones: solo avisan y reservan en el registro de trex, nunca tocan el proyecto. */
 // La memoria de Trex va por el mismo puente que la coordinación y, como ella, sin pedir permiso.
-const CLAUDE_COORDINATION_TOOLS = [...COORDINATION_TOOLS, ...MEMORY_TOOLS].map(name => `mcp__${INBOX_SERVER}__${name}`);
+const CLAUDE_COORDINATION_TOOLS = [...COORDINATION_TOOLS, ...MEMORY_TOOLS, ...PROJECT_REQUEST_TOOLS].map(name => `mcp__${INBOX_SERVER}__${name}`);
 const PLANNING_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", CLAUDE_INBOX_TOOL, MCP_TASK_TOOL, `mcp__${INBOX_SERVER}__trex_peers`, ...DESKTOP_READ_TOOLS.map(name => `mcp__trex_desktop__${name}`), ...A11Y_READ_TOOLS.map(name => `mcp__${A11Y_SERVER}__${name}`), ...APPS_READ_TOOLS.map(name => `mcp__${APPS_SERVER}__${name}`), ...CHROME_READ_TOOLS.map(name => `mcp__${CHROME_SERVER}__${name}`)]);
 const planningDeniedLine = (requestId: string): string => JSON.stringify({
   type: "control_response", response: { subtype: "success", request_id: requestId,
@@ -353,7 +354,13 @@ export function useClaudeChat(options: ChatSessionOptions): ChatSession {
         const peer = options.queueId ?? sessionId;
         const reply = await claudeInboxReply(message.request_id!, request,
           () => inboxRequests.current.read(`${procId}:${message.request_id}`, queue.client.read), guidance.integrations, { appended: guidance.appended,
-            coordination: { tools: coordinationTools, call: (name, args) => coordinationCall(cwd, peer, name, args) } });
+            // Preguntas y encargos a otros proyectos: solo en un chat normal (quien recibe la respuesta), con la
+            // función encendida y fuera de un chat que está atendiendo una.
+            coordination: { tools: () => Promise.all([coordinationTools(), options.projectRequests ? projectRequestTools(cwd, peer).catch(() => []) : []])
+              .then(([own, projects]) => [...own, ...projects]),
+              call: (name, args) => !options.projectRequests && isProjectRequestTool(name)
+                ? Promise.resolve({ content: [{ type: "text", text: "Este chat no puede pedir nada a otros proyectos." }], isError: true })
+                : coordinationCall(cwd, peer, name, args) } });
         if (!reply || !isCurrentRef.current(procId)) return;
         await writeRef.current(reply.line);
         if (!isCurrentRef.current(procId)) return;

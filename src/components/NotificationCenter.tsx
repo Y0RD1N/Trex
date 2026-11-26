@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import type { AgentNotice } from "../types";
 import type { FloatingAnchor } from "../hooks/useFloatingPosition";
 import { noticeLabel } from "../agentNotices";
-import { AlertIcon, BellIcon, CheckIcon, SoundIcon, TrashIcon } from "./Icons";
+import { AlertIcon, BellIcon, CheckIcon, FolderIcon, SoundIcon, TrashIcon } from "./Icons";
 import AgentIcon from "./AgentIcon";
 import DropdownMenu from "./DropdownMenu";
 import "./NotificationCenter.css";
@@ -44,7 +44,7 @@ export default function NotificationCenter({ notices, soundEnabled, liveTabIds, 
         <span>Todo al día</span><p>Te avisaremos cuando un agente termine o necesite tu respuesta.</p></div>
         : <div className="notification-list">{notices.map(notice => <button key={notice.id} type="button" role="menuitem" tabIndex={-1}
           className={`notification-item${notice.read ? "" : " unread"}`} data-kind={notice.kind} onClick={() => { setAnchor(null); onOpenSession(notice); }}>
-          <span className={`notification-symbol ${notice.kind}`} aria-hidden="true">{notice.kind === "ready" ? <CheckIcon size={16} /> : <AlertIcon size={16} />}</span>
+          <span className={`notification-symbol ${notice.kind}`} aria-hidden="true">{notice.kind === "ready" ? <CheckIcon size={16} /> : notice.kind === "answer" ? <FolderIcon size={16} /> : <AlertIcon size={16} />}</span>
           <span className="notification-copy"><span className="notification-item-heading"><span className="notification-item-title">{noticeLabel(notice.kind)}</span>
           <time className="notification-time" dateTime={new Date(notice.createdAt).toISOString()}>
             {formatClock(notice.createdAt, timeFormat)}</time></span>

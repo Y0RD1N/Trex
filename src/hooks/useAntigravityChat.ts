@@ -147,7 +147,7 @@ export function useAntigravityChat(options: ChatSessionOptions): ChatSession {
       const apps = wanted.length ? await appsServer("full", current.cwd, wanted, message => notice("warn", message)) : null;
       tools.current = { available, a11y: !!a11y, apps: apps ? wanted : [] };
       const tasks = await messageQueueMcpConfig(messageQueueId(current.queueId ?? current.sessionId), true,
-        { session: current.queueId ?? current.sessionId, project: current.cwd });
+        { session: current.queueId ?? current.sessionId, project: current.cwd, requests: current.projectRequests === true });
       // Memoria de Trex: el resumen viaja en el contexto de la sesión (sin ella, el chat sigue igual).
       await loadMemory(current.cwd);
       // El navegador de la persona (extensión de trex): opcional. Su token va en el entorno del adaptador.

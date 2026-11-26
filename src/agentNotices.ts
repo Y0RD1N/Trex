@@ -142,4 +142,4 @@ export class NoticeScheduler {
 }
 
 export const noticeLabel = (kind: AgentNoticeKind): string =>
-  kind === "ready" ? "Tarea terminada" : kind === "attention" ? "Necesita tu respuesta" : "El proceso se interrumpió";
+  kind === "ready" ? "Tarea terminada" : kind === "attention" ? "Necesita tu respuesta" : kind === "answer" ? "Otro proyecto espera a este chat" : "El proceso se interrumpió";

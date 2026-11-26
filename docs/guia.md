@@ -8,7 +8,7 @@ Todo lo que puede hacer trex, con detalle. Si es tu primera vez, empieza por el
 [Cursor](#cursor-de-texto) · [Terminales divididas](#trabajar-con-hasta-cuatro-terminales) ·
 [Recuperar conversaciones](#recuperar-una-conversación) · [Capturas y avisos](#capturas-y-notificaciones) ·
 [Atajos](#atajos) · [Notas](#notas) · [Tu navegador](#tu-navegador-con-la-extensión-de-trex) ·
-[Fedora](#fedora) · [Equipos de agentes](#equipos-con-agente-principal)
+[Fedora](#fedora) · [Equipos de agentes](#equipos-con-agente-principal) · [Preguntas y encargos entre proyectos](#preguntas-y-encargos-entre-proyectos)
 
 ## Qué hace
 
@@ -664,3 +664,42 @@ Límites por equipo: ocho colaboradores, 32 tareas por ciclo y 128 en total; tar
 - **Coordinación sin sondeos**: el principal no espera consultando el estado; TREX abre un turno nuevo cuando terminan las delegaciones y una consulta devuelve los informes nuevos una sola vez.
 
 En chats individuales, el mismo panel muestra las tareas publicadas por Claude y Codex y los planes de Trex CLI, con pendientes, trabajo en curso y tareas completadas. No hace falta configurar un equipo ni cambiar de modo. Puedes abrir **Tareas** desde el inicio o contraerlo para ampliar el chat; abrir el panel no envía mensajes al modelo. Los estados se reconstruyen a partir de los resultados de tareas que devuelve el historial del asistente; un error o actualización incompleta no marca tareas como terminadas. En ventanas estrechas, la lista se coloca encima del chat y permite desplazarse sin tapar el borrador.
+
+## Preguntas y encargos entre proyectos
+
+Un agente puede preguntar al agente de otro de tus proyectos, pedirle un cambio allí o simplemente escribirle. Por ejemplo, desde un chat de tu web le dices «pregúntale al agente de zmodal cómo usar sus animaciones en esta página» o «pídele que añada al motor las animaciones que te falten»; y si encuentra un fallo en el motor, puede contárselo al agente de zmodal. El agente usa `trex_ask_project` (preguntas), `trex_request_change` (encargos) o `trex_message_project` (mensajes) con el nombre del proyecto, y trex se encarga del resto.
+
+**Se activa en Ajustes → Proyectos → Preguntas y encargos entre proyectos.** Viene apagado; apagado, ningún chat recibe estas herramientas y todo funciona como antes. Al encenderlo, marca en cada proyecto si **contesta preguntas**, si **acepta encargos y mensajes** y con qué cuenta (por defecto, el perfil predeterminado). Los proyectos que no marques no existen para los agentes. El agente que pide nombra el proyecto, nunca da una ruta; con `trex_projects` ve quién atiende qué y con `trex_project_requests`, el estado de lo que pidió.
+
+**Preguntas** (no hace falta tener abierto ningún chat del otro proyecto):
+
+- Trex abre en segundo plano, en la carpeta del otro proyecto, un chat de solo lectura con la cuenta elegida y le pasa la pregunta. Ese chat lee el proyecto (y su memoria de Trex), no cambia nada y rechaza solo cualquier petición de permiso. Aparece como una sesión más en **Sesiones** de ese proyecto mientras contesta. Antigravity no puede contestar, porque no tiene modo de solo lectura, pero sí preguntar.
+- Su mensaje final vuelve al chat que preguntó como **Respuesta de zmodal**, con lo que tardó y lo que gastó. **Abrir la conversación** la abre como un chat normal en zmodal, por si quieres ver qué leyó o seguir preguntándole tú.
+
+**Encargos** (los hace el chat que tienes abierto en el otro proyecto, a la vista):
+
+- Cuando el agente pide un encargo, el chat que lo pidió te muestra sobre la caja de mensaje qué pide, cómo se sabrá que está hecho y **qué chat de zmodal lo hará**: el que tengas abierto (si está ocupado, lo recibe al terminar) o uno nuevo que trex abre sin cambiarte de pestaña. Tú lo **envías** o lo **rechazas**; el agente no puede aprobarlo. Si marcas «No volver a preguntar», los siguientes encargos de ese proyecto a ese otro van directos; lo quitas en Ajustes. Si el chat que lo pide está en **acceso total**, no hay tarjeta: el encargo va directo al chat que la tarjeta habría propuesto, y el otro agente sabe que fue así.
+- El chat de zmodal recibe el encargo como un turno más, que el hilo muestra como **Encargo de Afelio**. Trabaja con los permisos de ese chat, así que te pide permiso como siempre y puedes intervenir.
+- Al terminar ese turno, su mensaje final vuelve al chat que lo pidió como **Informe de zmodal**, junto con los archivos que editó y su `git diff --stat`, medidos por trex y no copiados del texto del agente. **Ir al chat de zmodal** te lleva a esa conversación.
+- Mientras tanto, la pestaña **Peticiones**, junto a la caja de mensaje, muestra lo que espera (aprobación, turno o respuesta) y permite cancelarlo. Cancelar un encargo en marcha no detiene el chat de zmodal: solo deja de esperar su informe.
+
+**Mensajes** (para que los agentes se coordinen):
+
+- Con `trex_message_project`, un agente le escribe al de otro proyecto: un fallo que encontró en su código, un cambio de su lado que le afecta, o la respuesta a un mensaje suyo. No pide aprobación ni espera un informe.
+- Llega al chat que tienes abierto en ese proyecto, como **Mensaje de Afelio**: si el agente le contestó antes, al mismo chat; si no, al que esté libre. Si no hay ninguno abierto, espera a que abras uno, sin arrancar un agente solo para leerlo.
+- Ese agente lo recibe como información de otro agente, no como una orden tuya: puede contestar con otro mensaje (y la respuesta vuelve al chat que escribió) y, si señala un fallo de su proyecto, lo revisa y lo arregla solo si encaja con lo que le pediste en ese chat y sus permisos lo permiten. Para pedirle un cambio en firme está el encargo.
+- Los mensajes cuentan como turnos automáticos: tras seis seguidos sin que escribas, la conversación entre agentes se pausa.
+
+**Respuestas que se quedan sin chat:** si cierras el chat que pidió algo antes de que llegue la respuesta, trex te avisa y la deja en la pestaña **Peticiones** de cualquier chat de ese proyecto, con **Pasar a este chat** o **Descartar**. Si el chat sigue abierto pero no se ha mostrado desde que abriste trex, trex lo arranca para entregársela.
+
+**Lo que cruza** de un proyecto a otro se limpia de claves y credenciales y llega marcado como información de otro agente, no como órdenes tuyas.
+
+**Límites para que no se descontrole:**
+
+- Un solo salto: mientras un chat atiende una pregunta o un encargo, no puede pedir nada a otros proyectos.
+- Cada chat puede tener tres peticiones abiertas; cada proyecto, cinco preguntas en cola, dos chats contestando a la vez, tres encargos pendientes y diez mensajes sin leer.
+- Solo los chats normales pueden pedir: los miembros de un equipo o de una sala no reciben estas herramientas.
+- Las respuestas cuentan como turnos automáticos del proyecto: tras seis seguidos sin que escribas, se pausan como la conversación entre sesiones y siguen al escribir o al pulsar «Dejar que sigan». Un encargo aprobado no cuenta: lo aprobaste tú.
+- Un chat que contesta tiene 3 minutos para arrancar y 20 para responder. Si se corta a medias o trex se cierra, la pregunta se repite una vez. Un encargo nunca se repite solo: si trex se cierra mientras se hace, el agente que lo pidió recibe un aviso para revisar el chat de zmodal.
+- Lo que nadie atiende caduca: una pregunta o un encargo aprobado a las 6 horas, un encargo sin aprobar o un mensaje sin entregar al día.
+- Cada petición gasta la cuota de la cuenta que la atiende.

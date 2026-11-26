@@ -18,8 +18,8 @@ const COORDINATION_SERVER = "trex_coordination";
  * The app's coordination server for Trex CLI: trex_peers, trex_claim, trex_release and
  * trex_message for this chat (the same identity as its useCoordination) and project.
  */
-async function coordinationServer(session: string, project: string): Promise<{ command: string; args: string[] } | null> {
-  const config = await messageQueueMcpConfig(session, false, { session, project }, true);
+async function coordinationServer(session: string, project: string, requests: boolean): Promise<{ command: string; args: string[] } | null> {
+  const config = await messageQueueMcpConfig(session, false, { session, project, requests }, true);
   const command = config["mcp_servers.trex_inbox.command"], args = config["mcp_servers.trex_inbox.args"];
   return typeof command === "string" && Array.isArray(args) && args.every(arg => typeof arg === "string") ? { command, args } : null;
 }
@@ -190,7 +190,7 @@ export function useTrexChat(options: ChatSessionOptions): ChatSession {
       const accessibility = !a11yConfig ? false : accessibilityKeyboard(a11yConfig) ? { keyboard: true } : true;
       assertStartup(procId);
       // Without it the chat works as before; a failure is only a notice.
-      const coordination = await coordinationServer(current.queueId ?? current.sessionId, current.cwd).catch(() => null);
+      const coordination = await coordinationServer(current.queueId ?? current.sessionId, current.cwd, current.projectRequests === true).catch(() => null);
       if (!coordination) startupNotices.push("La coordinación con las otras sesiones del proyecto no está disponible en este chat.");
       assertStartup(procId);
       // Announce only installed applications; restrictions below still follow the preferences.

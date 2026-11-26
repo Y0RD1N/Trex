@@ -18,7 +18,7 @@ import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from 
 import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
 import { matchesPasteShortcut } from "../paste";
 import {
-  a11yActivity, chatActivity, contextPercent, contextTokensLabel, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, modelName, pendingPermissions,
+  a11yActivity, allowsAll, chatActivity, contextPercent, contextTokensLabel, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, modelName, pendingPermissions,
   shownUsage, supportedEfforts, type ChatItem, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
@@ -79,6 +79,15 @@ import type { TerminalOwner } from "../agentTerminals";
 import { useCoordination, type Coordination } from "../hooks/useCoordination";
 import { coordinationHub, notesBlock, notesFor, PEER_WAKE, peersOf, peerTurnNotes, WAKE_LIMIT, withNotes } from "../coordination";
 import PeerSessions, { PeerMessage } from "./chat/PeerSessions";
+import { ProjectAnswerMessage, ProjectQuestions } from "./chat/ProjectQuestions";
+import { ChangeApproval, IncomingChanges, ProjectChangeMessage, ProjectMessageCard } from "./chat/ProjectChanges";
+import {
+  answersMessage, answerTurn, changeTurn, defaultChangeChat, messagesTurn, messageTurn, persist, projectChatsStore, projectRequestDecide,
+  projectRequestReassign, projectRequestSent, projectRequestsDelivered, projectRequestsSnapshot, requestAwaiting, requestChats, requestDeliverable,
+  type ProjectRequest,
+} from "../projectRequests";
+import { useIncomingChanges } from "../hooks/useIncomingChanges";
+import { useIncomingMessages, useProjectOrphans, useSessionRequests } from "../hooks/useSessionRequests";
 import { syncChromeMode } from "../browserConnection";
 
 export type ChatViewProps = ChatSessionOptions & {
@@ -127,6 +136,18 @@ export type ChatViewProps = ChatSessionOptions & {
   onEffort?: (tabId: string, effort: string | null) => void;
   /** Aviso pasajero (toast) para lo que no debe quedar en el hilo. */
   onMessage: (message: string) => void;
+  /** Abre como chat normal la conversación con la que otro proyecto contestó una pregunta de este chat. */
+  onOpenProjectAnswer?: (request: ProjectRequest) => void;
+  /** Muestra la pestaña de otra sesión (el chat del otro proyecto que hace un encargo). */
+  onOpenSession?: (session: string) => void;
+  /** Abre, sin cambiar de pestaña, un chat en otro proyecto para un encargo; devuelve su sesión. */
+  onProjectChat?: (projectId: string) => string | null;
+  /** Con qué cuenta se abriría ese chat (para la tarjeta de aprobación); null si no se puede. */
+  projectChatProfile?: (projectId: string) => string | null;
+  /** La persona confía en los encargos de un proyecto a otro: dejan de pedir aprobación. */
+  onTrustPair?: (from: string, to: string) => void;
+  /** Arranca el proceso aunque la pestaña no se haya mostrado (para recibir una respuesta). */
+  onWake?: () => void;
 };
 
 const PROVIDERS: Record<AgentProvider, { name: string; product: string; defaultMode: string; modes: SelectOption[]; otherModes: Record<string, string> }> = {
@@ -536,12 +557,16 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
   // detuviste el chat o falló, el mensaje espera a tu próximo envío.
   const coordination = props.coordination;
   const peerWake = useRef({ sending: false, attempted: "" });
+  /** Un encargo de otro proyecto se está enviando a este chat (`useIncomingChanges`, más abajo): los demás turnos automáticos esperan. */
+  const changeSending = useRef<() => boolean>(() => false);
+  /** Mensajes de agentes de otros proyectos que trex está entregando ahora (más abajo). */
+  const messageWake = useRef({ sending: false, attempted: "", announced: "" });
   const peerNotes = coordination ? notesFor(coordination.board, coordination.session) : [];
   const peerKey = peerNotes.some(note => note.kind === "message") ? peerNotes.map(note => note.id).join(",") : "";
   const stopped = !!state.lastCompletion && state.lastCompletion.status !== "completed";
   useEffect(() => {
     const wake = peerWake.current;
-    if (!coordination || !peerKey || wake.sending || wake.attempted === peerKey) return;
+    if (!coordination || !peerKey || wake.sending || wake.attempted === peerKey || changeSending.current() || messageWake.current.sending) return;
     if (running || state.process !== "ready" || props.workflow || workflowLocked || handoffPending || queueSaving || hasQueued
       || submittingEdit || !session.queue.ready) return;
     const notes = notesFor(coordination.board, coordination.session);
@@ -559,6 +584,131 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
       .catch(() => undefined)
       .finally(() => { wake.sending = false; });
   }, [coordination, peerKey, stopped, running, state.process, props.workflow, workflowLocked, handoffPending, queueSaving, hasQueued, submittingEdit, session]);
+  // Respuestas de otros proyectos a preguntas de este chat (`trex_ask_project`): si está libre, trex
+  // se las pasa en un turno propio (el hilo pinta la respuesta, no un mensaje tuyo). Cuentan como
+  // turnos automáticos del proyecto: con la charla entre agentes en pausa, o si detuviste el chat,
+  // esperan a que intervengas.
+  const sessionRequests = useSessionRequests(coordination?.session ?? null);
+  const projectOrphans = useProjectOrphans(coordination ? cwd : null);
+  const answers = sessionRequests.filter(requestDeliverable);
+  const answerKey = answers.map(request => request.id).join(",");
+  const answerWake = useRef({ sending: false, attempted: "", announced: "" });
+  // Este chat puede recibir respuestas: mientras está montado, las suyas no se quedan sin dueño.
+  const requestSession = coordination?.session ?? null;
+  useEffect(() => requestSession ? requestChats.register(requestSession) : undefined, [requestSession]);
+  // Una pestaña restaurada que no se ha mostrado no tiene proceso: la respuesta la arranca.
+  const { onWake } = props;
+  useEffect(() => { if (answerKey && !visible && state.process === "starting") onWake?.(); }, [answerKey, visible, state.process, onWake]);
+  useEffect(() => {
+    const wake = answerWake.current;
+    if (!coordination || !answerKey || wake.sending || wake.attempted === answerKey || peerWake.current.sending || changeSending.current()
+      || messageWake.current.sending) return;
+    if (running || state.process !== "ready" || props.workflow || workflowLocked || handoffPending || queueSaving || hasQueued
+      || submittingEdit || !session.queue.ready) return;
+    if (stopped || !coordinationHub.spendWake(coordination.project)) {
+      if (wake.announced !== answerKey) {
+        wake.announced = answerKey;
+        const from = [...new Set(answers.map(request => `«${request.toName}»`))].join(", ");
+        session.notice("info", stopped ? `Llegó la respuesta de ${from}. Trex se la pasará al agente cuando termine tu próximo mensaje.`
+          : `Llegó la respuesta de ${from}, pero los agentes están en pausa tras ${WAKE_LIMIT} turnos automáticos seguidos. Escribe aquí o pulsa «Dejar que sigan» en Sesiones.`);
+        // Espera a que intervengas: que no se quede ahí sin que lo sepas.
+        props.onNotice(sessionId, "answer");
+      }
+      return;
+    }
+    wake.sending = true;
+    wake.attempted = answerKey;
+    void (async () => {
+      // El diario manda: si el agente ya las leyó con trex_project_requests, no se le dan otra vez.
+      const fresh = await projectRequestsSnapshot().catch(() => null);
+      const pending = fresh ? answers.filter(request => fresh.some(entry => entry.id === request.id && requestDeliverable(entry))) : answers;
+      if (!pending.length) return;
+      const { text, display } = answersMessage(pending);
+      const accepted = await Promise.resolve(session.send(text, [], [], display)).catch(() => false);
+      // Sin entregar, se vuelve a intentar cuando el chat cambie de estado.
+      if (accepted === false) { wake.attempted = ""; return; }
+      await persist(() => projectRequestsDelivered(pending.map(request => request.id)));
+    })().catch(() => undefined).finally(() => { wake.sending = false; });
+    // `answers` cambia con `answerKey`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coordination, answerKey, stopped, running, state.process, props.workflow, workflowLocked, handoffPending, queueSaving, hasQueued, submittingEdit, session]);
+  // Respuestas de este proyecto cuyo chat se cerró: este chat las puede recoger como suyas.
+  const adoptAnswer = useCallback((request: ProjectRequest) => requestSession
+    ? projectRequestReassign(request.id, requestSession, cwd) : Promise.reject(new Error("este chat aún no ha arrancado")), [requestSession, cwd]);
+  const dismissAnswer = useCallback((request: ProjectRequest) => projectRequestsDelivered([request.id]), []);
+  // Encargos de otros proyectos para este chat, ya aprobados: llegan como un turno a la vista cuando
+  // queda libre (no cuentan como charla entre agentes: los aprobó la persona).
+  const incoming = useIncomingChanges(session, requestSession, {
+    free: !running && !props.workflow && !workflowLocked && !handoffPending && !queueSaving && !hasQueued && !submittingEdit,
+    busy: () => peerWake.current.sending || answerWake.current.sending || messageWake.current.sending, visible, onWake });
+  changeSending.current = incoming.sending;
+  // Mensajes de agentes de otros proyectos (`trex_message_project`): si el chat está libre, trex se los
+  // pasa en un turno propio y el hilo los pinta como «Mensaje de …». Cuentan como turnos automáticos del
+  // proyecto, igual que las respuestas: con la charla en pausa o el chat detenido, esperan a que intervengas.
+  const incomingMessages = useIncomingMessages(requestSession);
+  const messageKey = incomingMessages.map(request => request.id).join(",");
+  useEffect(() => { if (messageKey && !visible && state.process === "starting") onWake?.(); }, [messageKey, visible, state.process, onWake]);
+  useEffect(() => {
+    const wake = messageWake.current;
+    if (!coordination || !requestSession || !messageKey || wake.sending || wake.attempted === messageKey || peerWake.current.sending
+      || answerWake.current.sending || changeSending.current()) return;
+    if (running || state.process !== "ready" || props.workflow || workflowLocked || handoffPending || queueSaving || hasQueued
+      || submittingEdit || !session.queue.ready) return;
+    if (stopped || !coordinationHub.spendWake(coordination.project)) {
+      if (wake.announced !== messageKey) {
+        wake.announced = messageKey;
+        const from = [...new Set(incomingMessages.map(request => `«${request.fromName}»`))].join(", ");
+        session.notice("info", stopped ? `Llegó un mensaje de ${from}. Trex se lo pasará al agente cuando termine tu próximo mensaje.`
+          : `Llegó un mensaje de ${from}, pero los agentes están en pausa tras ${WAKE_LIMIT} turnos automáticos seguidos. Escribe aquí o pulsa «Dejar que sigan» en Sesiones.`);
+        props.onNotice(sessionId, "answer");
+      }
+      return;
+    }
+    wake.sending = true;
+    wake.attempted = messageKey;
+    const messages = incomingMessages;
+    void (async () => {
+      const { text, display } = messagesTurn(messages);
+      const accepted = await Promise.resolve(session.send(text, [], [], display)).catch(() => false);
+      if (accepted === false) { wake.attempted = ""; return; }
+      for (const message of messages) await persist(() => projectRequestSent(message.id, requestSession));
+    })().catch(() => undefined).finally(() => { wake.sending = false; });
+    // `incomingMessages` cambia con `messageKey`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coordination, requestSession, messageKey, stopped, running, state.process, props.workflow, workflowLocked, handoffPending, queueSaving, hasQueued, submittingEdit, session]);
+  // Encargos que pidió este chat: esperan aquí a que la persona los apruebe o los rechace.
+  const awaitingChange = sessionRequests.find(requestAwaiting) ?? null;
+  const awaitingId = awaitingChange?.id ?? "";
+  const announcedChange = useRef("");
+  useEffect(() => {
+    if (!awaitingId || announcedChange.current === awaitingId) return;
+    announcedChange.current = awaitingId;
+    if ((!visible || !focused) && !allowsAll(state.permissionMode)) props.onNotice(sessionId, "attention");
+    // Solo al aparecer uno nuevo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [awaitingId]);
+  const { onProjectChat, onTrustPair, projectId } = props;
+  const approveChange = useCallback(async (request: ProjectRequest, target: string | null, trust: boolean, note: string | null = null) => {
+    const chat = target ?? onProjectChat?.(request.toProjectId) ?? null;
+    if (!chat) throw new Error(`no se pudo abrir un chat en «${request.toName}»`);
+    await projectRequestDecide(request.id, true, chat, note);
+    if (trust && projectId) onTrustPair?.(projectId, request.toProjectId);
+  }, [onProjectChat, onTrustPair, projectId]);
+  const rejectChange = useCallback((request: ProjectRequest) => projectRequestDecide(request.id, false, null), []);
+  // En acceso total el chat no pide permiso para nada: tampoco para sus encargos. Va al chat que la tarjeta
+  // propondría (el libre de ese proyecto, o uno nuevo); si no se puede, queda la tarjeta.
+  const fullAccess = allowsAll(state.permissionMode);
+  const autoApproved = useRef("");
+  const [autoFailed, setAutoFailed] = useState("");
+  useEffect(() => {
+    if (!awaitingChange || !fullAccess || autoApproved.current === awaitingChange.id) return;
+    const request = awaitingChange;
+    autoApproved.current = request.id;
+    const target = defaultChangeChat(projectChatsStore.get(), request.toProjectId)?.session ?? null;
+    void approveChange(request, target, false, `Va directo, sin tarjeta de aprobación: el chat de «${request.fromName}» que lo pidió está en acceso total.`)
+      .catch(error => { setAutoFailed(request.id); session.notice("warn", `No se pudo enviar solo el encargo a «${request.toName}»: ${formatError(error)}. Decide en la tarjeta.`); });
+  }, [awaitingChange, fullAccess, approveChange, session]);
+  const showApproval = !!awaitingChange && (!fullAccess || autoFailed === awaitingChange.id);
   const workflowSource = useMemo(() => ({ sessionId, provider, profileId: props.profileId ?? null,
     profileName: props.profileName ?? agent.product, title: props.sessionTitle ?? "Planificación",
     projectId: props.projectId ?? "", projectName, cwd }), [sessionId, provider, props.profileId, props.profileName, props.sessionTitle, props.projectId, projectName, cwd, agent.product]);
@@ -1239,7 +1389,7 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
     const askingFor = new Set(threadItems.flatMap(item => item.kind === "permission" && item.state === "pending" && item.toolUseId ? [item.toolUseId] : []));
     const asked = (id: string): boolean => askingFor.has(id) || askingFor.has(id.split("#")[0]);
     const canEdit = (item: Extract<ChatItem, { kind: "user" }>): boolean =>
-      !props.historyReadOnly && !item.fromQueue && !peerTurnNotes(item.text) && (provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id));
+      !props.historyReadOnly && !item.fromQueue && !peerTurnNotes(item.text) && !answerTurn(item.text) && !changeTurn(item.text) && !messageTurn(item.text) && (provider === "codex" ? !!item.providerTurnId : /^[\da-f-]{36}$/i.test(item.id));
     const visibleItems = threadItems.slice(threadStart);
     const rendered = visibleItems.map((item, offset) => {
       const animate = threadStart + offset >= enterFrom;
@@ -1248,6 +1398,12 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         case "user": {
           const notes = peerTurnNotes(item.text);
           if (notes) return <PeerMessage key={item.id} notes={notes} at={item.at} animate={animate} />;
+          const answered = answerTurn(item.text);
+          if (answered) return <ProjectAnswerMessage key={item.id} answers={answered} at={item.at} animate={animate} onOpen={props.onOpenProjectAnswer} onOpenSession={props.onOpenSession} />;
+          const messages = messageTurn(item.text);
+          if (messages) return <ProjectMessageCard key={item.id} messages={messages} at={item.at} animate={animate} />;
+          const change = changeTurn(item.text);
+          if (change) return <ProjectChangeMessage key={item.id} change={change} at={item.at} animate={animate} />;
           return <UserMessage key={item.id} id={item.id} text={item.text} images={item.images} previews={item.previews} at={item.at}
             onEdit={beginEdit} onResend={resendMessage} editing={editingId === item.id} editable={canEdit(item)} fromQueue={item.fromQueue}
             disabled={props.historyReadOnly || running || submittingEdit || busy} animate={animate} />;
@@ -1426,6 +1582,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
      <div className="chat-composer-accessories">
       {props.composerLead && <ComposerPanel label="Planificación" title="Planificación y ejecución" icon={<MapIcon size={13} />}>{props.composerLead}</ComposerPanel>}
       <BackgroundTerminals owners={terminalOwners} />
+      <ProjectQuestions requests={sessionRequests} orphans={projectOrphans} onAdopt={adoptAnswer} onDismiss={dismissAnswer} onOpenSession={props.onOpenSession} />
+      <IncomingChanges requests={incoming.requests} />
       <QueuedMessages compact onFocusComposer={focusComposer} queue={session.queue} running={running} busy={queueSaving || submittingEdit || handoffPending || workflowLocked}
         onContinue={wakeQueue} onRemove={removeQueued} onEdit={editQueued} onSendNow={sendQueued} onRestoreDirect={restoreQueued}
         directDisabledReason={queuedBlockedReason} />
@@ -1436,6 +1594,8 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         emptyLabel={wantsSkills ? skillsError ?? (state.skills.length ? "No hay skills que coincidan con tu búsqueda." : "No hay skills disponibles en esta sesión.") : undefined}
         onPick={pick} onHover={setActive} />}
       {question && <QuestionPanel key={question.id} item={question} agent={agent.name} active={visible && focused} onAnswer={answer} />}
+      {!question && showApproval && awaitingChange && <ChangeApproval key={awaitingChange.id} request={awaitingChange}
+        newChat={props.projectChatProfile?.(awaitingChange.toProjectId) ?? null} onApprove={approveChange} onReject={rejectChange} />}
       {/* Mientras hay una pregunta, la caja se oculta sin desmontarse: lo escrito sigue ahí al volver. */}
       <form className="chat-composer" hidden={!!question} onSubmit={event => { event.preventDefault(); send(); }}>
         {editing && <div className="chat-edit-banner" role="status">
@@ -1649,27 +1809,35 @@ function CoordinatedPanel({ session, ...props }: ChatViewProps & { session: Chat
   return <ChatPanel {...props} session={session} coordination={coordination} />;
 }
 
-function ClaudeChat(props: ChatViewProps) {
-  return <CoordinatedPanel {...props} session={useClaudeChat(props)} />;
+/** El proceso arranca al mostrarse la pestaña o cuando trex lo despierta (`awake`) para entregarle algo. */
+type SessionProps = ChatViewProps & { awake: boolean };
+const started = (props: SessionProps): SessionProps => props.awake && !props.visible ? { ...props, visible: true } : props;
+
+function ClaudeChat(props: SessionProps) {
+  return <CoordinatedPanel {...props} session={useClaudeChat(started(props))} />;
 }
 
-function CodexChat(props: ChatViewProps) {
-  return <CoordinatedPanel {...props} session={useCodexChat(props)} />;
+function CodexChat(props: SessionProps) {
+  return <CoordinatedPanel {...props} session={useCodexChat(started(props))} />;
 }
 
 function ChatView(input: ChatViewProps) {
   const desktopEnabled = useRef(input.settings.desktopEnabled).current;
   // Experimental; en equipos y salas cada agente reserva las ventanas en las que actúa.
   const a11yEnabled = useRef(input.settings.a11yEnabled === true).current;
-  const props = { ...input, chatLabel: chatLabel(input), desktopEnabled, a11yEnabled, integrations: input.settings.integrations, autoCompact: input.settings.autoCompact };
+  const [awake, setAwake] = useState(false);
+  const wake = useCallback(() => setAwake(true), []);
+  // Una pestaña normal: recibe respuestas y encargos de otros proyectos, así que puede pedirlos.
+  const props = { ...input, chatLabel: chatLabel(input), desktopEnabled, a11yEnabled, integrations: input.settings.integrations, autoCompact: input.settings.autoCompact,
+    awake, onWake: wake, projectRequests: true };
   return props.provider === "antigravity" ? <AntigravityChat {...props} /> : props.provider === "trex" ? <TrexChat {...props} /> : props.provider === "codex" ? <CodexChat {...props} /> : <ClaudeChat {...props} />;
 }
 
-function TrexChat(props: ChatViewProps) {
-  return <CoordinatedPanel {...props} historyReadOnly session={useTrexChat(props)} />;
+function TrexChat(props: SessionProps) {
+  return <CoordinatedPanel {...props} historyReadOnly session={useTrexChat(started(props))} />;
 }
-function AntigravityChat(props: ChatViewProps) {
-  return <CoordinatedPanel {...props} historyReadOnly session={useAntigravityChat(props)} />;
+function AntigravityChat(props: SessionProps) {
+  return <CoordinatedPanel {...props} historyReadOnly session={useAntigravityChat(started(props))} />;
 }
 
 export default memo(ChatView);

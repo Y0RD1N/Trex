@@ -21,6 +21,11 @@ import { AgentTerminals, type TerminalSession } from "../agentTerminals";
 export type ChatSessionOptions = {
   /** Identidad estable de la cola cuando el proceso de un equipo cambia de generación. */
   queueId?: string;
+  /**
+   * Un chat normal (una pestaña): recibe las herramientas para preguntar y encargar a otros proyectos,
+   * porque es quien recibe sus respuestas. Los miembros de equipos y salas, y los chats que contestan, no.
+   */
+  projectRequests?: boolean;
   /** Solo el principal recibe las herramientas de este equipo y generación. */
   team?: { id: string; epoch: string };
   /** Nombre del chat (cuenta · título): «Tu navegador» lo usa para el grupo de pestañas de este chat. */
