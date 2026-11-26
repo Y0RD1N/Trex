@@ -1,6 +1,6 @@
 # Optional Trex CLI installer
 
-Windows bundles use NSIS. The base application has the version in `tauri.conf.json` (`0.13.0`) and
+Windows bundles use NSIS. The base application has the version in `tauri.conf.json` (`0.14.0`) and
 identifier `com.trex.app`; the Windows configuration adds the CLI resource and installer
 customization for the optional CLI component. Claude Code and Codex work without the
 CLI component.
