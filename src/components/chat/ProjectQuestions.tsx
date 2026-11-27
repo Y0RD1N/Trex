@@ -5,7 +5,7 @@
  * informe que entregó trex. Solo cambia cómo se ve: el texto que recibe el agente es el de `answersMessage`.
  */
 import { memo, useEffect, useState } from "react";
-import { projectRequestCancel, requestAwaiting, requestDuration, requestOpen, type AnswerView, type ProjectRequest } from "../../projectRequests";
+import { projectRequestCancel, requestDuration, requestOpen, type AnswerView, type ProjectRequest } from "../../projectRequests";
 
 
 import { formatError } from "../../api";
@@ -55,8 +55,7 @@ function OpenStatus({ request }: { request: ProjectRequest }) {
   const since = request.startedAt ?? request.updatedAt;
   if (request.kind === "message") return <>{request.toSession ? "en cola en su chat" : `espera a que abras un chat de ${request.toName}`}</>;
   if (request.kind === "change") {
-    if (request.status === "awaiting_approval") return <>espera tu aprobación</>;
-    if (request.status === "approved") return <>aprobado, en cola</>;
+    if (request.status === "approved") return <>{request.toSession ? "en cola en su chat" : "enviado"}</>;
     return <>trabajando · <Elapsed since={since} /></>;
   }
   return request.status === "running" ? <>contestando · <Elapsed since={since} /></> : <>en cola</>;
@@ -77,7 +76,7 @@ export const ProjectQuestions = memo(function ProjectQuestions({ requests, orpha
   const count = open.length + orphans.length;
   const asks = open.some(request => request.kind === "ask"), changes = open.some(request => request.kind === "change");
   return <ComposerPanel label="Peticiones" title="Peticiones a otros proyectos" icon={<FolderIcon size={13} />} count={count}
-    attention={orphans.length > 0 || open.some(requestAwaiting)} live={open.some(request => request.status === "running")}>
+    attention={orphans.length > 0} live={open.some(request => request.status === "running")}>
     {open.length > 0 && <ul className="project-questions">
       {open.map(request => {
         const what = request.kind === "change" ? "el encargo" : request.kind === "message" ? "el mensaje" : "la pregunta";

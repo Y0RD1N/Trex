@@ -3,9 +3,9 @@ import test from "node:test";
 import { load } from "./ts-loader.mjs";
 
 const {
-  normalizeProjectRequests, answerPrompt, answerDisplay, answersMessage, answerTurn, ANSWER_WAKE, ANSWER_POLICY,
+  answerPrompt, answerDisplay, answersMessage, answerTurn, ANSWER_WAKE, ANSWER_POLICY,
   requestDeliverable, requestOpen, isProjectRequestTool, PROJECT_REQUEST_TOOLS, projectRequestsStore,
-  requestDuration, projectKey, requestChats, requestOrphan, finalReply, changePrompt, changeDisplay, changeTurn, requestAwaiting,
+  requestDuration, projectKey, requestChats, requestOrphan, finalReply, changePrompt, changeDisplay, changeTurn,
   defaultChangeChat, messagesTurn, messageTurn, MESSAGE_WAKE,
 } = await load("projectRequests");
 const { claudeInboxReply } = await load("inboxProtocol");
@@ -17,21 +17,6 @@ const request = (overrides = {}) => ({
   kind: "ask", question: "¿Cómo animo la entrada del héroe con zmodal?", status: "answered", attempts: 1,
   report: "Usa `fadeUp()`:\n\n```ts\nimport { fadeUp } from \"zmodal\";\n```", delivered: false, createdAt: 1, updatedAt: 2,
   ...overrides,
-});
-
-test("the feature is off unless explicitly switched on, and answerers are clean", () => {
-  assert.deepEqual(normalizeProjectRequests(null), { enabled: false, answerers: [], trusted: [] });
-  assert.deepEqual(normalizeProjectRequests({ enabled: "true" }), { enabled: false, answerers: [], trusted: [] });
-  assert.deepEqual(normalizeProjectRequests({ enabled: true, answerers: [
-    { projectId: "p-1", profileId: "codex-default" }, { projectId: "p-1", profileId: "otro" }, { projectId: "" }, null, "p-2",
-    { projectId: "p-3", profileId: 4, questions: false, changes: true }, { projectId: "p-4", changes: "true" },
-  ], trusted: [{ from: "p-1", to: "p-3" }, { from: "p-1", to: "p-3" }, { from: "p-2", to: "p-2" }, { from: "p-1" }, null] }), {
-    enabled: true,
-    // Sin `questions` (primera versión) contesta preguntas; los encargos, solo con un `true` explícito.
-    answerers: [{ projectId: "p-1", profileId: "codex-default", questions: true, changes: false }, { projectId: "p-3", profileId: "", questions: false, changes: true },
-      { projectId: "p-4", profileId: "", questions: true, changes: false }],
-    trusted: [{ from: "p-1", to: "p-3" }],
-  });
 });
 
 test("the question reaches the other agent framed as a request from another agent, not from the user", () => {
@@ -151,13 +136,12 @@ const change = (overrides = {}) => request({
   context: "La web la importa como `import { bounceIn } from \"zmodal\"`.", status: "approved", toSession: "t-zmodal", report: undefined, ...overrides,
 });
 
-test("a change reaches the other chat framed as an approved request from another agent, and its thread can paint it", () => {
+test("a change reaches the other chat straight, framed as a request from another agent under that chat's permissions", () => {
   const prompt = changePrompt(change());
-  assert.match(prompt, /^\[Trex · encargo q-19ab-2f-0 del proyecto «Afelio»\]\nLa persona lo aprobó\./);
+  assert.match(prompt, /^\[Trex · encargo q-19ab-2f-0 del proyecto «Afelio»\]\nTe llega directo, sin otra aprobación que los permisos de este chat\./);
   assert.ok(prompt.includes("Añade bounceIn al motor.") && prompt.includes("Exportada desde src/anim.js") && prompt.includes("import { bounceIn }"));
-  assert.match(prompt, /solo dentro de este proyecto/);
+  assert.match(prompt, /solo dentro de este proyecto y con los permisos de este chat \(lo que necesite permiso, pídeselo a la persona como siempre\)/);
   assert.match(prompt, /push/);
-  assert.match(changeDisplay(change({ trusted: true })), /La persona confía en los encargos de «Afelio»/);
   const view = changeTurn(prompt);
   assert.deepEqual(view, { id: "q-19ab-2f-0", from: "Afelio", task: "Añade bounceIn al motor.", acceptance: "Exportada desde src/anim.js",
     context: "La web la importa como `import { bounceIn } from \"zmodal\"`." });
@@ -180,12 +164,10 @@ test("the report of a change comes back with the files trex measured, apart from
   assert.deepEqual({ ok: unfinished.ok, files: unfinished.files, diffStat: unfinished.diffStat }, { ok: false, files: [], diffStat: null });
 });
 
-test("only a change waiting for the person asks for approval, and it goes to a free chat by default", () => {
-  assert.equal(requestAwaiting(change({ status: "awaiting_approval" })), true);
-  assert.equal(requestAwaiting(change()), false);
-  assert.equal(requestAwaiting(request({ status: "awaiting_approval" })), false, "las preguntas no se aprueban");
-  assert.equal(requestOpen(change({ status: "awaiting_approval" })), true);
-  assert.equal(requestOpen(change({ status: "rejected" })), false);
+test("a sent change stays open until its report, and it goes to a free chat by default", () => {
+  assert.equal(requestOpen(change({ toSession: undefined })), true);
+  assert.equal(requestOpen(change({ status: "running" })), true);
+  assert.equal(requestOpen(change({ status: "answered" })), false);
   const chats = [
     { session: "t-a", projectId: "p-zmodal", label: "Claude Code", provider: "claude", busy: true },
     { session: "t-b", projectId: "p-zmodal", label: "Codex", provider: "codex", busy: false },
@@ -208,11 +190,4 @@ test("agents' messages reach the other chat as information, with how to answer, 
   assert.deepEqual(messageTurn(messagesTurn([reply]).display), [{ id: "q-19ab-4f-0", from: "zmodal", reply: true, text: reply.question }]);
   assert.equal(messageTurn("Encontré un fallo"), null);
   assert.equal(messageTurn("[Trex · mensaje q-1 del proyecto «x»]\nsin cierre"), null);
-});
-
-test("a change that went through on full access tells the other agent how it was approved", () => {
-  const note = "Va directo, sin tarjeta de aprobación: el chat de «Afelio» que lo pidió está en acceso total.";
-  assert.match(changeDisplay(request({ kind: "change", note })), /\nVa directo, sin tarjeta de aprobación/);
-  assert.ok(!changeDisplay(request({ kind: "change" })).includes("acceso total"));
-  assert.equal(changeTurn(changeDisplay(request({ kind: "change", note }))).task, request().question);
 });

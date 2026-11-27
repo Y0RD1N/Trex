@@ -22,7 +22,7 @@ import { formatError } from "../api";
 import { launchForProfile, profilesForInstallation } from "../profiles";
 import { codexChatSupported } from "../codexChat";
 import {
-  ANSWER_POLICY, answerDisplay, answerPrompt, finalReply, persist, projectRequestClaim, projectRequestDecide, projectRequestFinish, projectRequestRetry,
+  ANSWER_POLICY, answerDisplay, answerPrompt, finalReply, persist, projectRequestClaim, projectRequestFinish, projectRequestRetry,
   projectRequestsRecover, projectRequestsSnapshot, projectRequestsStore, requestChats, requestOrphan, type ProjectRequest,
 } from "../projectRequests";
 import { usageTotals, type UsageTotals } from "../tokenUsage";
@@ -35,8 +35,8 @@ const START_MS = 3 * 60_000;
 const ANSWER_MS = 20 * 60_000;
 const MAX_ACTIVE = 4;
 /**
- * Los encargos en marcha se dan por cortados solo al arrancar trex. Si la función se apaga y se vuelve a
- * encender, el host se monta otra vez pero el chat que hace el encargo sigue abierto y lo termina él.
+ * Los encargos en marcha se dan por cortados solo al arrancar trex. Si el host se vuelve a montar (p. ej.,
+ * al recargar el código en desarrollo), el chat que hace el encargo sigue abierto y lo termina él.
  */
 let recoveredChanges = false;
 
@@ -54,18 +54,14 @@ type Runner = {
   users: Set<string>;
 };
 
-/** La cuenta que contesta por un proyecto, o por qué no puede hacerlo. */
-export function answeringProfile(settings: Settings, projectId: string, trexInstalled: boolean): LauncherProfile | string {
-  const answerer = settings.projectRequests.answerers.find(entry => entry.projectId === projectId);
-  if (!answerer?.questions) return "ya no contesta preguntas";
+/** La cuenta que contesta preguntas, o por qué no puede hacerlo. */
+export function answeringProfile(settings: Settings, trexInstalled: boolean): LauncherProfile | string {
   const profiles = profilesForInstallation(settings, trexInstalled);
-  // «Predeterminado» (o una cuenta que ya no existe, que Ajustes muestra igual): el perfil predeterminado si
-  // puede contestar; si no, la primera cuenta que pueda.
+  // El perfil predeterminado si puede contestar; si no, la primera cuenta que pueda (Antigravity no tiene
+  // modo de solo lectura).
   const usable = profiles.filter(entry => entry.provider !== "antigravity");
-  const profile = profiles.find(entry => entry.id === answerer.profileId)
-    ?? usable.find(entry => entry.id === settings.defaultProfileId) ?? usable[0];
-  if (!profile) return "no hay ninguna cuenta que pueda contestar";
-  if (profile.provider === "antigravity") return "Antigravity no puede contestar en solo lectura; elige otra cuenta en Ajustes → Proyectos";
+  const profile = usable.find(entry => entry.id === settings.defaultProfileId) ?? usable[0];
+  if (!profile) return "no hay ninguna cuenta que pueda contestar en solo lectura (Antigravity no puede)";
   if (!profile.command.trim()) return `la cuenta «${profile.name}» no tiene comando`;
   if (profile.provider === "codex" && !codexChatSupported(profile.args)) return `la cuenta «${profile.name}» usa opciones de terminal`;
   return profile;
@@ -136,7 +132,7 @@ function ProjectRequestsHost({ settings, projects, trexInstalled, onOrphan }: Ho
     };
     /**
      * Encargos cuyo chat ya no está abierto (dos vueltas seguidas, como las respuestas sin chat): el que
-     * hacía uno o iba a hacerlo se cerró, o se cerró el que lo pidió antes de que lo aprobaras.
+     * hacía uno o iba a hacerlo se cerró.
      */
     let closing = new Set<string>();
     const closed = new Set<string>();
@@ -144,18 +140,14 @@ function ProjectRequestsHost({ settings, projects, trexInstalled, onOrphan }: Ho
       const now = new Set<string>();
       for (const request of snapshot) {
         if (request.kind !== "change" || closed.has(request.id)) continue;
-        const gone = request.status === "awaiting_approval" ? !requestChats.has(request.fromSession)
-          : (request.status === "approved" || request.status === "running") && !!request.toSession && !requestChats.has(request.toSession);
+        const gone = (request.status === "approved" || request.status === "running") && !!request.toSession && !requestChats.has(request.toSession);
         if (!gone) continue;
         now.add(request.id);
         if (!closing.has(request.id)) continue;
         closed.add(request.id);
-        const write = request.status === "awaiting_approval"
-          ? () => projectRequestDecide(request.id, false, null, "El chat que lo pidió se cerró antes de que lo aprobaras.")
-          : () => projectRequestFinish(request.id, "failed", request.status === "running"
-            ? `El chat de «${request.toName}» se cerró mientras hacía el encargo. Revisa ese proyecto para ver qué llegó a cambiar.`
-            : `El chat de «${request.toName}» que iba a hacerlo se cerró antes de empezar. Pídelo de nuevo si sigue haciendo falta.`, null);
-        void persist(write);
+        void persist(() => projectRequestFinish(request.id, "failed", request.status === "running"
+          ? `El chat de «${request.toName}» se cerró mientras hacía el encargo. Revisa ese proyecto para ver qué llegó a cambiar.`
+          : `El chat de «${request.toName}» que iba a hacerlo se cerró antes de empezar. Pídelo de nuevo si sigue haciendo falta.`, null));
       }
       closing = now;
     };
@@ -209,7 +201,7 @@ function ProjectRequestsHost({ settings, projects, trexInstalled, onOrphan }: Ho
     const start = async (request: ProjectRequest): Promise<void> => {
       const { settings: current, projects: list, trexInstalled: installed } = latest.current;
       const project = list.find(entry => entry.id === request.toProjectId);
-      const profile = project ? answeringProfile(current, project.id, installed) : "ya no está en trex";
+      const profile = project ? answeringProfile(current, installed) : "ya no está en trex";
       if (typeof profile === "string" || !project) {
         await projectRequestFinish(request.id, "failed", `«${request.toName}» no puede contestar: ${typeof profile === "string" ? profile : "ya no está en trex"}.`, null).catch(() => undefined);
         return;

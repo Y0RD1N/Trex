@@ -349,7 +349,8 @@ async fn load_config(app: AppHandle) -> Result<AppConfig, config::LoadFailure> {
     }))
 }
 
-/// Los chats leen de disco qué proyectos contestan preguntas: se publica al cargar y al guardar.
+/// Los chats leen de disco la lista de proyectos (todos atienden a los demás): se publica al cargar y al
+/// guardar, así que un proyecto nuevo entra en cuanto se añade.
 /// Un fallo solo deja la lista anterior; la configuración se guardó igual.
 fn publish_project_directory(app: &AppHandle, config: &AppConfig) {
     if let Ok(root) = app.path().app_data_dir() {
@@ -515,7 +516,7 @@ pub fn run() {
             project_requests::project_requests_delivered,
             project_requests::project_request_reassign,
             project_requests::project_request_retry,
-            project_requests::project_request_decide,
+            project_requests::project_request_assign,
             project_requests::project_request_begin,
             project_requests::project_request_sent,
             project_requests::project_request_tools,

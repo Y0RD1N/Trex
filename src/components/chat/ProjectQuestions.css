@@ -50,17 +50,9 @@
 .project-answer-open:hover { color: var(--text); text-decoration-color: currentColor; }
 .project-answer-open:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; border-radius: var(--radius-sm); }
 
-/* Encargos: la aprobación vive en la caja de mensaje, separada de lo que escribes por una regla. */
-.chat-dock > .chat-ask.change-approval { border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
-/* El encargo puede ser largo: en el peso del texto normal y con su propio desplazamiento. */
-.change-approval-task { max-height: 12em; overflow: auto; font-weight: 400; }
+/* Encargo recibido: «Hecho cuando…» bajo el texto. */
 .change-approval-line { display: flex; align-items: baseline; gap: var(--sp-1-5); margin: 0; color: var(--text-muted); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .change-approval-line > svg { flex-shrink: 0; transform: translateY(1px); }
-.change-approval-target { display: flex; align-items: center; gap: var(--sp-3); color: var(--text-muted); font-size: var(--fs-sm); }
-.change-approval-target > span { flex: 0 0 auto; }
-.change-approval-target > button { flex: 1 1 auto; min-width: 0; max-width: 28rem; }
-.change-approval-trust { display: inline-flex; align-items: center; gap: var(--sp-2); justify-self: start; color: var(--text-muted); font-size: var(--fs-sm); cursor: pointer; }
-.change-approval-trust:has(input:checked) { color: var(--text); }
 .project-change-context > summary { color: var(--text-muted); font-size: var(--fs-sm); cursor: pointer; }
 .project-change-context[open] > summary { margin-bottom: var(--sp-1-5); }
 

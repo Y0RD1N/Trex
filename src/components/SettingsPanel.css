@@ -449,24 +449,3 @@
 .settings-block-head .btn { display: inline-flex; align-items: center; gap: var(--sp-1-5); }
 .launcher-shortcut { display: inline-flex; align-items: center; gap: var(--sp-2); justify-self: end; }
 .launcher-shortcut kbd { padding: 1px var(--sp-1-5); border: 1px solid var(--settings-edge); border-radius: var(--radius-xs); background: var(--settings-inset); color: var(--text); font: var(--fs-xs)/1.5 var(--font-mono); }
-
-/* Preguntas entre proyectos: una fila por proyecto; al marcarlo, debajo, con qué cuenta contesta. */
-.answering-projects { display: grid; gap: var(--sp-1-5); margin: 0; padding: 0; list-style: none; }
-.answering-projects li { display: grid; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--settings-edge); border-radius: var(--radius-control); background: var(--settings-inset); }
-.answering-project { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-4); min-width: 0; }
-.answering-project-flags { display: flex; flex-wrap: wrap; gap: var(--sp-1-5) var(--sp-4); }
-.answering-project-flags label { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; cursor: pointer; }
-.answering-project-flags label:has(input:checked) { color: var(--text); }
-.answering-project-name { display: grid; min-width: 0; }
-.answering-project-name strong { overflow: hidden; color: var(--text); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
-.answering-project-name small { overflow: hidden; color: var(--text-dim); font: var(--fs-xs)/1.5 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.answering-projects li:not(.is-on) .answering-project-name strong { color: var(--text-muted); }
-.answering-project-profile { display: flex; align-items: center; gap: var(--sp-3); padding-top: var(--sp-2); border-top: 1px solid var(--settings-edge); color: var(--text-muted); font-size: var(--fs-sm); }
-.answering-project-profile > span { flex: 0 0 auto; }
-.answering-project-profile > button { flex: 1 1 auto; min-width: 0; }
-.answering-project-profile > span { display: inline-flex; align-items: center; gap: var(--sp-1); }
-/* Parejas cuyos encargos van directos: se quitan una a una. */
-.trusted-pairs { display: grid; gap: var(--sp-1-5); margin-top: var(--sp-3); }
-.trusted-pairs h5 { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
-.trusted-pairs ul { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
-.trusted-pairs li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3); border-radius: var(--radius-control); background: var(--settings-inset); color: var(--text); font-size: var(--fs-sm); }

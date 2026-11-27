@@ -18,7 +18,7 @@ import { MAX_FILES, isImagePath, pathName, saveAttachment, type ChatFile } from 
 import { KIND_LABELS, fileInfo, fileKind, formatBytes, openFile } from "../sharedFiles";
 import { matchesPasteShortcut } from "../paste";
 import {
-  a11yActivity, allowsAll, chatActivity, contextPercent, contextTokensLabel, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, modelName, pendingPermissions,
+  a11yActivity, chatActivity, contextPercent, contextTokensLabel, conversationTitle, currentModel, effortLabel, fastSpeed, formatDuration, modelName, pendingPermissions,
   shownUsage, supportedEfforts, type ChatItem, type OutgoingImage, type PermissionItem, type QuestionChoice,
 } from "../chatState";
 import { messageAttachments } from "../chatMessages";
@@ -80,11 +80,10 @@ import { useCoordination, type Coordination } from "../hooks/useCoordination";
 import { coordinationHub, notesBlock, notesFor, PEER_WAKE, peersOf, peerTurnNotes, WAKE_LIMIT, withNotes } from "../coordination";
 import PeerSessions, { PeerMessage } from "./chat/PeerSessions";
 import { ProjectAnswerMessage, ProjectQuestions } from "./chat/ProjectQuestions";
-import { ChangeApproval, IncomingChanges, ProjectChangeMessage, ProjectMessageCard } from "./chat/ProjectChanges";
+import { IncomingChanges, ProjectChangeMessage, ProjectMessageCard } from "./chat/ProjectChanges";
 import {
-  answersMessage, answerTurn, changeTurn, defaultChangeChat, messagesTurn, messageTurn, persist, projectChatsStore, projectRequestDecide,
-  projectRequestReassign, projectRequestSent, projectRequestsDelivered, projectRequestsSnapshot, requestAwaiting, requestChats, requestDeliverable,
-  type ProjectRequest,
+  answersMessage, answerTurn, changeTurn, messagesTurn, messageTurn, persist, projectRequestReassign, projectRequestSent, projectRequestsDelivered,
+  projectRequestsSnapshot, requestChats, requestDeliverable, type ProjectRequest,
 } from "../projectRequests";
 import { useIncomingChanges } from "../hooks/useIncomingChanges";
 import { useIncomingMessages, useProjectOrphans, useSessionRequests } from "../hooks/useSessionRequests";
@@ -140,12 +139,6 @@ export type ChatViewProps = ChatSessionOptions & {
   onOpenProjectAnswer?: (request: ProjectRequest) => void;
   /** Muestra la pestaña de otra sesión (el chat del otro proyecto que hace un encargo). */
   onOpenSession?: (session: string) => void;
-  /** Abre, sin cambiar de pestaña, un chat en otro proyecto para un encargo; devuelve su sesión. */
-  onProjectChat?: (projectId: string) => string | null;
-  /** Con qué cuenta se abriría ese chat (para la tarjeta de aprobación); null si no se puede. */
-  projectChatProfile?: (projectId: string) => string | null;
-  /** La persona confía en los encargos de un proyecto a otro: dejan de pedir aprobación. */
-  onTrustPair?: (from: string, to: string) => void;
   /** Arranca el proceso aunque la pestaña no se haya mostrado (para recibir una respuesta). */
   onWake?: () => void;
 };
@@ -676,39 +669,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
     // `incomingMessages` cambia con `messageKey`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordination, requestSession, messageKey, stopped, running, state.process, props.workflow, workflowLocked, handoffPending, queueSaving, hasQueued, submittingEdit, session]);
-  // Encargos que pidió este chat: esperan aquí a que la persona los apruebe o los rechace.
-  const awaitingChange = sessionRequests.find(requestAwaiting) ?? null;
-  const awaitingId = awaitingChange?.id ?? "";
-  const announcedChange = useRef("");
-  useEffect(() => {
-    if (!awaitingId || announcedChange.current === awaitingId) return;
-    announcedChange.current = awaitingId;
-    if ((!visible || !focused) && !allowsAll(state.permissionMode)) props.onNotice(sessionId, "attention");
-    // Solo al aparecer uno nuevo.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [awaitingId]);
-  const { onProjectChat, onTrustPair, projectId } = props;
-  const approveChange = useCallback(async (request: ProjectRequest, target: string | null, trust: boolean, note: string | null = null) => {
-    const chat = target ?? onProjectChat?.(request.toProjectId) ?? null;
-    if (!chat) throw new Error(`no se pudo abrir un chat en «${request.toName}»`);
-    await projectRequestDecide(request.id, true, chat, note);
-    if (trust && projectId) onTrustPair?.(projectId, request.toProjectId);
-  }, [onProjectChat, onTrustPair, projectId]);
-  const rejectChange = useCallback((request: ProjectRequest) => projectRequestDecide(request.id, false, null), []);
-  // En acceso total el chat no pide permiso para nada: tampoco para sus encargos. Va al chat que la tarjeta
-  // propondría (el libre de ese proyecto, o uno nuevo); si no se puede, queda la tarjeta.
-  const fullAccess = allowsAll(state.permissionMode);
-  const autoApproved = useRef("");
-  const [autoFailed, setAutoFailed] = useState("");
-  useEffect(() => {
-    if (!awaitingChange || !fullAccess || autoApproved.current === awaitingChange.id) return;
-    const request = awaitingChange;
-    autoApproved.current = request.id;
-    const target = defaultChangeChat(projectChatsStore.get(), request.toProjectId)?.session ?? null;
-    void approveChange(request, target, false, `Va directo, sin tarjeta de aprobación: el chat de «${request.fromName}» que lo pidió está en acceso total.`)
-      .catch(error => { setAutoFailed(request.id); session.notice("warn", `No se pudo enviar solo el encargo a «${request.toName}»: ${formatError(error)}. Decide en la tarjeta.`); });
-  }, [awaitingChange, fullAccess, approveChange, session]);
-  const showApproval = !!awaitingChange && (!fullAccess || autoFailed === awaitingChange.id);
   const workflowSource = useMemo(() => ({ sessionId, provider, profileId: props.profileId ?? null,
     profileName: props.profileName ?? agent.product, title: props.sessionTitle ?? "Planificación",
     projectId: props.projectId ?? "", projectName, cwd }), [sessionId, provider, props.profileId, props.profileName, props.sessionTitle, props.projectId, projectName, cwd, agent.product]);
@@ -1594,8 +1554,6 @@ export function ChatPanel(props: ChatViewProps & { session: ChatSession; coordin
         emptyLabel={wantsSkills ? skillsError ?? (state.skills.length ? "No hay skills que coincidan con tu búsqueda." : "No hay skills disponibles en esta sesión.") : undefined}
         onPick={pick} onHover={setActive} />}
       {question && <QuestionPanel key={question.id} item={question} agent={agent.name} active={visible && focused} onAnswer={answer} />}
-      {!question && showApproval && awaitingChange && <ChangeApproval key={awaitingChange.id} request={awaitingChange}
-        newChat={props.projectChatProfile?.(awaitingChange.toProjectId) ?? null} onApprove={approveChange} onReject={rejectChange} />}
       {/* Mientras hay una pregunta, la caja se oculta sin desmontarse: lo escrito sigue ahí al volver. */}
       <form className="chat-composer" hidden={!!question} onSubmit={event => { event.preventDefault(); send(); }}>
         {editing && <div className="chat-edit-banner" role="status">

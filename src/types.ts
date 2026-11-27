@@ -79,7 +79,6 @@ export type Settings = {
   /** Lanzador de proyectos: carpetas raíz, agente y si vuelve al chat abierto. */
   projectLauncher: import("./projectLauncher").ProjectLauncherSettings;
   /** Preguntas entre proyectos: apagadas salvo que la persona las active, y qué proyectos contestan. */
-  projectRequests: import("./projectRequests").ProjectRequestsSettings;
   desktopEnabled: boolean;
   /** Control por accesibilidad (experimental). */
   a11yEnabled: boolean;

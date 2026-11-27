@@ -763,12 +763,10 @@ mod tests {
         let exchange = |scope: Scope| exchange_with(scope, &chat);
         let names = |replies: &[Value]| replies[0]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
         let replies = exchange(Scope::Peers);
-        assert!(!names(&replies).iter().any(|name| name.starts_with("trex_ask")), "apagado no se ofrece");
+        assert!(!names(&replies).iter().any(|name| name.starts_with("trex_ask")), "sin la lista de proyectos no se ofrece");
         assert_eq!(replies[1]["result"]["isError"], true);
-        let mut config: crate::config::AppConfig = serde_json::from_value(json!({"projects":[
+        let config: crate::config::AppConfig = serde_json::from_value(json!({"projects":[
             {"id":"p-web","name":"Afelio","path":web},{"id":"p-engine","name":"zmodal","path":engine}]})).unwrap();
-        config.settings.project_requests.enabled = true;
-        config.settings.project_requests.answerers.push(crate::config::ProjectAnswerer { project_id: "p-engine".into(), ..Default::default() });
         project_requests::publish_directory(&dir.0, &config).unwrap();
         for scope in [Scope::Peers, Scope::Tasks, Scope::All] {
             let replies = exchange(scope);

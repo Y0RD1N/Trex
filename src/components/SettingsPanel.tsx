@@ -7,8 +7,7 @@ import { cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutE
 import { DEFAULT_FONT_FAMILY, clamp } from "../api";
 import AccentPicker from "./AccentPicker";
 import { APPEARANCE_OPTIONS, applyTheme, normalizeAppearance, type Appearance } from "../theme";
-import type { AppInfo, ClaudeInfo, Project, Settings } from "../types";
-import type { ProjectRequestsSettings } from "../projectRequests";
+import type { AppInfo, ClaudeInfo, Settings } from "../types";
 import { useDialog } from "./DialogProvider";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { addLauncherRoot, MAX_LAUNCHER_ROOTS, type ProjectLauncherSettings } from "../projectLauncher";
@@ -40,8 +39,6 @@ type Props = {
   leaving: boolean;
   surfaceRef?: RefObject<HTMLDivElement | null>;
   settings: Settings;
-  /** Para elegir qué proyectos contestan preguntas de otros (solo se leen). */
-  projects?: Project[];
   cwd?: string;
   appInfo: AppInfo | null;
   claudeInfo: ClaudeInfo | null;
@@ -86,7 +83,7 @@ const GROUPS: { id: string; label: string; icon: ReactNode; pages: SectionId[] }
 const ABOUT = { id: "about", label: "Acerca de trex", icon: <InfoIcon size={16} />, pages: ["about"] as SectionId[] };
 const groupOf = (section: SectionId) => GROUPS.find(group => group.pages.includes(section)) ?? ABOUT;
 
-export default function SettingsPanel({ entering, leaving, surfaceRef, settings, projects = [], cwd, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect, cliUpdates, onUpdateCli }: Props) {
+export default function SettingsPanel({ entering, leaving, surfaceRef, settings, cwd, appInfo, claudeInfo, codexInfo, initialSection = "appearance", onSave, onClose, onRedetect, cliUpdates, onUpdateCli }: Props) {
   const dialog = useDialog();
   const id = useId();
   const [draft, setDraft] = useState<Settings>(settings);
@@ -145,11 +142,6 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
   const patch = (partial: Partial<Settings>): void => setDraft(previous => ({ ...previous, ...partial }));
   const patchLauncher = (partial: Partial<ProjectLauncherSettings>): void =>
     setDraft(previous => ({ ...previous, projectLauncher: { ...previous.projectLauncher, ...partial } }));
-  const patchRequests = (change: (current: ProjectRequestsSettings) => Partial<ProjectRequestsSettings>): void =>
-    setDraft(previous => ({ ...previous, projectRequests: { ...previous.projectRequests, ...change(previous.projectRequests) } }));
-  // Antigravity no tiene modo de solo lectura: no puede contestar.
-  const answeringProfiles = draft.profiles.filter(profile => profile.provider !== "antigravity");
-  const defaultAnswering = answeringProfiles.find(profile => profile.id === draft.defaultProfileId) ?? answeringProfiles[0];
   const [rootNotice, setRootNotice] = useState("");
   const addRoot = async (): Promise<void> => {
     setRootNotice("");
@@ -393,70 +385,6 @@ export default function SettingsPanel({ entering, leaving, surfaceRef, settings,
                 <div className="settings-toggles">
                   <SettingToggle label="Volver al chat que ya está abierto" info="Si el proyecto ya tiene un chat de ese agente, el lanzador va a él en lugar de abrir otro." checked={draft.projectLauncher.reuseChat} onChange={reuseChat => patchLauncher({ reuseChat })} />
                 </div>
-                <div className="settings-block">
-                  <div className="settings-block-head">
-                    <h4>Preguntas y encargos entre proyectos<SettingInfo text="Un agente puede pedir a trex que pregunte algo al agente de otro proyecto (por ejemplo, cómo usar tu librería desde tu web) o que le encargue un cambio allí. Las preguntas las contesta un chat de solo lectura que trex abre en ese proyecto, aunque no tengas ninguno abierto. Los encargos los apruebas tú y los hace el chat que tengas abierto en ese proyecto, a la vista. Cada petición gasta la cuota de la cuenta que la atiende." /></h4>
-                  </div>
-                </div>
-                <div className="settings-toggles">
-                  <SettingToggle label="Los agentes pueden preguntar y pedir cambios a otros proyectos" info="Apagado, ningún chat recibe estas herramientas y todo funciona como antes."
-                    checked={draft.projectRequests.enabled} onChange={enabled => patchRequests(() => ({ enabled }))} />
-                </div>
-                {draft.projectRequests.enabled && <div className="settings-block">
-                  <p className="settings-hint">Marca qué atiende cada proyecto. Los que no marques no existen para los agentes. Quien contesta una pregunta solo lee; un encargo lo apruebas tú en el chat que lo pidió (o va solo si ese chat está en acceso total), y los mensajes llegan a su chat abierto.</p>
-                  {projects.length > 0 ? <ul className="answering-projects" aria-label="Proyectos que atienden preguntas o encargos">
-                    {projects.map(project => {
-                      const entry = draft.projectRequests.answerers.find(answerer => answerer.projectId === project.id);
-                      const toggle = (flag: "questions" | "changes", on: boolean): void => patchRequests(current => {
-                        const before = current.answerers.find(answerer => answerer.projectId === project.id);
-                        const next = { ...(before ?? { projectId: project.id, profileId: "", questions: false, changes: false }), [flag]: on };
-                        const keep = next.questions || next.changes;
-                        const answerers = before
-                          ? current.answerers.flatMap(answerer => answerer.projectId !== project.id ? [answerer] : keep ? [next] : [])
-                          : keep ? [...current.answerers, next] : current.answerers;
-                        // Sin encargos hacia él, sus parejas de confianza sobran.
-                        const trusted = next.changes ? current.trusted : current.trusted.filter(pair => pair.to !== project.id);
-                        return { answerers, trusted };
-                      });
-                      return <li key={project.id} className={entry ? "is-on" : undefined}>
-                        <div className="answering-project">
-                          <span className="answering-project-name"><strong>{project.name}</strong><small title={project.path}>{project.path}</small></span>
-                          <span className="answering-project-flags">
-                            <label><input type="checkbox" role="switch" className="settings-switch" checked={!!entry?.questions}
-                              onChange={event => toggle("questions", event.currentTarget.checked)} />Contesta preguntas</label>
-                            <label><input type="checkbox" role="switch" className="settings-switch" checked={!!entry?.changes}
-                              onChange={event => toggle("changes", event.currentTarget.checked)} />Acepta encargos y mensajes</label>
-                          </span>
-                        </div>
-                        {entry && <div className="answering-project-profile">
-                          <span>{entry.questions ? "Contesta con" : "Chat nuevo con"}<SettingInfo text="La cuenta del chat de solo lectura que contesta preguntas y la del chat que trex abre para un encargo si no tienes ninguno abierto en este proyecto." /></span>
-                          <Select aria-label={`Cuenta que contesta por ${project.name}`}
-                            value={entry.profileId && answeringProfiles.some(profile => profile.id === entry.profileId) ? entry.profileId : ""}
-                            onChange={profileId => patchRequests(current => ({ answerers: current.answerers.map(answerer => answerer.projectId === project.id ? { ...answerer, profileId } : answerer) }))}
-                            options={[
-                              { value: "", label: "Predeterminado", description: defaultAnswering ? `Ahora ${defaultAnswering.name}` : "No hay ninguna cuenta que pueda contestar",
-                                icon: <AgentIcon kind={defaultAnswering?.provider ?? "claude"} size={15} /> },
-                              ...answeringProfiles.map(profile => ({ value: profile.id, label: profile.name, icon: <AgentIcon kind={profile.provider} size={15} /> })),
-                            ]} />
-                        </div>}
-                      </li>;
-                    })}
-                  </ul> : <p className="settings-hint">Aún no hay proyectos en trex.</p>}
-                  {draft.projectRequests.trusted.length > 0 && <div className="trusted-pairs">
-                    <h5>Encargos que no piden aprobación</h5>
-                    <ul aria-label="Parejas de confianza">
-                      {draft.projectRequests.trusted.map(pair => {
-                        const name = (projectId: string): string => projects.find(project => project.id === projectId)?.name ?? "proyecto borrado";
-                        return <li key={`${pair.from}-${pair.to}`}>
-                          <span>{name(pair.from)}<span aria-label=" a "> → </span>{name(pair.to)}</span>
-                          <button type="button" className="btn btn-small btn-ghost"
-                            onClick={() => patchRequests(current => ({ trusted: current.trusted.filter(entry => entry.from !== pair.from || entry.to !== pair.to) }))}>
-                            Volver a preguntar</button>
-                        </li>;
-                      })}
-                    </ul>
-                  </div>}
-                </div>}
               </>}
 
               {item.id === "sessions" && <div className="settings-toggles">

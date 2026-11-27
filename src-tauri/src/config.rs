@@ -80,37 +80,6 @@ impl Default for ProjectLauncherSettings {
     fn default() -> Self { Self { roots: Vec::new(), profile_id: String::new(), reuse_chat: true } }
 }
 
-/// Preguntas y encargos entre proyectos (ver `project_requests.rs`): apagados salvo que la persona
-/// los active. Solo atienden los proyectos de `answerers`, cada uno con lo que la persona marcó.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ProjectRequestsSettings {
-    pub enabled: bool,
-    pub answerers: Vec<ProjectAnswerer>,
-    /// Parejas cuyos encargos van directos al chat del otro proyecto, sin pedir aprobación.
-    pub trusted: Vec<TrustedPair>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ProjectAnswerer {
-    pub project_id: String,
-    /// Perfil con el que contesta (y con el que se abre un chat para un encargo); vacío = el predeterminado.
-    pub profile_id: String,
-    /// Contesta preguntas en un chat oculto de solo lectura.
-    pub questions: bool,
-    /// Acepta encargos con cambios: los hace el chat que la persona tenga abierto en ese proyecto.
-    pub changes: bool,
-}
-impl Default for ProjectAnswerer {
-    fn default() -> Self { Self { project_id: String::new(), profile_id: String::new(), questions: true, changes: false } }
-}
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct TrustedPair {
-    pub from: String,
-    pub to: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -118,7 +87,6 @@ pub struct Settings {
     pub integrations: ApplicationIntegrations,
     pub auto_compact: AutoCompactSettings,
     pub project_launcher: ProjectLauncherSettings,
-    pub project_requests: ProjectRequestsSettings,
     pub desktop_enabled: bool,
     /// Control por accesibilidad (experimental, desactivado por defecto).
     pub a11y_enabled: bool,
@@ -175,7 +143,6 @@ impl Default for Settings {
             integrations: ApplicationIntegrations::default(),
             auto_compact: AutoCompactSettings::default(),
             project_launcher: ProjectLauncherSettings::default(),
-            project_requests: ProjectRequestsSettings::default(),
             desktop_enabled: false,
             a11y_enabled: false,
             a11y_keyboard: false,

@@ -1,25 +1,28 @@
-//! Preguntas y encargos entre proyectos: el agente de un chat pregunta al agente de otro proyecto de
-//! trex (`trex_ask_project`) o le pide un cambio (`trex_request_change`).
+//! Preguntas, encargos y mensajes entre proyectos: el agente de un chat pregunta al agente de otro
+//! proyecto de trex (`trex_ask_project`), le pide un cambio (`trex_request_change`) o le escribe
+//! (`trex_message_project`).
 //!
 //! Trex guarda cada petición en un diario durable.
 //!   - Una pregunta la contesta en segundo plano un chat de solo lectura que la ventana arranca en la
 //!     carpeta del otro proyecto; el otro proyecto no tiene que estar abierto.
-//!   - Un encargo espera a que la persona lo apruebe y lo hace el chat que ella tenga abierto en el
-//!     otro proyecto (o uno que trex abre), a la vista y con los permisos de ese chat.
+//!   - Un encargo lo hace el chat que la persona tenga abierto en el otro proyecto (o uno que trex abre,
+//!     también si el agente pide un chat nuevo), a la vista y con los permisos de ese chat, que son la
+//!     única aprobación: en acceso total lo hace sin preguntar; si no, pide permiso como siempre.
 //! La respuesta o el informe vuelve al chat que pidió (le abre un turno si está libre).
 //!
 //! Reglas:
-//!   - Apagado salvo que la persona lo active en Ajustes; sin `directory.json` no hay herramientas.
-//!   - El modelo nombra un proyecto: nunca da rutas. Solo atienden los proyectos que la persona marcó.
+//!   - Siempre encendido: atienden todos los proyectos de trex con carpeta, también los que se añadan.
+//!     Sin `directory.json` (la ventana aún no lo publicó) no hay herramientas.
+//!   - El modelo nombra un proyecto: nunca da rutas.
 //!   - Un chat que está atendiendo una petición no puede pedir nada a su vez: un solo salto.
 //!   - Lo que cruza se limpia de credenciales; la respuesta es información de otro agente, no órdenes.
-//!   - Quién atiende (cuenta, chat, carpeta) lo decide la persona, nunca el modelo; un encargo solo
-//!     se aprueba desde la ventana, salvo las parejas en las que la persona confió.
+//!   - Quién atiende (cuenta, chat, carpeta) lo decide trex, nunca el modelo: el agente solo puede pedir
+//!     que su encargo lo haga un chat nuevo de ese proyecto.
 //!
 //! Lo comparten la ventana y el servidor MCP de cada chat (otro proceso): cada cambio se hace con el
 //! cerrojo de la carpeta tomado y se guarda de forma atómica.
 use crate::agent_team::{ceil_boundary, floor_boundary, TaskUsage};
-use crate::config::{AppConfig, TrustedPair};
+use crate::config::AppConfig;
 use crate::coordination;
 use crate::message_queue::atomic_replace;
 use serde::{Deserialize, Serialize};
@@ -56,12 +59,12 @@ const MAX_RUNNING_PER_TARGET: usize = 2;
 const MAX_RUNNING: usize = 4;
 /// Una pregunta interrumpida (trex se cerró) se vuelve a intentar una vez: es de solo lectura.
 const MAX_ATTEMPTS: u32 = 2;
-/// Nadie la empezó en este tiempo (trex cerrado, proyecto desmarcado): caduca.
+/// Nadie la empezó en este tiempo (trex cerrado): caduca.
 const QUEUED_MAX_MS: u64 = 6 * 60 * 60_000;
 /// Red de seguridad: la ventana corta antes (20 min); esto solo limpia lo que quedó colgado.
 const RUNNING_MAX_MS: u64 = 2 * 60 * 60_000;
-/// Un encargo sin aprobar caduca al día; uno en marcha, a las 6 h (la persona puede intervenir en él).
-const AWAITING_MAX_MS: u64 = 24 * 60 * 60_000;
+/// Un mensaje sin entregar caduca al día; un encargo en marcha, a las 6 h (la persona puede intervenir en él).
+const MESSAGE_MAX_MS: u64 = 24 * 60 * 60_000;
 const CHANGE_RUNNING_MAX_MS: u64 = 6 * 60 * 60_000;
 const KEEP_MS: u64 = 14 * 24 * 60 * 60_000;
 const MAX_REQUESTS: usize = 200;
@@ -79,9 +82,8 @@ const MAX_OPEN_MESSAGES_PER_TARGET: usize = 10;
 /// Un mensaje ya está en el hilo del otro chat.
 const SENT: &str = "sent";
 
-const AWAITING: &str = "awaiting_approval";
+/// Encargo o mensaje enviado: espera a un chat del otro proyecto (sin otra aprobación que sus permisos).
 const APPROVED: &str = "approved";
-const REJECTED: &str = "rejected";
 const QUEUED: &str = "queued";
 const RUNNING: &str = "running";
 const ANSWERED: &str = "answered";
@@ -92,7 +94,7 @@ const EXPIRED: &str = "expired";
 
 pub const TOOLS: [&str; 5] = ["trex_projects", "trex_ask_project", "trex_request_change", "trex_message_project", "trex_project_requests"];
 
-const DISABLED: &str = "Las preguntas y encargos entre proyectos están apagados: la persona puede activarlos en Ajustes → Proyectos.";
+const NO_DIRECTORY: &str = "Trex todavía no ha publicado la lista de proyectos. Inténtalo de nuevo en un momento.";
 const ANSWERING: &str = "Este chat está atendiendo una petición de otro proyecto: no puede pedir nada a otros proyectos a su vez. Hazlo con lo que hay en este proyecto.";
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -147,16 +149,13 @@ fn folder_name(path: &str) -> &str {
 
 // --- Directorio: qué proyectos hay y cuáles contestan ------------------------------------
 
-/// Lo que la ventana publica al guardar la configuración: el servidor MCP (otro proceso) no puede
-/// preguntarle, así que resuelve nombres y permisos leyendo este archivo.
+/// Lo que la ventana publica al cargar y al guardar la configuración: el servidor MCP (otro proceso) no
+/// puede preguntarle, así que resuelve los nombres leyendo este archivo. Están todos los proyectos de trex.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Directory {
     #[serde(default)]
     pub projects: Vec<DirectoryProject>,
-    /// Parejas (ids de proyecto) cuyos encargos no esperan aprobación.
-    #[serde(default)]
-    pub trusted: Vec<TrustedPair>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -165,46 +164,25 @@ pub struct DirectoryProject {
     pub id: String,
     pub name: String,
     pub path: String,
-    /// Contesta preguntas.
-    #[serde(default)]
-    pub answers: bool,
-    /// Acepta encargos con cambios.
-    #[serde(default)]
-    pub changes: bool,
 }
 
-fn directory_from(config: &AppConfig) -> Option<Directory> {
-    let settings = &config.settings.project_requests;
-    if !settings.enabled {
-        return None;
-    }
+fn directory_from(config: &AppConfig) -> Directory {
     let projects = config
         .projects
         .iter()
         .filter_map(|project| {
             let path = coordination::project_root(&project.path)?;
-            let entry = settings.answerers.iter().find(|answerer| answerer.project_id == project.id);
-            let (answers, changes) = entry.map_or((false, false), |entry| (entry.questions, entry.changes));
             let name = if project.name.trim().is_empty() { folder_name(&path).to_string() } else { bounded(&project.name, MAX_NAME) };
-            Some(DirectoryProject { id: project.id.clone(), name, path, answers, changes })
+            Some(DirectoryProject { id: project.id.clone(), name, path })
         })
         .take(MAX_PROJECTS)
-        .collect::<Vec<_>>();
-    let known = |id: &str| projects.iter().any(|project: &DirectoryProject| project.id == id);
-    let trusted = settings.trusted.iter().filter(|pair| pair.from != pair.to && known(&pair.from) && known(&pair.to)).cloned().collect();
-    Some(Directory { projects, trusted })
+        .collect();
+    Directory { projects }
 }
 
-/// Escribe (o borra, si está apagado) el directorio que leen los servidores MCP de los chats.
+/// Escribe el directorio que leen los servidores MCP de los chats (si cambió).
 pub fn publish_directory(root: &Path, config: &AppConfig) -> Result<(), String> {
-    let Some(directory) = directory_from(config) else {
-        // Apagado no crea nada: solo quita la lista si una vez estuvo encendido.
-        return match fs::remove_file(root.join(DIR).join(DIRECTORY)) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!("No se pudo apagar las preguntas entre proyectos: {error}")),
-        };
-    };
+    let directory = directory_from(config);
     if load_directory(root).as_ref() == Some(&directory) {
         return Ok(());
     }
@@ -225,20 +203,9 @@ fn load_directory(root: &Path) -> Option<Directory> {
 }
 
 impl Directory {
-    /// Proyectos que atienden peticiones de esa clase (`ask` o `change`), menos el de `from`.
-    fn serving<'a>(&'a self, from: &'a str, kind: &'a str) -> impl Iterator<Item = &'a DirectoryProject> + 'a {
-        self.projects
-            .iter()
-            // Los mensajes llegan al chat abierto, como los encargos: a los proyectos que aceptan encargos.
-            .filter(move |project| (if kind == ASK { project.answers } else { project.changes }) && !coordination::same_project(&project.path, from))
-    }
-
-    /// La persona confió en los encargos de `from` (carpeta) a `to` (id): no esperan aprobación.
-    fn trusts(&self, from: &str, to: &str) -> bool {
-        self.projects
-            .iter()
-            .find(|project| coordination::same_project(&project.path, from))
-            .is_some_and(|project| self.trusted.iter().any(|pair| pair.from == project.id && pair.to == to))
+    /// Los demás proyectos de trex: todos atienden preguntas, encargos y mensajes.
+    fn others<'a>(&'a self, from: &'a str) -> impl Iterator<Item = &'a DirectoryProject> + 'a {
+        self.projects.iter().filter(move |project| !coordination::same_project(&project.path, from))
     }
 
     fn name_of(&self, path: &str) -> String {
@@ -249,38 +216,29 @@ impl Directory {
             .unwrap_or_else(|| folder_name(path).to_string())
     }
 
-    fn resolve<'a>(&'a self, wanted: &str, from: &'a str, kind: &'a str) -> Result<&'a DirectoryProject, String> {
+    fn resolve<'a>(&'a self, wanted: &str, from: &'a str) -> Result<&'a DirectoryProject, String> {
         let key = name_key(wanted.trim().trim_matches(['«', '»', '"', '\'']));
         if key.is_empty() {
             return Err("Indica el nombre del proyecto (project).".into());
         }
-        let serves = match kind {
-            CHANGE => "acepta encargos",
-            MESSAGE => "recibe mensajes",
-            _ => "contesta preguntas",
-        };
         let matches = |project: &DirectoryProject| name_key(&project.name) == key || name_key(folder_name(&project.path)) == key;
-        let exact: Vec<&DirectoryProject> = self.serving(from, kind).filter(|project| matches(project)).collect();
+        let exact: Vec<&DirectoryProject> = self.others(from).filter(|project| matches(project)).collect();
         let found: Vec<&DirectoryProject> = if exact.is_empty() {
-            self.serving(from, kind).filter(|project| name_key(&project.name).contains(&key)).collect()
+            self.others(from).filter(|project| name_key(&project.name).contains(&key)).collect()
         } else {
             exact
         };
         match found.as_slice() {
             [one] => Ok(one),
             [] => {
-                let names = self.serving(from, kind).map(|project| format!("«{}»", project.name)).collect::<Vec<_>>();
-                if let Some(project) = self.projects.iter().find(|project| matches(project)) {
-                    return Err(if coordination::same_project(&project.path, from) {
-                        "Ese es tu propio proyecto. Para hablar con otras sesiones de este proyecto usa trex_message.".into()
-                    } else {
-                        format!("«{}» no {serves}: la persona puede activarlo en Ajustes → Proyectos.", project.name)
-                    });
+                if self.projects.iter().any(|project| matches(project) && coordination::same_project(&project.path, from)) {
+                    return Err("Ese es tu propio proyecto. Para hablar con otras sesiones de este proyecto usa trex_message.".into());
                 }
+                let names = self.others(from).map(|project| format!("«{}»", project.name)).collect::<Vec<_>>();
                 Err(if names.is_empty() {
-                    format!("Ningún otro proyecto de trex {serves} ahora.")
+                    "No hay otros proyectos en trex.".to_string()
                 } else {
-                    format!("No hay ningún proyecto llamado «{}» que {serves}. Proyectos: {}.", bounded(wanted, MAX_NAME), names.join(", "))
+                    format!("No hay ningún proyecto llamado «{}». Proyectos: {}.", bounded(wanted, MAX_NAME), names.join(", "))
                 })
             }
             many => Err(format!(
@@ -324,15 +282,12 @@ pub struct Request {
     /// Encargos: cómo saber que está hecho.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acceptance: Option<String>,
-    /// Encargos: el chat del otro proyecto que lo hace (lo elige la persona al aprobarlo).
+    /// Encargos y mensajes: el chat del otro proyecto que lo recibe (lo elige la ventana).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_session: Option<String>,
-    /// Encargos: fue directo, sin aprobación, porque la persona confía en esa pareja.
+    /// Encargos: el agente pidió que lo haga un chat nuevo de ese proyecto, no el que esté abierto.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub trusted: bool,
-    /// Encargos: cómo se aprobó, si no fue con la tarjeta (p. ej., el chat que lo pidió estaba en acceso total).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    pub new_chat: bool,
     /// Mensajes: el mensaje que contesta (a su chat de origen vuelve la respuesta).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
@@ -380,7 +335,7 @@ fn ask_kind() -> String {
 
 impl Request {
     fn open(&self) -> bool {
-        [QUEUED, RUNNING, AWAITING, APPROVED].contains(&self.status.as_str())
+        [QUEUED, RUNNING, APPROVED].contains(&self.status.as_str())
     }
 
     fn change(&self) -> bool {
@@ -416,9 +371,7 @@ impl Journal {
             let running_max = if request.change() { CHANGE_RUNNING_MAX_MS } else { RUNNING_MAX_MS };
             if request.status == QUEUED && request.created_at.saturating_add(QUEUED_MAX_MS) < now {
                 request.finish(EXPIRED, "Nadie la contestó a tiempo: trex estuvo cerrado o el proyecto dejó de contestar preguntas.".into(), now);
-            } else if request.status == AWAITING && request.created_at.saturating_add(AWAITING_MAX_MS) < now {
-                request.finish(EXPIRED, "La persona no aprobó el encargo a tiempo.".into(), now);
-            } else if request.message() && request.status == APPROVED && request.created_at.saturating_add(AWAITING_MAX_MS) < now {
+            } else if request.message() && request.status == APPROVED && request.created_at.saturating_add(MESSAGE_MAX_MS) < now {
                 // Un mensaje que no llegó en un día ya no sirve; no merece despertar a quien lo mandó.
                 request.finish(EXPIRED, format!("No había ningún chat de «{}» abierto para recibirlo.", request.to_name), now);
                 request.delivered = true;
@@ -460,7 +413,7 @@ impl Journal {
 pub fn tools() -> Vec<Value> {
     vec![
         json!({"name":"trex_projects",
-            "description":"Other Trex projects whose agent answers questions (trex_ask_project) or takes change requests (trex_request_change), with your open requests to them. No arguments.",
+            "description":"The other Trex projects, whose agents answer questions (trex_ask_project), take change requests (trex_request_change) and messages (trex_message_project), with your open requests to them. No arguments.",
             "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
             "annotations":{"readOnlyHint":true}}),
         json!({"name":"trex_ask_project",
@@ -473,12 +426,13 @@ pub fn tools() -> Vec<Value> {
                 "required":["project","question","key"],"additionalProperties":false},
             "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"trex_request_change",
-            "description":"Ask the agent of another Trex project (see trex_projects) to change that project for you: add or fix something you need from it. The user approves each request in Trex (unless they trusted this pair); then it goes to the chat the user has open in that project, where its agent does the work in view of the user, with that chat's permissions. It changes only its own project and cannot see yours: put in context what it needs (what you are building, the API you expect, short code) and in acceptance how to tell it is done. Never wait or poll: end your turn and Trex opens a new one with its report. If the user rejects it, do not ask again. key: a short stable id for this request.",
+            "description":"Ask the agent of another Trex project (see trex_projects) to change that project for you: add or fix something you need from it. It goes straight to the chat the user has open in that project (or a new one Trex opens), where its agent does the work in view of the user, with that chat's permissions: with full access it just does it, otherwise it asks the user as usual. Set newChat to have it done in a new chat of that project instead, e.g. when it is unrelated to what that chat is doing. It changes only its own project and cannot see yours: put in context what it needs (what you are building, the API you expect, short code) and in acceptance how to tell it is done. Never wait or poll: end your turn and Trex opens a new one with its report. key: a short stable id for this request.",
             "inputSchema":{"type":"object","properties":{
                 "project":{"type":"string","minLength":1,"maxLength":200,"description":"Project name as trex_projects lists it."},
                 "task":{"type":"string","minLength":1,"maxLength":MAX_QUESTION,"description":"What to add or change in that project."},
                 "acceptance":{"type":"string","maxLength":MAX_ACCEPTANCE,"description":"How the other agent can tell it is done (tests, behaviour, API)."},
                 "context":{"type":"string","maxLength":MAX_CONTEXT,"description":"What the other agent needs to know about your side."},
+                "newChat":{"type":"boolean","description":"Have it done in a new chat of that project rather than the one the user has open."},
                 "key":{"type":"string","minLength":1,"maxLength":MAX_KEY}},
                 "required":["project","task","key"],"additionalProperties":false},
             "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
@@ -501,24 +455,15 @@ pub fn tools() -> Vec<Value> {
     ]
 }
 
-/// Lo que se ofrece a un chat: nada con la función apagada o mientras atiende una petición de otro
-/// proyecto; preguntar, solo si algún otro proyecto contesta; encargar, solo si alguno acepta encargos.
+/// Lo que se ofrece a un chat: todas, salvo que no haya otro proyecto en trex o que el chat esté
+/// atendiendo una petición de otro proyecto (un solo salto).
 pub fn offered_tools(root: &Path, project: &str, session: &str) -> Vec<Value> {
     let Some(directory) = load_directory(root) else { return Vec::new() };
     let Some(from) = coordination::project_root(project) else { return Vec::new() };
-    let asks = directory.serving(&from, ASK).next().is_some();
-    let changes = directory.serving(&from, CHANGE).next().is_some();
-    if !asks && !changes || with_journal(root, |journal, _| (journal.answering(session), false)).unwrap_or(true) {
+    if directory.others(&from).next().is_none() || with_journal(root, |journal, _| (journal.answering(session), false)).unwrap_or(true) {
         return Vec::new();
     }
     tools()
-        .into_iter()
-        .filter(|tool| match tool["name"].as_str() {
-            Some("trex_ask_project") => asks,
-            Some("trex_request_change") | Some("trex_message_project") => changes,
-            _ => true,
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -553,6 +498,14 @@ fn text_arg(object: Option<&Map<String, Value>>, name: &str, limit: usize, requi
     }
 }
 
+fn bool_arg(object: Option<&Map<String, Value>>, name: &str) -> Result<bool, String> {
+    match object.and_then(|object| object.get(name)) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(format!("{name} debe ser true o false.")),
+    }
+}
+
 /// Lo que cruza de un proyecto a otro, sin credenciales ni bloques de entorno.
 fn clean(text: &str) -> Result<String, String> {
     let text = crate::handoff::sanitize_handoff_text(text).trim().to_string();
@@ -575,8 +528,7 @@ fn status_label(request: &Request) -> String {
         };
     }
     match request.status.as_str() {
-        AWAITING => "espera la aprobación de la persona".into(),
-        APPROVED => format!("aprobado; espera a que el chat de «{}» quede libre", request.to_name),
+        APPROVED => format!("enviado; espera a que el chat de «{}» quede libre", request.to_name),
         QUEUED => "en cola".into(),
         RUNNING if change => format!("«{}» está trabajando en él", request.to_name),
         RUNNING => "contestando".into(),
@@ -585,7 +537,6 @@ fn status_label(request: &Request) -> String {
         UNCERTAIN => "interrumpida".into(),
         CANCELLED => (if change { "cancelado" } else { "cancelada" }).into(),
         EXPIRED => (if change { "caducado" } else { "caducada" }).into(),
-        REJECTED => "rechazado por la persona".into(),
         _ => "desconocido".into(),
     }
 }
@@ -610,11 +561,7 @@ fn answer_text(root: &Path, request: &Request, full: bool) -> String {
         let what = if request.status == ANSWERED { "Respuesta" } else { "Sin respuesta" };
         return format!("{what} de «{}» a tu pregunta {} («{}»):\n{report}", request.to_name, request.id, bounded(&request.question, 120));
     }
-    let what = match request.status.as_str() {
-        ANSWERED => "Informe",
-        REJECTED => "Rechazado",
-        _ => "Sin terminar",
-    };
+    let what = if request.status == ANSWERED { "Informe" } else { "Sin terminar" };
     let mut text = format!("{what} de «{}» sobre tu encargo {} («{}»):\n{report}", request.to_name, request.id, bounded(&request.question, 120));
     if !request.files.is_empty() {
         text.push_str(&format!("\nArchivos que editó (medido por trex): {}", request.files.join(", ")));
@@ -627,29 +574,12 @@ fn answer_text(root: &Path, request: &Request, full: bool) -> String {
 
 fn projects_tool(journal: &Journal, directory: &Directory, from: &str, session: &str, args: &Value) -> Result<String, String> {
     arguments(args, &[])?;
-    let projects: Vec<&DirectoryProject> = directory
-        .projects
-        .iter()
-        .filter(|project| (project.answers || project.changes) && !coordination::same_project(&project.path, from))
-        .collect();
+    let projects: Vec<&DirectoryProject> = directory.others(from).collect();
     let mut lines = if projects.is_empty() {
-        vec!["Ningún otro proyecto de trex atiende peticiones ahora.".to_string()]
+        vec!["No hay otros proyectos en trex.".to_string()]
     } else {
-        let mut lines = vec!["Proyectos de trex que atienden peticiones (usa su nombre con trex_ask_project o trex_request_change):".to_string()];
-        lines.extend(projects.iter().map(|project| {
-            let mut serves = Vec::new();
-            if project.answers {
-                serves.push("contesta preguntas".to_string());
-            }
-            if project.changes {
-                serves.push(if directory.trusts(from, &project.id) {
-                    "acepta encargos (sin esperar aprobación)".to_string()
-                } else {
-                    "acepta encargos (con aprobación de la persona)".to_string()
-                });
-            }
-            format!("- «{}» (carpeta {}): {}", project.name, folder_name(&project.path), serves.join(" · "))
-        }));
+        let mut lines = vec!["Otros proyectos de trex (usa su nombre con trex_ask_project, trex_request_change o trex_message_project):".to_string()];
+        lines.extend(projects.iter().map(|project| format!("- «{}» (carpeta {})", project.name, folder_name(&project.path))));
         lines
     };
     let open: Vec<&Request> = journal.requests.iter().filter(|request| request.from_session == session && request.open()).collect();
@@ -671,7 +601,7 @@ fn message_tool(journal: &mut Journal, directory: &Directory, from: &str, sessio
     if let Some(existing) = journal.requests.iter().find(|request| request.from_session == session && request.key == key) {
         return Ok(format!("Ya enviaste esto ({}, a «{}»): {}. No lo repitas.", existing.id, existing.to_name, status_label(existing)));
     }
-    let target = directory.resolve(&project, from, MESSAGE)?;
+    let target = directory.resolve(&project, from)?;
     if let Some(reply_to) = &reply_to {
         // Solo se contesta un mensaje que llegó a este chat desde ese proyecto.
         let original = journal.requests.iter().find(|request| &request.id == reply_to && request.message()).ok_or("No hay ningún mensaje con ese replyTo.")?;
@@ -701,8 +631,7 @@ fn message_tool(journal: &mut Journal, directory: &Directory, from: &str, sessio
         context: None,
         acceptance: None,
         to_session: None,
-        trusted: false,
-        note: None,
+        new_chat: false,
         reply_to,
         files: Vec::new(),
         diff_stat: None,
@@ -733,13 +662,14 @@ fn message_tool(journal: &mut Journal, directory: &Directory, from: &str, sessio
 fn request_tool(journal: &mut Journal, directory: &Directory, from: &str, session: &str, args: &Value, now: u64, kind: &str) -> Result<String, String> {
     let change = kind == CHANGE;
     let (field, allowed): (&str, &[&str]) =
-        if change { ("task", &["project", "task", "acceptance", "context", "key"]) } else { ("question", &["project", "question", "context", "key"]) };
+        if change { ("task", &["project", "task", "acceptance", "context", "newChat", "key"]) } else { ("question", &["project", "question", "context", "key"]) };
     let object = arguments(args, allowed)?;
     let project = text_arg(object, "project", 200, true)?.unwrap_or_default();
     let key = text_arg(object, "key", MAX_KEY, true)?.unwrap_or_default();
     let question = clean(&text_arg(object, field, MAX_QUESTION, true)?.unwrap_or_default())?;
     let context = text_arg(object, "context", MAX_CONTEXT, false)?.map(|text| clean(&text)).transpose()?;
     let acceptance = if change { text_arg(object, "acceptance", MAX_ACCEPTANCE, false)?.map(|text| clean(&text)).transpose()? } else { None };
+    let new_chat = change && bool_arg(object, "newChat")?;
     if let Some(existing) = journal.requests.iter().find(|request| request.from_session == session && request.key == key) {
         return Ok(format!(
             "Ya enviaste esto ({}, a «{}»): {}. No lo repitas; trex te abrirá un turno con {}.",
@@ -749,7 +679,7 @@ fn request_tool(journal: &mut Journal, directory: &Directory, from: &str, sessio
             if existing.change() { "el informe" } else { "la respuesta" }
         ));
     }
-    let target = directory.resolve(&project, from, kind)?;
+    let target = directory.resolve(&project, from)?;
     let open = journal.requests.iter().filter(|request| request.from_session == session && request.open()).count();
     if open >= MAX_OPEN_PER_SESSION {
         return Err(format!("Ya tienes {open} peticiones sin terminar. Termina tu turno y espera sus respuestas antes de pedir más."));
@@ -766,14 +696,8 @@ fn request_tool(journal: &mut Journal, directory: &Directory, from: &str, sessio
             return Err(format!("«{}» ya tiene {queued} preguntas en cola. Inténtalo más tarde.", target.name));
         }
     }
-    let trusted = change && directory.trusts(from, &target.id);
-    let status = if !change {
-        QUEUED
-    } else if trusted {
-        APPROVED
-    } else {
-        AWAITING
-    };
+    // Un encargo no espera ninguna aprobación: la del chat que lo hace son sus permisos.
+    let status = if change { APPROVED } else { QUEUED };
     let request = Request {
         id: uid(),
         key,
@@ -788,8 +712,7 @@ fn request_tool(journal: &mut Journal, directory: &Directory, from: &str, sessio
         context,
         acceptance,
         to_session: None,
-        trusted,
-        note: None,
+        new_chat,
         reply_to: None,
         files: Vec::new(),
         diff_stat: None,
@@ -813,15 +736,11 @@ fn request_tool(journal: &mut Journal, directory: &Directory, from: &str, sessio
             "Pregunta enviada a «{}» ({}). Trex abre un chat de solo lectura en ese proyecto; suele tardar unos minutos. No esperes ni consultes en bucle: termina tu turno y trex te abrirá otro con la respuesta.",
             request.to_name, request.id
         )
-    } else if trusted {
-        format!(
-            "Encargo enviado a «{}» ({}). La persona confía en los encargos de este proyecto a «{}»: va directo al chat que tenga abierto allí, donde su agente lo hará a la vista. No esperes ni consultes en bucle: termina tu turno y trex te abrirá otro con su informe.",
-            request.to_name, request.id, request.to_name
-        )
     } else {
+        let chat = if new_chat { "a un chat nuevo de ese proyecto" } else { "al chat que la persona tenga abierto allí (o a uno nuevo, si no hay ninguno)" };
         format!(
-            "Encargo enviado a «{}» ({}). La persona tiene que aprobarlo en trex; después lo hará el chat que tenga abierto en «{}», a la vista. No esperes ni consultes en bucle: termina tu turno y trex te abrirá otro con su informe. Si lo rechaza, no lo repitas.",
-            request.to_name, request.id, request.to_name
+            "Encargo enviado a «{}» ({}). Va {chat}, donde su agente lo hará a la vista con los permisos de ese chat. No esperes ni consultes en bucle: termina tu turno y trex te abrirá otro con su informe.",
+            request.to_name, request.id
         )
     };
     journal.requests.push(request);
@@ -875,7 +794,7 @@ fn call_inner(root: &Path, project: &str, session: &str, name: &str, args: &Valu
         return Err("Sesión no válida.".into());
     }
     let from = coordination::project_root(project).ok_or("La carpeta del proyecto debe ser una ruta absoluta.")?;
-    let directory = load_directory(root).ok_or(DISABLED)?;
+    let directory = load_directory(root).ok_or(NO_DIRECTORY)?;
     with_journal(root, |journal, now| {
         if journal.answering(session) {
             return (Err(ANSWERING.to_string()), false);
@@ -1000,8 +919,8 @@ fn retry_board(journal: &mut Journal, id: &str, report: &str, now: u64) -> Resul
 
 /// Al arrancar trex: una pregunta que se estaba contestando cuando se cerró vuelve a la cola una vez
 /// (solo lee). Un encargo no se repite solo: pudo cambiar cosas a medias, así que se avisa.
-/// `changes`: también los encargos (solo al arrancar trex; al volver a encender la función, el chat
-/// que hace un encargo sigue abierto y lo termina él).
+/// `changes`: también los encargos (solo al arrancar trex; si la ventana vuelve a montar a quien contesta,
+/// el chat que hace un encargo sigue abierto y lo termina él).
 fn recover_board(journal: &mut Journal, now: u64, changes: bool) -> bool {
     let mut changed = false;
     for request in journal.requests.iter_mut().filter(|request| request.status == RUNNING && (changes || !request.change())) {
@@ -1038,33 +957,20 @@ fn cancel_board(journal: &mut Journal, id: &str, now: u64) -> Result<Request, St
     Ok(request.clone())
 }
 
-/// La persona decide un encargo desde la ventana (el modelo no puede): aprobarlo para el chat `session`
-/// del otro proyecto o rechazarlo. También asigna el chat a un encargo de una pareja de confianza.
-/// Un rechazo no despierta a quien lo pidió: queda entregado y lo ve si consulta el estado.
-/// `reason`: por qué se descarta sin aprobar (por defecto, que la persona lo rechazó).
-///
-/// Con un mensaje solo se asigna (o se reasigna, si su chat se cerró) el chat que lo recibe; `reason`,
-/// al aprobar, queda como nota de cómo se aprobó (se le dice al agente que lo hace).
-fn decide_board(journal: &mut Journal, id: &str, approve: bool, session: Option<&str>, reason: Option<&str>, now: u64) -> Result<Request, String> {
-    let request = journal.requests.iter_mut().find(|request| request.id == id).ok_or("El encargo ya no existe.")?;
-    let waiting = request.change() && (request.status == AWAITING || request.status == APPROVED && request.to_session.is_none())
-        || request.message() && request.status == APPROVED && approve;
+/// La ventana da a un encargo o a un mensaje el chat del otro proyecto que lo recibe (el modelo no
+/// puede): el libre, uno nuevo o, con un mensaje, el que ya habló con quien escribe. Un mensaje cuyo
+/// chat se cerró pasa a otro; un encargo, una vez asignado, ya no cambia de chat.
+fn assign_board(journal: &mut Journal, id: &str, session: &str, now: u64) -> Result<Request, String> {
+    if !valid_session(session) {
+        return Err("Falta el chat que lo recibe.".into());
+    }
+    let request = journal.requests.iter_mut().find(|request| request.id == id).ok_or("La petición ya no existe.")?;
+    let waiting = request.status == APPROVED && (request.message() || request.change() && request.to_session.is_none());
     if !waiting {
-        return Err("El encargo ya no espera una decisión.".into());
+        return Err("Esa petición ya no espera un chat.".into());
     }
-    if approve {
-        let session = session.filter(|session| valid_session(session)).ok_or("Falta el chat que hará el encargo.")?;
-        if request.status == AWAITING {
-            request.note = reason.map(|reason| bounded(reason, 300)).filter(|reason| !reason.is_empty());
-        }
-        request.status = APPROVED.into();
-        request.to_session = Some(session.into());
-        request.updated_at = now;
-    } else {
-        let text = reason.map(|reason| bounded(reason, 300)).filter(|reason| !reason.is_empty()).unwrap_or_else(|| "La persona rechazó el encargo.".into());
-        request.finish(REJECTED, text, now);
-        request.delivered = true;
-    }
+    request.to_session = Some(session.into());
+    request.updated_at = now;
     Ok(request.clone())
 }
 
@@ -1441,13 +1347,13 @@ pub async fn project_request_cancel(app: AppHandle, id: String) -> Result<Reques
     .await
 }
 
-/// La persona aprueba (con el chat que lo hará) o rechaza un encargo. Solo existe en la ventana.
+/// El chat del otro proyecto que recibe un encargo o un mensaje. Solo existe en la ventana.
 #[tauri::command]
-pub async fn project_request_decide(app: AppHandle, id: String, approve: bool, session: Option<String>, reason: Option<String>) -> Result<Request, String> {
+pub async fn project_request_assign(app: AppHandle, id: String, session: String) -> Result<Request, String> {
     let root = data_dir(&app)?;
     blocking(move || {
         with_journal(&root, |journal, now| {
-            let result = decide_board(journal, &id, approve, session.as_deref(), reason.as_deref(), now);
+            let result = assign_board(journal, &id, &session, now);
             let changed = result.is_ok();
             (result, changed)
         })?
@@ -1531,7 +1437,6 @@ pub async fn project_request_tools(app: AppHandle, project: String, session: Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ProjectAnswerer, ProjectRequestsSettings, TrustedPair};
 
     const AFELIO: &str = if cfg!(windows) { "D:/web/Afelio" } else { "/home/ana/web/Afelio" };
     const ZMODAL: &str = if cfg!(windows) { "D:/motor/zmodal" } else { "/home/ana/motor/zmodal" };
@@ -1551,17 +1456,11 @@ mod tests {
         }
     }
 
-    fn config(enabled: bool, answerers: &[&str]) -> AppConfig {
-        let mut config: AppConfig = serde_json::from_value(json!({"projects":[
+    fn config() -> AppConfig {
+        serde_json::from_value(json!({"projects":[
             {"id":"p-afelio","name":"Afelio","path":AFELIO},
             {"id":"p-zmodal","name":"zmodal","path":ZMODAL},
-            {"id":"p-notas","name":"Notas","path":NOTAS}]})).unwrap();
-        config.settings.project_requests = ProjectRequestsSettings {
-            enabled,
-            answerers: answerers.iter().map(|id| ProjectAnswerer { project_id: id.to_string(), ..Default::default() }).collect(),
-            trusted: Vec::new(),
-        };
-        config
+            {"id":"p-notas","name":"Notas","path":NOTAS}]})).unwrap()
     }
 
     fn text(value: &Value) -> String {
@@ -1573,47 +1472,35 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_are_opt_in_and_roundtrip() {
-        let old: AppConfig = serde_json::from_value(json!({"settings":{}})).unwrap();
-        assert!(!old.settings.project_requests.enabled && old.settings.project_requests.answerers.is_empty());
-        let saved = serde_json::to_value(config(true, &["p-zmodal"])).unwrap();
-        assert_eq!(
-            saved["settings"]["projectRequests"],
-            json!({"enabled":true,"answerers":[{"projectId":"p-zmodal","profileId":"","questions":true,"changes":false}],"trusted":[]})
-        );
-        // Los ajustes de la fase 1 (sin `questions`) siguen contestando preguntas y no aceptan encargos.
-        let phase1: crate::config::ProjectAnswerer = serde_json::from_value(json!({"projectId":"p-zmodal","profileId":""})).unwrap();
-        assert!(phase1.questions && !phase1.changes);
-    }
-
-    #[test]
-    fn nothing_is_offered_while_the_feature_is_off_or_nobody_answers() {
+    fn every_project_takes_part_without_settings() {
+        // Los ajustes de la versión con interruptor se ignoran al cargar y no se vuelven a guardar.
+        let old: AppConfig = serde_json::from_value(json!({"settings":{"projectRequests":{"enabled":false,"answerers":[],"trusted":[]}}})).unwrap();
+        assert!(serde_json::to_value(&old).unwrap()["settings"].get("projectRequests").is_none());
         let dir = TestDir::new();
-        publish_directory(&dir.0, &config(false, &["p-zmodal"])).unwrap();
+        // Sin la lista de proyectos (la ventana aún no la publicó) no hay herramientas.
         assert!(!offered(&dir.0, AFELIO, "t-1"));
-        assert!(text(&ask(&dir.0, "t-1", "zmodal", "k")).contains("apagados"));
-        assert!(!dir.0.join(DIR).exists(), "apagado no deja nada en la carpeta de datos");
-        publish_directory(&dir.0, &config(true, &["p-afelio"])).unwrap();
-        // Solo contesta su propio proyecto: no hay a quién preguntar.
+        assert!(text(&ask(&dir.0, "t-1", "zmodal", "k")).contains("todavía no"));
+        // Con un solo proyecto no hay a quién preguntar.
+        let alone: AppConfig = serde_json::from_value(json!({"projects":[{"id":"p-afelio","name":"Afelio","path":AFELIO}]})).unwrap();
+        publish_directory(&dir.0, &alone).unwrap();
         assert!(!offered(&dir.0, AFELIO, "t-1"));
-        assert!(offered(&dir.0, ZMODAL, "t-2"));
-        publish_directory(&dir.0, &config(false, &[])).unwrap();
-        assert!(!dir.0.join(DIR).join(DIRECTORY).exists());
-    }
-
-    #[test]
-    fn projects_are_found_by_name_never_by_path_and_only_if_they_answer() {
-        let dir = TestDir::new();
-        publish_directory(&dir.0, &config(true, &["p-zmodal"])).unwrap();
+        // Un proyecto nuevo entra en cuanto la ventana guarda la configuración: no hay que marcar nada.
+        publish_directory(&dir.0, &config()).unwrap();
+        assert!(offered(&dir.0, AFELIO, "t-1") && offered(&dir.0, NOTAS, "t-2"));
         let listing = text(&call(&dir.0, AFELIO, "t-1", "trex_projects", &json!({})));
-        assert!(listing.contains("«zmodal»") && !listing.contains("«Notas»") && !listing.contains("«Afelio»"), "{listing}");
+        assert!(listing.contains("«zmodal»") && listing.contains("«Notas»") && !listing.contains("«Afelio»"), "{listing}");
+    }
+
+    #[test]
+    fn projects_are_found_by_name_never_by_path() {
+        let dir = TestDir::new();
+        publish_directory(&dir.0, &config()).unwrap();
         for spelling in ["zmodal", "Z-Modal", "«ZMODAL»", "zmod"] {
             let reply = ask(&dir.0, "t-1", spelling, &format!("k-{spelling}"));
             assert_eq!(reply["isError"], false, "{spelling}: {}", text(&reply));
             cancel_all(&dir.0);
         }
         assert!(text(&ask(&dir.0, "t-1", ZMODAL, "ruta")).contains("No hay ningún proyecto"));
-        assert!(text(&ask(&dir.0, "t-1", "Notas", "n")).contains("no contesta preguntas"));
         assert!(text(&ask(&dir.0, "t-1", "Afelio", "a")).contains("tu propio proyecto"));
         let reply = call(&dir.0, AFELIO, "t-1", "trex_ask_project", &json!({"project":"zmodal","question":"x","key":"k","path":"C:/"}));
         assert!(text(&reply).contains("Argumento desconocido"));
@@ -1635,7 +1522,7 @@ mod tests {
     #[test]
     fn a_question_is_answered_once_and_the_answer_goes_back_to_who_asked() {
         let dir = TestDir::new();
-        publish_directory(&dir.0, &config(true, &["p-zmodal"])).unwrap();
+        publish_directory(&dir.0, &config()).unwrap();
         let reply = call(&dir.0, AFELIO, "t-1", "trex_ask_project", &json!({"project":"zmodal","question":"¿Cómo animo el héroe? token sk-ant-abcdefghijklmnop1234","context":"React 19","key":"heroe"}));
         assert_eq!(reply["isError"], false, "{}", text(&reply));
         // Repetir la misma clave no crea otra.
@@ -1674,7 +1561,7 @@ mod tests {
     #[test]
     fn an_answer_whose_chat_closed_can_go_to_another_chat_of_the_same_project() {
         let dir = TestDir::new();
-        publish_directory(&dir.0, &config(true, &["p-zmodal"])).unwrap();
+        publish_directory(&dir.0, &config()).unwrap();
         assert_eq!(ask(&dir.0, "t-1", "zmodal", "k")["isError"], false);
         let id = with_journal(&dir.0, |journal, _| (journal.requests[0].id.clone(), false)).unwrap();
         // Sin respuesta todavía no hay nada que pasar.
@@ -1697,7 +1584,7 @@ mod tests {
     #[test]
     fn limits_keep_an_agent_from_flooding_other_projects() {
         let dir = TestDir::new();
-        publish_directory(&dir.0, &config(true, &["p-zmodal", "p-notas"])).unwrap();
+        publish_directory(&dir.0, &config()).unwrap();
         for index in 0..MAX_OPEN_PER_SESSION {
             assert_eq!(ask(&dir.0, "t-1", "zmodal", &format!("k{index}"))["isError"], false);
         }
@@ -1717,7 +1604,7 @@ mod tests {
     #[test]
     fn an_interrupted_answer_is_retried_once_and_long_answers_are_kept_whole() {
         let dir = TestDir::new();
-        publish_directory(&dir.0, &config(true, &["p-zmodal"])).unwrap();
+        publish_directory(&dir.0, &config()).unwrap();
         ask(&dir.0, "t-1", "zmodal", "k");
         let id = with_journal(&dir.0, |journal, _| (journal.requests[0].id.clone(), false)).unwrap();
         for attempt in 1..=MAX_ATTEMPTS {
@@ -1757,7 +1644,7 @@ mod tests {
         let base = Request {
             id: "q-1".into(), key: "k".into(), from_project: AFELIO.into(), from_name: "Afelio".into(), from_session: "t-1".into(),
             to_project_id: "p-zmodal".into(), to_project: ZMODAL.into(), to_name: "zmodal".into(), kind: ASK.into(), question: "?".into(), context: None,
-            acceptance: None, to_session: None, trusted: false, note: None, reply_to: None, files: Vec::new(), diff_stat: None, baseline: None,
+            acceptance: None, to_session: None, new_chat: false, reply_to: None, files: Vec::new(), diff_stat: None, baseline: None,
             status: QUEUED.into(), attempts: 0, answer_session: None, conversation: None, answer_profile: None, usage: None, report: None, report_file: None,
             delivered: false, created_at: 0, updated_at: 0, started_at: None, finished_at: None,
         };
@@ -1770,16 +1657,6 @@ mod tests {
         assert!(journal.requests[0].deliverable(), "quien preguntó se entera de que caducó");
     }
 
-    fn change_config(trusted: bool) -> AppConfig {
-        let mut config = config(true, &["p-zmodal"]);
-        config.settings.project_requests.answerers[0].changes = true;
-        config.settings.project_requests.answerers[0].questions = false;
-        if trusted {
-            config.settings.project_requests.trusted.push(TrustedPair { from: "p-afelio".into(), to: "p-zmodal".into() });
-        }
-        config
-    }
-
     fn request_change(root: &Path, key: &str) -> Value {
         call(root, AFELIO, "t-1", "trex_request_change", &json!({"project":"zmodal","task":"Añade bounceIn al motor","acceptance":"Exportada y con prueba","key":key}))
     }
@@ -1788,28 +1665,34 @@ mod tests {
         with_journal(root, |journal, _| (journal.requests.last().unwrap().clone(), false)).unwrap()
     }
 
+    fn assign(root: &Path, id: &str, session: &str) -> Result<Request, String> {
+        with_journal(root, |journal, now| {
+            let result = assign_board(journal, id, session, now);
+            let changed = result.is_ok();
+            (result, changed)
+        })
+        .unwrap()
+    }
+
     #[test]
-    fn a_change_waits_for_the_person_and_then_goes_to_the_chat_they_chose() {
+    fn a_change_goes_straight_to_a_chat_of_the_other_project_without_approval() {
         let dir = TestDir::new();
-        publish_directory(&dir.0, &change_config(false)).unwrap();
-        // Solo acepta encargos: se ofrece encargar, no preguntar.
+        publish_directory(&dir.0, &config()).unwrap();
         let names: Vec<String> = offered_tools(&dir.0, AFELIO, "t-1").iter().map(|tool| tool["name"].as_str().unwrap().to_string()).collect();
-        assert_eq!(names, ["trex_projects", "trex_request_change", "trex_message_project", "trex_project_requests"]);
-        assert!(text(&ask(&dir.0, "t-1", "zmodal", "p")).contains("no contesta preguntas"));
-        assert!(text(&call(&dir.0, AFELIO, "t-1", "trex_projects", &json!({}))).contains("acepta encargos (con aprobación de la persona)"));
+        assert_eq!(names, TOOLS);
 
         let reply = request_change(&dir.0, "bounce");
         assert_eq!(reply["isError"], false, "{}", text(&reply));
-        assert!(text(&reply).contains("tiene que aprobarlo"));
+        assert!(text(&reply).contains("con los permisos de ese chat"), "{}", text(&reply));
         let request = only(&dir.0);
-        assert_eq!((request.kind.as_str(), request.status.as_str(), request.acceptance.as_deref()), (CHANGE, AWAITING, Some("Exportada y con prueba")));
-        // Nadie lo empieza sin aprobar, ni siquiera el chat al que iría.
+        // No espera a la persona: queda enviado hasta que la ventana le da un chat de zmodal.
+        assert_eq!((request.kind.as_str(), request.status.as_str(), request.to_session.as_deref(), request.new_chat), (CHANGE, APPROVED, None, false));
+        assert_eq!(request.acceptance.as_deref(), Some("Exportada y con prueba"));
+        // Nadie lo empieza sin chat asignado, ni siquiera el chat al que iría.
         assert!(with_journal(&dir.0, |journal, now| (begin_board(journal, &request.id, "t-zmodal", None, now), false)).unwrap().is_none());
-        // Aprobar exige el chat que lo hará.
-        assert!(with_journal(&dir.0, |journal, now| (decide_board(journal, &request.id, true, None, None, now), false)).unwrap().is_err());
-        let approved = with_journal(&dir.0, |journal, now| (decide_board(journal, &request.id, true, Some("t-zmodal"), None, now), true)).unwrap().unwrap();
-        assert_eq!((approved.status.as_str(), approved.to_session.as_deref()), (APPROVED, Some("t-zmodal")));
-        assert!(with_journal(&dir.0, |journal, now| (decide_board(journal, &request.id, false, None, None, now), false)).unwrap().is_err(), "ya está decidido");
+        assert!(assign(&dir.0, &request.id, "").is_err(), "hace falta el chat que lo hará");
+        assert_eq!(assign(&dir.0, &request.id, "t-zmodal").unwrap().to_session.as_deref(), Some("t-zmodal"));
+        assert!(assign(&dir.0, &request.id, "t-otro").is_err(), "un encargo asignado no cambia de chat");
         // Solo lo empieza el chat elegido.
         assert!(with_journal(&dir.0, |journal, now| (begin_board(journal, &request.id, "t-otro", None, now), false)).unwrap().is_none());
         let running = with_journal(&dir.0, |journal, now| (begin_board(journal, &request.id, "t-zmodal", None, now), true)).unwrap().unwrap();
@@ -1836,46 +1719,38 @@ mod tests {
     }
 
     #[test]
-    fn a_rejected_change_does_not_wake_anyone_and_a_trusted_pair_skips_the_approval() {
+    fn an_agent_can_ask_for_a_new_chat_and_changes_to_one_project_are_capped() {
         let dir = TestDir::new();
-        publish_directory(&dir.0, &change_config(false)).unwrap();
-        request_change(&dir.0, "uno");
-        let id = only(&dir.0).id;
-        let rejected = with_journal(&dir.0, |journal, now| (decide_board(journal, &id, false, None, None, now), true)).unwrap().unwrap();
-        assert_eq!((rejected.status.as_str(), rejected.delivered), (REJECTED, true));
-        assert!(!rejected.deliverable(), "un rechazo no abre un turno al agente que lo pidió");
-        assert!(text(&call(&dir.0, AFELIO, "t-1", "trex_project_requests", &json!({"requestId":id}))).contains("Rechazado"));
-
-        publish_directory(&dir.0, &change_config(true)).unwrap();
-        assert!(text(&call(&dir.0, AFELIO, "t-1", "trex_projects", &json!({}))).contains("sin esperar aprobación"));
-        assert!(text(&request_change(&dir.0, "dos")).contains("confía"));
-        let trusted = only(&dir.0);
-        assert_eq!((trusted.status.as_str(), trusted.to_session.as_deref(), trusted.trusted), (APPROVED, None, true));
-        // La ventana le asigna el chat; después ya no se puede reasignar.
-        let assigned = with_journal(&dir.0, |journal, now| (decide_board(journal, &trusted.id, true, Some("t-zmodal"), None, now), true)).unwrap().unwrap();
-        assert_eq!(assigned.to_session.as_deref(), Some("t-zmodal"));
-        assert!(with_journal(&dir.0, |journal, now| (decide_board(journal, &trusted.id, true, Some("t-otro"), None, now), false)).unwrap().is_err());
+        publish_directory(&dir.0, &config()).unwrap();
+        let wrong = call(&dir.0, AFELIO, "t-1", "trex_request_change", &json!({"project":"zmodal","task":"x","newChat":"sí","key":"mal"}));
+        assert!(text(&wrong).contains("true o false"), "{}", text(&wrong));
+        let fresh = call(&dir.0, AFELIO, "t-1", "trex_request_change", &json!({"project":"zmodal","task":"Añade un modo oscuro al visor","newChat":true,"key":"nuevo"}));
+        assert!(text(&fresh).contains("a un chat nuevo"), "{}", text(&fresh));
+        assert!(only(&dir.0).new_chat);
+        // Las preguntas no eligen chat: siempre contesta uno oculto de solo lectura.
+        let question = call(&dir.0, AFELIO, "t-1", "trex_ask_project", &json!({"project":"zmodal","question":"?","newChat":true,"key":"p"}));
+        assert!(text(&question).contains("Argumento desconocido"));
         // Tres encargos abiertos al mismo proyecto como mucho.
-        request_change(&dir.0, "tres");
-        request_change(&dir.0, "cuatro");
-        assert!(text(&call(&dir.0, AFELIO, "t-2", "trex_request_change", &json!({"project":"zmodal","task":"otro","key":"cinco"}))).contains("encargos pendientes"));
+        request_change(&dir.0, "dos");
+        call(&dir.0, AFELIO, "t-2", "trex_request_change", &json!({"project":"zmodal","task":"otro","key":"tres"}));
+        assert!(text(&call(&dir.0, AFELIO, "t-3", "trex_request_change", &json!({"project":"zmodal","task":"otro","key":"cuatro"}))).contains("encargos pendientes"));
     }
 
     #[test]
     fn a_change_cut_by_a_restart_is_reported_not_repeated() {
         let dir = TestDir::new();
-        publish_directory(&dir.0, &change_config(true)).unwrap();
+        publish_directory(&dir.0, &config()).unwrap();
         request_change(&dir.0, "a");
         let running = only(&dir.0).id;
         with_journal(&dir.0, |journal, now| {
-            decide_board(journal, &running, true, Some("t-zmodal"), None, now).unwrap();
+            assign_board(journal, &running, "t-zmodal", now).unwrap();
             begin_board(journal, &running, "t-zmodal", None, now).unwrap();
             ((), true)
         })
         .unwrap();
         request_change(&dir.0, "b");
         let waiting = only(&dir.0).id;
-        // Al volver a encender la función (sin reiniciar trex) el encargo sigue en marcha: lo termina su chat.
+        // Si la ventana vuelve a montar a quien contesta (sin reiniciar trex), el encargo sigue en marcha: lo termina su chat.
         with_journal(&dir.0, |journal, now| ((), recover_board(journal, now, false))).unwrap();
         assert_eq!(with_journal(&dir.0, |journal, _| (journal.requests.iter().find(|request| request.id == running).unwrap().status.clone(), false)).unwrap(), RUNNING);
         with_journal(&dir.0, |journal, now| ((), recover_board(journal, now, true))).unwrap();
@@ -1883,7 +1758,7 @@ mod tests {
         let cut = requests.iter().find(|request| request.id == running).unwrap();
         assert_eq!(cut.status, FAILED);
         assert!(cut.report.as_deref().unwrap().contains("Revisa ese chat"));
-        assert_eq!(requests.iter().find(|request| request.id == waiting).unwrap().status, APPROVED, "lo aprobado espera al chat");
+        assert_eq!(requests.iter().find(|request| request.id == waiting).unwrap().status, APPROVED, "lo enviado espera al chat");
         assert!(with_journal(&dir.0, |journal, now| (retry_board(journal, &running, "x", now), false)).unwrap().is_err(), "un encargo no se reintenta solo");
     }
 
@@ -1945,10 +1820,7 @@ mod tests {
     #[test]
     fn agents_can_tell_each_other_things_and_answer_without_approval_or_reports() {
         let dir = TestDir::new();
-        // Afelio y zmodal se aceptan mensajes el uno al otro (los dos «aceptan encargos»).
-        let mut config = change_config(false);
-        config.settings.project_requests.answerers.push(ProjectAnswerer { project_id: "p-afelio".into(), changes: true, questions: false, ..Default::default() });
-        publish_directory(&dir.0, &config).unwrap();
+        publish_directory(&dir.0, &config()).unwrap();
         let sent = message(&dir.0, AFELIO, "t-afelio", "zmodal", "fallo", None);
         assert_eq!(sent["isError"], false, "{}", text(&sent));
         let note = only(&dir.0);
@@ -1957,9 +1829,9 @@ mod tests {
         assert!(!note.deliverable());
         // La ventana elige el chat que lo recibe y lo marca entregado al ponerlo en su hilo.
         assert!(with_journal(&dir.0, |journal, now| (sent_board(journal, &note.id, "t-zmodal", now), false)).unwrap().is_none(), "sin chat asignado no se entrega");
-        with_journal(&dir.0, |journal, now| (decide_board(journal, &note.id, true, Some("t-zmodal-viejo"), None, now), true)).unwrap().unwrap();
+        assign(&dir.0, &note.id, "t-zmodal-viejo").unwrap();
         // Si ese chat se cierra, se puede pasar a otro.
-        let moved = with_journal(&dir.0, |journal, now| (decide_board(journal, &note.id, true, Some("t-zmodal"), None, now), true)).unwrap().unwrap();
+        let moved = assign(&dir.0, &note.id, "t-zmodal").unwrap();
         assert_eq!(moved.to_session.as_deref(), Some("t-zmodal"));
         let delivered = with_journal(&dir.0, |journal, now| (sent_board(journal, &note.id, "t-zmodal", now), true)).unwrap().unwrap();
         assert_eq!(delivered.status, SENT);
@@ -1972,22 +1844,8 @@ mod tests {
         assert_eq!(reply["isError"], false, "{}", text(&reply));
         let answer = only(&dir.0);
         assert_eq!((answer.reply_to.as_deref(), answer.from_name.as_str(), answer.to_name.as_str()), (Some(note.id.as_str()), "zmodal", "Afelio"));
-        // A un proyecto que no acepta encargos no se le escribe.
-        assert!(text(&message(&dir.0, AFELIO, "t-afelio", "Notas", "n", None)).contains("no recibe mensajes"));
-    }
-
-    #[test]
-    fn a_change_approved_by_full_access_says_so_to_the_agent_that_does_it() {
-        let dir = TestDir::new();
-        publish_directory(&dir.0, &change_config(false)).unwrap();
-        request_change(&dir.0, "acceso-total");
-        let id = only(&dir.0).id;
-        let approved = with_journal(&dir.0, |journal, now| {
-            (decide_board(journal, &id, true, Some("t-zmodal"), Some("Va directo: el chat de «Afelio» está en acceso total."), now), true)
-        })
-        .unwrap()
-        .unwrap();
-        assert_eq!((approved.status.as_str(), approved.note.as_deref()), (APPROVED, Some("Va directo: el chat de «Afelio» está en acceso total.")));
+        // A uno mismo no: para eso están las sesiones del proyecto.
+        assert!(text(&message(&dir.0, AFELIO, "t-afelio", "Afelio", "n", None)).contains("tu propio proyecto"));
     }
 
     #[test]
@@ -1996,12 +1854,12 @@ mod tests {
         let base = Request {
             id: "q-9".into(), key: "k".into(), from_project: AFELIO.into(), from_name: "Afelio".into(), from_session: "t-1".into(),
             to_project_id: "p-zmodal".into(), to_project: ZMODAL.into(), to_name: "zmodal".into(), kind: MESSAGE.into(), question: "hola".into(), context: None,
-            acceptance: None, to_session: None, trusted: false, note: None, reply_to: None, files: Vec::new(), diff_stat: None, baseline: None,
+            acceptance: None, to_session: None, new_chat: false, reply_to: None, files: Vec::new(), diff_stat: None, baseline: None,
             status: APPROVED.into(), attempts: 0, answer_session: None, conversation: None, answer_profile: None, usage: None, report: None, report_file: None,
             delivered: true, created_at: 0, updated_at: 0, started_at: None, finished_at: None,
         };
         journal.requests.push(base);
-        journal.prune(AWAITING_MAX_MS + 1);
+        journal.prune(MESSAGE_MAX_MS + 1);
         assert_eq!(journal.requests[0].status, EXPIRED);
         assert!(!journal.requests[0].deliverable(), "no despierta a quien lo mandó");
     }
