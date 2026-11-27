@@ -13,14 +13,26 @@ import {
   GROUP_TITLE, COMMON_COLOR, ENDED_COLOR, DEFAULT_PORT, DEFAULT_PAGE_CHARS, MAX_PAGE_CHARS, MAX_TEXT, CARD_REFUSAL,
   webUrl, normalizeCode, validPort, parseKey, describeTabs, describePage, describeDialog, browserName, chatOf, chatTitle, chatColor,
   tabAccess, splitTabs, knownChats, fieldBlock, looksLikeCard, validRef, formFields, pickOption, listOptions, waitSpec, waitResult,
-  uploadPaths, clip,
+  uploadPaths, clip, DEFAULT_EDGE, LARGE_CHANGE, QUIET_MS, SETTLE_MAX_MS, HIDDEN_SETTLE_MS, HIDDEN_SETTLE_MAX_MS, CAPTURE_MODES, captureSpec, captureScale, regionArea, capturePoint,
+  changedArea, describeCapture, describeChange, jpegSize,
 } from "./lib.js";
-import { collect, locate, ensureClicked, focusRef, fieldInfo, setValue, setChecked, chooseOption, probe, refElement, scrollPage } from "./page.js";
+import {
+  collect, locate, ensureClicked, focusRef, fieldInfo, setValue, setChecked, chooseOption, probe, refElement, scrollPage,
+  viewInfo, shieldResize, refArea, sensitiveRects, labelRects, watchChanges, changesQuiet, changesReport, pointAt, clickedAt,
+} from "./page.js";
 
 const VERSION = chrome.runtime.getManifest().version;
 const RECONNECT_MS = 4000;
 const LOAD_TIMEOUT_MS = 25000;
-const CAPTURE_TIMEOUT_MS = 12000;
+/** Con la pestaña delante, una captura tarda menos de medio segundo; si no llega, se prueba como con la pestaña detrás. */
+const VISIBLE_CAPTURE_MS = 4000;
+/** Con la pestaña detrás: lo que se espera a cada petición antes de pedir otra (ver `shootHidden`). */
+const HIDDEN_WAITS_MS = [250, 1500, 3000];
+const JPEG_QUALITY = 80;
+/** Elementos numerados como mucho en una captura con «labels». */
+const MAX_LABELS = 150;
+/** Tras una acción que lleva a otra página, lo que se espera a que cargue antes de capturarla. */
+const AFTER_LOAD_MS = 8000;
 /** Lo que se espera a que el navegador entregue un clic de ratón antes de darlo directamente. */
 const MOUSE_TIMEOUT_MS = 1500;
 /** Sin órdenes durante este tiempo se suelta el depurador (y desaparece el aviso de Chrome). */
@@ -44,6 +56,12 @@ const attached = new Map();
 const dialogs = new Map();
 /** Quien espera a que se abra un diálogo en una pestaña. */
 const dialogWaiters = new Map();
+/**
+ * La última captura de cada pestaña: dónde empieza en el documento, su escala y su tamaño.
+ * Con ella, `region` y `click_at` traducen píxeles de esa imagen a la página. Solo números:
+ * la imagen no se guarda.
+ */
+const shots = new Map();
 
 const stored = () => chrome.storage.local.get({ token: "", port: DEFAULT_PORT, name: "" });
 const setState = (next, error = "") => { state = next; lastError = error; chrome.runtime.sendMessage({ type: "state" }).catch(() => {}); };
@@ -294,8 +312,8 @@ chrome.debugger.onDetach.addListener(source => {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId;
   if (tabId === undefined || !attached.has(tabId)) return;
-  // La pestaña navegó: el mundo aislado y sus referencias ya no existen.
-  if (method === "Runtime.executionContextsCleared") attached.set(tabId, null);
+  // La pestaña navegó: el mundo aislado, sus referencias y la última captura ya no valen.
+  if (method === "Runtime.executionContextsCleared") { attached.set(tabId, null); shots.delete(tabId); }
   if (method === "Page.javascriptDialogOpening") {
     const dialog = { type: params?.type, message: String(params?.message ?? ""), defaultPrompt: String(params?.defaultPrompt ?? "") };
     dialogs.set(tabId, dialog);
@@ -304,7 +322,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   }
   if (method === "Page.javascriptDialogClosed") dialogs.delete(tabId);
 });
-chrome.tabs.onRemoved.addListener(tabId => { attached.delete(tabId); dialogs.delete(tabId); });
+chrome.tabs.onRemoved.addListener(tabId => { attached.delete(tabId); dialogs.delete(tabId); shots.delete(tabId); });
 // Sale de los grupos de trex: se suelta al momento. Va en turno con los cambios de grupo, para
 // no soltarla mientras pasa del grupo común al de un chat.
 chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -445,6 +463,224 @@ function refuseSensitive(field, text) {
   if (reason) throw new Error(reason);
 }
 
+// --- Capturas -------------------------------------------------------------------------------
+//
+// Solo con el depurador de la pestaña del chat (`Page.captureScreenshot`): nunca
+// `captureVisibleTab` ni nada que vea otras pestañas, la ventana o la pantalla.
+
+const fromBase64 = text => Uint8Array.from(atob(text), char => char.charCodeAt(0));
+function toBase64(bytes) {
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  return btoa(binary);
+}
+
+/** Una captura con tiempo límite: sus datos, o `null` si no llega. Si salta un diálogo, lo dice. */
+async function shoot(tabId, params, timeoutMs) {
+  const work = unlessDialog(tabId, send(tabId, "Page.captureScreenshot", params));
+  work.catch(() => {});
+  const result = await Promise.race([work, settle(timeoutMs).then(() => null)]);
+  return result?.data ?? null;
+}
+
+/**
+ * Capturas de una pestaña que no se está pintando. Medido en Brave: una petición se queda sin
+ * respuesta hasta que llega la siguiente, y entonces responden las dos; la otra mitad de las
+ * veces responde a la primera. Así que se pide, y si no llega pronto, se pide otra vez
+ * (con más margen cada vez) y vale la primera que conteste.
+ */
+async function shootHidden(tabId, params) {
+  const never = new Promise(() => {});
+  const asked = [];
+  for (const waitMs of HIDDEN_WAITS_MS) {
+    const request = unlessDialog(tabId, send(tabId, "Page.captureScreenshot", params));
+    request.catch(() => {});
+    asked.push(request.then(result => result?.data ? result.data : never, error => error instanceof DialogOpen ? Promise.reject(error) : never));
+    const data = await Promise.race([...asked, settle(waitMs).then(() => null)]);
+    if (data) return data;
+  }
+  return null;
+}
+
+/**
+ * La vista entera de la pestaña, a la resolución de la pantalla. Se pide siempre lo mismo, sin
+ * `clip` ni escala: con ellos el navegador cambia la vista por dentro para capturar y, si una
+ * captura no llega, la deja así (la siguiente sale a otra escala o del tamaño del recorte).
+ * Recortar y reducir se hace después, en `finish`.
+ *
+ * Con la pestaña delante, la captura de siempre. Con la pestaña detrás o la ventana minimizada
+ * el navegador no la pinta y esa captura no llega nunca: fijar la vista a su mismo tamaño
+ * (`setDeviceMetricsOverride`) la hace pintar para la ocasión, sin cambiar cómo se ve. La
+ * página recibiría un aviso de cambio de tamaño, que `shieldResize` le oculta.
+ */
+async function grab(tabId, view) {
+  const params = { format: "jpeg", quality: JPEG_QUALITY, fromSurface: true };
+  if (!view.hidden) {
+    const data = await shoot(tabId, params, VISIBLE_CAPTURE_MS);
+    if (data) return data;
+  }
+  await glance(tabId, shieldResize, true);
+  try {
+    await send(tabId, "Emulation.setDeviceMetricsOverride", { width: view.outerWidth, height: view.outerHeight, deviceScaleFactor: 0, mobile: false });
+    const data = await shootHidden(tabId, params);
+    if (data) return data;
+  } finally {
+    await send(tabId, "Emulation.clearDeviceMetricsOverride").catch(() => {});
+    await glance(tabId, shieldResize, false).catch(() => {});
+  }
+  throw new Error("El navegador no entregó la captura. Inténtalo otra vez en un momento, o usa read_page.");
+}
+
+/**
+ * La imagen final, a partir de la vista entera: recortada a `area`, reducida a `size`, con lo
+ * sensible tapado y, si se piden, los elementos numerados. Se dibuja sobre la imagen, nunca en
+ * la página. Si no hay nada que hacer, la de origen tal cual.
+ */
+async function finish(data, view, area, size, masks, boxes) {
+  const bitmap = await createImageBitmap(new Blob([fromBase64(data)], { type: "image/jpeg" }));
+  // La captura cubre la vista con sus barras de desplazamiento: de ahí sale su escala real.
+  const k = bitmap.width / view.outerWidth;
+  const source = [(area.x - view.x) * k, (area.y - view.y) * k, area.width * k, area.height * k];
+  const whole = source[0] < 1 && source[1] < 1 && Math.abs(source[2] - bitmap.width) < 2 && Math.abs(source[3] - bitmap.height) < 2;
+  if (whole && bitmap.width <= size.width + 1 && !masks.length && !boxes.length) { bitmap.close(); return data; }
+  const canvas = new OffscreenCanvas(Math.max(1, Math.min(size.width, Math.round(source[2]))), Math.max(1, Math.min(size.height, Math.round(source[3]))));
+  const context = canvas.getContext("2d");
+  context.imageSmoothingQuality = "high";
+  context.drawImage(bitmap, ...source, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const sx = canvas.width / area.width, sy = canvas.height / area.height;
+  const place = rect => [(rect.x - area.x) * sx, (rect.y - area.y) * sy, rect.width * sx, rect.height * sy];
+  const font = Math.max(11, Math.round(12 * Math.min(sx, 2)));
+  context.font = `bold ${font}px sans-serif`;
+  context.textBaseline = "top";
+  for (const box of boxes) {
+    const [x, y, width, height] = place(box);
+    context.strokeStyle = "#ffd400";
+    context.lineWidth = 2;
+    context.strokeRect(x, y, width, height);
+    const label = box.ref.slice(4);
+    const labelWidth = context.measureText(label).width + 6, labelHeight = font + 4;
+    const left = Math.min(Math.max(0, x), canvas.width - labelWidth), top = y - labelHeight >= 0 ? y - labelHeight : Math.max(0, y);
+    context.fillStyle = "#ffd400";
+    context.fillRect(left, top, labelWidth, labelHeight);
+    context.fillStyle = "#000";
+    context.fillText(label, left + 3, top + 2);
+  }
+  context.fillStyle = "#1b1b1b";
+  for (const mask of masks) context.fillRect(...place(mask));
+  const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: JPEG_QUALITY / 100 });
+  return toBase64(new Uint8Array(await blob.arrayBuffer()));
+}
+
+/** Si la pestaña sigue siendo de este chat (la persona puede sacarla del grupo mientras tanto). */
+async function stillOwn(chat, tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) return false;
+  const owners = await readOwners();
+  return tabAccess(tab.groupId, owners, chat.owner, await commonGroups(owners)) === "propia";
+}
+
+/**
+ * Captura `area` (px CSS del documento) de una pestaña del chat: a la escala que toca, con lo
+ * sensible tapado y, con `page` (una lectura recién hecha), los elementos numerados. Apunta
+ * la captura para que `region` y `click_at` puedan usar sus píxeles.
+ */
+async function captureArea(chat, tabId, view, wanted, maxEdge, page = null) {
+  // Solo se captura lo que está a la vista.
+  const left = Math.max(wanted.x, view.x), top = Math.max(wanted.y, view.y);
+  const right = Math.min(wanted.x + wanted.width, view.x + view.width), bottom = Math.min(wanted.y + wanted.height, view.y + view.height);
+  if (right - left < 4 || bottom - top < 4) throw new Error("Esa zona ya no está a la vista: la página se desplazó. Haz otra captura.");
+  const area = { x: left, y: top, width: right - left, height: bottom - top };
+  const size = captureScale(area, view.dpr, maxEdge);
+  const masks = await inPage(tabId, sensitiveRects, area);
+  const boxes = page ? await inPage(tabId, labelRects, area, MAX_LABELS) : [];
+  const data = await finish(await grab(tabId, view), view, area, size, masks, boxes);
+  // Si la pestaña dejó de ser de este chat mientras se capturaba, la imagen no sale.
+  if (!await stillOwn(chat, tabId)) throw new Error("La pestaña dejó de estar compartida con este chat mientras la capturaba: no envío la imagen.");
+  const real = jpegSize(data) ?? size;
+  shots.set(tabId, { x: area.x, y: area.y, pxPerCss: real.width / area.width, width: real.width, height: real.height, url: view.url });
+  const byRef = new Map((page?.elements ?? []).map(element => [element.ref, element]));
+  const labels = page ? boxes.map(box => byRef.get(box.ref)).filter(Boolean)
+    .map(element => `${element.ref.slice(4)} = ${element.ref} ${element.role}${element.name ? ` «${element.name}»` : ""}`) : null;
+  return { width: real.width, height: real.height, masked: masks.length, labels, image: { mimeType: "image/jpeg", data } };
+}
+
+/** Lo que dice una acción al terminar, sin la coletilla de «vuelve a leer» cuando ya va lo que cambió. */
+const withoutHint = text => String(text ?? "").replace(/ (Si la página cambió, vuelve a leerla|Vuelve a leer la página)\.$/, "");
+
+/** Una mirada a la página con tiempo límite: `undefined` si no contesta (está cambiando de página). */
+async function glance(tabId, fn, ...args) {
+  try {
+    return await Promise.race([inPage(tabId, fn, ...args), settle(PROBE_TIMEOUT_MS).then(() => undefined)]);
+  } catch (error) {
+    if (error instanceof DialogOpen) throw error;
+    return undefined;
+  }
+}
+
+/**
+ * Espera a que la página deje de cambiar tras una acción y recoge lo que cambió. `null` si la
+ * pestaña cargó otra página (entonces espera a que cargue). En segundo plano el navegador
+ * retrasa los temporizadores de la página hasta un segundo: lo que hace «al momento» puede
+ * tardar eso, y se espera algo más.
+ */
+async function settleChanges(tabId, touched, hidden) {
+  const start = Date.now();
+  const least = hidden ? HIDDEN_SETTLE_MS : 0, most = hidden ? HIDDEN_SETTLE_MAX_MS : SETTLE_MAX_MS;
+  await settle(120);
+  for (;;) {
+    // `undefined`: la página no contestó a tiempo (está ocupada); -1: ya es otra página.
+    const quiet = await glance(tabId, changesQuiet);
+    if (quiet !== undefined && quiet < 0) break;
+    const waited = Date.now() - start;
+    if ((quiet !== undefined && quiet >= QUIET_MS && waited >= least) || waited >= most) {
+      const report = await glance(tabId, changesReport, touched);
+      if (report) return report;
+      if (report === undefined) throw new Error("la página no contestó a tiempo");
+      break;
+    }
+    await settle(100);
+  }
+  await unlessDialog(tabId, waitForLoad(tabId, AFTER_LOAD_MS));
+  return null;
+}
+
+/**
+ * Tras una acción, si la persona lo activó en Ajustes (`after`: «text» o «image»), le dice al
+ * agente qué cambió: en texto y, con «image», con una captura de solo esa zona (o de la vista
+ * entera si cambió casi todo, si cargó otra página o si lo pide con `capture: "full"`). El
+ * agente puede saltárselo en cada acción con `capture: "none"`. Lo de después de la acción
+ * nunca hace fallar la acción, que ya se hizo.
+ */
+async function withChanges(chat, tabId, after, captureMode, touched, work, { full = false, scroll = false } = {}) {
+  const mode = after && captureMode !== "none" ? (CAPTURE_MODES.includes(captureMode) ? captureMode : "changed") : "none";
+  if (mode === "none") return work();
+  idle(tabId);
+  const watching = await glance(tabId, watchChanges);
+  const result = await work();
+  if (!watching || dialogs.has(tabId)) return result;
+  let text = withoutHint(result.text);
+  try {
+    const report = await settleChanges(tabId, touched, watching.hidden);
+    const view = await inPage(tabId, viewInfo);
+    const area = report && !full && mode !== "full" ? changedArea(report.rects, view) : null;
+    text += `\n${describeChange(report, area, view, { scroll })}`;
+    if (after !== "image") return { ...result, text };
+    const whole = { x: view.x, y: view.y, width: view.width, height: view.height };
+    const target = !report || full || mode === "full" || report.urlChanged || (area && area.fraction > LARGE_CHANGE) ? whole
+      : area ? { x: area.x + view.x, y: area.y + view.y, width: area.width, height: area.height } : null;
+    if (!target) return { ...result, text };
+    const shot = await captureArea(chat, tabId, view, target, DEFAULT_EDGE);
+    text += `\nImagen: ${target === whole ? "la vista entera" : "solo la zona que cambió"}, ${shot.width}×${shot.height} px`
+      + `${shot.masked ? `, con ${shot.masked} ${shot.masked === 1 ? "campo sensible tapado" : "campos sensibles tapados"}` : ""}`
+      + ". Coordenadas para region y click_at: píxeles de esta imagen.";
+    return { ...result, text, image: shot.image };
+  } catch (error) {
+    if (error instanceof DialogOpen) return { ...result, text: `${text} ${error.message}` };
+    return { ...result, text: `${text}\n(No pude ver qué cambió: ${String(error?.message ?? error).slice(0, 300)})` };
+  }
+}
+
 // --- Herramientas -------------------------------------------------------------------------
 //
 // Cada una recibe primero el chat que la pide; las que nombran una pestaña empiezan por
@@ -463,16 +699,30 @@ const TOOLS = {
     return { text: describePage(await inPage(tabId, collect, limit, MAX_ELEMENTS)) };
   },
 
-  async screenshot(chat, { tabId }) {
-    const tab = await ownTab(chat, tabId);
+  async screenshot(chat, { tabId, ref, region, maxEdge, fullResolution, labels }) {
+    await ownTab(chat, tabId);
+    const spec = captureSpec({ ref, region, maxEdge, fullResolution, labels });
     idle(tabId);
     await attach(tabId);
-    const capture = unlessDialog(tabId, send(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 72, fromSurface: true }));
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(tab.active
-      ? "El navegador no entregó la captura a tiempo."
-      : "No se puede capturar una pestaña que está en segundo plano. Pide a la persona que la ponga delante, o usa read_page.")), CAPTURE_TIMEOUT_MS));
-    const { data } = await Promise.race([capture, timeout]);
-    return { text: `Captura de ${tab.title || tab.url || "la pestaña"}.`, image: { mimeType: "image/jpeg", data } };
+    // El elemento, antes de numerar: numerar vuelve a leer la página y cambia las referencias.
+    let area = null, part = null;
+    if (spec.ref) {
+      area = await inPage(tabId, refArea, spec.ref);
+      if (!area) throw new Error(GONE);
+      part = `el elemento ${spec.ref}`;
+    }
+    const page = spec.labels ? await inPage(tabId, collect, 1000, MAX_ELEMENTS) : null;
+    const view = await inPage(tabId, viewInfo);
+    if (spec.region) {
+      area = regionArea(spec.region, shots.get(tabId), view);
+      part = `la zona x=${spec.region.x} y=${spec.region.y} ${spec.region.width}×${spec.region.height} de tu captura anterior`;
+    }
+    area ??= { x: view.x, y: view.y, width: view.width, height: view.height };
+    const shot = await captureArea(chat, tabId, view, area, spec.maxEdge, page);
+    return {
+      text: describeCapture({ title: view.title, url: view.url, tabId, width: shot.width, height: shot.height, view, part, masked: shot.masked, labels: shot.labels }),
+      image: shot.image,
+    };
   },
 
   async wait_for(chat, { tabId, text, ref, selector, load, gone, timeout }) {
@@ -557,6 +807,39 @@ const TOOLS = {
     if (dialog) return { text: `Clic hecho en ${ref}.${dialog}` };
     await settle(250);
     return { text: `Clic hecho en ${ref}. Si la página cambió, vuelve a leerla.` };
+  },
+
+  async click_at(chat, { tabId, x, y }) {
+    await ownTab(chat, tabId);
+    idle(tabId);
+    await attach(tabId);
+    const view = await inPage(tabId, viewInfo);
+    const point = capturePoint(x, y, shots.get(tabId), view);
+    const target = await inPage(tabId, pointAt, point.x, point.y, true);
+    if (!target) throw new Error("En ese punto no hay nada de la página.");
+    if (target.frame && target.hidden) {
+      throw new Error("Ese punto cae dentro de un marco (iframe) y la pestaña está en segundo plano: así no le llega el clic. Pide a la persona que la ponga delante, o busca el elemento con read_page.");
+    }
+    const what = `${target.role}${target.name ? ` «${target.name}»` : ""}`;
+    // Como en `click`: el ratón de verdad si la página se está pintando, y si no le llegó, el clic directo.
+    if (!target.hidden) {
+      const mouse = { x: point.x, y: point.y, button: "left", clickCount: 1 };
+      const pressed = (async () => {
+        await send(tabId, "Input.dispatchMouseEvent", { ...mouse, type: "mouseMoved", button: "none" });
+        await send(tabId, "Input.dispatchMouseEvent", { ...mouse, type: "mousePressed" });
+        await send(tabId, "Input.dispatchMouseEvent", { ...mouse, type: "mouseReleased" });
+      })();
+      pressed.catch(() => {});
+      const watch = dialogOpened(tabId);
+      await Promise.race([pressed, settle(MOUSE_TIMEOUT_MS), watch.opened]).catch(() => {});
+      watch.stop();
+      if (!dialogs.has(tabId)) await settle(60);
+    }
+    const dialog = target.frame ? await andDialog(tabId, settle(100))
+      : await andDialog(tabId, inPage(tabId, clickedAt).catch(error => { if (error instanceof DialogOpen) throw error; return "perdido"; }));
+    if (dialog) return { text: `Clic hecho en (${x}, ${y}): ${what}.${dialog}` };
+    await settle(250);
+    return { text: `Clic hecho en (${x}, ${y}): ${what}. Si la página cambió, vuelve a leerla.` };
   },
 
   async type(chat, { tabId, ref, text, submit }) {
@@ -724,13 +1007,37 @@ const TOOLS = {
   },
 };
 
+/**
+ * Las acciones tras las que se puede enseñar qué cambió, y qué tocaron: escribir o elegir
+ * no cambia el DOM, así que esos campos cuentan como cambiados («focus»: el que tiene el foco;
+ * «point»: lo que hay donde se hizo clic, por si es un lienzo).
+ */
+const OBSERVED = {
+  navigate: () => [],
+  click: args => [String(args.ref ?? "")],
+  click_at: () => ["point"],
+  type: args => [args.ref ? String(args.ref) : "focus"],
+  fill_form: args => Array.isArray(args.fields) ? args.fields.map(field => String(field?.ref ?? "")) : [],
+  select_option: args => [String(args.ref ?? "")],
+  key: () => ["focus"],
+  scroll: () => [],
+};
+
 async function run(method, params) {
   const tool = Object.hasOwn(TOOLS, method) ? TOOLS[method] : null;
   if (!tool) throw new Error("Herramienta desconocida.");
   const chat = chatOf(params);
   if (!chat) throw new Error("La orden no dice de qué chat viene. Actualiza trex.");
-  const args = params?.arguments;
-  return tool(chat, args && typeof args === "object" && !Array.isArray(args) ? args : {});
+  const raw = params?.arguments;
+  const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  // Lo que cambió tras cada acción, solo si la persona lo activó en Ajustes (trex manda `after`).
+  const after = params?.after === "text" || params?.after === "image" ? params.after : null;
+  if (after && Object.hasOwn(OBSERVED, method)) {
+    // Antes de mirar la página: solo las pestañas de este chat.
+    await ownTab(chat, args.tabId);
+    return withChanges(chat, args.tabId, after, args.capture, OBSERVED[method](args), () => tool(chat, args), { full: method === "scroll", scroll: method === "scroll" || method === "key" });
+  }
+  return tool(chat, args);
 }
 
 // --- Ventanita de la extensión ---------------------------------------------------------------

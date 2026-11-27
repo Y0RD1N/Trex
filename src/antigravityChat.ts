@@ -4,6 +4,7 @@ import { baseReducer, finalize, list, liveCompletion, normalizeEffortChoice, nor
 import { parseTaskPlan } from "./taskTools";
 import { withoutNotes } from "./coordination";
 import { browserResultArtifacts } from "./browser";
+import { capturePreviewArtifacts } from "./capturePreviews";
 import { acpContext, antigravityTier } from "./antigravityUsage";
 import { addApiUsage, readApiUsage } from "./tokenUsage";
 import type { PlanUsage } from "./planUsage";
@@ -169,7 +170,8 @@ export function antigravityReducer(state: ChatState, action: AntigravityAction):
     let item: Extract<ChatItem, { kind: "tool" }> = { kind: "tool", id, name: u.title || u.toolName ? parsed.name : before?.kind === "tool" ? before.name : parsed.name,
       input: u.rawInput ? parsed.input : before?.kind === "tool" ? before.input : parsed.input,
       status: record(u.rawOutput)?.isError === true ? "error" : u.status ? status : before?.kind === "tool" ? before.status : status, output: output ?? (before?.kind === "tool" ? before.output : null), patch: null,
-      artifacts: browserResultArtifacts(record(u.rawOutput)) };
+      artifacts: [...browserResultArtifacts(record(u.rawOutput)),
+        ...(/trex_chrome/.test(parsed.name) ? capturePreviewArtifacts(record(u.rawOutput)?.content) : [])] };
     // ACP implementations may replace the MCP tool's name with a friendly
     // title. The accepted app result is still an exact, validated task plan.
     if (item.status === "done") {

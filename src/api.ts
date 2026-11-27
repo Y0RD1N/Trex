@@ -633,12 +633,15 @@ export const blenderBridge = (action: BridgeAction, file?: string): Promise<Blen
 export const trexAppsMcpConfig = (mode: BrowserMode, cwd: string, apps: string[]): Promise<BrowserConfig> => invoke("trex_apps_mcp_config", { mode, cwd, apps });
 export const trexA11yMcpConfig = (mode: BrowserMode): Promise<BrowserConfig> => invoke("trex_a11y_mcp_config", { mode });
 // --- «Tu navegador»: la extensión de trex (src-tauri/src/browser_bridge.rs) ----------
+/** Qué ve el agente tras cada acción en tu navegador: nada (por defecto), un resumen, o el resumen y una captura de lo que cambió. */
+export type BrowserAfterAction = "off" | "text" | "image";
 export type BrowserBridgeStatus = {
   enabled: boolean; port: number; running: boolean; error: string | null; connected: boolean; pairing: boolean; extensionPath: string | null;
   browsers: { id: string; name: string; createdAt: number; lastSeen: number; connected: boolean; version: string | null }[];
+  afterAction: BrowserAfterAction;
 };
 export const browserBridgeStatus = (): Promise<BrowserBridgeStatus> => invoke("browser_bridge_status");
-export const browserBridgeConfigure = (settings: { enabled: boolean; port: number }): Promise<BrowserBridgeStatus> => invoke("browser_bridge_configure", { settings });
+export const browserBridgeConfigure = (settings: { enabled: boolean; port: number; afterAction?: BrowserAfterAction }): Promise<BrowserBridgeStatus> => invoke("browser_bridge_configure", { settings });
 export const browserBridgePairingStart = (): Promise<{ code: string; expiresAt: number; port: number }> => invoke("browser_bridge_pairing_start");
 export const browserBridgePairingCancel = (): Promise<void> => invoke("browser_bridge_pairing_cancel");
 /** Abre la carpeta de la extensión en el explorador de archivos. */

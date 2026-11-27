@@ -2,7 +2,7 @@
  * Piezas del hilo de chat: mensajes, filas de herramientas, diffs, tareas y
  * peticiones de permiso. Solo pintan; las acciones llegan por props.
  */
-import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   a11yVerified, answersOf, describeTool, diffStats, inputDiff, questionsOf, relativePath, todoItems,
   type DiffLine, type PermissionItem, type ToolItem,
@@ -16,6 +16,7 @@ import { KIND_LABELS, fileKind, openFile } from "../../sharedFiles";
 import { useImageViewer } from "../ImageViewer";
 import { useMessageEntry } from "./useMessageEntry";
 import type { BrowserArtifact } from "../../browser";
+import { capturePreview, subscribeCapturePreviews } from "../../capturePreviews";
 import { formatClock, formatDateTime } from "../../timeFormat";
 import { useTimeFormat } from "../../hooks/useTimeFormat";
 import { peerNotice } from "../../coordination";
@@ -277,10 +278,26 @@ export const ToolRow = memo(function ToolRow({ item, cwd, expanded = false, onIm
 
 /** Archivo que devolvió una herramienta (captura, vídeo…): solo sus datos, se guarda en este equipo. */
 function ToolArtifact({ artifact }: { artifact: BrowserArtifact }) {
+  if (artifact.kind === "capture") return <CaptureArtifact id={artifact.id} />;
   const label = artifact.mimeType.startsWith("image/") ? "Captura" : artifact.mimeType.startsWith("video/") ? "Vídeo" : artifact.kind === "trace" ? "Traza" : "Diagnóstico";
   return <span className="chat-browser-artifact" title="Guardado en este equipo">
     <ImageIcon size={15} /><span>{label}</span><small>{artifact.width && artifact.height ? `${artifact.width} × ${artifact.height}` : artifact.sizeBytes === undefined ? "" : `${Math.max(1, Math.round(artifact.sizeBytes / 1024))} kB`}</small>
   </span>;
+}
+
+/**
+ * Lo que vio el agente en «Tu navegador»: una miniatura que se abre en grande. Solo dura lo que
+ * la sesión de trex (las imágenes no se guardan con el chat); después queda la etiqueta.
+ */
+function CaptureArtifact({ id }: { id: string }) {
+  const preview = useSyncExternalStore(subscribeCapturePreviews, () => capturePreview(id));
+  const viewer = useImageViewer();
+  if (!preview) return <span className="chat-browser-artifact" title="Lo que vio el agente en tu navegador"><ImageIcon size={15} /><span>Captura</span></span>;
+  return <button type="button" className="chat-browser-capture" title="Lo que vio el agente en tu navegador (se envió al proveedor del modelo)"
+    onClick={() => viewer.open([{ src: preview.url, name: "Captura del navegador" }])}>
+    <img src={preview.url} alt="Captura de la pestaña que vio el agente" />
+    <small>{preview.width} × {preview.height}</small>
+  </button>;
 }
 
 /** Opciones de "permitir siempre" que propone el propio CLI. */

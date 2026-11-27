@@ -71,12 +71,40 @@ restaure el navegador ya no son de nadie.
   `screenshot` y `wait_for` (esperar, como mucho 30 s, a que aparezca o desaparezca un texto o
   un elemento, o a que termine de cargar).
 - **Actuar** (solo con el chat en un modo que lo permita): `tab_open`, `navigate`, `click`,
-  `type`, `fill_form` (varios campos de una vez: texto, desplegables, casillas y botones de
-  opción), `select_option`, `key`, `scroll`, `upload_file`, `handle_dialog` (aceptar o
-  descartar un `alert`, `confirm` o `prompt`) y `tab_close`.
+  `click_at` (clic en un punto de su última captura: un lienzo, un marco, un mapa), `type`,
+  `fill_form` (varios campos de una vez: texto, desplegables, casillas y botones de opción),
+  `select_option`, `key`, `scroll`, `upload_file`, `handle_dialog` (aceptar o descartar un
+  `alert`, `confirm` o `prompt`) y `tab_close`.
 
 Si la página abre un diálogo, las herramientas no se quedan esperando: avisan de que hay uno
 abierto y el agente lo resuelve con `handle_dialog` (o lo cierras tú).
+
+### Capturas
+
+`screenshot` captura la zona visible de una pestaña del chat, **también en segundo plano** (sin
+traerla delante), reducida a 1280 px de lado largo (unos 1 000 tokens; `maxEdge` de 256 a 2576,
+`fullResolution` para la de la pantalla). Con `ref`, solo ese elemento; con `region`, solo una
+zona de la última captura de esa pestaña, a la resolución de la pantalla; con `labels`, numera
+en la imagen los elementos con los que se puede interactuar (el número N es `ref_N`).
+
+- Solo la pestaña del chat, por su depurador: nunca otras pestañas, la ventana ni la pantalla.
+  No hace falta ningún permiso nuevo.
+- Antes de que la imagen salga del navegador se tapan las contraseñas, los campos de tarjeta y
+  de códigos de verificación, y los marcos de pago (`allow="payment"` o de proveedores
+  conocidos). El texto normal de la página no se tapa, igual que en `read_page`.
+- Si la pestaña deja de ser del chat mientras se captura, la imagen no sale.
+- Con la pestaña en segundo plano, el navegador no la pinta: la extensión fija la vista a su
+  mismo tamaño un momento para que la pinte, y la página no se entera de ese cambio de tamaño.
+
+**Tras cada acción** (Ajustes › Conexiones › Navegador, por defecto «Nada»): con «Qué cambió»,
+después de `navigate`, `click`, `click_at`, `type`, `fill_form`, `select_option`, `key` y
+`scroll` la extensión cuenta qué cambió en la página (lo que apareció o desapareció, la
+dirección, el foco); con «Con imagen», además una captura de solo esa zona, o de la vista
+entera si cambió casi todo o cargó otra página. El agente elige en cada acción con `capture`
+(`changed`, `full` o `none`). Lo que cambió se ve con un `MutationObserver` en el mundo aislado
+de la extensión, no comparando imágenes; los cambios que no tocan la página (un lienzo, un
+campo en el que se escribe) cuentan por el elemento que tocó la acción. En segundo plano, la
+página va con sus temporizadores retrasados y se espera algo más.
 
 **Subir archivos** (`upload_file`) solo sirve con archivos de la carpeta del proyecto del chat
 (trex lo comprueba: nada fuera de ella, sin `..` ni enlaces, hasta 64 MiB y 10 archivos), y
@@ -105,6 +133,13 @@ extensión. Sin eso, todo lo demás funciona.
 - `lib.js`: piezas puras, con pruebas en `scripts/extension.test.mjs`.
 - El otro extremo es `src-tauri/src/browser_bridge.rs` (servidor local, emparejado, sesiones
   de los chats, validación de `upload_file` y herramientas para los agentes). trex no manda
-  órdenes a extensiones anteriores a 0.2.0.
+  órdenes a extensiones anteriores a 0.2.0, ni `click_at`, capturas por zona o elemento, ni
+  «tras cada acción» a las anteriores a 0.3.0. Con «tras cada acción» encendido, las órdenes de
+  las acciones traen `after` («text» o «image»).
+- Capturas, medido en Brave 158: el `clip` y la escala de `Page.captureScreenshot` no son de
+  fiar (tras una captura que no llega, la siguiente sale a la escala o del tamaño de la
+  anterior), así que siempre se pide la vista entera y se recorta y reduce con
+  `OffscreenCanvas`. Con la pestaña oculta, una petición a veces no contesta hasta que llega la
+  siguiente: se vuelve a pedir a los 250 ms (ver `shootHidden`).
 - Paquete para las tiendas: `node scripts/package-extension.mjs <carpeta fuera del repo>`;
   pasos de publicación en `docs/extension-tiendas.md`.

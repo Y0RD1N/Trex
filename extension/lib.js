@@ -278,9 +278,166 @@ export function uploadPaths(paths) {
   return paths.every(path => typeof path === "string" && path.length <= 4096 && !path.includes("\0") && absolute(path)) ? [...paths] : null;
 }
 
+// --- Capturas --------------------------------------------------------------------------------
+//
+// `Page.captureScreenshot` recibe un `clip` en píxeles CSS del documento y una escala: la
+// imagen mide «CSS × scale × devicePixelRatio». Aquí se decide esa escala, se traducen las
+// zonas y los puntos de una captura anterior y se describe lo que cambió tras una acción.
+
+/** Lado largo de una captura si el agente no pide otro: unos 1 000 tokens en Claude. */
+export const DEFAULT_EDGE = 1280;
+export const MIN_EDGE = 256;
+/** Lo más que aprovecha un modelo: Claude 5 ve hasta 2576 px de lado largo. */
+export const MAX_EDGE = 2576;
+/** Si lo que cambió ocupa más que esto de la vista, se enseña la vista entera. */
+export const LARGE_CHANGE = 0.35;
+/** Lo que se espera a que la página deje de cambiar tras una acción, y el tope. */
+export const QUIET_MS = 300;
+export const SETTLE_MAX_MS = 1500;
+/** En segundo plano, los temporizadores de la página van con hasta un segundo de retraso: se espera más. */
+export const HIDDEN_SETTLE_MS = 1100;
+export const HIDDEN_SETTLE_MAX_MS = 2500;
+const MIN_REGION = 8;
+/** Qué se puede pedir tras una acción: lo que cambió, la vista entera o nada. */
+export const CAPTURE_MODES = ["changed", "full", "none"];
+
+/** Qué captura pide el agente: la vista, un elemento (`ref`) o una zona de su última captura. */
+export function captureSpec({ ref, region, maxEdge, fullResolution, labels } = {}) {
+  const hasRef = ref !== undefined && ref !== null && ref !== "";
+  const hasRegion = region !== undefined && region !== null;
+  if (hasRef && hasRegion) throw new Error("Indica «ref» o «region», no las dos.");
+  const clean = hasRef ? validRef(ref) : null;
+  if (hasRef && !clean) throw new Error("La referencia es ref_N, de read_page.");
+  let area = null;
+  if (hasRegion) {
+    const values = ["x", "y", "width", "height"].map(key => region?.[key]);
+    if (!values.every(Number.isFinite)) throw new Error("«region» es { x, y, width, height } en píxeles de tu última captura de esta pestaña.");
+    const [x, y, width, height] = values.map(Math.round);
+    if (x < 0 || y < 0 || width < MIN_REGION || height < MIN_REGION) throw new Error(`«region» empieza en x, y ≥ 0 y mide al menos ${MIN_REGION}×${MIN_REGION} px.`);
+    area = { x, y, width, height };
+  }
+  if (maxEdge !== undefined && maxEdge !== null && (!Number.isInteger(maxEdge) || maxEdge < MIN_EDGE || maxEdge > MAX_EDGE)) {
+    throw new Error(`«maxEdge» es un número entero de ${MIN_EDGE} a ${MAX_EDGE}.`);
+  }
+  for (const [name, value] of [["fullResolution", fullResolution], ["labels", labels]]) {
+    if (value !== undefined && value !== null && typeof value !== "boolean") throw new Error(`«${name}» es true o false.`);
+  }
+  return { ref: clean, region: area, maxEdge: fullResolution === true ? MAX_EDGE : maxEdge ?? DEFAULT_EDGE, labels: labels === true };
+}
+
+/**
+ * El tamaño de la imagen de `area` (px CSS) para que no pase de `maxEdge` de lado largo. El
+ * navegador la captura a la resolución de la pantalla («CSS × devicePixelRatio») y aquí solo
+ * se reduce, nunca se amplía: ampliar no añade detalle y cuesta más tokens. Devuelve la escala
+ * sobre esa captura, los píxeles de imagen por píxel CSS y el tamaño final.
+ */
+export function captureScale(area, dpr, maxEdge) {
+  const ratio = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+  const long = Math.max(area.width, area.height, 1);
+  const scale = Math.min(maxEdge / (long * ratio), 1);
+  const pxPerCss = scale * ratio;
+  return { scale, pxPerCss, width: Math.max(1, Math.round(area.width * pxPerCss)), height: Math.max(1, Math.round(area.height * pxPerCss)) };
+}
+
+const NO_SHOT = "Aún no hay ninguna captura de esta pestaña, o es de otra página: haz una con screenshot y usa los píxeles de esa imagen.";
+
+/**
+ * Una zona en píxeles de la última captura (`shot`: origen en el documento, escala y tamaño
+ * de la imagen) → la misma zona en píxeles CSS del documento.
+ */
+export function regionArea(region, shot, view) {
+  if (!shot || (view && shot.url !== view.url)) throw new Error(NO_SHOT);
+  if (region.x >= shot.width || region.y >= shot.height) throw new Error(`Esa zona está fuera de la captura (${shot.width}×${shot.height} px).`);
+  const width = Math.min(region.width, shot.width - region.x), height = Math.min(region.height, shot.height - region.y);
+  return { x: shot.x + region.x / shot.pxPerCss, y: shot.y + region.y / shot.pxPerCss, width: width / shot.pxPerCss, height: height / shot.pxPerCss };
+}
+
+/** Un punto en píxeles de la última captura → el mismo punto en la vista de ahora (px CSS). */
+export function capturePoint(x, y, shot, view) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("Indica «x» e «y»: píxeles de tu última captura de esta pestaña.");
+  if (!shot || shot.url !== view.url) throw new Error(NO_SHOT);
+  if (x < 0 || y < 0 || x >= shot.width || y >= shot.height) throw new Error(`(${x}, ${y}) está fuera de la captura (${shot.width}×${shot.height} px).`);
+  const point = { x: shot.x + x / shot.pxPerCss - view.x, y: shot.y + y / shot.pxPerCss - view.y };
+  if (point.x < 0 || point.y < 0 || point.x >= view.width || point.y >= view.height) {
+    throw new Error("Ese punto ya no está a la vista: la página se desplazó desde la captura. Haz otra.");
+  }
+  return point;
+}
+
+/**
+ * La caja que abarca lo que cambió (rectángulos en px CSS de la vista), con un margen y
+ * recortada a la vista, y qué parte de la vista ocupa. `null` si nada cae en la vista.
+ */
+export function changedArea(rects, view) {
+  let box = null;
+  for (const rect of rects ?? []) {
+    const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
+    const right = Math.min(view.width, rect.x + rect.width), bottom = Math.min(view.height, rect.y + rect.height);
+    if (right - left < 1 || bottom - top < 1) continue;
+    box = box ? { left: Math.min(box.left, left), top: Math.min(box.top, top), right: Math.max(box.right, right), bottom: Math.max(box.bottom, bottom) }
+      : { left, top, right, bottom };
+  }
+  if (!box) return null;
+  const pad = 12;
+  const x = Math.max(0, box.left - pad), y = Math.max(0, box.top - pad);
+  const width = Math.min(view.width, box.right + pad) - x, height = Math.min(view.height, box.bottom + pad) - y;
+  return { x, y, width, height, fraction: (width * height) / Math.max(1, view.width * view.height) };
+}
+
+/** Ancho y alto de un JPEG en base64, leídos de su cabecera (marcador SOF). `null` si no se encuentra. */
+export function jpegSize(base64) {
+  const text = String(base64 ?? ""), take = Math.min(text.length, 16384);
+  let bytes;
+  try { bytes = Uint8Array.from(atob(text.slice(0, take - (take % 4))), c => c.charCodeAt(0)); } catch { return null; }
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  for (let at = 2; at + 9 < bytes.length;) {
+    if (bytes[at] !== 0xff) return null;
+    const marker = bytes[at + 1];
+    if (marker === 0xff) { at++; continue; }
+    const length = (bytes[at + 2] << 8) | bytes[at + 3];
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return { width: (bytes[at + 7] << 8) | bytes[at + 8], height: (bytes[at + 5] << 8) | bytes[at + 6] };
+    }
+    at += 2 + length;
+  }
+  return null;
+}
+
+const round = value => Math.round(value);
+
+/** El texto que acompaña a una captura. */
+export function describeCapture({ title, url, tabId, width, height, view, part, masked = 0, labels = null }) {
+  const where = part ? `una zona de la página (${part})` : `la zona visible, desplazada ${round(view.y)} de ${round(Math.max(0, view.docHeight - view.height))} px`;
+  const lines = [`Captura ${width}×${height} de «${clip(title || "Sin título", 120)}» (tabId ${tabId} · ${clip(url, 300)}): ${where}.`];
+  if (masked) lines.push(`${masked === 1 ? "Un campo sensible tapado" : `${masked} campos sensibles tapados`} (contraseñas, tarjetas, códigos o marcos de pago).`);
+  if (labels) lines.push(labels.length
+    ? `Cada número de la imagen es la referencia ref_N de ese elemento (las referencias anteriores ya no valen):\n${labels.join("\n")}`
+    : "No hay elementos con los que interactuar en esa zona.");
+  lines.push("Coordenadas para region y click_at: píxeles de esta imagen.");
+  return lines.join("\n");
+}
+
+/**
+ * Lo que cambió tras una acción, en una o dos líneas. `report` es lo que devuelve
+ * `changesReport` (page.js). El desplazamiento solo se cuenta si lo pidió la acción
+ * (`scroll`): hacer clic o escribir ya traen el elemento a la vista, y eso no es noticia.
+ */
+export function describeChange(report, area, view, { scroll = false } = {}) {
+  if (!report) return `Qué cambió: cargó otra página: «${clip(view?.title || "Sin título", 120)}» · ${clip(view?.url ?? "", 300)}.`;
+  const parts = [];
+  if (report.urlChanged) parts.push(`la dirección es ahora ${clip(report.url, 300)}`);
+  if (report.titleChanged) parts.push(`el título es «${clip(report.title, 120)}»`);
+  if (report.added.length) parts.push(`apareció ${report.added.map(text => `«${clip(text, 120)}»`).join(", ")}`);
+  if (report.removed.length) parts.push(`desapareció ${report.removed.map(text => `«${clip(text, 80)}»`).join(", ")}`);
+  if (report.scrolled && scroll) parts.push(`la vista se desplazó (ahora en ${round(report.scrollY)} px)`);
+  if (report.focus) parts.push(`el foco está en ${report.focus}`);
+  if (area) parts.push(`cambió una zona de ${round(area.width)}×${round(area.height)} px CSS (en ${round(area.x)},${round(area.y)} de la vista de ${round(view.width)}×${round(view.height)})`);
+  return parts.length ? `Qué cambió: ${parts.join("; ")}.` : "Qué cambió: nada visible en la página.";
+}
+
 // --- Textos para el agente ------------------------------------------------------------------
 
-const DIALOGS = { alert: "un aviso (alert)", confirm: "una confirmación (confirm)", prompt: "una pregunta (prompt)", beforeunload: "un aviso de salir de la página (beforeunload)" };
+const DIALOGS ={ alert: "un aviso (alert)", confirm: "una confirmación (confirm)", prompt: "una pregunta (prompt)", beforeunload: "un aviso de salir de la página (beforeunload)" };
 
 /** Un diálogo abierto: la página está parada hasta que se acepte o se descarte. */
 export function describeDialog(dialog) {

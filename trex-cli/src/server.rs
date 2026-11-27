@@ -1406,10 +1406,12 @@ impl Server {
                 "selected model explicitly does not support tools; choose a tool-capable model"
             );
             // A model must be able to inspect a screenshot before it can act on it.
+            // Screenshots themselves stay: they are kept as evidence for a later vision model.
             if image_support != Some(true) {
                 definitions.retain(|tool| {
                     !tool["function"]["name"].as_str().is_some_and(|name| {
-                        name.starts_with("desktop_") && !crate::desktop::read_only(name)
+                        (name.starts_with("desktop_") && !crate::desktop::read_only(name))
+                            || crate::chrome::acts_on_images(name)
                     })
                 });
             }

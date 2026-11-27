@@ -23,6 +23,10 @@
 .browser-settings-buttons { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:var(--sp-2); }
 .browser-settings-note { padding:var(--sp-3) var(--sp-3-5); border:1px solid var(--border); border-radius:var(--radius-lg); font-size:var(--fs-sm); line-height:1.6; color:var(--text-muted); }
 .browser-settings-field { display:grid; gap:var(--sp-2); font-size:var(--fs-sm); color:var(--text-muted); min-width:0; }
+.browser-settings-after { display:grid; justify-items:start; gap:var(--sp-2); font-size:var(--fs-sm); color:var(--text-muted); min-width:0; }
+.browser-settings-after > span { display:flex; align-items:center; gap:var(--sp-1-5); }
+.browser-settings-after .segmented { flex-wrap:wrap; max-width:100%; }
+.browser-settings-after small { font-size:var(--fs-xs); line-height:1.5; }
 .browser-settings-field .input { width:100%; min-width:0; }
 .browser-settings-card > .btn { display:inline-flex; align-self:flex-start; align-items:center; gap:var(--sp-1-5); }
 .browser-settings-error { color:var(--danger-text); font-size:var(--fs-sm); line-height:1.6; }

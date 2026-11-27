@@ -1,5 +1,6 @@
 import { formatClock } from "./timeFormat";
 import { browserResultArtifacts, browserToolResultText } from "./browser";
+import { chromeCaptures } from "./capturePreviews";
 /**
  * Protocolo de Claude Code en modo chat (`claude -p` con stream-json).
  *
@@ -229,6 +230,7 @@ function applyUser(state: ChatState, event: Json, fromHistory: boolean): ChatSta
           : toolResult?.type === "create" ? { ...current.input, changeKind: "add" } : current.input),
         output: answers ? answerText(answers) : current.name.startsWith("mcp__trex_desktop__") ? browserToolResultText(block.content) : resultText(block.content),
         ...(current.name.startsWith("mcp__trex_desktop__") ? { artifacts: browserResultArtifacts({ content: block.content }) } : {}),
+        ...(current.name.startsWith("mcp__trex_chrome__") && block.is_error !== true ? chromeCaptures(block.content) : {}),
         patch: patchLines(toolResult?.structuredPatch) ?? current.patch };
     } else if (block.type === "text") {
       const value = text(block.text);

@@ -164,7 +164,8 @@ test("tool arguments are checked before touching the page", () => {
 });
 
 test("page functions are self-contained, since they are sent to the tab as text", () => {
-  const functions = [page.collect, page.locate, page.ensureClicked, page.focusRef, page.fieldInfo, page.setValue, page.setChecked, page.chooseOption, page.probe, page.refElement, page.scrollPage];
+  const functions = [page.collect, page.locate, page.ensureClicked, page.focusRef, page.fieldInfo, page.setValue, page.setChecked, page.chooseOption, page.probe, page.refElement, page.scrollPage,
+    page.viewInfo, page.shieldResize, page.refArea, page.sensitiveRects, page.labelRects, page.watchChanges, page.changesQuiet, page.changesReport, page.pointAt, page.clickedAt];
   assert.deepEqual(functions.map(fn => fn.name).sort(), Object.keys(page).sort(), "every exported page function is checked");
   for (const fn of functions) {
     const source = fn.toString();
@@ -180,7 +181,7 @@ test("page functions are self-contained, since they are sent to the tab as text"
 test("the manifest asks for the minimum and every tool goes through the chat's own tabs", async () => {
   const manifest = JSON.parse(await read("manifest.json"));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "0.2.0");
+  assert.equal(manifest.version, "0.3.0");
   assert.ok(manifest.description.length <= 132, "the stores cut longer descriptions");
   assert.deepEqual(manifest.permissions.sort(), ["alarms", "debugger", "storage", "tabGroups", "tabs"]);
   // Only the local trex app: no access to sites through host permissions.
@@ -191,7 +192,7 @@ test("the manifest asks for the minimum and every tool goes through the chat's o
   const background = await read("background.js");
   const tools = background.slice(background.indexOf("const TOOLS = {"), background.indexOf("async function run("));
   const bodies = [...tools.matchAll(/\n  async (\w+)\(([^)]*)\) \{([\s\S]*?)\n  \},/g)].map(([, name, args, body]) => ({ name, args, body }));
-  assert.deepEqual(bodies.map(tool => tool.name), ["tabs_list", "read_page", "screenshot", "wait_for", "tab_open", "navigate", "click", "type", "fill_form",
+  assert.deepEqual(bodies.map(tool => tool.name), ["tabs_list", "read_page", "screenshot", "wait_for", "tab_open", "navigate", "click", "click_at", "type", "fill_form",
     "select_option", "key", "scroll", "upload_file", "handle_dialog", "tab_close"]);
   for (const tool of bodies) {
     assert.match(tool.args, /^chat\b/, `${tool.name} receives the chat first`);
@@ -201,7 +202,7 @@ test("the manifest asks for the minimum and every tool goes through the chat's o
   // The tool names match the ones the app lists for the agents.
   const rust = lf(await readFile(new URL("../src-tauri/src/browser_bridge.rs", import.meta.url), "utf8"));
   const listed = name => {
-    const start = rust.indexOf(`pub const ${name}:`), open = rust.indexOf("= [", start), close = rust.indexOf("];", open);
+    const start = rust.indexOf(`const ${name}:`), open = rust.indexOf("= [", start), close = rust.indexOf("];", open);
     return [...rust.slice(open, close).matchAll(/"(\w+)"/g)].map(match => match[1]);
   };
   assert.deepEqual(listed("OBSERVE_TOOLS"), ["tabs_list", "read_page", "screenshot", "wait_for"]);
@@ -212,6 +213,85 @@ test("the manifest asks for the minimum and every tool goes through the chat's o
   // The bridge sends the chat as an opaque owner, never the session key.
   assert.match(rust, /json!\(\{ "owner": chat\.owner, "group": chat\.group, "arguments": arguments \}\)/);
   assert.doesNotMatch(rust, /"session": session, "arguments"/);
+
+  // Captures only ever come from the chat's own tab through its debugger: nothing that sees
+  // other tabs, the window or the screen, and no new permission for it.
+  assert.doesNotMatch(background, /chrome\.(tabs\.captureVisibleTab|tabCapture|desktopCapture|offscreen)\b/);
+  for (const name of ["screenshot", "click_at"]) assert.match(bodies.find(tool => tool.name === name).body.trimStart(), /^await ownTab\(chat, tabId\);/, name);
+  // What changed after an action: the page is only watched after checking the tab is this chat's.
+  const run = background.slice(background.indexOf("async function run("));
+  assert.match(run, /await ownTab\(chat, args\.tabId\);\n    return withChanges\(/);
+  // The image leaves the browser only if the tab is still this chat's once captured.
+  assert.match(background, /if \(!await stillOwn\(chat, tabId\)\) throw/);
+  // The tools that report what changed are the same in the extension and in the app.
+  const observed = [...background.slice(background.indexOf("const OBSERVED = {"), background.indexOf("async function run(")).matchAll(/\n  (\w+): /g)].map(match => match[1]);
+  assert.deepEqual(observed, listed("OBSERVED_TOOLS"));
+});
+
+test("captures pick their scale, map zones and points back to the page, and describe what changed", () => {
+  // Defaults, limits and the zone of a previous capture.
+  assert.deepEqual(lib.captureSpec({}), { ref: null, region: null, maxEdge: 1280, labels: false });
+  assert.deepEqual(lib.captureSpec({ ref: " ref_7 ", maxEdge: 768, labels: true }), { ref: "ref_7", region: null, maxEdge: 768, labels: true });
+  assert.equal(lib.captureSpec({ fullResolution: true }).maxEdge, 2576);
+  assert.deepEqual(lib.captureSpec({ region: { x: 10.4, y: 0, width: 100, height: 40.6 } }).region, { x: 10, y: 0, width: 100, height: 41 });
+  for (const bad of [{ ref: "ref_1", region: { x: 0, y: 0, width: 10, height: 10 } }, { ref: "boton" }, { region: { x: 0, y: 0, width: 4, height: 50 } },
+    { region: { x: -1, y: 0, width: 50, height: 50 } }, { region: { x: 0, y: 0 } }, { maxEdge: 100 }, { maxEdge: 4000 }, { maxEdge: 900.5 }, { labels: "sí" }]) {
+    assert.throws(() => lib.captureSpec(bad), Error, JSON.stringify(bad));
+  }
+
+  // The view is never enlarged; at 125 % a 1920-wide view is reduced to 1280.
+  const view = lib.captureScale({ width: 1536, height: 730 }, 1.25, 1280);
+  assert.equal(view.width, 1280);
+  assert.ok(Math.abs(view.height - 608) <= 1, String(view.height));
+  assert.deepEqual(lib.captureScale({ width: 800, height: 600 }, 1, 2576), { scale: 1, pxPerCss: 1, width: 800, height: 600 }, "full resolution is the screen's");
+  // A small element is never enlarged: that adds no detail, only tokens.
+  const small = lib.captureScale({ width: 120, height: 40 }, 1.25, 1280);
+  assert.deepEqual([small.scale, small.width, small.height], [1, 150, 50]);
+
+  // Zones and points in the pixels of the last capture map back to the page.
+  const shot = { x: 0, y: 800, pxPerCss: 0.5, width: 640, height: 360, url: "https://a.test/" };
+  const current = { x: 0, y: 800, width: 1280, height: 720, url: "https://a.test/" };
+  assert.deepEqual(lib.regionArea({ x: 100, y: 50, width: 200, height: 1000 }, shot, current), { x: 200, y: 900, width: 400, height: 620 });
+  assert.deepEqual(lib.capturePoint(100, 50, shot, current), { x: 200, y: 100 });
+  assert.throws(() => lib.capturePoint(100, 50, shot, { ...current, y: 2000 }), /se desplazó/);
+  assert.throws(() => lib.capturePoint(100, 50, shot, { ...current, url: "https://b.test/" }), /Aún no hay ninguna captura/);
+  assert.throws(() => lib.capturePoint(700, 50, shot, current), /fuera de la captura/);
+  assert.throws(() => lib.regionArea({ x: 0, y: 0, width: 10, height: 10 }, null, current), /Aún no hay ninguna captura/);
+
+  // What changed: the box around the changes inside the view, and how much of it.
+  const area = lib.changedArea([{ x: 100, y: 100, width: 200, height: 40 }, { x: 150, y: 2000, width: 10, height: 10 }, { x: 120, y: 160, width: 50, height: 20 }], { width: 1000, height: 800 });
+  assert.deepEqual(area, { x: 88, y: 88, width: 224, height: 104, fraction: (224 * 104) / (1000 * 800) });
+  assert.equal(lib.changedArea([{ x: 0, y: 900, width: 10, height: 10 }], { width: 1000, height: 800 }), null, "outside the view");
+  const report = { url: "https://a.test/?q=1", title: "A", urlChanged: true, titleChanged: false, scrolled: true, scrollY: 0, rects: [], added: ["Pedido recibido"], removed: [], focus: "text «Buscar»" };
+  const said = lib.describeChange(report, area, { width: 1000, height: 800 });
+  assert.match(said, /^Qué cambió: la dirección es ahora https:\/\/a\.test\/\?q=1; apareció «Pedido recibido»; el foco está en text «Buscar»; cambió una zona de 224×104/);
+  assert.equal(lib.describeChange({ ...report, urlChanged: false, added: [], focus: null }, null, { width: 1, height: 1 }), "Qué cambió: nada visible en la página.",
+    "bringing a clicked element into view is not news");
+  assert.equal(lib.describeChange({ ...report, urlChanged: false, added: [], focus: null, scrollY: 640 }, null, { width: 1, height: 1 }, { scroll: true }),
+    "Qué cambió: la vista se desplazó (ahora en 640 px).");
+  assert.match(lib.describeChange(null, null, { title: "Otra", url: "https://b.test/" }), /cargó otra página: «Otra» · https:\/\/b\.test\//);
+  assert.deepEqual(lib.CAPTURE_MODES, ["changed", "full", "none"]);
+
+  // The capture's own text says what it is and how to point into it.
+  const text = lib.describeCapture({ title: "Tienda", url: "https://a.test/", tabId: 4, width: 1280, height: 608, view: { y: 1200, height: 730, docHeight: 5400 }, masked: 2, labels: ["3 = ref_3 button «Comprar»"] });
+  assert.match(text, /^Captura 1280×608 de «Tienda» \(tabId 4 · https:\/\/a\.test\/\): la zona visible, desplazada 1200 de 4670 px\./);
+  assert.match(text, /2 campos sensibles tapados/);
+  assert.match(text, /3 = ref_3 button «Comprar»/);
+  assert.match(text, /Coordenadas para region y click_at: píxeles de esta imagen\.$/);
+
+  // The size of a JPEG comes from its header.
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x60, 0x05, 0x00, 0x03, 0x01, 0x22, 0x00]).toString("base64");
+  assert.deepEqual(lib.jpegSize(jpeg), { width: 1280, height: 608 });
+  assert.equal(lib.jpegSize("iVBORw0KGgo="), null, "not a JPEG");
+  assert.equal(lib.jpegSize(""), null);
+});
+
+test("what the page hides in a capture and how it reports changes stays private", () => {
+  // Masks cover passwords, payment and code fields, and payment frames, like the typing refusals.
+  const masks = page.sensitiveRects.toString();
+  for (const rule of ['element.type === "password"', 'token.startsWith("cc-")', '"one-time-code"', "allow", "stripe\\.com"]) assert.ok(masks.includes(rule), rule);
+  // Neither the change report nor the point under a click ever read what is typed in a field.
+  for (const fn of [page.changesReport, page.pointAt, page.viewInfo, page.labelRects]) assert.doesNotMatch(fn.toString(), /\.value\b/, fn.name);
 });
 
 test("the store package holds only the extension files", async () => {
@@ -219,7 +299,7 @@ test("the store package holds only the extension files", async () => {
   const out = await mkdtemp(join(tmpdir(), "trex-extension-test-"));
   try {
     const { file, entries } = await packageExtension(out);
-    assert.match(file, /trex-extension-0\.2\.0\.zip$/);
+    assert.match(file, /trex-extension-0\.3\.0\.zip$/);
     const inside = zipEntries(await readFile(file));
     assert.deepEqual(inside.map(entry => entry.name), entries);
     assert.equal(inside[0].name, "manifest.json", "manifest at the root, first");

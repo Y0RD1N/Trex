@@ -25,6 +25,12 @@ pub const TOKEN_ENV: &str = "TREX_CHROME_TOKEN";
 pub const PREFIX: &str = "browser_";
 /// Tools that only look. Must match OBSERVE_TOOLS in src-tauri/src/browser_bridge.rs.
 pub const READ_TOOLS: [&str; 4] = ["tabs_list", "read_page", "screenshot", "wait_for"];
+/// The browser tool that acts on what a screenshot shows (a click on one of its points): like
+/// desktop input, only for a model that can see the image. Screenshots themselves stay for any
+/// model, as evidence a later vision model can read.
+pub fn acts_on_images(name: &str) -> bool {
+    name.strip_prefix(PREFIX) == Some("click_at")
+}
 const PROTOCOL: &str = "2025-11-25";
 const PROTOCOLS: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", PROTOCOL];
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -741,5 +747,13 @@ mod tests {
         let error = run(&provider, "full", "browser_click").await.unwrap_err();
         assert!(error.downcast_ref::<BrowserUncertain>().is_none());
         assert!(error.to_string().contains("not answering"), "{error}");
+    }
+
+    #[test]
+    fn only_a_click_on_a_screenshot_point_needs_a_model_that_sees_images() {
+        assert!(acts_on_images("browser_click_at"));
+        for name in ["browser_screenshot", "browser_read_page", "browser_click", "click_at", "desktop_click"] {
+            assert!(!acts_on_images(name), "{name}");
+        }
     }
 }

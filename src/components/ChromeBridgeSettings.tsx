@@ -6,7 +6,8 @@
  */
 import { useEffect, useId, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { browserBridgeConfigure, browserBridgeOpenExtension,browserBridgePairingCancel, browserBridgePairingStart, browserBridgeRevoke, browserBridgeStatus, formatError, type BrowserBridgeStatus } from "../api";
+import { browserBridgeConfigure, browserBridgeOpenExtension,browserBridgePairingCancel, browserBridgePairingStart, browserBridgeRevoke, browserBridgeStatus, formatError, type BrowserAfterAction, type BrowserBridgeStatus } from "../api";
+import { Segmented } from "./AgentSetup";
 import { GlobeIcon } from "./Icons";
 import SettingInfo from "./SettingInfo";
 import LegacyBrowserCleanup from "./LegacyBrowserCleanup";
@@ -18,6 +19,21 @@ type Pairing = { code: string; expiresAt: number; seen: boolean };
 
 /** El de src-tauri/src/browser_bridge.rs (DEFAULT_PORT) y el que trae la extensión. */
 const DEFAULT_PORT = 7341;
+/** La extensión que sabe contar qué cambió tras cada acción (CAPTURE_EXTENSION en browser_bridge.rs). */
+const CAPTURE_EXTENSION = [0, 3, 0];
+const AFTER_OPTIONS: { value: BrowserAfterAction; label: string }[] = [
+  { value: "off", label: "Nada" }, { value: "text", label: "Qué cambió" }, { value: "image", label: "Con imagen" },
+];
+/** Si una versión de la extensión («0.2.0») es anterior a `minimum`. */
+function olderExtension(version: string | null, minimum = CAPTURE_EXTENSION): boolean {
+  if (!version) return false;
+  const parts = version.split(".").map(Number);
+  for (let index = 0; index < minimum.length; index++) {
+    const part = Number.isFinite(parts[index]) ? parts[index] : 0;
+    if (part !== minimum[index]) return part < minimum[index];
+  }
+  return false;
+}
 const validPort = (value: number): boolean => Number.isInteger(value) && value >= 1024 && value <= 65535;
 /** Las respuestas de trex pueden llegar desordenadas: solo vale la de la petición más reciente. */
 const newest = (seq: number, applied: { current: number }): boolean => {
@@ -108,6 +124,14 @@ function BrowserBridge() {
         <input id={`${id}-port`} className="input" inputMode="numeric" value={portText} disabled={busy} aria-invalid={!validPort(portValue)}
           onChange={event => setPortDraft(event.currentTarget.value.replace(/\D/g, "").slice(0, 5))}
           onBlur={applyPort} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+      </div>
+
+      <div className="browser-settings-after">
+        <span id={`${id}-after`}>Tras cada acción, el agente ve <SettingInfo text="Después de hacer clic, escribir o navegar, la extensión le cuenta al agente qué cambió en la página: lo que apareció o desapareció, la dirección, el foco. «Con imagen» añade una captura de solo esa zona (unos cientos de tokens), con las contraseñas y los datos de pago tapados. Con «Nada» lo comprueba el agente cuando lo necesita." /></span>
+        <Segmented labelledBy={`${id}-after`} value={status.afterAction} options={AFTER_OPTIONS} disabled={busy}
+          onChange={value => void run(() => browserBridgeConfigure({ enabled: status.enabled, port: status.port, afterAction: value }))} />
+        {status.afterAction !== "off" && status.browsers.some(browser => browser.connected && olderExtension(browser.version))
+          && <small>La extensión de tu navegador es anterior a la 0.3.0: recárgala en chrome://extensions para que esto funcione.</small>}
       </div>
 
       {pairing

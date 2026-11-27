@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "trex para tu navegador",
   "short_name": "trex",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Deja que los agentes de la app trex vean y manejen las pestañas que tú les compartas: cada chat, en su propio grupo de pestañas.",
   "minimum_chrome_version": "120",
   "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms"],

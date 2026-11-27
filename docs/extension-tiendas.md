@@ -286,5 +286,8 @@ Por eso, al pasar de la versión cargada a mano a la de la tienda:
   (`owner`) y el título de su grupo (`group`). Con un trex anterior responde «Actualiza trex».
 - Al revés, trex no atiende a una extensión anterior a 0.2.0 (que pondría todos los chats en
   un único grupo): pide recargarla o actualizarla.
+- La 0.3.0 (capturas) no pide permisos nuevos. Con una 0.2.0, trex no le manda lo que no sabe
+  hacer (`click_at`, capturas por elemento, por zona, con otro tamaño o numeradas, y lo que
+  cambió tras cada acción): responde al agente que pida recargarla.
 - Si cambian los permisos del manifiesto, Chrome desactiva la extensión hasta que la persona
   acepte los nuevos, y la revisión vuelve a ser manual: evita tocarlos sin necesidad.

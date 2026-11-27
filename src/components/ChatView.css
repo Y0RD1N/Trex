@@ -2428,6 +2428,11 @@ pre.chat-ask-preview-body {
 .chat-browser-artifacts { display: flex; flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3) var(--sp-3) var(--sp-8); }
 .chat-browser-artifact { display: flex; align-items: center; gap: var(--sp-2); max-width: 100%; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); color: var(--text-muted); font-size: var(--fs-sm); }
 .chat-browser-artifact small { color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-browser-capture { display: grid; gap: var(--sp-1); justify-items: start; max-width: min(100%, 280px); padding: var(--sp-1); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); color: var(--text-dim); font-size: var(--fs-xs); cursor: zoom-in; }
+.chat-browser-capture img { display: block; max-width: 100%; max-height: 160px; border-radius: var(--radius-md); }
+.chat-browser-capture small { padding: 0 var(--sp-1); }
+.chat-browser-capture:hover { border-color: var(--border-strong, var(--border)); }
+.chat-browser-capture:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* --- Panel lateral: equipo, tareas y Git ------------------------------------
    Un solo panel con pestañas. Contraído, las pestañas flotan arriba a la

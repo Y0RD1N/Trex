@@ -1,5 +1,6 @@
 import { formatClock } from "./timeFormat";
 import { browserResultArtifacts, browserToolResultText } from "./browser";
+import { chromeCaptures } from "./capturePreviews";
 import { taskToolInput } from "./taskTools";
 /**
  * Protocolo de Codex en modo chat (`codex app-server`).
@@ -402,7 +403,8 @@ function itemTools(item: Json): ToolItem[] {
       const name = `mcp__${text(item.server)}__${text(item.tool)}`;
       const failed = !!item.error || record(item.result)?.isError === true;
       const taskInput = !failed && status === "done" && record(item.result) ? taskToolInput(name, input) : null;
-      return [{ kind: "tool", id, name: taskInput ? "TodoWrite" : name, input: taskInput ?? input, status: failed ? "error" : status, output: item.server === "trex_desktop" && !item.error ? browserToolResultText(record(item.result)?.content ?? item.result) : mcpOutput(item), patch: null, ...(item.server === "trex_desktop" ? { artifacts: browserResultArtifacts(item.result) } : {}) }];
+      return [{ kind: "tool", id, name: taskInput ? "TodoWrite" : name, input: taskInput ?? input, status: failed ? "error" : status, output: item.server === "trex_desktop" && !item.error ? browserToolResultText(record(item.result)?.content ?? item.result) : mcpOutput(item), patch: null, ...(item.server === "trex_desktop" ? { artifacts: browserResultArtifacts(item.result) } : {}),
+        ...(item.server === "trex_chrome" && !failed ? chromeCaptures(record(item.result)?.content) : {}) }];
     }
     case "dynamicToolCall": {
       const output = list(item.contentItems).map(record).map(entry => text(entry?.text)).filter(Boolean).join("\n");
